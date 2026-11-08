@@ -430,9 +430,14 @@ pub(crate) async fn forward(
     // Start Plan 兜底：Coding Plan Key 认证通过但账号没有对应资源包（429/1113、402），
     // 而登录会话的 JWT 在——免费 Start Plan 的额度在 zcode.z.ai 自己的端点上
     // （用会话 JWT + ZCode 同款着装请求）。有 Coding Plan 的账号不受影响。
-    let billing = response.status() == StatusCode::TOO_MANY_REQUESTS
-        || response.status() == StatusCode::PAYMENT_REQUIRED;
-    if billing && super::zcode_start::jwt_at().is_some() {
+    // 网络级失败（502 上游不可达）与账单级失败（429/1113、402）同样换 Start Plan
+    // 通道：两条通道的主机不同（api.z.ai vs zcode.z.ai），一条被网络环境挡住时
+    // 另一条可能可达。都失败才把最后的错误交回调用方。
+    let billing_or_network = response.status() == StatusCode::TOO_MANY_REQUESTS
+        || response.status() == StatusCode::PAYMENT_REQUIRED
+        || response.status() == StatusCode::BAD_GATEWAY
+        || response.status() == StatusCode::GATEWAY_TIMEOUT;
+    if billing_or_network && super::zcode_start::jwt_at().is_some() {
         return super::zcode_start::forward(deps, entry, protocol, body, session).await;
     }
     response
