@@ -371,9 +371,12 @@ pub(crate) async fn handle(
     let started = std::time::Instant::now();
     let request_id = crate::gateway::activity::next_request_id();
     let agent = agent_from_headers(&headers);
-    let Some(model) = extract_model(&body) else {
+    let Some(raw_model) = extract_model(&body) else {
         return error_response(StatusCode::BAD_REQUEST, "请求体缺少 model 字段或不是有效 JSON");
     };
+    // 规范名 = 剥掉 Claude Code 的 [1m]/[1M] 窗口标记。路由、流水、用量、上游
+    // 全部用规范名，避免同一模型在统计里出现两行、上游收到不认识的后缀。
+    let model = route::canonical_model(&raw_model).to_string();
     let meta = RouteMeta {
         session: session_identity(agent.as_deref(), &headers, &body),
         agent: agent.clone(),
@@ -405,6 +408,16 @@ pub(crate) async fn handle(
                 .ok()
                 .and_then(|conn| route::historical_slug_message(&conn, slug))
         };
+        // 裸模型名 → 目录里第一个暴露它的来源（对齐 magpie 的裸名解析）。
+        // 只在模型 id 不带前缀时被调用，因此正常带前缀的请求不多这一次查询。
+        let bare = |name: &str| -> Option<String> {
+            let conn = deps.db.lock().ok()?;
+            crate::gateway::catalog::list(&conn)
+                .ok()?
+                .into_iter()
+                .find(|entry| entry.model == name)
+                .map(|entry| entry.slug)
+        };
         let mut affinity = match state.affinity.lock() {
             Ok(g) => g,
             Err(_) => return error_response(StatusCode::SERVICE_UNAVAILABLE, "网关状态暂不可用，请稍后重试"),
@@ -421,6 +434,7 @@ pub(crate) async fn handle(
             &mut affinity,
             &cooldowns,
             &history,
+            &bare,
         )
     };
 

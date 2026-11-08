@@ -251,17 +251,61 @@ impl RouteDecision<'_> {
 /// 旧 slug 查询：只在 slug 未命中时调用，避免每次请求都读历史表。
 pub(crate) type SlugHistoryLookup<'a> = dyn Fn(&str) -> Option<String> + 'a;
 
+/// 裸模型名 → 来源 slug 的目录查询（magpie `provider::Resolve` 的裸名分支）。
+/// 只在模型 id 不带前缀时调用；实现方按目录顺序返回**第一个**暴露该模型的来源。
+pub(crate) type BareModelLookup<'a> = dyn Fn(&str) -> Option<String> + 'a;
+
+/// Claude Code 的 1M 上下文窗口标记：`settings.json` 里的模型名可能带 `[1m]`/`[1M]`，
+/// 上游不认识这个后缀。路由前剥掉；工具配置侧（wiring）负责在写入时按需补回。
+/// 大小写不敏感——官方写小写，用户手写常变大写。
+pub(crate) fn canonical_model(model: &str) -> &str {
+    // 两端去空白（对齐 magpie validateModel 的 TrimSpace），再剥尾部标记
+    let trimmed = model.trim();
+    if trimmed.len() > 4 && trimmed.as_bytes()[trimmed.len() - 4..].eq_ignore_ascii_case(b"[1m]") {
+        trimmed[..trimmed.len() - 4].trim_end()
+    } else {
+        trimmed
+    }
+}
+
 /// 选路：模型 id → slug 命中 → 协议检查 → 按连接类型分发。
+///
+/// 模型 id 的解析顺序（对齐 magpie `provider::Resolve`）：
+/// 1. 剥 `[1m]` 标记；
+/// 2. 带 `<slug>/` 前缀 → 按前缀精确路由；前缀一半为空是明确的请求错误；
+/// 3. 裸模型名 → 目录里第一个暴露它的来源（`bare`）；
+/// 4. 目录未命中 → 默认来源兜底；
+/// 5. 都没有 → 报错并说明两条设置路径。
 pub(crate) fn decide<'a>(
     entries: &'a [PoolEntry],
     model: &str,
     default_connection: Option<&str>,
     history: &SlugHistoryLookup<'_>,
+    bare: &BareModelLookup<'_>,
 ) -> RouteDecision<'a> {
+    let model = canonical_model(model);
+    if model.contains('/') {
+        // 前缀一半为空不是「裸名」，是写错了：与 magpie 同样明确拒绝
+        let (head, tail) = model.split_once('/').expect("contains('/') 已判定");
+        if head.trim().is_empty() || tail.trim().is_empty() {
+            return RouteDecision::reject(
+                RejectKind::BadRequest,
+                format!("模型「{model}」格式无效：来源与模型两部分都不能为空"),
+            );
+        }
+    }
     let (slug, model_name) = match split_model_id(model) {
         Some(parts) => parts,
         None => {
-            // 无 slug 前缀：仅当设置了默认连接才兜底
+            // 裸模型名：目录里第一个暴露它的来源优先（对齐 magpie），再落默认来源兜底
+            if let Some(slug) = bare(model) {
+                if let Some(entry) = entries.iter().find(|e| e.slug == slug) {
+                    if let Some(reject) = status_reject(entry, None) {
+                        return reject;
+                    }
+                    return classify(entry, model.trim().to_string());
+                }
+            }
             let Some(id) = default_connection else {
                 return RouteDecision::reject(
                     RejectKind::BadRequest,
@@ -352,9 +396,10 @@ pub(crate) fn decide_with_affinity<'a>(
     affinity: &mut Affinity,
     cooldowns: &Cooldowns,
     history: &SlugHistoryLookup<'_>,
+    bare: &BareModelLookup<'_>,
 ) -> RouteDecision<'a> {
     let now = now_ms();
-    let decision = decide(entries, model, default_connection, history);
+    let decision = decide(entries, model, default_connection, history, bare);
     let target = match &decision {
         RouteDecision::Direct(entry, _) | RouteDecision::Subscription(entry) => Some(entry),
         RouteDecision::Reject { .. } => None,
@@ -436,6 +481,73 @@ mod tests {
     fn no_history(_: &str) -> Option<String> {
         None
     }
+    fn no_bare(_: &str) -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn canonical_model_strips_1m_marker() {
+        // Claude Code 的 1M 窗口标记：settings 里常见小写，用户手写常变大写；上游不认识
+        assert_eq!(canonical_model("GLM-5.3-Flash[1m]"), "GLM-5.3-Flash");
+        assert_eq!(canonical_model("GLM-5.3-Flash[1M]"), "GLM-5.3-Flash");
+        assert_eq!(canonical_model("zcode/GLM-5.3-Flash[1m]"), "zcode/GLM-5.3-Flash");
+        assert_eq!(canonical_model("glm-5.3"), "glm-5.3", "没有标记就不动");
+        assert_eq!(canonical_model("[1m]"), "[1m]", "只有标记本身不算标记，避免剥成空串");
+        assert_eq!(canonical_model("  ab[1m]  "), "ab", "尾部空白随标记一起去掉");
+    }
+
+    #[test]
+    fn bare_model_resolves_via_catalog_before_default_source() {
+        // magpie 的裸名语义：目录里第一个暴露该模型的来源优先，默认来源只是兜底
+        let pool = vec![
+            entry("zcode", "auth", "anthropic", "connected"),
+            entry("kimi", "api", "anthropic", "connected"),
+        ];
+        let catalog = |name: &str| -> Option<String> {
+            // 目录顺序：zcode 在前。zcode 不暴露 kimi-k2，kimi 暴露
+            if name == "GLM-5.3-Flash" { Some("zcode".into()) } else { None }
+        };
+        match decide(&pool, "GLM-5.3-Flash", Some("c-kimi"), &no_history, &catalog) {
+            RouteDecision::Subscription(e) => assert_eq!(e.slug, "zcode", "目录命中优先于默认来源"),
+            other => panic!("应经目录解析到 zcode，实际 {other:?}"),
+        }
+        // 目录未命中 → 默认来源兜底
+        match decide(&pool, "other-model", Some("c-kimi"), &no_history, &catalog) {
+            RouteDecision::Direct(e, m) => {
+                assert_eq!(e.slug, "kimi");
+                assert_eq!(m, "other-model");
+            }
+            other => panic!("目录未命中应落默认来源，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn half_prefix_model_is_a_bad_request_not_a_bare_name() {
+        // 「/model」「slug/」是写错的前缀，不能当成裸名去目录里撞——
+        // 那会把请求静默路由到不相干的来源。
+        let pool = vec![entry("kimi", "api", "anthropic", "connected")];
+        for bad in ["/kimi-k2", "kimi/"] {
+            match decide(&pool, bad, Some("c-kimi"), &no_history, &no_bare) {
+                RouteDecision::Reject { kind, message, .. } => {
+                    assert_eq!(kind, RejectKind::BadRequest);
+                    assert!(message.contains("不能为空"), "{bad}: {message}");
+                }
+                other => panic!("{bad} 应明确报格式错误，实际 {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn prefixed_model_with_1m_marker_strips_before_upstream() {
+        // 带前缀 + [1m]：前缀用于选路，剥掉标记后的名字才是发给上游的
+        let pool = vec![entry("zcode", "auth", "anthropic", "connected")];
+        match decide(&pool, "zcode/GLM-5.3-Flash[1M]", None, &no_history, &no_bare) {
+            RouteDecision::Subscription(e) => assert_eq!(e.slug, "zcode"),
+            other => panic!("{other:?}"),
+        }
+        // 上游拿到的模型名经 RouteDecision 验证：Direct 分支带 upstream_model，
+        // Subscription 的剥前缀在 classify 内完成，这里验证路由本身不因标记失败
+    }
 
     #[test]
     fn unprefixed_model_routes_to_default_source() {
@@ -445,7 +557,7 @@ mod tests {
             entry("zcode", "auth", "anthropic", "connected"),
             entry("kimi", "api", "anthropic", "connected"),
         ];
-        match decide(&pool, "GLM-5.3-Flash", Some("c-zcode"), &no_history) {
+        match decide(&pool, "GLM-5.3-Flash", Some("c-zcode"), &no_history, &no_bare) {
             RouteDecision::Subscription(e) => assert_eq!(e.slug, "zcode"),
             other => panic!("应兜底到默认来源，实际 {other:?}"),
         }
@@ -454,7 +566,7 @@ mod tests {
     #[test]
     fn unprefixed_model_without_default_source_is_rejected_with_actionable_message() {
         let pool = vec![entry("zcode", "auth", "anthropic", "connected")];
-        match decide(&pool, "GLM-5.3-Flash", None, &no_history) {
+        match decide(&pool, "GLM-5.3-Flash", None, &no_history, &no_bare) {
             RouteDecision::Reject { kind, message, .. } => {
                 assert_eq!(kind, RejectKind::BadRequest);
                 assert!(message.contains("未带来源前缀"), "要说清是前缀问题：{message}");
@@ -468,7 +580,7 @@ mod tests {
     fn default_source_pointing_at_missing_connection_is_service_unavailable() {
         // 默认来源被删掉后不能静默落到别的来源上，否则请求会打到用户没预期的账号。
         let pool = vec![entry("kimi", "api", "anthropic", "connected")];
-        match decide(&pool, "GLM-5.3-Flash", Some("c-gone"), &no_history) {
+        match decide(&pool, "GLM-5.3-Flash", Some("c-gone"), &no_history, &no_bare) {
             RouteDecision::Reject { kind, message, .. } => {
                 assert_eq!(kind, RejectKind::ServiceUnavailable);
                 assert!(message.contains("已不存在"), "{message}");
@@ -484,7 +596,7 @@ mod tests {
             entry("zcode", "auth", "anthropic", "connected"),
             entry("kimi", "api", "anthropic", "connected"),
         ];
-        match decide(&pool, "kimi/kimi-k2", Some("c-zcode"), &no_history) {
+        match decide(&pool, "kimi/kimi-k2", Some("c-zcode"), &no_history, &no_bare) {
             RouteDecision::Direct(e, m) => {
                 assert_eq!(e.slug, "kimi");
                 assert_eq!(m, "kimi-k2");
@@ -507,15 +619,15 @@ mod tests {
             entry("kimi", "api", "anthropic", "connected"),
             entry("codex", "auth", "openai", "connected"),
         ];
-        match decide(&pool, "kimi/kimi-k2", None, &no_history) {
+        match decide(&pool, "kimi/kimi-k2", None, &no_history, &no_bare) {
             RouteDecision::Direct(e, m) => {
                 assert_eq!(e.slug, "kimi");
                 assert_eq!(m, "kimi-k2");
             }
             other => panic!("{other:?}"),
         }
-        assert!(matches!(decide(&pool, "codex/gpt-5.5", None, &no_history), RouteDecision::Subscription(_)));
-        let err = match decide(&pool, "nope/m", None, &no_history) {
+        assert!(matches!(decide(&pool, "codex/gpt-5.5", None, &no_history, &no_bare), RouteDecision::Subscription(_)));
+        let err = match decide(&pool, "nope/m", None, &no_history, &no_bare) {
             RouteDecision::Reject { message, kind, .. } => {
                 assert_eq!(kind, RejectKind::NotFound);
                 message
@@ -525,29 +637,29 @@ mod tests {
         assert!(err.contains("kimi"), "{err}");
         // 无前缀 + 无默认连接 → 明确指引
         assert!(matches!(
-            decide(&pool, "kimi-k2", None, &no_history),
+            decide(&pool, "kimi-k2", None, &no_history, &no_bare),
             RouteDecision::Reject { kind: RejectKind::BadRequest, .. }
         ));
         // 无前缀 + 默认连接命中该连接
-        match decide(&pool, "kimi-k2", Some("c-kimi"), &no_history) {
+        match decide(&pool, "kimi-k2", Some("c-kimi"), &no_history, &no_bare) {
             RouteDecision::Direct(_, m) => assert_eq!(m, "kimi-k2"),
             other => panic!("{other:?}"),
         }
         // 暂停的连接明确拒绝，返回 503
         let paused = vec![entry("kimi", "api", "anthropic", "paused")];
         assert!(matches!(
-            decide(&paused, "kimi/kimi-k2", None, &no_history),
+            decide(&paused, "kimi/kimi-k2", None, &no_history, &no_bare),
             RouteDecision::Reject { kind: RejectKind::ServiceUnavailable, .. }
         ));
         // 失效的登录返回 401，额度用尽返回 402
         let invalid = vec![entry("kimi", "api", "anthropic", "invalid")];
         assert!(matches!(
-            decide(&invalid, "kimi/kimi-k2", None, &no_history),
+            decide(&invalid, "kimi/kimi-k2", None, &no_history, &no_bare),
             RouteDecision::Reject { kind: RejectKind::Unauthorized, .. }
         ));
         let exhausted = vec![entry("kimi", "api", "anthropic", "exhausted")];
         assert!(matches!(
-            decide(&exhausted, "kimi/kimi-k2", None, &no_history),
+            decide(&exhausted, "kimi/kimi-k2", None, &no_history, &no_bare),
             RouteDecision::Reject { kind: RejectKind::PaymentRequired, .. }
         ));
     }
@@ -584,7 +696,7 @@ mod tests {
         let history = |slug: &str| {
             (slug == "old").then(|| "没有名为「old」的来源；它现在叫「kimi」".to_string())
         };
-        match decide(&pool, "old/kimi-k2", None, &history) {
+        match decide(&pool, "old/kimi-k2", None, &history, &no_bare) {
             RouteDecision::Reject { kind: RejectKind::NotFound, message, .. } => {
                 assert!(message.contains("现在叫「kimi」"), "{message}");
             }
@@ -620,7 +732,7 @@ mod tests {
         let cooldowns = Cooldowns::new();
         affinity.bind("s1", "c-kimi", 100);
         // 换 slug = 调用方故意换模型：亲和不覆盖明确意图，改走新连接并重绑
-        match decide_with_affinity(&pool, "glm/glm-4.6", None, Some("s1"), &mut affinity, &cooldowns, &no_history) {
+        match decide_with_affinity(&pool, "glm/glm-4.6", None, Some("s1"), &mut affinity, &cooldowns, &no_history, &no_bare) {
             RouteDecision::Direct(e, m) => {
                 assert_eq!(e.slug, "glm");
                 assert_eq!(m, "glm-4.6");
@@ -629,7 +741,7 @@ mod tests {
         }
         assert_eq!(affinity.get("s1"), Some("c-glm"), "命中新连接后应重绑会话");
         // 无 slug + 默认连接兜底也照常
-        match decide_with_affinity(&pool, "glm-4.6", Some("c-kimi"), Some("s1"), &mut affinity, &cooldowns, &no_history) {
+        match decide_with_affinity(&pool, "glm-4.6", Some("c-kimi"), Some("s1"), &mut affinity, &cooldowns, &no_history, &no_bare) {
             RouteDecision::Direct(e, _) => assert_eq!(e.slug, "kimi"),
             other => panic!("{other:?}"),
         }
@@ -647,7 +759,7 @@ mod tests {
         cooldowns.cool(&pool[0].cred_key(), now_ms() + 30_000);
         // 请求命中的正是会话绑定的 kimi，且 kimi 冷却中：拒绝而非悄悄切到 glm
         let decision =
-            decide_with_affinity(&pool, "kimi/kimi-k2", None, Some("s1"), &mut affinity, &cooldowns, &no_history);
+            decide_with_affinity(&pool, "kimi/kimi-k2", None, Some("s1"), &mut affinity, &cooldowns, &no_history, &no_bare);
         let RouteDecision::Reject { kind: RejectKind::TooManyRequests, message, retry_after } = decision else {
             panic!("{decision:?}")
         };
@@ -655,12 +767,12 @@ mod tests {
         assert!(retry_after.is_some());
         // 未绑定该账号的会话同样按账号冷却拒绝（单来源不换别家）
         let decision =
-            decide_with_affinity(&pool, "kimi/kimi-k2", None, Some("s2"), &mut affinity, &cooldowns, &no_history);
+            decide_with_affinity(&pool, "kimi/kimi-k2", None, Some("s2"), &mut affinity, &cooldowns, &no_history, &no_bare);
         assert!(matches!(decision, RouteDecision::Reject { kind: RejectKind::TooManyRequests, .. }));
         // 冷却过期后恢复服务
         cooldowns.cool(&pool[0].cred_key(), now_ms() - 1);
         assert!(matches!(
-            decide_with_affinity(&pool, "kimi/kimi-k2", None, Some("s1"), &mut affinity, &cooldowns, &no_history),
+            decide_with_affinity(&pool, "kimi/kimi-k2", None, Some("s1"), &mut affinity, &cooldowns, &no_history, &no_bare),
             RouteDecision::Direct(_, _)
         ));
     }
@@ -677,7 +789,7 @@ mod tests {
         affinity.bind("s1", "c-kimi", 100);
         cooldowns.cool(&pool[0].cred_key(), now_ms() + 30_000);
         assert!(matches!(
-            decide_with_affinity(&pool, "glm/glm-4.6", None, Some("s1"), &mut affinity, &cooldowns, &no_history),
+            decide_with_affinity(&pool, "glm/glm-4.6", None, Some("s1"), &mut affinity, &cooldowns, &no_history, &no_bare),
             RouteDecision::Direct(_, _)
         ));
     }

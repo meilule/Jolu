@@ -60,7 +60,16 @@ pub(crate) async fn handle(
     let history = |slug: &str| -> Option<String> {
         deps.db.try_lock().ok().and_then(|conn| route::historical_slug_message(&conn, slug))
     };
-    let decision = route::decide(&pool, model_id, None, &history);
+    // 裸模型名 → 目录里第一个暴露它的来源（与 wire 主路径同一语义）
+    let bare = |name: &str| -> Option<String> {
+        let conn = deps.db.lock().ok()?;
+        crate::gateway::catalog::list(&conn)
+            .ok()?
+            .into_iter()
+            .find(|entry| entry.model == name)
+            .map(|entry| entry.slug)
+    };
+    let decision = route::decide(&pool, model_id, None, &history, &bare);
     if let RouteDecision::Direct(entry, _) | RouteDecision::Subscription(entry) = &decision {
         if !route::source_is_current(&deps, entry) {
             return error_response(StatusCode::SERVICE_UNAVAILABLE, "来源已关闭或配置已变化，请刷新后重试");
