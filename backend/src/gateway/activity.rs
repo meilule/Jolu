@@ -44,6 +44,9 @@ pub(crate) struct RouteMeta {
     pub connection_id: Option<String>,
     /// 只有能从请求里验证出会话身份时才有值；亲和兜底键不算
     pub session: Option<SessionRef>,
+    /// 命中的命名客户端 Key 名（局域网共享时，鉴权中间件写入；只进路由流水，
+    /// 供限额计数与来源归属；实时事件与在途快照不带它，避免把 Key 名广播给前端）
+    pub client_key: Option<String>,
 }
 
 impl RouteMeta {
@@ -228,6 +231,7 @@ mod tests {
             requested_model: "kimi/k2".into(),
             connection_id: Some("conn-1".into()),
             session: Some(SessionRef { platform: "codex".into(), session_id: "ses-1".into() }),
+            client_key: None,
         }
     }
 

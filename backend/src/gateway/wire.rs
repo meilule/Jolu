@@ -322,6 +322,7 @@ pub(crate) fn record_route(
             connection_id: meta.connection_id.as_deref(),
             session_platform: meta.session_platform(),
             session_id: meta.session_id(),
+            client_key: meta.client_key.as_deref(),
         },
     );
 }
@@ -362,12 +363,14 @@ struct GatewayState<'a> {
 }
 
 /// 统一入口。`path_and_query` 原样拼到上游 base 后（路径参数与查询都保真）。
+/// `client_key` 是鉴权中间件命中的命名客户端 Key（局域网共享时）；只进路由流水。
 pub(crate) async fn handle(
     protocol: CallerProtocol,
     deps: Arc<ProxyDeps>,
     headers: HeaderMap,
     mut body: axum::body::Bytes,
     path_and_query: &str,
+    client_key: Option<String>,
 ) -> Response {
     let started = std::time::Instant::now();
     let request_id = crate::gateway::activity::next_request_id();
@@ -407,6 +410,7 @@ pub(crate) async fn handle(
         agent: agent.clone(),
         requested_model: model.clone(),
         connection_id: None,
+        client_key,
     };
 
     // 模型池快照：拿不到数据库锁时沿用旧索引（与观测模式 KeyIndex 同策略）
@@ -766,7 +770,7 @@ mod tests {
         assert_eq!(pool.len(),1);
         for (enabled,status) in [(false,"connected"),(true,"paused")] {
             deps.db.lock().unwrap().execute("UPDATE connections SET serve_enabled=?1,status=?2 WHERE id='isolation-source'",rusqlite::params![enabled,status]).unwrap();
-            let response=tokio::time::timeout(std::time::Duration::from_millis(500),handle(CallerProtocol::Chat,deps.clone(),HeaderMap::new(),axum::body::Bytes::from_static(br#"{"model":"isolated/fixture","messages":[{"role":"user","content":"test"}]}"#),"/v1/chat/completions")).await;
+            let response=tokio::time::timeout(std::time::Duration::from_millis(500),handle(CallerProtocol::Chat,deps.clone(),HeaderMap::new(),axum::body::Bytes::from_static(br#"{"model":"isolated/fixture","messages":[{"role":"user","content":"test"}]}"#),"/v1/chat/completions",None)).await;
             assert!(response.is_ok(),"不应等待上游；缓存中的来源已经关闭或暂停");
             assert_eq!(response.unwrap().status(),StatusCode::SERVICE_UNAVAILABLE);
             assert!(tokio::time::timeout(std::time::Duration::from_millis(20),listener.accept()).await.is_err(),"关闭后的来源不能收到新请求");

@@ -31,6 +31,7 @@ pub(crate) async fn handle(
     method: GeminiMethod,
     body: axum::body::Bytes,
     headers: &axum::http::HeaderMap,
+    client_key: Option<String>,
 ) -> Response {
     if method == GeminiMethod::Count {
         return json_response(
@@ -48,6 +49,7 @@ pub(crate) async fn handle(
         agent,
         requested_model: model_id.to_string(),
         connection_id: None,
+        client_key,
     };
     // Gemini 资源名可能带 `models/` 前缀，菜单 id 是 `<slug>/<model>`，两种都接受
     let model_id = model_id.strip_prefix("models/").unwrap_or(model_id);

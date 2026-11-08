@@ -164,10 +164,15 @@ pub(crate) struct ProxyDeps {
     pub(crate) on_circuit: Arc<dyn Fn(&str) + Send + Sync>,
     /// 网关模式：请求开始 / 结束的实时事件（灵动岛转发动效用，只带元数据）。
     pub(crate) on_activity: crate::gateway::activity::Emit,
-    /// 网关鉴权宽松开关：中转模式且网关只监听 127.0.0.1 回环（见 start 的绑定）时为 true，
-    /// 调用方令牌只用于识别 agent、不比对密钥——手动 Key 刷新不再让已接线工具集体 401。
-    /// 未来加入局域网共享开关后必须改回 false 走严格校验（access.rs::authorize）。
+    /// 网关鉴权宽松开关：中转模式且未开启局域网共享（回环监听，见 start 的绑定）时为
+    /// true，调用方令牌只用于识别 agent、不比对密钥——手动 Key 刷新不再让已接线工具
+    /// 集体 401。局域网共享开启后绑定 0.0.0.0，此开关必须为 false 走严格校验
+    /// （access.rs::authorize，含命名客户端 Key）。
     pub(crate) gateway_auth_relaxed: bool,
+    /// 局域网共享（P8.3）：网关绑定 0.0.0.0 且鉴权走严格校验。Host 检查随之放宽到
+    /// 任意 IP 字面量（局域网客户端连的是 IP），域名 Host 仍然拒绝。
+    /// 只在网关模式为 true；观测模式透传上游凭证且无鉴权，永不共享。
+    pub(crate) gateway_lan_shared: bool,
 }
 
 impl ProxyDeps {
@@ -742,6 +747,11 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
         return Err("没有已接管的平台上游，无法启动".into());
     }
 
+    // 局域网共享（P8.3）：只对网关（relay）模式生效；绑定地址随之下面的两个分支。
+    // 开关的存取见 gateway_shared_lan_set，改动在下一次 start() 生效。
+    let lan_shared = mode == crate::gateway::Mode::Relay && settings.gateway_shared_lan;
+    let bind_host: &'static str = if lan_shared { "0.0.0.0" } else { "127.0.0.1" };
+
     // 长连接池：无总超时无读超时（流式响应间隙可能很长），只限制连接建立阶段
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
@@ -833,22 +843,31 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
                 let _ = app.emit(name, payload);
             })
         },
-        // 宽松鉴权只属于回环中转：下面的绑定写死 127.0.0.1（两个分支都是），
-        // 局域网共享开关尚不存在；未来若允许非回环监听，此处必须改回 false。
-        gateway_auth_relaxed: mode == crate::gateway::Mode::Relay,
+        // 局域网共享（P8.3，与 P2.2 的回环安全注释呼应）：只在网关模式生效——观测
+        // 模式在请求头里透传真实上游凭证且无鉴权，监听地址必须保持回环。共享开启时
+        // 绑定 0.0.0.0（下面两个绑定分支都按 bind_host 走），同时 gateway_auth_relaxed
+        // 必须为 false：任意令牌重新走严格校验（手动 Key / 命名客户端 Key / 接线记录），
+        // 「只监听回环」让出的安全由密钥校验补上。
+        gateway_auth_relaxed: mode == crate::gateway::Mode::Relay && !lan_shared,
+        gateway_lan_shared: lan_shared,
     });
 
     let router = build_router(mode, deps.clone());
+
+    if lan_shared {
+        eprintln!("[网关] 局域网共享已开启：监听 0.0.0.0:{port}，凭据走严格校验（命名客户端 Key / 手动 Key）");
+    }
 
     // 同步上下文里绑定端口：占用等错误要直接反馈给设置页，不能吞进后台任务。
     // 端口被占用时自动改用系统分配的随机端口并落库——用户配置的端口只是"首选"，
     // 不能因为别的程序临时占用就整条链路不可用（CLI 接线写的是实际生效端口）。
     let (listener, port) = tauri::async_runtime::block_on(async move {
-        match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+        match tokio::net::TcpListener::bind((bind_host, port)).await {
             Ok(listener) => Ok((listener, port)),
             // 观测模式不依赖固定端口：CLI 配置会按实际端口写入，可以回退随机端口。
+            // 观测模式永不共享，bind_host 在这条分支里恒为 127.0.0.1。
             Err(error) if error.kind() == std::io::ErrorKind::AddrInUse && mode == crate::gateway::Mode::Observe => {
-                let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|fallback| {
+                let listener = tokio::net::TcpListener::bind((bind_host, 0)).await.map_err(|fallback| {
                     format!("端口 {port} 已被占用，且无法分配随机端口：{fallback}")
                 })?;
                 let actual = listener.local_addr().map_err(|e| format!("读取监听端口失败：{e}"))?.port();
@@ -859,7 +878,7 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
             Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => Err(format!(
                 "端口 {port} 已被占用；模型入口必须使用固定端口，请先释放该端口或换一个端口再接入工具"
             )),
-            Err(error) => Err(format!("监听 127.0.0.1:{port} 失败：{error}")),
+            Err(error) => Err(format!("监听 {bind_host}:{port} 失败：{error}")),
         }
     })?;
     // 刻意不改写 settings.proxy_port：那是用户填写的偏好（"首选端口"），
@@ -1193,7 +1212,17 @@ pub(crate) mod test_support {
             on_activity: Arc::new(|_, _| {}),
             // 测试固定走严格校验，保持 access.rs 既有 HTTP 用例的 401 语义。
             gateway_auth_relaxed: false,
+            gateway_lan_shared: false,
         })
+    }
+
+    /// 局域网共享（P8.3）的测试 deps：严格校验 + Host 接受 IP 字面量。
+    #[cfg(test)]
+    pub(crate) fn lan_shared_deps() -> Arc<ProxyDeps> {
+        let base = bare_deps();
+        let mut deps = Arc::try_unwrap(base).ok().expect("新建的 deps 只有一个引用");
+        deps.gateway_lan_shared = true;
+        std::sync::Arc::new(deps)
     }
 }
 
@@ -1333,6 +1362,7 @@ mod tests {
             on_circuit: Arc::new(|_| {}),
             on_activity: Arc::new(|_, _| {}),
             gateway_auth_relaxed: false,
+            gateway_lan_shared: false,
         });
         (deps, shutdown_rx)
     }

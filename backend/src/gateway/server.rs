@@ -13,7 +13,8 @@ use crate::proxy::ProxyDeps;
 /// 与观测模式一致：长上下文请求可达数十 MB，取 512 MB 上限。
 const BODY_LIMIT: usize = 512 * 1024 * 1024;
 
-/// 网关路由：挂在 `proxy.rs::start` 的监听端口上（仅 127.0.0.1）。
+/// 网关路由：挂在 `proxy.rs::start` 的监听端口上（默认 127.0.0.1；
+/// 局域网共享开启时绑定 0.0.0.0，凭据走严格校验）。
 /// 观测模式的 `forward` 兜底不参与网关模式——两套数据路径严格分流。
 pub(crate) fn router(deps: Arc<ProxyDeps>) -> Router {
     Router::new()
@@ -40,7 +41,8 @@ pub(crate) fn router(deps: Arc<ProxyDeps>) -> Router {
 /// 只接受本机工具的请求：拒绝浏览器跨站（Origin/Referer）与 DNS rebinding（Host 不是回环）。
 /// 凭据校验分两档（`deps.gateway_auth_relaxed`）：回环中转且未开启局域网共享时为宽松——
 /// 任意调用方令牌放行、令牌只用于识别 agent（wire 层按 `jolu-<agent>` 前缀与 User-Agent），
-/// 手动 Key 刷新不再让已接线工具集体 401；否则按手动 Key / 接线记录严格比对。
+/// 手动 Key 刷新不再让已接线工具集体 401；否则按手动 Key / 命名客户端 Key / 接线记录严格比对，
+/// 并对带请求数限额的命名 Key 做超限检查（429，见 `authorize_and_limit`）。
 async fn local_only(State(deps): State<Arc<ProxyDeps>>, request: axum::extract::Request, next: axum::middleware::Next) -> Response {
     if request.headers().contains_key(axum::http::header::ORIGIN)
         || request.headers().contains_key(axum::http::header::REFERER)
@@ -54,7 +56,7 @@ async fn local_only(State(deps): State<Arc<ProxyDeps>>, request: axum::extract::
         .headers()
         .get(axum::http::header::HOST)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(loopback_host);
+        .is_some_and(|value| host_allowed(value, deps.gateway_lan_shared));
     if !host_ok {
         return error_json(StatusCode::FORBIDDEN, "Host 不是本机回环地址，已拒绝");
     }
@@ -62,32 +64,108 @@ async fn local_only(State(deps): State<Arc<ProxyDeps>>, request: axum::extract::
         .and_then(|h| h.split_once(' ')).filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, token)| token)
         .or_else(|| request.headers().get("x-api-key").and_then(|h| h.to_str().ok()))
         .or_else(|| request.headers().get("x-goog-api-key").and_then(|h| h.to_str().ok()));
-    let allowed = match deps.db.lock() {
-        Ok(conn) => super::access::authorize(
-            &conn,
-            token,
-            request.uri().path(),
-            // 宽松标志由 start() 按模式给出：仅回环中转且未开启局域网共享时为 true；
-            // 非回环监听（未来共享开关）必须保持严格校验。
-            deps.gateway_auth_relaxed,
-        ),
-        Err(_) => Err("网关状态暂不可用".into()),
-    };
-    match allowed {
-        Ok(true) => next.run(request).await,
-        Ok(false) => error_json(StatusCode::UNAUTHORIZED, "API Key 无效或已刷新，请从 Jolu 复制最新的 API Key"),
-        Err(_) => error_json(StatusCode::SERVICE_UNAVAILABLE, "无法读取网关密钥，请在 Jolu 中重试"),
+    match authorize_and_limit(&deps, token, request.method(), request.uri().path()) {
+        Ok(client_key) => {
+            // 命名 Key 名挂到请求扩展上，handler 取出后交给 wire 记路由流水
+            let mut request = request;
+            if let Some(name) = client_key {
+                request.extensions_mut().insert(ClientKeyName(name));
+            }
+            next.run(request).await
+        }
+        Err(GateFailure::Unauthorized) => {
+            error_json(StatusCode::UNAUTHORIZED, "API Key 无效或已刷新，请从 Jolu 复制最新的 API Key")
+        }
+        Err(GateFailure::Limit(refusal)) => limit_response(&refusal),
+        Err(GateFailure::Store(message)) => error_json(StatusCode::SERVICE_UNAVAILABLE, message),
     }
 }
 
-/// Host 头必须是 127.0.0.1 / localhost / [::1]（可带端口）。
-fn loopback_host(value: &str) -> bool {
+/// 鉴权中间件命中的命名客户端 Key 名（局域网共享时）。挂在请求扩展上，
+/// 由各协议 handler 取出并传给 wire / gemini 适配器，最终进路由流水。
+#[derive(Clone)]
+struct ClientKeyName(String);
+
+/// 中间件拒绝的种类，各自映射成响应。
+enum GateFailure {
+    /// API Key 无效或已刷新
+    Unauthorized,
+    /// 密钥存储读不出来（损坏 / 状态锁不可用）：明确报 503，不静默放行
+    Store(&'static str),
+    /// 命名 Key 当日请求数超限（进 provider 之前的 429，对齐 magpie keyLimited）
+    Limit(super::access::RequestLimitRefusal),
+}
+
+/// 计费口径（对齐 magpie keyLimited 的豁免规则）：POST 请求计入命名 Key 的
+/// 当日请求数；读取类（GET 模型清单）、工具回调（`/__jolu/bridge/callback`）
+/// 与 Gemini countTokens 不计。
+fn is_billable(method: &axum::http::Method, path: &str) -> bool {
+    method == axum::http::Method::POST
+        && path != "/__jolu/bridge/callback"
+        && !path.ends_with(":countTokens")
+}
+
+/// 鉴权 + 命名 Key 限额，共用一把 DB 锁；返回放行请求携带的命名 Key 名。
+/// 限额在进入任何上游适配器之前完成：超限的请求到不了 provider。
+fn authorize_and_limit(
+    deps: &ProxyDeps,
+    token: Option<&str>,
+    method: &axum::http::Method,
+    path: &str,
+) -> Result<Option<String>, GateFailure> {
+    let conn = deps.db.lock().map_err(|_| GateFailure::Store("网关状态暂不可用"))?;
+    let outcome = super::access::authorize_detail(&conn, token, path, deps.gateway_auth_relaxed)
+        .map_err(|_| GateFailure::Store("无法读取网关密钥，请在 Jolu 中重试"))?;
+    if !outcome.allowed {
+        return Err(GateFailure::Unauthorized);
+    }
+    if let Some(name) = outcome.client_key.as_deref() {
+        if is_billable(method, path) {
+            let verdict = super::access::check_client_key_limit(&conn, name, chrono::Local::now())
+                .map_err(|_| GateFailure::Store("无法读取网关客户端密钥，请在 Jolu 中重试"))?;
+            if let Some(refusal) = verdict {
+                return Err(GateFailure::Limit(refusal));
+            }
+        }
+    }
+    Ok(outcome.client_key)
+}
+
+/// 限额 429：JSON 错误体 + Retry-After（距重置的秒数），与 wire.rs 的限流响应同形状。
+fn limit_response(refusal: &super::access::RequestLimitRefusal) -> Response {
+    let mut response = json_response(
+        StatusCode::TOO_MANY_REQUESTS,
+        serde_json::json!({"error": {"type": "jolu_gateway_key_limit", "message": refusal.message}}).to_string(),
+    );
+    if let Ok(value) = axum::http::HeaderValue::from_str(&refusal.retry_after_seconds.to_string()) {
+        response.headers_mut().insert(axum::http::header::RETRY_AFTER, value);
+    }
+    response
+}
+
+/// Host 头校验（P2.2 的 DNS rebinding 防御）：
+/// - 共享关闭（回环监听）：只接受 127.0.0.1 / localhost / [::1]（可带端口）；
+/// - 共享开启（`proxy.rs::start` 绑定 0.0.0.0）：额外接受任何 IP 字面量——局域网
+///   客户端连接的就是 IP 地址；域名 Host 仍然拒绝，rebound 域名照旧进不来，
+///   浏览器跨站则由上面的 Origin/Referer 检查拦住。
+fn host_allowed(value: &str, allow_lan_ip: bool) -> bool {
     let host = if let Some(rest) = value.strip_prefix('[') {
         rest.split(']').next().map(|inner| format!("[{inner}]"))
     } else {
         value.split(':').next().map(str::to_string)
     };
-    matches!(host.as_deref(), Some("127.0.0.1" | "localhost" | "[::1]"))
+    if matches!(host.as_deref(), Some("127.0.0.1" | "localhost" | "[::1]")) {
+        return true;
+    }
+    if !allow_lan_ip {
+        return false;
+    }
+    host.is_some_and(|h| {
+        h.trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok()
+    })
 }
 
 /// MCP 桥的工具调用回调（§6.3）：挂起等待 agent 的 tool_result 释放。
@@ -353,6 +431,7 @@ async fn split(request: Request) -> Result<(String, HeaderMap, axum::body::Bytes
 /// `POST /v1/messages`（Anthropic Messages 协议入口）。
 /// 隐私脱敏（P5）：鉴权后、选路前脱敏请求体；响应回来后把占位符换回真值。
 async fn messages(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Response {
+    let client_key = request.extensions().get::<ClientKeyName>().map(|k| k.0.clone());
     match split(request).await {
         Ok((path, headers, body)) => {
             let body = match crate::gateway::mask::prepare_request(body) {
@@ -360,7 +439,7 @@ async fn messages(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Respo
                 Err(response) => return response,
             };
             let response =
-                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Anthropic, deps, headers, body, &path)
+                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Anthropic, deps, headers, body, &path, client_key)
                     .await;
             crate::gateway::mask::restore_response(response).await
         }
@@ -370,6 +449,7 @@ async fn messages(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Respo
 
 /// `POST /v1/chat/completions`（OpenAI Chat 协议入口）。
 async fn chat(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Response {
+    let client_key = request.extensions().get::<ClientKeyName>().map(|k| k.0.clone());
     match split(request).await {
         Ok((path, headers, body)) => {
             let body = match crate::gateway::mask::prepare_request(body) {
@@ -377,7 +457,7 @@ async fn chat(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Response 
                 Err(response) => return response,
             };
             let response =
-                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Chat, deps, headers, body, &path)
+                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Chat, deps, headers, body, &path, client_key)
                     .await;
             crate::gateway::mask::restore_response(response).await
         }
@@ -387,6 +467,7 @@ async fn chat(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Response 
 
 /// `POST /v1/responses`（OpenAI Responses 协议入口；当前无直通连接，仅保留路由）。
 async fn responses(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Response {
+    let client_key = request.extensions().get::<ClientKeyName>().map(|k| k.0.clone());
     match split(request).await {
         Ok((path, headers, body)) => {
             let body = match crate::gateway::mask::prepare_request(body) {
@@ -394,7 +475,7 @@ async fn responses(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Resp
                 Err(response) => return response,
             };
             let response =
-                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Responses, deps, headers, body, &path)
+                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Responses, deps, headers, body, &path, client_key)
                     .await;
             crate::gateway::mask::restore_response(response).await
         }
@@ -427,6 +508,7 @@ async fn gemini_generate(
         }
     };
     // 先留一份请求头：Agent 识别与流水记录要用，请求体读取会消费 request
+    let client_key = request.extensions().get::<ClientKeyName>().map(|k| k.0.clone());
     let headers = request.headers().clone();
     let body = match axum::body::to_bytes(request.into_body(), BODY_LIMIT).await {
         Ok(bytes) => bytes,
@@ -437,7 +519,7 @@ async fn gemini_generate(
             );
         }
     };
-    crate::gateway::adapter::gemini::handle(deps, model, method, body, &headers).await
+    crate::gateway::adapter::gemini::handle(deps, model, method, body, &headers, client_key).await
 }
 
 /// `GET /v1beta/models`：Gemini 格式的模型清单（只读缓存，不在这里打上游）。
@@ -499,7 +581,7 @@ mod tests {
     #[tokio::test]
     async fn models_endpoint_answers_empty_list_when_pool_empty() {
         let base = spawn_router(crate::proxy::test_support::bare_deps()).await;
-        let body = reqwest::Client::new()
+        let body = reqwest::Client::builder().no_proxy().build().unwrap()
             .get(format!("{base}/v1/models"))
             .send()
             .await
@@ -510,6 +592,23 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(value["object"], "list");
         assert_eq!(value["data"].as_array().map(Vec::len), Some(0));
+    }
+
+    /// Host 校验（P2.2 DNS rebinding 防御）在局域网共享（P8.3）下的放宽边界：
+    /// 只放宽到 IP 字面量（局域网客户端连的就是 IP），域名照旧拒绝。
+    #[test]
+    fn host_check_allows_ip_literals_only_when_lan_shared() {
+        for value in ["127.0.0.1:12731", "localhost:12731", "[::1]:12731", "127.0.0.1", "localhost"] {
+            assert!(host_allowed(value, false), "回环 Host 任何模式下都放行：{value}");
+        }
+        assert!(!host_allowed("evil.example:12731", false));
+        assert!(!host_allowed("192.168.1.5:12731", false), "共享关闭时局域网 IP 也拒绝");
+        for value in ["192.168.1.5:12731", "10.0.0.2", "[fe80::1]:12731"] {
+            assert!(host_allowed(value, true), "共享时 IP Host 放行：{value}");
+        }
+        for value in ["evil.example:12731", "jolu.local", "sub.evil.example"] {
+            assert!(!host_allowed(value, true), "共享时域名 Host 仍拒绝（rebound 域名进不来）：{value}");
+        }
     }
 
     #[cfg(windows)]
@@ -692,10 +791,10 @@ mod tests {
     #[test]
     fn loopback_host_accepts_only_local_names() {
         for ok in ["127.0.0.1:12731", "localhost:12731", "[::1]:12731", "127.0.0.1"] {
-            assert!(loopback_host(ok), "{ok}");
+            assert!(host_allowed(ok, false), "{ok}");
         }
         for bad in ["evil.example:12731", "10.0.0.2:12731", "127.0.0.1.evil.example", ""] {
-            assert!(!loopback_host(bad), "{bad}");
+            assert!(!host_allowed(bad, false), "{bad}");
         }
     }
 
@@ -703,7 +802,7 @@ mod tests {
     #[tokio::test]
     async fn codex_backend_path_reaches_the_gateway() {
         let base = spawn_router(crate::proxy::test_support::bare_deps()).await;
-        let res = reqwest::Client::new()
+        let res = reqwest::Client::builder().no_proxy().build().unwrap()
             .post(format!("{base}/backend-api/codex/responses"))
             .header("content-type", "application/json")
             .body(r#"{"model":"kimi/kimi-k2","input":[]}"#)
@@ -790,7 +889,7 @@ mod tests {
     #[tokio::test]
     async fn messages_endpoint_rejects_when_pool_is_empty() {
         let base = spawn_router(crate::proxy::test_support::bare_deps()).await;
-        let res = reqwest::Client::new()
+        let res = reqwest::Client::builder().no_proxy().build().unwrap()
             .post(format!("{base}/v1/messages"))
             .header("content-type", "application/json")
             .body(r#"{"model":"kimi/kimi-k2"}"#)

@@ -2183,6 +2183,60 @@ fn gateway_copy_key(app: tauri::AppHandle) -> Result<(), String> {
     crate::gateway::access::copy(&conn)
 }
 
+/// 开关局域网共享（P8.3）。开启后网关（中转模式）在下次 `proxy::start` 时绑定
+/// 0.0.0.0，并把鉴权切到严格校验（命名客户端 Key / 手动 Key / 接线记录，任意令牌
+/// 不再放行）；关闭则恢复回环 + 宽松校验。观测模式不受影响——透传上游凭证且无
+/// 鉴权，监听地址必须保持回环。
+///
+/// 照 `gateway_set_default_source` 的模式只改设置并广播：监听地址与鉴权档位在
+/// `proxy::start` 时重新读取，运行中的网关要靠重启监听应用新值（设置页负责提示）。
+/// 安全前提：开启共享前应至少签发一把命名 Key（或保留手动 Key），否则严格分支
+/// 里「未开通过手动接入」的旧安装会对局域网放行任意令牌——界面批次要给出提醒。
+#[tauri::command]
+fn gateway_shared_lan_set(app: tauri::AppHandle, on: bool) -> Result<settings::Settings, String> {
+    let next = app
+        .state::<Cfg>()
+        .0
+        .try_update(|settings| {
+            settings.gateway_shared_lan = on;
+        })
+        .map_err(|error| format!("保存局域网共享设置失败：{error}"))?;
+    let _ = app.emit("settings-changed", next.clone());
+    Ok(next)
+}
+
+/// 列出命名客户端 Key：名称 + 掩码 + 限额 + 最近使用与当日计数。
+/// Key 原文不出后端——列表里只有掩码，原文仅在签发结果里出现一次。
+#[tauri::command]
+fn gateway_client_keys_list(app: tauri::AppHandle) -> Result<Vec<crate::gateway::access::ClientKeySummary>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "无法读取网关状态")?;
+    crate::gateway::access::client_keys_list(&conn)
+}
+
+/// 签发一把命名客户端 Key，返回结果里带 Key 原文（只此一次，复制给客户端）。
+/// `tokens_per_day` / `requests_per_day` 传 None 表示不限；请求数限额即时生效，
+/// Token 限额本期只保存不强制（见 access.rs::check_client_key_limit 的说明）。
+#[tauri::command]
+fn gateway_client_key_issue(
+    app: tauri::AppHandle,
+    name: String,
+    tokens_per_day: Option<i64>,
+    requests_per_day: Option<i64>,
+) -> Result<crate::gateway::access::IssuedClientKey, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "无法读取网关状态")?;
+    crate::gateway::access::client_key_issue(&conn, &name, tokens_per_day, requests_per_day)
+}
+
+/// 撤销命名客户端 Key（删除行，立即失效；流水里的历史归属保留）。
+#[tauri::command]
+fn gateway_client_key_revoke(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "无法读取网关状态")?;
+    crate::gateway::access::client_key_revoke(&conn, &name)
+}
+
 /// 切换网关模式（observe / relay）。切到 relay 时按当前设置启动监听；
 /// 切回 observe 前先还原全部接线，保证两套模式不交叉占用同一批配置文件。
 #[tauri::command]
@@ -4024,6 +4078,10 @@ pub fn run() {
             gateway_status,
             gateway_access_key,
             gateway_copy_key,
+            gateway_shared_lan_set,
+            gateway_client_keys_list,
+            gateway_client_key_issue,
+            gateway_client_key_revoke,
             fx_rate,
             set_cost_currency,
             gateway_set_mode,

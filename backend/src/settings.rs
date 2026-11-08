@@ -103,6 +103,11 @@ pub struct Settings {
     /// 网关模式：是否允许自动熔断（关闭后只能手动切回）。
     #[serde(default = "yes")]
     pub gateway_auto_escape: bool,
+    /// 局域网共享（P8.3）：开启后网关（中转模式）监听 0.0.0.0，并把命名客户端 Key
+    /// 的严格校验作为唯一入口（任意令牌不再放行）。观测模式永不共享：透传上游凭证
+    /// 且无鉴权，监听地址必须保持回环。改动在下一次网关启动时生效。
+    #[serde(default)]
+    pub gateway_shared_lan: bool,
     /// 本实例标识：接线 token 带它的前 8 位，用来识别「这个配置是哪个 Jolu 写的」。
     /// 首次启动生成后固定，正式版、验收版、改名测试包各自不同。
     #[serde(default)]
@@ -258,6 +263,7 @@ impl Default for Settings {
             gateway_default_connection: None,
             gateway_circuit_threshold: default_gateway_circuit(),
             gateway_auto_escape: true,
+            gateway_shared_lan: false,
             instance_id: String::new(),
             gateway_wiring: std::collections::BTreeMap::new(),
             default_page: default_default_page(),
@@ -356,6 +362,7 @@ mod tests {
         assert_eq!(old.gateway_default_connection, None);
         assert_eq!(old.gateway_circuit_threshold, 5);
         assert!(old.gateway_auto_escape);
+        assert!(!old.gateway_shared_lan, "局域网共享必须默认关闭");
         assert!(old.gateway_wiring.is_empty());
     }
 
@@ -366,6 +373,7 @@ mod tests {
         s.gateway_default_connection = Some("c1".into());
         s.gateway_circuit_threshold = 3;
         s.gateway_auto_escape = false;
+        s.gateway_shared_lan = true;
         s.gateway_wiring.insert("claude-code".into(), r#"{"base":"https://x"}"#.into());
         let v = serde_json::to_value(&s).unwrap();
         let back: Settings = serde_json::from_value(v).unwrap();
@@ -373,6 +381,7 @@ mod tests {
         assert_eq!(back.gateway_default_connection.as_deref(), Some("c1"));
         assert_eq!(back.gateway_circuit_threshold, 3);
         assert!(!back.gateway_auto_escape);
+        assert!(back.gateway_shared_lan);
         assert_eq!(back.gateway_wiring.get("claude-code").map(String::as_str), Some(r#"{"base":"https://x"}"#));
     }
 

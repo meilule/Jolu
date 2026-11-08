@@ -260,6 +260,16 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
             duration_ms    INTEGER
         );
         CREATE INDEX IF NOT EXISTS idx_gateway_route_log_ts ON gateway_route_log(ts DESC);
+        -- 局域网共享（P8.3）的命名客户端 Key：签发时生成、原文只展示一次，
+        -- 落库存的是按 access.rs 网关密钥同一方式（DPAPI）加密后的十六进制。
+        -- 撤销 = 删除行；重新签发同名 = 先撤销再签发。
+        CREATE TABLE IF NOT EXISTS gateway_client_keys (
+            name             TEXT PRIMARY KEY,
+            protected        TEXT NOT NULL,
+            tokens_per_day   INTEGER,
+            requests_per_day INTEGER,
+            created_ms       INTEGER NOT NULL
+        );
         "#,
     )?;
 
@@ -320,6 +330,9 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN connection_id TEXT", []);
     let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN session_platform TEXT", []);
     let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN session_id TEXT", []);
+    // 局域网共享（P8.3）：流水记录命中了哪个命名客户端 Key。可空新列、旧行保持 NULL：
+    // 限额按 Key 名统计当日成功请求数就是读这一列，历史行与未带 Key 的请求天然不计入。
+    let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN client_key TEXT", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN activity_state TEXT NOT NULL DEFAULT 'done'", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN activity_updated_ms INTEGER", []);
     let _ = conn.execute(

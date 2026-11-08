@@ -26,6 +26,8 @@ pub struct RouteLogEntry {
     pub connection_id: Option<String>,
     pub session_platform: Option<String>,
     pub session_id: Option<String>,
+    /// 命中的命名客户端 Key 名（局域网共享，P8.3）；旧行与本机工具的请求为 None
+    pub client_key: Option<String>,
 }
 
 pub struct NewEntry<'a> {
@@ -39,13 +41,15 @@ pub struct NewEntry<'a> {
     pub connection_id: Option<&'a str>,
     pub session_platform: Option<&'a str>,
     pub session_id: Option<&'a str>,
+    /// 命中的命名客户端 Key 名（局域网共享时由鉴权中间件识别）；None 表示本机调用方
+    pub client_key: Option<&'a str>,
 }
 
 pub fn record(conn: &Connection, entry: NewEntry<'_>) {
     let _ = conn.execute(
         "INSERT INTO gateway_route_log(ts, agent, requested_model, source, upstream_model, status_code, result, duration_ms,
-                                       connection_id, session_platform, session_id)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                                       connection_id, session_platform, session_id, client_key)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             chrono::Local::now().timestamp_millis(),
             entry.agent,
@@ -58,6 +62,7 @@ pub fn record(conn: &Connection, entry: NewEntry<'_>) {
             entry.connection_id,
             entry.session_platform,
             entry.session_id,
+            entry.client_key,
         ],
     );
     // 只保留最近 1000 行；每 50 次写清理一次，避免每条请求都做一次 NOT IN 子查询。
@@ -72,7 +77,7 @@ pub fn record(conn: &Connection, entry: NewEntry<'_>) {
 }
 
 const COLUMNS: &str = "id, ts, agent, requested_model, source, upstream_model, status_code, result, duration_ms,
-                       connection_id, session_platform, session_id";
+                       connection_id, session_platform, session_id, client_key";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RouteLogEntry> {
     Ok(RouteLogEntry {
@@ -88,6 +93,7 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RouteLogEntry> {
         connection_id: r.get(9)?,
         session_platform: r.get(10)?,
         session_id: r.get(11)?,
+        client_key: r.get(12)?,
     })
 }
 
@@ -222,7 +228,7 @@ mod tests {
     fn entry(result: &str) -> NewEntry<'_> {
         NewEntry {
             agent: None, requested_model: "a/b", source: None, upstream_model: None, status_code: None, result,
-            duration_ms: None, connection_id: None, session_platform: None, session_id: None,
+            duration_ms: None, connection_id: None, session_platform: None, session_id: None, client_key: None,
         }
     }
 
@@ -233,8 +239,8 @@ mod tests {
     #[test]
     fn recent_is_newest_first_and_keeps_metadata() {
         let conn = db();
-        record(&conn, NewEntry { agent: Some("codex"), requested_model: "kimi/kimi-k2", source: Some("kimi"), upstream_model: Some("kimi-k2"), status_code: Some(200), result: "ok", duration_ms: Some(42), connection_id: Some("c1"), session_platform: Some("codex"), session_id: Some("s1") });
-        record(&conn, NewEntry { agent: None, requested_model: "nope/m", source: None, upstream_model: None, status_code: Some(404), result: "rejected", duration_ms: None, connection_id: None, session_platform: None, session_id: None });
+        record(&conn, NewEntry { agent: Some("codex"), requested_model: "kimi/kimi-k2", source: Some("kimi"), upstream_model: Some("kimi-k2"), status_code: Some(200), result: "ok", duration_ms: Some(42), connection_id: Some("c1"), session_platform: Some("codex"), session_id: Some("s1"), client_key: None });
+        record(&conn, NewEntry { agent: None, requested_model: "nope/m", source: None, upstream_model: None, status_code: Some(404), result: "rejected", duration_ms: None, connection_id: None, session_platform: None, session_id: None, client_key: None });
         let rows = recent(&conn, 10).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].result, "rejected");
@@ -253,6 +259,25 @@ mod tests {
         }
         assert_eq!(counts_since(&conn, 0).unwrap(), (2, 1, 1));
         assert_eq!(counts_since(&conn, i64::MAX).unwrap(), (0, 0, 0));
+    }
+
+    /// 局域网共享（P8.3）：命中的命名客户端 Key 随流水落库，供限额按 Key 名统计。
+    #[test]
+    fn client_key_is_recorded_and_readable_back() {
+        let conn = db();
+        record(&conn, NewEntry { client_key: Some("lab-agent"), ..entry("ok") });
+        record(&conn, NewEntry { client_key: None, ..entry("ok") });
+        let rows = recent(&conn, 10).unwrap();
+        assert_eq!(rows[0].client_key, None, "本机请求不带 Key 名");
+        assert_eq!(rows[1].client_key.as_deref(), Some("lab-agent"));
+        let named = conn
+            .query_row(
+                "SELECT COUNT(*) FROM gateway_route_log WHERE client_key = 'lab-agent' AND result = 'ok'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(named, 1);
     }
 
     #[test]
@@ -321,6 +346,7 @@ mod tests {
         let link = |model: &'static str, conn_id: &'static str, session: &'static str| NewEntry {
             agent: Some("codex"), requested_model: model, source: Some("kimi"), upstream_model: None, status_code: Some(200),
             result: "ok", duration_ms: None, connection_id: Some(conn_id), session_platform: Some("codex"), session_id: Some(session),
+            client_key: None,
         };
         record(&conn, link("kimi/a", "c1", "s1"));
         record(&conn, link("kimi/b", "c1", "s1"));
