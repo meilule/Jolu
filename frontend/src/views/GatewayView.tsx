@@ -221,22 +221,16 @@ export function GatewayView() {
     if (agent === "codex") return setDialog({ kind: "codex" })
     if (agent === "gemini") return setDialog({ kind: "gemini" })
     /*
-     * Claude Code 的模型键怎么处理，取决于有没有默认来源：
-     *
-     * - 设了默认来源：不写任何模型键。工具原本的 `ANTHROPIC_MODEL` / 各个 DEFAULT_* 全部原样保留，
-     *   模型名直接透传给网关，由默认来源兜底。换模型只需在 Claude Code 里改，Jolu 不用再动
-     *   —— 这才是「配一次、以后换模型不用重配」。
-     * - 没设默认来源：只能写死一个带前缀的模型，否则无前缀请求一律被拒。这时下拉里选的那个
-     *   才会被写进去；用户仍然要自己设置默认来源才能彻底摆脱前缀。
+     * Claude Code 接线写完整档位体系（magpie writeTiers 语义）：
+     * 主模型写 settings.json 顶层 `model` 与全部档位 env（默认跟随），并移除
+     * `ANTHROPIC_MODEL`——这样 /model 里的切换不会被覆盖，换模型不再需要重接 Jolu。
+     * 没选模型时只写地址和令牌，用户的模型配置原样保留。
      */
-    const useDefaultSource = Boolean(status?.default_connection)
-    const model = agent === "claude-code" && !useDefaultSource ? claudeModel || null : null
+    const model = agent === "claude-code" ? claudeModel || null : null
     const detail = agent === "claude-code"
-      ? useDefaultSource
-        ? "将把 Claude Code 的请求地址指向本机网关。已设置默认来源，模型名按原样透传，你现有的模型配置保持不变，断开时恢复。"
-        : model
-          ? `将更新这个工具的本机配置，使其通过 Jolu 统一网关调用模型（默认模型 ${model}）。原连接配置会被保留，断开时恢复。`
-          : "将更新这个工具的本机配置，使其通过 Jolu 统一网关调用模型。原连接配置会被保留，断开时恢复。"
+      ? model
+        ? `将更新这个工具的本机配置，使其通过 Jolu 统一网关调用模型（主模型 ${model}，各档位默认跟随）。你现有的模型配置会先快照，断开时恢复。`
+        : "将更新这个工具的本机配置，使其通过 Jolu 统一网关调用模型。原连接配置会被保留，断开时恢复。"
       : "将更新这个工具的本机配置，使其通过 Jolu 统一网关调用模型。原连接配置会被保留，断开时恢复。"
     setDialog({ kind: "confirm", title: `接入 ${agentLabel(agent)}？`, description: detail, label: "确认接入", work: () => run(() => gatewayApi.setWiring(agent, true, model), `已接入 ${agentLabel(agent)}`, true) })
   }
@@ -386,7 +380,7 @@ export function GatewayView() {
         }} />
       )}
       {dialog?.kind === "serve-conflict" && <MessageDialog title="这个来源没有加入模型池" tone="danger" message={dialog.message} onClose={() => setDialog({ kind: "manage" })} />}
-      {dialog?.kind === "wiring" && <WiringDialog agents={agents} models={claudeModels} modelChoice={claudeModel} onModelChoice={setClaudeModelChoice} usingDefaultSource={Boolean(status?.default_connection)} busy={busy} onClose={() => setDialog(null)} onWire={(agent) => { setDialog(null); wire(agent) }} onUnwire={confirmUnwire} onAccept={confirmAccept} />}
+      {dialog?.kind === "wiring" && <WiringDialog agents={agents} models={claudeModels} modelChoice={claudeModel} onModelChoice={setClaudeModelChoice} busy={busy} onClose={() => setDialog(null)} onWire={(agent) => { setDialog(null); wire(agent) }} onUnwire={confirmUnwire} onAccept={confirmAccept} />}
       {dialog?.kind === "codex" && <CodexDialog returnFocusTo={accessTrigger.current} mode={agents.find((entry) => entry.agent === "codex")?.codex_mode ?? "provider"} busy={busy} onClose={() => setDialog(null)} onConfirm={() => run(() => gatewayApi.setWiring("codex", true), "已接入 Codex", true)} />}
       {dialog?.kind === "gemini" && <GeminiDialog returnFocusTo={accessTrigger.current} busy={busy} onClose={() => setDialog(null)} onConfirm={() => run(() => gatewayApi.setWiring("gemini", true), "已接入 Gemini CLI", true)} />}
       {dialog?.kind === "restore-failed" && <MessageDialog title="没能恢复工具配置" tone="danger" message={dialog.message} action={{ label: "重试断开", onClick: async () => { setDialog(null); await unwire(dialog.agent) } }} onClose={() => setDialog(null)} />}

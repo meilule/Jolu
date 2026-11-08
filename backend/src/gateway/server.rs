@@ -38,7 +38,9 @@ pub(crate) fn router(deps: Arc<ProxyDeps>) -> Router {
 }
 
 /// 只接受本机工具的请求：拒绝浏览器跨站（Origin/Referer）与 DNS rebinding（Host 不是回环）。
-/// 开通过手动 Key 后同时校验凭据；原生 OAuth 与一键接线沿用各自凭据。
+/// 凭据校验分两档（`deps.gateway_auth_relaxed`）：回环中转且未开启局域网共享时为宽松——
+/// 任意调用方令牌放行、令牌只用于识别 agent（wire 层按 `jolu-<agent>` 前缀与 User-Agent），
+/// 手动 Key 刷新不再让已接线工具集体 401；否则按手动 Key / 接线记录严格比对。
 async fn local_only(State(deps): State<Arc<ProxyDeps>>, request: axum::extract::Request, next: axum::middleware::Next) -> Response {
     if request.headers().contains_key(axum::http::header::ORIGIN)
         || request.headers().contains_key(axum::http::header::REFERER)
@@ -61,7 +63,14 @@ async fn local_only(State(deps): State<Arc<ProxyDeps>>, request: axum::extract::
         .or_else(|| request.headers().get("x-api-key").and_then(|h| h.to_str().ok()))
         .or_else(|| request.headers().get("x-goog-api-key").and_then(|h| h.to_str().ok()));
     let allowed = match deps.db.lock() {
-        Ok(conn) => super::access::authorize(&conn, token, request.uri().path()),
+        Ok(conn) => super::access::authorize(
+            &conn,
+            token,
+            request.uri().path(),
+            // 宽松标志由 start() 按模式给出：仅回环中转且未开启局域网共享时为 true；
+            // 非回环监听（未来共享开关）必须保持严格校验。
+            deps.gateway_auth_relaxed,
+        ),
         Err(_) => Err("网关状态暂不可用".into()),
     };
     match allowed {

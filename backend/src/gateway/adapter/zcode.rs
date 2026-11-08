@@ -40,6 +40,36 @@ pub(crate) fn bound(
     Ok((secret, session))
 }
 
+/// 家族 → Anthropic 上游。借用 [`crate::zcode_browser_auth::Session::anthropic_base`]
+/// 的既有映射，不在本文件重复定义域名；这里没有真实会话，其余字段填空即可。
+fn anthropic_base_of(family: &str) -> &'static str {
+    crate::zcode_browser_auth::Session {
+        access_token: String::new(),
+        refresh_token: None,
+        user_id: String::new(),
+        account: None,
+        zcode_token: String::new(),
+        family: Some(family.to_owned()),
+    }
+    .anthropic_base()
+}
+
+/// 直读本机 ZCode 凭据里的 Coding Plan Key（与 magpie `zcodeOwn` 同款只读链）。
+///
+/// 订阅转发原本只能走 [`material_at`] 的多步 OAuth 链，对 z.ai 账号经常 401；
+/// ZCode 自己的凭据文件里就有现成的 Coding Plan Key，能解密就直接用。
+/// 返回 (API Key, Anthropic 上游, `zcodejwttoken`)：JWT 只表达登录态，不当转发凭据。
+/// 拿不到 Key 时报错，由调用方退回 [`material_at`] 旧链——供应商页登录的产品功能仍依赖它。
+/// `id` 只用于错误文案定位是哪条连接；凭据文件是整机唯一的 ZCode 登录，与连接无关。
+fn forward_credential(id: &str) -> Result<(String, &'static str, Option<String>), String> {
+    let home =
+        crate::creds::home().ok_or_else(|| "无法定位本机 ZCode 配置目录".to_string())?;
+    let (key, family) = crate::zcode_quota::coding_plan_key_at(&home)
+        .map_err(|error| format!("连接 {id} 未能读取本机 ZCode Coding Plan 凭据：{error}"))?;
+    let jwt = crate::zcode_quota::coding_plan_jwt_at(&home);
+    Ok((key, anthropic_base_of(family), jwt))
+}
+
 async fn data(mut response: reqwest::Response) -> Result<Value, String> {
     if !response.status().is_success() {
         return Err(format!(
@@ -206,7 +236,15 @@ async fn material_at(deps: &Arc<ProxyDeps>, id: &str, origin: &str) -> Result<St
 }
 
 pub(crate) async fn models(deps: &Arc<ProxyDeps>, id: &str) -> Result<Vec<String>, String> {
+    // 先直读本机凭据的 Coding Plan Key（新路径），失败再退回 OAuth 换取链；
     // 上游按账号家族分开：z.ai 账号去 api.z.ai，BigModel 账号去 open.bigmodel.cn。
+    if let Ok((key, base, _jwt)) = forward_credential(id) {
+        return tokio::task::spawn_blocking(move || {
+            crate::connections::fetch_models("zcode", Some("anthropic"), base, &key)
+        })
+        .await
+        .map_err(|_| "ZCode 模型查询失败")?;
+    }
     let (origin, base) = {
         let conn = deps.db.lock().map_err(|_| "无法读取 ZCode 授权")?;
         let (_, session) = bound(&conn, id)?;
@@ -232,19 +270,29 @@ pub(crate) async fn forward(
             "ZCode 订阅使用 Anthropic Messages 协议",
         );
     }
-    // 上游与凭据都按账号家族走：z.ai 账号必须打到 api.z.ai。
-    let (origin, base) = {
-        match deps.db.lock() {
-            Ok(conn) => match bound(&conn, &entry.connection_id) {
-                Ok((_, session)) => (session.origin(), session.anthropic_base()),
+    // 凭据走两条链：先直读本机 ZCode 凭据的 Coding Plan Key（z.ai 账号的常规来源），
+    // 失败再退回 `material_at` 的 OAuth 换取链——它慢且对 z.ai 账号经常 401，但
+    // 供应商页登录的产品功能仍依赖它，且本机凭据缺失时它是唯一来源。旧链的
+    // 报错语义保持原样（401 + 原文案），新链失败则静默换链，不打断请求。
+    let (token, base) = match forward_credential(&entry.connection_id) {
+        Ok((key, base, _jwt)) => (key, base),
+        Err(_) => {
+            let (origin, base) = {
+                match deps.db.lock() {
+                    Ok(conn) => match bound(&conn, &entry.connection_id) {
+                        Ok((_, session)) => (session.origin(), session.anthropic_base()),
+                        Err(e) => return error_response(StatusCode::UNAUTHORIZED, &e),
+                    },
+                    Err(_) => {
+                        return error_response(StatusCode::SERVICE_UNAVAILABLE, "无法读取 ZCode 授权")
+                    }
+                }
+            };
+            match material_at(&deps, &entry.connection_id, origin).await {
+                Ok(v) => (v, base),
                 Err(e) => return error_response(StatusCode::UNAUTHORIZED, &e),
-            },
-            Err(_) => return error_response(StatusCode::SERVICE_UNAVAILABLE, "无法读取 ZCode 授权"),
+            }
         }
-    };
-    let token = match material_at(&deps, &entry.connection_id, origin).await {
-        Ok(v) => v,
-        Err(e) => return error_response(StatusCode::UNAUTHORIZED, &e),
     };
     let value: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,

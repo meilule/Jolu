@@ -76,19 +76,17 @@ export function RenameDialog({ connection, busy, onClose, onSave }: { connection
 /**
  * Agent 接线。
  *
- * Claude Code 多一步：网关按 `<来源>/<模型>` 选路，而它默认发自带模型别名，
- * 不写模型映射就会被判成无法路由（表现是「接好了但识别不出模型」）。所以这一行
- * 让用户选一个已接入来源的模型，接线时一并写进 `ANTHROPIC_MODEL`。
- * 不选也能接，但用户得自己去配环境变量——所以默认预选第一个可用模型。
+ * Claude Code 的主模型（magpie writeTiers 语义）：接线写 settings.json 顶层 `model`、
+ * 全部档位 env（opus/sonnet/haiku/fable/small-fast 默认跟随主模型），并移除
+ * `ANTHROPIC_MODEL`——它压过 /model 的选择，写了切换只在本会话生效。
+ * 断开时按快照还原用户原来的全部模型配置。不选模型也能接（只写地址和令牌）。
  */
-export function WiringDialog({ agents, models, modelChoice, onModelChoice, usingDefaultSource, busy, onClose, onWire, onUnwire, onAccept }: {
+export function WiringDialog({ agents, models, modelChoice, onModelChoice, busy, onClose, onWire, onUnwire, onAccept }: {
   agents: WiringStatusDto[]
   /** 可选的 `<来源>/<模型>` 列表（来自模型目录，只含已接入来源） */
   models: string[]
   modelChoice: string
   onModelChoice: (value: string) => void
-  /** 已设默认来源：接线不写模型键，工具原有模型配置原样保留 */
-  usingDefaultSource: boolean
   busy: boolean
   onClose: () => void
   onWire: (agent: string) => void
@@ -99,9 +97,9 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, using
   return (
     <Modal busy={busy} title="Agent 接线" onClose={onClose} footer={<Button label="关闭" disabled={busy} onClick={onClose} />}>
       <p className="text-[9.5px] text-jolu-muted">状态按配置文件里实际写入的值判断；重新应用不会重新拍快照。</p>
-      {claude && !usingDefaultSource && (
+      {claude && (
         <div className="flex flex-col gap-1 rounded-lg border border-jolu-border bg-jolu-side px-2.5 py-2">
-          <span className="text-[9.5px] text-jolu-text">Claude Code 默认模型</span>
+          <span className="text-[9.5px] text-jolu-text">Claude Code 主模型</span>
           {models.length === 0 ? (
             <span className="text-[8.5px] text-jolu-warn">还没有可用模型：先在上面接入来源，再点来源区的「拉取」拿清单。</span>
           ) : (
@@ -116,11 +114,8 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, using
           )}
           <span className="text-[8.5px] text-jolu-muted">
             {modelChoice
-              ? "接入后写进 settings.json 的 ANTHROPIC_MODEL 和 ANTHROPIC_SMALL_FAST_MODEL；断开时还原你原来的值。"
-              : "不选则不改模型，Claude Code 会发自带模型名，网关无法路由。"}
-          </span>
-          <span className="text-[8.5px] text-jolu-warn">
-            想以后换模型不用重配？回到主页面把「默认来源」设好，接线就不再改你的模型配置。
+              ? "写入 settings.json 顶层 model 与全部档位（opus/sonnet/haiku/fable/small-fast 跟随主模型）；ANTHROPIC_MODEL 会被移除，/model 切换不再被覆盖。断开时还原你原来的全部模型配置。"
+              : "不选则只接地址和令牌，你的模型配置原样保留；Claude Code 会发自带模型名，需要「默认来源」兜底才能路由。"}
           </span>
         </div>
       )}

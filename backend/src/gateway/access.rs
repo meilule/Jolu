@@ -76,8 +76,19 @@ fn equal(a: &str, b: &str) -> bool {
 }
 
 /// 原生 OAuth 与桥接继续走既有接线；手动 Key 永远先校验，不能借路径绕过撤销。
-pub fn authorize(conn: &Connection, token: Option<&str>, path: &str) -> Result<bool, String> {
-    authorize_with(conn, token, path, || {
+///
+/// `relaxed`（宽松模式，参照 magpie）：网关只监听 127.0.0.1 回环且未开启局域网共享时，
+/// 令牌只用于识别调用方（`jolu-<agent>` 前缀与 User-Agent，见 `wire::agent_from_headers`），
+/// 不再比对任何密钥——手动 Key 刷新后，工具配置里的旧令牌依然放行，不会集体 401。
+/// 安全是「只监听回环」这条底线给的，不是令牌给的；一旦监听地址可能不是回环
+/// （未来的局域网共享开关），调用方必须传 `false` 走严格校验。
+pub fn authorize(
+    conn: &Connection,
+    token: Option<&str>,
+    path: &str,
+    relaxed: bool,
+) -> Result<bool, String> {
+    authorize_with(conn, token, path, relaxed, || {
         crate::creds::local_codex_auth().map(|(token, _)| token)
     })
 }
@@ -86,8 +97,14 @@ fn authorize_with(
     conn: &Connection,
     token: Option<&str>,
     path: &str,
+    relaxed: bool,
     oauth: impl Fn() -> Option<String>,
 ) -> Result<bool, String> {
+    // 宽松模式：回环上的任意令牌（含未携带令牌）都放行，甚至不读取密钥存储。
+    // 调用方识别照旧由 wire 层按 `jolu-<agent>` 前缀与 User-Agent 完成。
+    if relaxed {
+        return Ok(true);
+    }
     let key = load(conn)?;
     if token.is_some_and(|t| t.starts_with("jolu-manual-")) {
         return Ok(key.as_deref().zip(token).is_some_and(|(a, b)| equal(a, b)));
@@ -134,7 +151,7 @@ mod tests {
             .query_row("SELECT protected FROM gateway_access", [], |r| r.get(0))
             .unwrap();
         assert!(!blob.windows(first.len()).any(|w| w == first.as_bytes()));
-        assert!(authorize(&conn, Some(&first), "/v1/models").unwrap());
+        assert!(authorize(&conn, Some(&first), "/v1/models", false).unwrap());
         assert!(!masked(&conn, false).unwrap().contains(&first));
         let second = rotate(&conn).unwrap();
         assert_ne!(first, second);
@@ -143,11 +160,11 @@ mod tests {
             "/backend-api/codex/models",
             "/__jolu/bridge/callback",
         ] {
-            assert!(!authorize(&conn, Some(&first), path).unwrap());
-            assert!(authorize(&conn, Some(&second), path).unwrap());
+            assert!(!authorize(&conn, Some(&first), path, false).unwrap());
+            assert!(authorize(&conn, Some(&second), path, false).unwrap());
         }
-        assert!(!authorize(&conn, None, "/v1/models").unwrap());
-        assert!(!authorize(&conn, Some("arbitrary"), "/v1/models").unwrap());
+        assert!(!authorize(&conn, None, "/v1/models", false).unwrap());
+        assert!(!authorize(&conn, Some("arbitrary"), "/v1/models", false).unwrap());
     }
 
     #[tokio::test]
@@ -234,7 +251,7 @@ mod tests {
         )
         .unwrap();
         assert!(current(&conn).is_err());
-        assert!(authorize(&conn, Some("anything"), "/v1/models").is_err());
+        assert!(authorize(&conn, Some("anything"), "/v1/models", false).is_err());
     }
 
     #[test]
@@ -261,24 +278,152 @@ mod tests {
                 &conn,
                 Some("synthetic-native-token"),
                 "/backend-api/codex/models",
+                false,
                 oauth
             )
             .unwrap());
             assert!(
-                !authorize_with(&conn, Some("arbitrary"), "/backend-api/codex/models", oauth)
-                    .unwrap()
+                !authorize_with(
+                    &conn,
+                    Some("arbitrary"),
+                    "/backend-api/codex/models",
+                    false,
+                    oauth
+                )
+                .unwrap()
             );
             assert!(
-                !authorize_with(&conn, Some("synthetic-native-token"), "/v1/models", oauth)
+                !authorize_with(&conn, Some("synthetic-native-token"), "/v1/models", false, oauth)
                     .unwrap()
             );
             rotate(&conn).unwrap();
         }
         assert!(
-            !authorize_with(&conn, Some(&first), "/backend-api/codex/models", || Some(
-                first.clone()
-            ))
+            !authorize_with(
+                &conn,
+                Some(&first),
+                "/backend-api/codex/models",
+                false,
+                || Some(first.clone())
+            )
             .unwrap()
         );
+    }
+
+    /// 宽松模式（回环中转，参照 magpie）：任意令牌、无令牌都放行，
+    /// 且不依赖密钥存储是否可读——Key 刷新与存储损坏都不再打断调用方。
+    #[test]
+    fn relaxed_loopback_mode_accepts_any_token_without_key_comparison() {
+        let conn = Connection::open_in_memory().unwrap();
+        let key = current(&conn).unwrap();
+        for token in [
+            Some("anything"),
+            Some("jolu-codex.stalekey"),
+            Some("jolu-manual-0000"),
+            Some(key.as_str()),
+            None,
+        ] {
+            assert!(authorize(&conn, token, "/v1/models", true).unwrap(), "{token:?}");
+        }
+        // 宽松分支不读密钥存储：存储损坏照样放行；严格模式则报错不静默换钥。
+        conn.execute(
+            "UPDATE gateway_access SET protected=?1",
+            [b"broken".as_slice()],
+        )
+        .unwrap();
+        assert!(authorize(&conn, Some("anything"), "/v1/models", true).unwrap());
+        assert!(authorize(&conn, Some("anything"), "/v1/models", false).is_err());
+    }
+
+    /// 安全底线：宽松只属于回环监听。一旦监听地址可能不是回环（未来局域网共享），
+    /// 调用方必须传 relaxed=false，任意令牌重新被严格校验拒绝。
+    #[test]
+    fn non_loopback_listening_requires_strict_auth() {
+        let conn = Connection::open_in_memory().unwrap();
+        current(&conn).unwrap();
+        assert!(!authorize(&conn, Some("stale-jolu-token"), "/v1/models", false).unwrap());
+        assert!(!authorize(&conn, None, "/v1/models", false).unwrap());
+        assert!(!authorize(&conn, Some("jolu-codex.old"), "/v1/messages", false).unwrap());
+    }
+
+    /// HTTP 端到端（宽松 deps）：旧 Key、任意令牌、无令牌都放行；
+    /// 非回环 Host 与浏览器跨站仍然在进入鉴权之前被拒。
+    #[tokio::test]
+    async fn relaxed_http_gateway_accepts_stale_and_arbitrary_tokens() {
+        let bare = std::sync::Arc::try_unwrap(crate::proxy::test_support::bare_deps())
+            .ok()
+            .expect("新建的 deps 只有一个引用");
+        let deps = {
+            let mut relaxed = bare;
+            relaxed.gateway_auth_relaxed = true;
+            std::sync::Arc::new(relaxed)
+        };
+        let first = {
+            let conn = deps.db.lock().unwrap();
+            super::super::wiring_store::mark_pending(
+                &conn,
+                "claude-code",
+                "test",
+                "relay",
+                None,
+                &super::super::wiring_store::Applied::default(),
+                Some("jolu-claude-code.test"),
+            )
+            .unwrap();
+            current(&conn).unwrap()
+        };
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}/v1/models", listener.local_addr().unwrap());
+        let router = super::super::server::router(deps.clone());
+        let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        for (header, value) in [
+            ("authorization", "Bearer jolu-manual-stale".to_string()),
+            ("x-api-key", "anything".to_string()),
+            ("x-goog-api-key", first.clone()),
+            ("authorization", "Bearer jolu-claude-code.test".to_string()),
+        ] {
+            assert_eq!(
+                client
+                    .get(&url)
+                    .header(header, value)
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                200,
+                "宽松模式接受任意调用方令牌：{header}"
+            );
+        }
+        assert_eq!(
+            client.get(&url).send().await.unwrap().status(),
+            200,
+            "未携带令牌的回环请求同样放行"
+        );
+        assert_eq!(
+            client
+                .get(&url)
+                .header("host", "evil.example:12731")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            403,
+            "非回环 Host 在宽松模式下仍然拒绝"
+        );
+        assert_eq!(
+            client
+                .get(&url)
+                .header("origin", "https://example.com")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            403,
+            "浏览器跨站在宽松模式下仍然拒绝"
+        );
+        task.abort();
     }
 }

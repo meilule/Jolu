@@ -154,6 +154,121 @@ fn credential_secret(home: &Path) -> String {
         .unwrap_or_else(|| format!("zcode-credential-fallback:{platform}:{}:{username}", home.display()))
 }
 
+/// 本机 ZCode 自己登录凭据里的 Coding Plan Key 及其账号家族（`FAMILY_ZAI` / `FAMILY_BIGMODEL`）。
+///
+/// 统一网关转发订阅请求时直接拿这把 Key 当 API Key 用，不再走「OAuth → 列项目 → 换短期
+/// Bearer」的多步链（那条链对 z.ai 账号经常 401）。做法与 magpie 的 `zcodeOwn` 一致，只读：
+///
+/// - `credentials.json` 里键名含 `:coding-plan:` 且以 `:api-key` 结尾的条目
+///   （形如 `account-provider:coding-plan:account:zai-individual-coding-plan:account:<uuid>:api-key`），
+///   解密后 Key 含 `.`（`<id>.<secret>`）才算有效；
+/// - 家族只由键名判断：含 `:bigmodel-` 走中国站，否则走国际站；zai 优先于 bigmodel
+///   （serde_json 默认按键名排序遍历，所以这里显式表达优先级，不依赖条目顺序）；
+/// - ZCode 3.15+ 不再把它写进 credentials.json，而是放在 `config.json` 的
+///   provider 条目 `options.apiKey`，作为第二步兜底。
+///
+/// 解密复用本模块的 [`decrypt_credential`]（对明文直通），不重写一套。
+/// 只读纪律同模块说明：不写 `~/.zcode`，Key 原文不进日志与错误文案。
+pub(crate) fn coding_plan_key_at(home: &Path) -> Result<(String, &'static str), String> {
+    let dir = home.join(".zcode").join("v2");
+    let raw = std::fs::read_to_string(dir.join("credentials.json")).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "未找到本机 ZCode 登录凭据".to_string()
+        } else {
+            "读取本机 ZCode 登录凭据失败".to_string()
+        }
+    })?;
+    let credentials: Value =
+        serde_json::from_str(&raw).map_err(|_| "本机 ZCode 登录凭据格式无效".to_string())?;
+    let secret = credential_secret(home);
+    // picked 记 (是否 zai, Key)：同一家族先到先得，bigmodel 只在还没有任何结果时被接受
+    let mut picked: Option<(bool, String)> = None;
+    if let Some(entries) = credentials.as_object() {
+        for (name, value) in entries {
+            if !name.contains(":coding-plan:") || !name.ends_with(":api-key") {
+                continue;
+            }
+            let Some(value) = value.as_str() else { continue };
+            let Ok(key) = decrypt_credential(value, &secret) else { continue };
+            let key = key.trim();
+            // 官方 Key 恒为 `<id>.<secret>`；缺 `.` 的解密结果（多半是解错了口令）不可信
+            if !key.contains('.') {
+                continue;
+            }
+            let is_zai = !name.contains(":bigmodel-");
+            let better = match &picked {
+                None => true,
+                Some((zai, _)) => is_zai && !*zai,
+            };
+            if better {
+                picked = Some((is_zai, key.to_owned()));
+            }
+        }
+    }
+    if let Some((zai, key)) = picked {
+        let family =
+            if zai { crate::zcode_browser_auth::FAMILY_ZAI } else { crate::zcode_browser_auth::FAMILY_BIGMODEL };
+        return Ok((key, family));
+    }
+    coding_plan_key_from_config(&dir, &secret)
+        .ok_or_else(|| "本机 ZCode 没有可用的 Coding Plan 凭据".to_string())
+}
+
+/// `config.json` 兜底（ZCode 3.15+）：Key 在 provider 条目的 `options.apiKey`，
+/// 可能是明文，也可能是同一套 `enc:` 封装。zai 条目排在前，与 magpie/ZCode 自己的
+/// 列出顺序一致。Key 里出现空格、`{`、`$` 多半是未填的模板占位，不当真。
+fn coding_plan_key_from_config(dir: &Path, secret: &str) -> Option<(String, &'static str)> {
+    let raw = std::fs::read_to_string(dir.join("config.json")).ok()?;
+    let config: Value = serde_json::from_str(&raw).ok()?;
+    for (ids, family) in [
+        (
+            ["builtin:zai-coding-plan", "account:zai-individual-coding-plan"],
+            crate::zcode_browser_auth::FAMILY_ZAI,
+        ),
+        (
+            ["builtin:bigmodel-coding-plan", "account:bigmodel-individual-coding-plan"],
+            crate::zcode_browser_auth::FAMILY_BIGMODEL,
+        ),
+    ] {
+        for id in ids {
+            let Some(key) = config
+                .pointer(&format!("/provider/{id}/options/apiKey"))
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            let key = key.trim();
+            // 解不开的加密条目跳过本轮，继续看下一个 id，而不是整体放弃
+            let key = if key.starts_with("enc:") {
+                match decrypt_credential(key, secret) {
+                    Ok(value) => value.trim().to_owned(),
+                    Err(_) => continue,
+                }
+            } else {
+                key.to_owned()
+            };
+            if key.contains('.') && !key.contains([' ', '{', '$']) {
+                return Some((key, family));
+            }
+        }
+    }
+    None
+}
+
+/// 本机 ZCode 的 `zcodejwttoken`（Start Plan 的会话 JWT），剥掉可能的前缀 `Bearer `。
+/// 它只用来表达登录态（例如判定「本机确有 ZCode 登录」），不当转发凭据；
+/// 读不到或解不开都返回 None。
+pub(crate) fn coding_plan_jwt_at(home: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(home.join(".zcode").join("v2").join("credentials.json")).ok()?;
+    let credentials: Value = serde_json::from_str(&raw).ok()?;
+    let secret = credential_secret(home);
+    let value = credentials.get("zcodejwttoken")?.as_str()?;
+    let plain = decrypt_credential(value, &secret).ok()?;
+    let trimmed = plain.trim();
+    let jwt = trimmed.strip_prefix("Bearer ").map(str::trim).unwrap_or(trimmed);
+    (!jwt.is_empty()).then(|| jwt.to_owned())
+}
+
 /// 已解密的登录信息里只取邮箱做掩码；昵称、user_id、头像、令牌原文都不返回。
 fn masked_account_email(credentials: &Value, secret: &str, family: &str) -> Option<String> {
     let raw = credentials.get(&format!("oauth:{family}:user_info")).and_then(Value::as_str)?;
@@ -658,6 +773,116 @@ mod tests {
             {"providerId":"bigmodel-api","config":{"access":{"type":"zhipu-coding-plan-api-key","apiKey":"valid"}}}
         ]}}});
         assert_eq!(coding_plan_key(&config), Some((PlanProvider::ZhipuCn, "valid")));
+    }
+
+    /// 凭据条目名（magpie 实测形态）：家族写在名字里，`<uuid>` 是账号 id。
+    /// 形如 `account-provider:coding-plan:account:zai-individual-coding-plan:account:<uuid>:api-key`。
+    #[test]
+    fn coding_plan_key_at_prefers_zai_over_bigmodel() {
+        let home = temp_home("coding-plan-both");
+        let secret = credential_secret(&home);
+        write_credentials(&home, &serde_json::json!({
+            // serde_json 默认按键名排序遍历，bigmodel 恰好排在 zai 前面，
+            // 用来验证「zai 优先」是显式规则而不是遍历顺序的巧合
+            "account-provider:coding-plan:account:bigmodel-individual-coding-plan:account:66666666-7777-8888-9999-000000000000:api-key": envelope(&secret, "bigmodel-key.id-secret"),
+            "account-provider:coding-plan:account:zai-individual-coding-plan:account:11111111-2222-3333-4444-555555555555:api-key": envelope(&secret, "zai-key.id-secret"),
+            // 非 coding-plan 条目（哪怕带点）不能被当成 Key
+            "oauth:zai:access_token": envelope(&secret, "oauth-token.not-a-key")
+        }));
+        let (key, family) = coding_plan_key_at(&home).unwrap();
+        assert_eq!(key, "zai-key.id-secret");
+        assert_eq!(family, crate::zcode_browser_auth::FAMILY_ZAI);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn coding_plan_key_at_takes_bigmodel_when_it_is_the_only_entry() {
+        let home = temp_home("coding-plan-cn");
+        let secret = credential_secret(&home);
+        write_credentials(&home, &serde_json::json!({
+            "account-provider:coding-plan:account:bigmodel-individual-coding-plan:account:66666666-7777-8888-9999-000000000000:api-key": envelope(&secret, "bigmodel-key.id-secret"),
+        }));
+        let (key, family) = coding_plan_key_at(&home).unwrap();
+        assert_eq!(key, "bigmodel-key.id-secret");
+        assert_eq!(family, crate::zcode_browser_auth::FAMILY_BIGMODEL);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn coding_plan_key_at_falls_back_to_config_json() {
+        let home = temp_home("coding-plan-config");
+        let secret = credential_secret(&home);
+        // credentials.json 里的条目用别的口令加密：解不开必须跳过并继续兜底，不能整体失败
+        write_credentials(&home, &serde_json::json!({
+            "account-provider:coding-plan:account:zai-individual-coding-plan:account:11111111-2222-3333-4444-555555555555:api-key": envelope("some-other-secret", "zai-key.id-secret"),
+        }));
+        // ZCode 3.15+：Key 在 config.json 的 provider 条目里，zai 的两个 id 都要认
+        let config = serde_json::json!({
+            "provider": {"builtin:zai-coding-plan": {"options": {"apiKey": "cfg-key.id-secret"}}}
+        });
+        std::fs::write(home.join(".zcode").join("v2").join("config.json"), config.to_string()).unwrap();
+        let (key, family) = coding_plan_key_at(&home).unwrap();
+        assert_eq!((key.as_str(), family), ("cfg-key.id-secret", crate::zcode_browser_auth::FAMILY_ZAI));
+
+        // config.json 里的加密条目也要能解开；明文条目带空格/{/$ 视为未填的模板占位，
+        // 不带 `.` 的同样不当真——zai 条目全部无效时才轮到 bigmodel
+        let config = serde_json::json!({
+            "provider": {
+                "builtin:zai-coding-plan": {"options": {"apiKey": "your api key here"}},
+                "account:zai-individual-coding-plan": {"options": {"apiKey": "no-dot"}},
+                "builtin:bigmodel-coding-plan": {"options": {"apiKey": envelope(&secret, "bigmodel-cfg.id-secret")}}
+            }
+        });
+        std::fs::write(home.join(".zcode").join("v2").join("config.json"), config.to_string()).unwrap();
+        let (key, family) = coding_plan_key_at(&home).unwrap();
+        assert_eq!((key.as_str(), family), ("bigmodel-cfg.id-secret", crate::zcode_browser_auth::FAMILY_BIGMODEL));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn coding_plan_key_at_errors_without_credentials_or_config() {
+        let home = temp_home("coding-plan-none");
+        assert!(coding_plan_key_at(&home).is_err(), "没有 credentials.json 应报错");
+
+        // credentials.json 存在但没有任何 coding-plan 条目、也没有 config.json：同样报错
+        let secret = credential_secret(&home);
+        write_credentials(&home, &serde_json::json!({
+            "oauth:active_provider": envelope(&secret, "zai"),
+        }));
+        assert!(coding_plan_key_at(&home).is_err());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn coding_plan_jwt_at_strips_bearer_prefix_and_reports_missing() {
+        let home = temp_home("coding-plan-jwt");
+        let secret = credential_secret(&home);
+        // 官方客户端有时把 JWT 存成 "Bearer <token>"
+        write_credentials(&home, &serde_json::json!({
+            "zcodejwttoken": envelope(&secret, "Bearer  abc.header.sig "),
+        }));
+        assert_eq!(coding_plan_jwt_at(&home).as_deref(), Some("abc.header.sig"));
+        write_credentials(&home, &serde_json::json!({
+            "zcodejwttoken": envelope(&secret, "plain.jwt.token"),
+        }));
+        assert_eq!(coding_plan_jwt_at(&home).as_deref(), Some("plain.jwt.token"));
+        write_credentials(&home, &serde_json::json!({}));
+        assert_eq!(coding_plan_jwt_at(&home), None);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn coding_plan_key_at_ignores_entries_that_do_not_match_the_name_shape() {
+        let home = temp_home("coding-plan-shape");
+        let secret = credential_secret(&home);
+        write_credentials(&home, &serde_json::json!({
+            // 只以 :api-key 结尾、没有 :coding-plan: 段的键不是 Coding Plan 凭据
+            "account-provider:account:zai-individual-coding-plan:account:uuid:api-key": envelope(&secret, "zai-key.id-secret"),
+            // 有 :coding-plan: 段但不是 :api-key 结尾的同样不是
+            "account-provider:coding-plan:account:zai-individual-coding-plan:account:uuid": envelope(&secret, "zai-key.id-secret"),
+        }));
+        assert!(coding_plan_key_at(&home).is_err(), "条目名两个条件缺一不可");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

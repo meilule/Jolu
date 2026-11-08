@@ -2281,9 +2281,10 @@ fn gateway_source_capabilities(app: tauri::AppHandle) -> Result<Vec<crate::gatew
 
 /// 接入 / 断开单个工具。
 ///
-/// `model` 只对 Claude Code 有意义：网关按 `<来源>/<模型>` 选路，接线时一并写进
-/// `ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL`，否则工具会发自带别名导致识别不出模型。
-/// 不传（或传空）时不写模型键，用户原有的映射保持不变。
+/// `model` 只对 Claude Code 有意义，是**主模型**：接线时写入 settings.json 顶层 `model`、
+/// `ANTHROPIC_SMALL_FAST_MODEL` 与全部档位 env（opus/sonnet/haiku/fable 默认跟随主模型），
+/// 并移除 `ANTHROPIC_MODEL`（它压过 /model 的选择）与各档旧的「关于」键；断开时按快照还原。
+/// 不传（或传空）时只接地址和令牌，用户的模型配置原样保留。
 #[tauri::command]
 fn gateway_wiring_set(app: tauri::AppHandle, agent: String, wired: bool, model: Option<String>) -> Result<String, String> {
     let result = gateway_wiring_set_inner(&app, agent, wired, model.as_deref());

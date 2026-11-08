@@ -164,6 +164,10 @@ pub(crate) struct ProxyDeps {
     pub(crate) on_circuit: Arc<dyn Fn(&str) + Send + Sync>,
     /// 网关模式：请求开始 / 结束的实时事件（灵动岛转发动效用，只带元数据）。
     pub(crate) on_activity: crate::gateway::activity::Emit,
+    /// 网关鉴权宽松开关：中转模式且网关只监听 127.0.0.1 回环（见 start 的绑定）时为 true，
+    /// 调用方令牌只用于识别 agent、不比对密钥——手动 Key 刷新不再让已接线工具集体 401。
+    /// 未来加入局域网共享开关后必须改回 false 走严格校验（access.rs::authorize）。
+    pub(crate) gateway_auth_relaxed: bool,
 }
 
 impl ProxyDeps {
@@ -829,6 +833,9 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
                 let _ = app.emit(name, payload);
             })
         },
+        // 宽松鉴权只属于回环中转：下面的绑定写死 127.0.0.1（两个分支都是），
+        // 局域网共享开关尚不存在；未来若允许非回环监听，此处必须改回 false。
+        gateway_auth_relaxed: mode == crate::gateway::Mode::Relay,
     });
 
     let router = build_router(mode, deps.clone());
@@ -1184,6 +1191,8 @@ pub(crate) mod test_support {
             circuit_threshold: 5,
             on_circuit: Arc::new(|_| {}),
             on_activity: Arc::new(|_, _| {}),
+            // 测试固定走严格校验，保持 access.rs 既有 HTTP 用例的 401 语义。
+            gateway_auth_relaxed: false,
         })
     }
 }
@@ -1323,6 +1332,7 @@ mod tests {
             circuit_threshold: 5,
             on_circuit: Arc::new(|_| {}),
             on_activity: Arc::new(|_, _| {}),
+            gateway_auth_relaxed: false,
         });
         (deps, shutdown_rx)
     }
