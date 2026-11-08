@@ -23,9 +23,11 @@ import {
   validateConnectionName,
 } from "./providerCatalog.ts"
 
-test("供应商目录保留自定义与现有平台，六个地区版本独立展示", () => {
-  assert.deepEqual(PROVIDERS.map((p) => p.name), ["自定义供应商", "Claude Code", "Codex", "Gemini", "Grok", "OpenCode", "ZCode", "Qoder CN", "Qoder", "WorkBuddy", "WorkBuddy AI", "Trae CN", "Trae"])
+test("供应商目录保留自定义与现有平台，地区版本独立展示", () => {
+  // ZCode 拆成国内 / 国际两条（各有上游与账号家族），所以名称与 edition 清单都多一项。
+  assert.deepEqual(PROVIDERS.map((p) => p.name), ["自定义供应商", "Claude Code", "Codex", "Gemini", "Grok", "OpenCode", "ZCode 国内版", "ZCode 国际版", "Qoder CN", "Qoder", "WorkBuddy", "WorkBuddy AI", "Trae CN", "Trae"])
   assert.deepEqual(PROVIDERS.filter(p => p.edition).map(p => [p.id, p.platformId, p.edition]), [
+    ["zcode-bigmodel", "zcode", "bigmodel"], ["zcode", "zcode", "zai"],
     ["qoder-cn", "qoder", "cn"], ["qoder", "qoder", "global"],
     ["workbuddy", "workbuddy", "cn"], ["workbuddy-ai", "workbuddy", "ai"],
     ["trae-cn", "trae", "cn"], ["trae", "trae", "global"],
@@ -184,4 +186,16 @@ test("模型区忙碌状态：获取与验证互斥，过期请求结束不改�
 })
 
 test("Qoder 与 WorkBuddy 密钥在原工具配置",()=>{for(const id of ["qoder","workbuddy"]){const p=providerEntry(id);assert.equal(p.apiKey,"none");assert.equal(singleModeReason(p),`${p.name} 的自定义模型在 ${p.name} 客户端内配置，Jolu 不代管密钥。`)}})
-test("ZCode 四种官方地址与鉴权协议匹配",()=>{const p=providerEntry("zcode");assert.equal(p.baseUrlChoices.length,4);for(const c of p.baseUrlChoices)assert.equal(c.protocol,c.value.endsWith("anthropic")?"anthropic":"openai")})
+test("ZCode 两个版本各有官方地址与鉴权协议",()=>{
+  // 国内版与国际版是两条独立条目（各有 edition 与上游），不再混在一条里。
+  const intl=providerEntry("zcode")
+  const cn=providerEntry("zcode-bigmodel")
+  assert.equal(intl.edition,"zai")
+  assert.equal(cn.edition,"bigmodel")
+  for(const p of [intl,cn]){
+    assert.equal(p.baseUrlChoices.length,2)
+    for(const c of p.baseUrlChoices)assert.equal(c.protocol,c.value.endsWith("anthropic")?"anthropic":"openai")
+  }
+  assert.ok(intl.baseUrlChoices.every(c=>c.value.includes("z.ai")))
+  assert.ok(cn.baseUrlChoices.every(c=>c.value.includes("bigmodel.cn")))
+})

@@ -37,6 +37,10 @@ pub struct Applied {
     /// 接线方式：oauth（保留登录，写 openai_base_url）或 provider（自定义 provider + 静态令牌）。
     #[serde(default)]
     pub mode: Option<String>,
+    /// 只对 Claude Code：写进 `ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` 的 `<来源>/<模型>`。
+    /// 重新接线算原值快照时要拿它判断「这个模型名是我们写的」，不能当成用户原来的设置。
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 pub fn load(conn: &Connection, agent: &str) -> Option<WiringRecord> {
@@ -166,7 +170,7 @@ mod tests {
     #[test]
     fn pending_then_wired_then_idle_round_trip() {
         let conn = db();
-        let applied = Applied { base: "http://127.0.0.1:12731".into(), token: Some("jolu-codex.abcd1234".into()), provider: None, mode: Some("provider".into()) };
+        let applied = Applied { base: "http://127.0.0.1:12731".into(), token: Some("jolu-codex.abcd1234".into()), provider: None, mode: Some("provider".into()), model: None };
         mark_pending(&conn, "codex", "instance-1", "relay", Some(r#"{"model_provider":"openai"}"#), &applied, Some("jolu-codex.abcd1234")).unwrap();
         let record = load(&conn, "codex").unwrap();
         assert_eq!(record.state, "pending");

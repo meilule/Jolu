@@ -9,7 +9,7 @@ import type { PlatformId } from "@/types"
  *   none    平台不提供该方式，不展示入口
  */
 export type ModeState = "ready" | "pending" | "none"
-export type ProviderId = PlatformId | "workbuddy-ai" | "trae-cn" | "qoder-cn"
+export type ProviderId = PlatformId | "workbuddy-ai" | "trae-cn" | "qoder-cn" | "zcode-bigmodel"
 
 export interface ProviderEntry {
   id: ProviderId
@@ -32,9 +32,18 @@ export const PROVIDERS: readonly ProviderEntry[] = [
   { id: "gemini", platformId: "gemini", name: "Gemini", access: "账号授权 / API Key", subscription: "ready", apiKey: "ready", baseUrl: { value: "https://generativelanguage.googleapis.com/v1beta/openai", locked: true } },
   { id: "grok", platformId: "grok", name: "Grok", access: "按可用接入方式连接", subscription: "ready", apiKey: "ready", baseUrl: { value: "https://api.x.ai/v1", locked: true } },
   { id: "opencode", platformId: "opencode", name: "OpenCode", access: "先选择模型服务", subscription: "ready", apiKey: "ready", baseUrl:{value:"https://opencode.ai/zen/go/v1",locked:true} },
-  { id: "zcode", platformId: "zcode", name: "ZCode", access: "订阅套餐 / API Key", subscription: "ready", apiKey: "ready", baseUrl:{value:"https://open.bigmodel.cn/api/anthropic",locked:true}, baseUrlChoices:[
+  /*
+   * ZCode 有两个账号家族，登录与转发都走各自的上游，必须分开建条目：
+   * - `bigmodel`（智谱中国版）：open.bigmodel.cn
+   * - `zai`（国际版 z.ai）：api.z.ai
+   * 以前只有一条、没有 edition，登录时统一传 "default"，后端只认 BigModel，
+   * 导致 z.ai 账号授权后拿不到凭据（连接 secret 为空，网关报「缺少完整授权」）。
+   */
+  { id: "zcode-bigmodel", platformId: "zcode", edition: "bigmodel", name: "ZCode 国内版", access: "订阅套餐 / API Key", subscription: "ready", apiKey: "ready", baseUrl:{value:"https://open.bigmodel.cn/api/anthropic",locked:true}, baseUrlChoices:[
     {label:"国内 · Anthropic",value:"https://open.bigmodel.cn/api/anthropic",protocol:"anthropic"},
     {label:"国内 · OpenAI",value:"https://open.bigmodel.cn/api/coding/paas/v4",protocol:"openai"},
+  ] },
+  { id: "zcode", platformId: "zcode", edition: "zai", name: "ZCode 国际版", access: "订阅套餐 / API Key", subscription: "ready", apiKey: "ready", baseUrl:{value:"https://api.z.ai/api/anthropic",locked:true}, baseUrlChoices:[
     {label:"国际 · Anthropic",value:"https://api.z.ai/api/anthropic",protocol:"anthropic"},
     {label:"国际 · OpenAI",value:"https://api.z.ai/api/coding/paas/v4",protocol:"openai"},
   ] },

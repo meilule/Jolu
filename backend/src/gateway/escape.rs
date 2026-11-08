@@ -198,7 +198,11 @@ pub fn startup(app: &tauri::AppHandle) {
 
 /// 接线：把一批 agent 指向网关。
 /// pending 先落库 → 写文件 → 标 wired；任何一步失败都留下可读的记录。
-pub fn wire_agents(app: &tauri::AppHandle, agents: &[String]) -> Result<Vec<String>, String> {
+///
+/// `model` 只用于 Claude Code：网关按 `<来源>/<模型>` 选路，不写模型映射的话工具会发它
+/// 自带的模型别名，请求无法路由（用户看到的就是「接好了但识别不出模型」）。
+/// 其它 agent 忽略这个参数。
+pub fn wire_agents(app: &tauri::AppHandle, agents: &[String], model: Option<&str>) -> Result<Vec<String>, String> {
     let settings = app.state::<crate::Cfg>().0.get();
     // 只有正在运行的模型入口才能接管工具：接到一个没在监听的端口会让工具全部失败。
     let (mode, _) = crate::gateway::mode_from(&settings);
@@ -221,7 +225,7 @@ pub fn wire_agents(app: &tauri::AppHandle, agents: &[String]) -> Result<Vec<Stri
             }
             // 已经接线且文件仍是我们的值：幂等跳过，不重复快照。
             // 需要重新应用时沿用上一次保存的原值（A4：重新应用不重新快照）。
-            let prior_snapshot = {
+            let (prior_snapshot, prior_model) = {
                 let state = app.state::<crate::Db>();
                 let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
                 match wiring_store::load(&conn, agent) {
@@ -232,9 +236,10 @@ pub fn wire_agents(app: &tauri::AppHandle, agents: &[String]) -> Result<Vec<Stri
                             wired.push(agent.clone());
                             continue;
                         }
-                        record.original_json
+                        let model = record.applied().and_then(|a| a.model);
+                        (record.original_json, model)
                     }
-                    None => None,
+                    None => (None, None),
                 }
             };
             // 先读原值、算好要写的值（快照已过滤所有网关值），写 pending 后再落盘
@@ -244,6 +249,8 @@ pub fn wire_agents(app: &tauri::AppHandle, agents: &[String]) -> Result<Vec<Stri
                 &instance_short,
                 &backup_dir,
                 prior_snapshot.as_deref(),
+                model,
+                prior_model.as_deref(),
                 |snapshot, applied| {
                     let state = app.state::<crate::Db>();
                     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;

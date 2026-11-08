@@ -122,6 +122,12 @@ static LAST_ERROR: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new
 static FALLBACK_REASON: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 static PROXY: LazyLock<Mutex<Option<Arc<ProxyRuntime>>>> = LazyLock::new(|| Mutex::new(None));
 
+/// 运行中实例的转发依赖。网关没在监听时返回 None——调用方不能自己造一份：
+/// 凭证索引、连接池与冷却都挂在运行实例上，另造一份等于拿空池去打上游。
+pub(crate) fn running_deps() -> Option<Arc<ProxyDeps>> {
+    PROXY.lock().ok()?.as_ref().map(|runtime| runtime.deps.clone())
+}
+
 pub(crate) struct ProxyRuntime {
     pub port: u16,
     mode: crate::gateway::Mode,

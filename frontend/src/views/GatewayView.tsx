@@ -67,6 +67,8 @@ export function GatewayView() {
   const [groups, setGroups] = useState<GatewayGroupsDto>(EMPTY_GROUPS)
   const [capabilities, setCapabilities] = useState<SourceCapabilityDto[]>([])
   const [catalog, setCatalog] = useState<CatalogModelDto[]>([])
+  /** Claude Code 接线时写进 settings.json 的默认模型（`<来源>/<模型>`）；空串表示不改模型 */
+  const [claudeModelChoice, setClaudeModelChoice] = useState("")
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [tick, setTick] = useState(0)
@@ -152,6 +154,24 @@ export function GatewayView() {
   }, [view, onlyServing, connections, sourceGroups])
   const shownSlugs = new Set(graphSources.map((source) => source.connection.slug).filter(Boolean))
   const shownModels = catalog.filter((model) => shownSlugs.has(model.slug)).length
+  /**
+   * Claude Code 可选的默认模型：只列已接入来源的模型。
+   * 没接入的来源调不到，写进去只会让 Claude Code 每次请求都失败。
+   */
+  const claudeModels = useMemo(() => {
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const model of catalog) {
+      if (!model.slug || !shownSlugs.has(model.slug)) continue
+      const id = `${model.slug}/${model.model}`
+      if (seen.has(id)) continue
+      seen.add(id)
+      out.push(id)
+    }
+    return out
+  }, [catalog, shownSlugs])
+  // 列表变化（刚接入新来源 / 目录刷新）时补一个默认值，但不动用户已经选过的
+  const claudeModel = claudeModelChoice || claudeModels[0] || ""
 
   /* ── 「只看」：按 Agent 分组筛选会话 ── */
   const views: SessionView[] = useMemo(() => {
@@ -168,10 +188,57 @@ export function GatewayView() {
     })
   }
 
+  /**
+   * 主动拉一次模型清单。
+   *
+   * 订阅来源的清单只能实时向上游要，`catalog` 只读缓存——不点这个按钮，0 模型会一直卡着，
+   * 用户就选不到模型、只能去手写环境变量。逐个来源拉，单个失败不影响其它来源。
+   */
+  const refreshModels = () => {
+    if (!isTauri) return
+    const targets = serving.filter((connection) => connection.slug)
+    if (targets.length === 0) {
+      toast.danger("没有可拉取的来源", "请先把来源加入模型池")
+      return
+    }
+    void run(async () => {
+      const failed: string[] = []
+      let total = 0
+      for (const connection of targets) {
+        try {
+          total += (await gatewayApi.refreshModels(connection.id)).length
+        } catch {
+          failed.push(connection.name)
+        }
+      }
+      await refresh()
+      if (failed.length > 0) throw new Error(`${failed.join("、")} 未返回模型清单`)
+      return `已拉取 ${total} 个模型`
+    }, "模型清单已更新")
+  }
+
   const wire = (agent: string) => {
     if (agent === "codex") return setDialog({ kind: "codex" })
     if (agent === "gemini") return setDialog({ kind: "gemini" })
-    setDialog({ kind: "confirm", title: `接入 ${agentLabel(agent)}？`, description: "将更新这个工具的本机配置，使其通过 Jolu 统一网关调用模型。原连接配置会被保留，断开时恢复。", label: "确认接入", work: () => run(() => gatewayApi.setWiring(agent, true), `已接入 ${agentLabel(agent)}`, true) })
+    /*
+     * Claude Code 的模型键怎么处理，取决于有没有默认来源：
+     *
+     * - 设了默认来源：不写任何模型键。工具原本的 `ANTHROPIC_MODEL` / 各个 DEFAULT_* 全部原样保留，
+     *   模型名直接透传给网关，由默认来源兜底。换模型只需在 Claude Code 里改，Jolu 不用再动
+     *   —— 这才是「配一次、以后换模型不用重配」。
+     * - 没设默认来源：只能写死一个带前缀的模型，否则无前缀请求一律被拒。这时下拉里选的那个
+     *   才会被写进去；用户仍然要自己设置默认来源才能彻底摆脱前缀。
+     */
+    const useDefaultSource = Boolean(status?.default_connection)
+    const model = agent === "claude-code" && !useDefaultSource ? claudeModel || null : null
+    const detail = agent === "claude-code"
+      ? useDefaultSource
+        ? "将把 Claude Code 的请求地址指向本机网关。已设置默认来源，模型名按原样透传，你现有的模型配置保持不变，断开时恢复。"
+        : model
+          ? `将更新这个工具的本机配置，使其通过 Jolu 统一网关调用模型（默认模型 ${model}）。原连接配置会被保留，断开时恢复。`
+          : "将更新这个工具的本机配置，使其通过 Jolu 统一网关调用模型。原连接配置会被保留，断开时恢复。"
+      : "将更新这个工具的本机配置，使其通过 Jolu 统一网关调用模型。原连接配置会被保留，断开时恢复。"
+    setDialog({ kind: "confirm", title: `接入 ${agentLabel(agent)}？`, description: detail, label: "确认接入", work: () => run(() => gatewayApi.setWiring(agent, true, model), `已接入 ${agentLabel(agent)}`, true) })
   }
   const confirmUnwire = (agent: string) => setDialog({ kind: "confirm", title: `断开 ${agentLabel(agent)}？`, description: "将恢复这个工具接入前的连接配置，后续请求不再通过 Jolu 统一网关。", label: "确认断开", danger: true, work: () => run(() => gatewayApi.setWiring(agent, false), `已断开 ${agentLabel(agent)}`, true) })
   const confirmAccept = (agent: string) => setDialog({ kind: "confirm", title: `接受 ${agentLabel(agent)} 的现有配置？`, description: "将以工具当前的外部配置为准，结束 Jolu 对这份接线记录的管理。确认前请核对配置变动。", label: "接受现状", work: () => run(() => gatewayApi.acceptWiring(agent), "已接受现状", true) })
@@ -259,6 +326,24 @@ export function GatewayView() {
           仅看已接入
         </button>
         <div className="flex-1" />
+        {/* 默认来源：无前缀模型名（Claude Code 自带的 claude-*、或用户手写的 GLM-5.3-Flash）
+            只能靠它兜底，否则网关一律以「未带来源前缀」拒绝。所以放在主工具栏上，不藏进弹窗。 */}
+        <label className="flex h-9 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-2.5 text-[11.5px]"
+          title="不带「来源/」前缀的模型名会落到这里；不设置时这类请求会被拒绝">
+          <span className="shrink-0 text-jolu-muted">默认来源</span>
+          <select value={status?.default_connection ?? ""} disabled={busy || serving.length === 0}
+            aria-label="默认来源"
+            onChange={(event) => {
+              const next = event.target.value || null
+              void run(() => gatewayApi.setDefaultSource(next), next ? "已设置默认来源" : "已清除默认来源", true)
+            }}
+            className="max-w-[150px] bg-transparent text-[11.5px] text-jolu-text outline-none disabled:opacity-50">
+            <option value="">未设置</option>
+            {serving.map((connection) => (
+              <option key={connection.id} value={connection.id}>{connection.name}</option>
+            ))}
+          </select>
+        </label>
         <button type="button" onClick={() => setDialog({ kind: "manage" })} title="加入 / 移出模型池、改名与菜单 id、分组与排序"
           className="jolu-control motion-button flex h-9 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-[11.5px] text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
           <Settings2 aria-hidden className="size-3.5 text-jolu-muted" />
@@ -268,7 +353,8 @@ export function GatewayView() {
 
       <SessionGraph sources={graphSources} views={views} sourceLive={sessions.sourceLive} modelCount={shownModels} desktop={isTauri}
         loading={sessions.loading} loaded={sessions.loaded} error={sessions.error} freshness={sessions.freshness} busy={busy}
-        onRetry={sessions.refresh} onToggleServe={askServe} />
+        onRetry={sessions.refresh} onToggleServe={askServe}
+        onRefreshModels={refreshModels} />
 
       <RouteLogPanel desktop={isTauri} connections={connections} tick={tick} />
 
@@ -300,7 +386,7 @@ export function GatewayView() {
         }} />
       )}
       {dialog?.kind === "serve-conflict" && <MessageDialog title="这个来源没有加入模型池" tone="danger" message={dialog.message} onClose={() => setDialog({ kind: "manage" })} />}
-      {dialog?.kind === "wiring" && <WiringDialog agents={agents} busy={busy} onClose={() => setDialog(null)} onWire={(agent) => { setDialog(null); wire(agent) }} onUnwire={confirmUnwire} onAccept={confirmAccept} />}
+      {dialog?.kind === "wiring" && <WiringDialog agents={agents} models={claudeModels} modelChoice={claudeModel} onModelChoice={setClaudeModelChoice} usingDefaultSource={Boolean(status?.default_connection)} busy={busy} onClose={() => setDialog(null)} onWire={(agent) => { setDialog(null); wire(agent) }} onUnwire={confirmUnwire} onAccept={confirmAccept} />}
       {dialog?.kind === "codex" && <CodexDialog returnFocusTo={accessTrigger.current} mode={agents.find((entry) => entry.agent === "codex")?.codex_mode ?? "provider"} busy={busy} onClose={() => setDialog(null)} onConfirm={() => run(() => gatewayApi.setWiring("codex", true), "已接入 Codex", true)} />}
       {dialog?.kind === "gemini" && <GeminiDialog returnFocusTo={accessTrigger.current} busy={busy} onClose={() => setDialog(null)} onConfirm={() => run(() => gatewayApi.setWiring("gemini", true), "已接入 Gemini CLI", true)} />}
       {dialog?.kind === "restore-failed" && <MessageDialog title="没能恢复工具配置" tone="danger" message={dialog.message} action={{ label: "重试断开", onClick: async () => { setDialog(null); await unwire(dialog.agent) } }} onClose={() => setDialog(null)} />}

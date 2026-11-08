@@ -15,8 +15,10 @@ use axum::{
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
+/// 两个账号家族的站点根。实际使用哪一个由连接里的 `session.family()` 决定，
+/// 这组常量只在「测试换了上游域名」的判断里用到。
 const ORIGIN: &str = "https://bigmodel.cn";
-const MODEL_BASE: &str = "https://open.bigmodel.cn/api/anthropic";
+const ZAI_ORIGIN: &str = "https://api.z.ai";
 
 pub(crate) fn bound(
     conn: &rusqlite::Connection,
@@ -84,7 +86,9 @@ async fn material_at(deps: &Arc<ProxyDeps>, id: &str, origin: &str) -> Result<St
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_secs(30));
-    let builder = if cfg!(test) && origin != ORIGIN {
+    // 测试里换掉上游域名（指向本地假服务器）时直连，避免测试代理干扰；
+    // 正式运行时 origin 一定是官方域名之一，这里不会命中。
+    let builder = if cfg!(test) && !matches!(origin, ORIGIN | ZAI_ORIGIN) {
         builder.no_proxy()
     } else {
         match crate::net::current_mode() {
@@ -202,9 +206,15 @@ async fn material_at(deps: &Arc<ProxyDeps>, id: &str, origin: &str) -> Result<St
 }
 
 pub(crate) async fn models(deps: &Arc<ProxyDeps>, id: &str) -> Result<Vec<String>, String> {
-    let token = material_at(deps, id, ORIGIN).await?;
+    // 上游按账号家族分开：z.ai 账号去 api.z.ai，BigModel 账号去 open.bigmodel.cn。
+    let (origin, base) = {
+        let conn = deps.db.lock().map_err(|_| "无法读取 ZCode 授权")?;
+        let (_, session) = bound(&conn, id)?;
+        (session.origin(), session.anthropic_base())
+    };
+    let token = material_at(deps, id, origin).await?;
     tokio::task::spawn_blocking(move || {
-        crate::connections::fetch_models("zcode", Some("anthropic"), MODEL_BASE, &token)
+        crate::connections::fetch_models("zcode", Some("anthropic"), base, &token)
     })
     .await
     .map_err(|_| "ZCode 模型查询失败")?
@@ -222,7 +232,17 @@ pub(crate) async fn forward(
             "ZCode 订阅使用 Anthropic Messages 协议",
         );
     }
-    let token = match material_at(&deps, &entry.connection_id, ORIGIN).await {
+    // 上游与凭据都按账号家族走：z.ai 账号必须打到 api.z.ai。
+    let (origin, base) = {
+        match deps.db.lock() {
+            Ok(conn) => match bound(&conn, &entry.connection_id) {
+                Ok((_, session)) => (session.origin(), session.anthropic_base()),
+                Err(e) => return error_response(StatusCode::UNAUTHORIZED, &e),
+            },
+            Err(_) => return error_response(StatusCode::SERVICE_UNAVAILABLE, "无法读取 ZCode 授权"),
+        }
+    };
+    let token = match material_at(&deps, &entry.connection_id, origin).await {
         Ok(v) => v,
         Err(e) => return error_response(StatusCode::UNAUTHORIZED, &e),
     };
@@ -230,15 +250,22 @@ pub(crate) async fn forward(
         Ok(v) => v,
         Err(_) => return error_response(StatusCode::BAD_REQUEST, "请求格式无效"),
     };
-    let Some(model) = value["model"]
-        .as_str()
-        .and_then(|m| m.split_once('/').map(|(_, m)| m))
-    else {
-        return error_response(StatusCode::BAD_REQUEST, "请选择来源和模型");
+    // 模型名可以带来源前缀（`zcode/GLM-5.3`）也可以不带（默认来源兜底时）。
+    // 早期这里要求必须有 `/`，会把不带前缀的请求在转发层再拒一次——路由是过了，
+    // 用户看到的仍是「请选择来源和模型」。前缀只用于选路，到上游前要剥掉。
+    let Some(raw_model) = value["model"].as_str() else {
+        return error_response(StatusCode::BAD_REQUEST, "请求缺少模型");
     };
+    let model = raw_model
+        .split_once('/')
+        .map_or(raw_model, |(_, m)| m)
+        .trim();
+    if model.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "请选择来源和模型");
+    }
     let mut target = entry.clone();
     target.secret = Some(token);
-    target.base_url = Some(MODEL_BASE.into());
+    target.base_url = Some(base.into());
     target.protocol = "anthropic".into();
     super::direct::forward(
         deps,
@@ -265,6 +292,7 @@ mod tests {
             user_id: "fixture-user".into(),
             account: None,
             zcode_token: "fixture-session".into(),
+            family: None,
         };
         let sealed = provider_browser_auth::seal("no-key", &Credential::Zcode { session }).unwrap();
         deps.db.lock().unwrap().execute("INSERT INTO connections(id,platform,kind,name,secret,created_ms,slug) VALUES('no-key','zcode','auth','fixture',?1,1,'no-key')", [sealed]).unwrap();
@@ -298,6 +326,7 @@ mod tests {
             user_id: "fixture-user".into(),
             account: None,
             zcode_token: "fixture-session".into(),
+            family: None,
         };
         let sealed =
             provider_browser_auth::seal("redirect", &Credential::Zcode { session }).unwrap();
@@ -343,6 +372,7 @@ mod tests {
                 user_id: id.into(),
                 account: None,
                 zcode_token: format!("{id}-session"),
+                family: None,
             };
             let sealed = provider_browser_auth::seal(id, &Credential::Zcode { session }).unwrap();
             deps.db.lock().unwrap().execute("INSERT INTO connections(id,platform,kind,name,secret,created_ms,slug) VALUES(?1,'zcode','auth',?1,?2,1,?1)",rusqlite::params![id,sealed]).unwrap();

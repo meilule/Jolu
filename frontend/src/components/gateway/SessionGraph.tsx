@@ -44,12 +44,14 @@ function reducedMotion(): boolean {
   return document.documentElement.classList.contains("reduce-motion") || window.matchMedia("(prefers-reduced-motion: reduce)").matches
 }
 
-export function SessionGraph({ sources, views, sourceLive, modelCount, loading, loaded, error, freshness, desktop, busy, onRetry, onToggleServe }: {
+export function SessionGraph({ sources, views, sourceLive, modelCount, loading, loaded, error, freshness, desktop, busy, onRetry, onToggleServe, onRefreshModels }: {
+  modelCount: number
+  /** 0 模型时提供「拉取」入口；不传则不显示 */
+  onRefreshModels?: () => void
   sources: GraphSource[]
   views: SessionView[]
   /** 没有会话标识的在途请求（如 Gemini CLI），按来源 id 汇总 */
   sourceLive: Map<string, SourceLive>
-  modelCount: number
   loading: boolean
   loaded: boolean
   error: string | null
@@ -278,7 +280,18 @@ export function SessionGraph({ sources, views, sourceLive, modelCount, loading, 
       <header className="grid grid-cols-[minmax(240px,330px)_minmax(80px,1fr)_minmax(300px,494px)] px-8 pb-3 pt-[22px] pr-[46px]">
         <div className="flex flex-col gap-[7px]">
           <h2 className="text-[16px] font-semibold text-jolu-text">模型来源</h2>
-          <p className="text-[11px] text-jolu-muted">{sources.length} 个来源 · {modelCount} 个模型</p>
+          <p className="flex items-center gap-1.5 text-[11px] text-jolu-muted">
+            <span>{sources.length} 个来源 · {modelCount} 个模型</span>
+            {/* 订阅类来源的清单只能实时拉，界面不会自己去打上游；0 模型时给一个明确的动作 */}
+            {modelCount === 0 && sources.length > 0 && onRefreshModels && (
+              <button type="button" disabled={busy} onClick={onRefreshModels}
+                title="向来源实时请求一次模型清单（订阅类来源不会自动拉取）"
+                className="inline-flex items-center gap-0.5 rounded px-1 text-jolu-accent outline-none hover:underline focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-50">
+                <RotateCw aria-hidden className="size-3" />
+                拉取
+              </button>
+            )}
+          </p>
         </div>
         <span />
         <div className="flex flex-col gap-[7px]">

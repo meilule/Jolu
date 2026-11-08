@@ -438,6 +438,62 @@ mod tests {
     }
 
     #[test]
+    fn unprefixed_model_routes_to_default_source() {
+        // 默认来源就是为「工具发不带前缀的模型名」准备的：Claude Code 自带的 claude-*、
+        // 用户手写的 GLM-5.3-Flash 都属于这种。没有它这些请求只能被拒。
+        let pool = vec![
+            entry("zcode", "auth", "anthropic", "connected"),
+            entry("kimi", "api", "anthropic", "connected"),
+        ];
+        match decide(&pool, "GLM-5.3-Flash", Some("c-zcode"), &no_history) {
+            RouteDecision::Subscription(e) => assert_eq!(e.slug, "zcode"),
+            other => panic!("应兜底到默认来源，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unprefixed_model_without_default_source_is_rejected_with_actionable_message() {
+        let pool = vec![entry("zcode", "auth", "anthropic", "connected")];
+        match decide(&pool, "GLM-5.3-Flash", None, &no_history) {
+            RouteDecision::Reject { kind, message, .. } => {
+                assert_eq!(kind, RejectKind::BadRequest);
+                assert!(message.contains("未带来源前缀"), "要说清是前缀问题：{message}");
+                assert!(message.contains("默认来源"), "要告诉用户去哪儿设：{message}");
+            }
+            other => panic!("无默认来源时应拒绝，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn default_source_pointing_at_missing_connection_is_service_unavailable() {
+        // 默认来源被删掉后不能静默落到别的来源上，否则请求会打到用户没预期的账号。
+        let pool = vec![entry("kimi", "api", "anthropic", "connected")];
+        match decide(&pool, "GLM-5.3-Flash", Some("c-gone"), &no_history) {
+            RouteDecision::Reject { kind, message, .. } => {
+                assert_eq!(kind, RejectKind::ServiceUnavailable);
+                assert!(message.contains("已不存在"), "{message}");
+            }
+            other => panic!("应报默认来源不存在，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn prefixed_model_ignores_default_source() {
+        // 明确写了前缀就按前缀走，默认来源不能抢走这条请求。
+        let pool = vec![
+            entry("zcode", "auth", "anthropic", "connected"),
+            entry("kimi", "api", "anthropic", "connected"),
+        ];
+        match decide(&pool, "kimi/kimi-k2", Some("c-zcode"), &no_history) {
+            RouteDecision::Direct(e, m) => {
+                assert_eq!(e.slug, "kimi");
+                assert_eq!(m, "kimi-k2");
+            }
+            other => panic!("前缀优先，实际 {other:?}"),
+        }
+    }
+
+    #[test]
     fn split_model_requires_both_parts() {
         assert_eq!(split_model_id("kimi/kimi-k2"), Some(("kimi", "kimi-k2")));
         assert_eq!(split_model_id("kimi/"), None);

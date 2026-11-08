@@ -276,7 +276,9 @@ impl PendingLogin {
             "workbuddy"=>Ok(Self::Workbuddy{edition:edition.into(),pending:crate::workbuddy_browser_auth::begin(edition)?}),
             "trae"=>Ok(Self::Trae{edition:edition.into(),pending:crate::trae_browser_auth::begin(edition)?}),
             "grok"=>crate::grok_browser_auth::begin().map(Self::Grok),
-            "zcode"=>crate::zcode_browser_auth::begin().map(Self::Zcode),
+            // ZCode 有两个账号家族：BigModel（智谱中国版）与 z.ai（国际版）。
+            // edition 在这里当家族用；空值走 BigModel，保持历史行为不变。
+            "zcode"=>crate::zcode_browser_auth::begin_family(if edition.trim().is_empty(){"bigmodel"}else{edition.trim()}).map(Self::Zcode),
             "claude"|"codex"|"gemini"|"opencode"=>crate::cli_browser_auth::begin(platform).map(Self::Cli),
             _=>Err("该供应商没有可用的浏览器登录协议".into()),
         }

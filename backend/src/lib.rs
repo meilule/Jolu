@@ -2098,6 +2098,46 @@ struct GatewayStatus {
     wiring: Vec<crate::gateway::wiring::WiringStatus>,
 }
 
+/// 设置 / 清除「默认来源」。
+///
+/// 网关的模型名有两种写法：带前缀 `<来源>/<模型>` 按前缀路由，不带前缀时**只能**靠默认来源兜底。
+/// 没有默认来源时无前缀请求会被直接拒绝（`route::split_model_id` 返回 None 后没有兜底）。
+/// 这就是「一键配置后工具仍报未带来源前缀」的原因，所以必须有一个能单独设置它的入口。
+///
+/// 只接受**正在服务**（`serve_enabled`）的连接：指向一个没进模型池的来源，等于每条请求都失败。
+/// 传 `None` 表示清除，清掉后无前缀请求重新变成明确报错，而不是静默乱路由。
+#[tauri::command]
+fn gateway_set_default_source(app: tauri::AppHandle, connection_id: Option<String>) -> Result<Option<String>, String> {
+    if let Some(id) = connection_id.as_deref() {
+        let state = app.state::<Db>();
+        let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+        let serving: Option<(String, Option<String>)> = conn
+            .query_row(
+                "SELECT name, slug FROM connections WHERE id = ?1 AND serve_enabled = 1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok();
+        match serving {
+            None => return Err("该来源不在模型池中：请先在「管理来源」里让它加入，再设为默认来源".into()),
+            Some((name, slug)) => {
+                if slug.as_deref().unwrap_or("").is_empty() {
+                    return Err(format!("来源「{name}」还没有 id，无法作为默认来源"));
+                }
+            }
+        }
+    }
+    let next = app
+        .state::<Cfg>()
+        .0
+        .try_update(|settings| {
+            settings.gateway_default_connection = connection_id.clone();
+        })
+        .map_err(|error| format!("保存默认来源失败：{error}"))?;
+    let _ = app.emit("settings-changed", next);
+    Ok(connection_id)
+}
+
 #[tauri::command]
 fn gateway_status(app: tauri::AppHandle) -> GatewayStatus {
     let settings = app.state::<Cfg>().0.get();
@@ -2240,17 +2280,21 @@ fn gateway_source_capabilities(app: tauri::AppHandle) -> Result<Vec<crate::gatew
 }
 
 /// 接入 / 断开单个工具。
+///
+/// `model` 只对 Claude Code 有意义：网关按 `<来源>/<模型>` 选路，接线时一并写进
+/// `ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL`，否则工具会发自带别名导致识别不出模型。
+/// 不传（或传空）时不写模型键，用户原有的映射保持不变。
 #[tauri::command]
-fn gateway_wiring_set(app: tauri::AppHandle, agent: String, wired: bool) -> Result<String, String> {
-    let result = gateway_wiring_set_inner(&app, agent, wired);
+fn gateway_wiring_set(app: tauri::AppHandle, agent: String, wired: bool, model: Option<String>) -> Result<String, String> {
+    let result = gateway_wiring_set_inner(&app, agent, wired, model.as_deref());
     let _ = app.emit("gateway-wiring-changed", ());
     result
 }
 
-fn gateway_wiring_set_inner(app: &tauri::AppHandle, agent: String, wired: bool) -> Result<String, String> {
+fn gateway_wiring_set_inner(app: &tauri::AppHandle, agent: String, wired: bool, model: Option<&str>) -> Result<String, String> {
     let app = app.clone();
     if wired {
-        let wired_agents = crate::gateway::escape::wire_agents(&app, std::slice::from_ref(&agent))?;
+        let wired_agents = crate::gateway::escape::wire_agents(&app, std::slice::from_ref(&agent), model)?;
         Ok(format!("已接入 {}", wired_agents.join("、")))
     } else {
         let settings = app.state::<Cfg>().0.get();
@@ -2423,6 +2467,53 @@ async fn list_connections(db: State<'_, DbRead>) -> Result<Vec<connections::Conn
         connections::list(conn).map_err(|e| e.to_string())
     })
     .await
+}
+
+/// 刷新某个来源的模型清单并落库（写 `connections.models_json`）。
+///
+/// 为什么需要单独一条命令：界面读的 `catalog::list` 只读缓存、从不打上游，所以订阅类来源
+/// （`kind = auth`）在缓存为空时永远显示 0 模型。Claude / Codex 有内置清单兜底，ZCode、Grok、
+/// Gemini 这类只能实时拉——没有这个入口，用户就会卡在「0 模型 → 选不了模型 → 只能手写环境变量」。
+///
+/// 只从已存连接取凭证，不接受前端传入的 Key；凭据不出后端。
+#[tauri::command]
+async fn gateway_refresh_models(app: tauri::AppHandle, connection_id: String) -> Result<Vec<String>, String> {
+    let (platform, status) = {
+        let state = app.state::<Db>();
+        let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+        conn.query_row(
+            "SELECT platform, status FROM connections WHERE id = ?1",
+            [&connection_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .map_err(|_| "来源不存在".to_string())?
+    };
+    if !matches!(status.as_str(), "connected" | "ok" | "valid") {
+        return Err("该来源当前不可用：请先重新登录或检查凭证".into());
+    }
+    let deps = crate::proxy::running_deps()
+        .ok_or("网关未在运行：请先开启「允许接入」，再刷新模型清单")?;
+    let fetched = match platform.as_str() {
+        "zcode" => crate::gateway::adapter::zcode::models(&deps, &connection_id).await,
+        "grok" => crate::gateway::adapter::grok::models(&deps, &connection_id).await,
+        "gemini" => crate::gateway::adapter::gemini_subscription::models(&deps, &connection_id).await,
+        _ => Err(format!("该平台没有可实时拉取的模型清单（{platform}）")),
+    }?;
+    if fetched.is_empty() {
+        return Err("上游返回了空清单：请确认该账号已开通可用的模型".into());
+    }
+    {
+        let state = app.state::<Db>();
+        let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+        let json = serde_json::to_string(&fetched).map_err(|error| format!("清单序列化失败：{error}"))?;
+        conn.execute(
+            "UPDATE connections SET models_json = ?2 WHERE id = ?1",
+            rusqlite::params![connection_id, json],
+        )
+        .map_err(|error| format!("保存模型清单失败：{error}"))?;
+    }
+    let _ = app.emit("gateway-catalog-changed", ());
+    Ok(fetched)
 }
 
 /// 「获取模型」（画布 18）：用用户填写的地址与 Key 拉取网关模型列表。
@@ -3725,6 +3816,8 @@ pub fn run() {
             fx_rate,
             set_cost_currency,
             gateway_set_mode,
+            gateway_set_default_source,
+            gateway_refresh_models,
             gateway_set_serve,
             gateway_set_serve_many,
             gateway_source_usage,

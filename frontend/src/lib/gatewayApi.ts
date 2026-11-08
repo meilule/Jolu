@@ -168,6 +168,13 @@ export const gatewayApi = {
   /** 切换模式；切回 observe 时后端会先还原全部接线 */
   setMode: (mode: GatewayMode, defaultConnection: string | null) =>
     invoke<unknown>("gateway_set_mode", { mode, defaultConnection }),
+  /**
+   * 设置 / 清除默认来源。无前缀模型名只能靠它兜底，否则会被网关拒绝（未带来源前缀）。
+   * 只接受已在模型池中的连接。
+   */
+  setDefaultSource: (connectionId: string | null) => invoke<string | null>("gateway_set_default_source", { connectionId }),
+  /** 实时拉取某来源的模型清单并落库；订阅类来源缓存为空时界面靠它脱离「0 模型」。 */
+  refreshModels: (connectionId: string) => invoke<string[]>("gateway_refresh_models", { connectionId }),
   /** 连接进出模型池 */
   setServe: (connectionId: string, enabled: boolean) =>
     invoke<void>("gateway_set_serve", { connectionId, enabled }),
@@ -177,7 +184,8 @@ export const gatewayApi = {
   /** 各来源最近使用时间与请求数 */
   sourceUsage: () => invoke<SourceUsageDto[]>("gateway_source_usage"),
   /** 接入 / 断开单个工具 */
-  setWiring: (agent: string, wired: boolean) => invoke<string>("gateway_wiring_set", { agent, wired }),
+  /** 接入 / 断开工具。`model` 只对 Claude Code 有意义（`<来源>/<模型>`），不传则不改模型映射。 */
+  setWiring: (agent: string, wired: boolean, model?: string | null) => invoke<string>("gateway_wiring_set", { agent, wired, model: model ?? null }),
   /** 接受漂移：只清接线记录，不改用户的配置文件 */
   acceptWiring: (agent: string) => invoke<void>("gateway_wiring_accept", { agent }),
   /** 逃生门：还原全部接线并停网关 */
