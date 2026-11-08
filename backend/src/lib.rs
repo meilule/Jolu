@@ -1805,6 +1805,12 @@ async fn finish_quota_query(
     let outcome = (success || unauthorized).then_some(success);
     let changed = with_database(pool, move |conn| connections::record_query_result(conn, &update_id, &expected, outcome)).await?;
     if changed { let _ = app.emit("connections-changed", ()); }
+    // 额度快照（路由分组 smart / pace 的数据源）：成功查询把最早的重置时间记入注册表
+    if let quota::QuotaState::Ok { windows, .. } = &state {
+        if let Some(resets) = crate::gateway::quota_snapshot::earliest_reset_from_windows(windows) {
+            crate::gateway::quota_snapshot::record(&id, resets);
+        }
+    }
     if app.state::<Cfg>().0.get().island_connection_id.as_deref() == Some(id.as_str()) {
         update_tray_icon(&app);
     }

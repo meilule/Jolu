@@ -464,8 +464,13 @@ pub(crate) async fn handle(
                 .unwrap_or(0)
         };
         let (ordered, note) = {
+            // smart / pace 的额度快照：成员 slug → 连接 id → 下一次重置时间
+            let resets_of = |slug: &str| -> Option<i64> {
+                let connection_id = pool.iter().find(|e| e.slug == slug)?.connection_id.clone();
+                crate::gateway::quota_snapshot::resets_of(&connection_id)
+            };
             let mut rotate = crate::gateway::routing_groups::rotate_state();
-            crate::gateway::routing_groups::ordered_members(&group, &mut rotate, &usage_of, bound.as_deref())
+            crate::gateway::routing_groups::ordered_members(&group, &mut rotate, &usage_of, &resets_of, bound.as_deref())
         };
         group_note = note;
         let (expanded, skipped) = crate::gateway::routing_groups::expand(&ordered, 0, &|slug| {

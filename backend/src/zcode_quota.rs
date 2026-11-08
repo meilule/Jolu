@@ -269,6 +269,108 @@ pub(crate) fn coding_plan_jwt_at(home: &Path) -> Option<String> {
     (!jwt.is_empty()).then(|| jwt.to_owned())
 }
 
+/// 团队套餐的坐席选定（magpie `zcodeOwnTeam` 同款）：ZCode 切到团队套餐后，
+/// setting.json 记下成员所在的机构与项目；转发要用**项目自己的 Key**（额度在项目上，
+/// 个人 Key 会 1113「余额不足」）。
+#[derive(Debug, Clone)]
+pub(crate) struct TeamSelection {
+    pub family: String,
+    pub org: String,
+    pub project: String,
+    /// 业务登录令牌：z.ai 家族走 Bearer，BigModel 家族裸放
+    pub access_token: String,
+}
+
+/// 读团队套餐的坐席选定。
+///
+/// `~/.zcode/v2/setting.json`：`providerFamilyDomain` 指明家族（缺省按 zai → bigmodel
+/// 顺序试），`providerFamilyConnectionSelections.<家族>.kind == "team-coding-plan"`
+/// 时给出 organizationId / projectId；旧版走 `modelProviderFamilySelectedKeys.<家族>`
+/// 的 `team-plan:builtin:<家族>-coding-plan:<org>:<project>` 形态。
+/// 业务令牌取 `oauth:<家族>:access_token` 解密；BigModel 家族里令牌与 `zcodejwttoken`
+/// 相同视为陈旧缓存，跳过（magpie 同款）。
+pub(crate) fn team_selection_at(home: &Path) -> Option<TeamSelection> {
+    let setting: Value = serde_json::from_str(
+        &std::fs::read_to_string(home.join(".zcode").join("v2").join("setting.json")).ok()?,
+    )
+    .ok()?;
+    let credentials: Value = serde_json::from_str(
+        &std::fs::read_to_string(home.join(".zcode").join("v2").join("credentials.json")).ok()?,
+    )
+    .ok()?;
+    let secret = credential_secret(home);
+    let domain = setting.get("providerFamilyDomain").and_then(Value::as_str);
+    // 两个映射都可能缺省（只有旧版选定的机器没有新表）：缺失按空表处理，
+    // 不能用 ? 提前返回——否则旧版用户永远读不出团队选定
+    let empty = serde_json::Map::new();
+    let selections = setting.get("providerFamilyConnectionSelections").and_then(Value::as_object).unwrap_or(&empty);
+    let legacy = setting.get("modelProviderFamilySelectedKeys").and_then(Value::as_object).unwrap_or(&empty);
+    let mut families: Vec<&str> = vec!["zai", "bigmodel"];
+    if let Some(domain) = domain {
+        families.insert(0, match domain { "bigmodel" => "bigmodel", _ => "zai" });
+    }
+    for family in families {
+        let mut org = String::new();
+        let mut project = String::new();
+        if let Some(selection) = selections.get(family).filter(|s| s["kind"] == "team-coding-plan") {
+            org = selection["organizationId"].as_str().unwrap_or_default().trim().to_string();
+            project = selection["projectId"].as_str().unwrap_or_default().trim().to_string();
+        } else if let Some(legacy_key) = legacy.get(family).and_then(Value::as_str) {
+            // 旧版：值 = "team-plan:builtin:<家族>-coding-plan:<account>:<org>:<project>"，
+            // CutPrefix 后剩三段（magpie 要求 len == 3），org / project 是第 2、3 段（百分号编码）
+            let rest = legacy_key
+                .strip_prefix(&format!("team-plan:builtin:{family}-coding-plan:"))?
+                .trim();
+            let mut parts = rest.split(':');
+            let _account = parts.next()?;
+            org = percent_decode(parts.next()?)?;
+            project = percent_decode(parts.next()?)?;
+            if parts.next().is_some() {
+                org.clear();
+            }
+        }
+        if org.is_empty() || project.is_empty() {
+            continue;
+        }
+        let token = credentials.get(format!("oauth:{family}:access_token")).and_then(Value::as_str)?;
+        let access_token = decrypt_credential(token, &secret).ok()?.trim().to_string();
+        if access_token.is_empty() {
+            continue;
+        }
+        // BigModel 家族：会话 JWT 与业务令牌相同 = 陈旧缓存，ZCode 自己也不会用
+        if family == "bigmodel" {
+            if let Some(jwt_raw) = credentials.get("zcodejwttoken").and_then(Value::as_str) {
+                if let Some(jwt) = decrypt_credential(jwt_raw, &secret).ok() {
+                    if jwt.trim().trim_start_matches("Bearer ").trim() == access_token {
+                        continue;
+                    }
+                }
+            }
+        }
+        return Some(TeamSelection { family: family.to_string(), org, project, access_token });
+    }
+    None
+}
+
+/// URL 段解码（团队选定的旧版形态里 org / project 是百分号编码）。
+fn percent_decode(raw: &str) -> Option<String> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok()?;
+            let byte = u8::from_str_radix(hex, 16).ok()?;
+            out.push(byte);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 /// 已解密的登录信息里只取邮箱做掩码；昵称、user_id、头像、令牌原文都不返回。
 fn masked_account_email(credentials: &Value, secret: &str, family: &str) -> Option<String> {
     let raw = credentials.get(&format!("oauth:{family}:user_info")).and_then(Value::as_str)?;
@@ -672,6 +774,79 @@ mod tests {
 
     fn write_credentials(home: &Path, credentials: &Value) {
         std::fs::write(home.join(".zcode").join("v2").join("credentials.json"), credentials.to_string()).unwrap();
+    }
+
+    #[test]
+    fn team_selection_reads_setting_json_and_legacy_forms() {
+        let home = temp_home("team-selection");
+        let secret = credential_secret(&home);
+        let credentials = serde_json::json!({
+            "oauth:zai:access_token": envelope(&secret, "synthetic-team-token"),
+        });
+        write_credentials(&home, &credentials);
+        let v2 = home.join(".zcode").join("v2");
+        std::fs::create_dir_all(&v2).unwrap();
+        // 新版：providerFamilyConnectionSelections 的 team-coding-plan 选定
+        std::fs::write(
+            v2.join("setting.json"),
+            serde_json::json!({
+                "providerFamilyDomain": "zai",
+                "providerFamilyConnectionSelections": {
+                    "zai": {"kind": "team-coding-plan", "organizationId": "org-1", "projectId": "proj-1"}
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let selection = team_selection_at(&home).expect("团队选定应能读出");
+        assert_eq!(selection.family, "zai");
+        assert_eq!(selection.org, "org-1");
+        assert_eq!(selection.project, "proj-1");
+        assert_eq!(selection.access_token, "synthetic-team-token");
+
+        // 旧版：modelProviderFamilySelectedKeys 的 team-plan 形态（org / project 百分号编码）
+        let legacy_home = temp_home("team-legacy");
+        let secret2 = credential_secret(&legacy_home);
+        let credentials2 = serde_json::json!({
+            "oauth:bigmodel:access_token": envelope(&secret2, "synthetic-bm-token"),
+        });
+        write_credentials(&legacy_home, &credentials2);
+        std::fs::create_dir_all(legacy_home.join(".zcode").join("v2")).unwrap();
+        std::fs::write(
+            legacy_home.join(".zcode").join("v2").join("setting.json"),
+            serde_json::json!({
+                "modelProviderFamilySelectedKeys": {
+                    "bigmodel": "team-plan:builtin:bigmodel-coding-plan:acc-1:org%2D9:proj%2D7"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let legacy = team_selection_at(&legacy_home).expect("旧版选定应能读出");
+        assert_eq!(legacy.family, "bigmodel");
+        assert_eq!(legacy.org, "org-9");
+        assert_eq!(legacy.project, "proj-7");
+    }
+
+    #[test]
+    fn team_selection_is_absent_for_personal_plans() {
+        // 个人套餐（kind = individual-coding-plan）不是团队坐席：返回 None，
+        // 转发层据此继续走个人 Key / Start Plan 通道。
+        let home = temp_home("team-absent");
+        let v2 = home.join(".zcode").join("v2");
+        std::fs::create_dir_all(&v2).unwrap();
+        std::fs::write(
+            v2.join("setting.json"),
+            serde_json::json!({
+                "providerFamilyDomain": "zai",
+                "providerFamilyConnectionSelections": {
+                    "zai": {"kind": "individual-coding-plan", "organizationId": "org-1", "projectId": "proj-1"}
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(team_selection_at(&home).is_none());
     }
 
     #[test]

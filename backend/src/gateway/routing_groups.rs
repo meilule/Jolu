@@ -163,6 +163,7 @@ pub(crate) fn ordered_members(
     group: &RoutingGroup,
     rotate_state: &mut std::collections::HashMap<String, u64>,
     usage_of: &dyn Fn(&str) -> i64,
+    resets_of: &dyn Fn(&str) -> Option<i64>,
     affinity_member: Option<&str>,
 ) -> (Vec<GroupMember>, Option<String>) {
     let mut members = group.members.clone();
@@ -177,10 +178,24 @@ pub(crate) fn ordered_members(
         "usage" => {
             members.sort_by_key(|m| usage_of(&m.slug));
         }
-        "smart" | "pace" => {
-            // 两种策略都依赖各账号的额度窗口快照（重置时间 / 周期剩余），
-            // 快照缓存尚未接入网关路由层；如实降级为 order，trace 里说明原因。
-            note = Some(format!("策略「{}」依赖额度窗口快照，当前不可用，已按 order 执行", group.strategy));
+        "smart" => {
+            // 重置最近的先用：额度马上回来的账号先花掉，别浪费在重置等待上（magpie smart）
+            let known = members.iter().any(|m| resets_of(&m.slug).is_some());
+            if known {
+                members.sort_by_key(|m| resets_of(&m.slug).unwrap_or(i64::MAX));
+            } else {
+                note = Some("策略「smart」需要额度快照（先刷新一次额度），已按 order 执行".into());
+            }
+        }
+        "pace" => {
+            // 剩余最多的先用：最近才重置的成员周期余量最足（magpie pace 的近似——
+            // 按「下一次重置最晚」排，等价于「刚重置完」的先用）
+            let known = members.iter().any(|m| resets_of(&m.slug).is_some());
+            if known {
+                members.sort_by_key(|m| std::cmp::Reverse(resets_of(&m.slug)));
+            } else {
+                note = Some("策略「pace」需要额度快照（先刷新一次额度），已按 order 执行".into());
+            }
         }
         _ => {}
     }
@@ -245,6 +260,10 @@ mod tests {
         GroupMember { slug: slug.into(), model: model.into() }
     }
 
+    fn no_resets(_: &str) -> Option<i64> {
+        None
+    }
+
     fn memory_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -286,13 +305,13 @@ mod tests {
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;
-        let (first, _) = ordered_members(&group, &mut state, &no_usage, None);
+        let (first, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, None);
         assert_eq!(first[0].slug, "a");
-        let (second, _) = ordered_members(&group, &mut state, &no_usage, None);
+        let (second, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, None);
         assert_eq!(second[0].slug, "b");
-        let (third, _) = ordered_members(&group, &mut state, &no_usage, None);
+        let (third, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, None);
         assert_eq!(third[0].slug, "c");
-        let (fourth, _) = ordered_members(&group, &mut state, &no_usage, None);
+        let (fourth, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, None);
         assert_eq!(fourth[0].slug, "a", "转满一圈回到开头");
     }
 
@@ -308,15 +327,15 @@ mod tests {
         };
         let mut state = std::collections::HashMap::new();
         let usage = |slug: &str| if slug == "a" { 100 } else { 3 };
-        let (ordered, _) = ordered_members(&group, &mut state, &usage, None);
+        let (ordered, _) = ordered_members(&group, &mut state, &usage, &no_resets, None);
         assert_eq!(ordered[0].slug, "b", "用量最少的排最前");
         // 会话已绑定 b：即使 a 用量更少，亲和也要把 b 提到最前（prompt cache）
-        let (ordered, _) = ordered_members(&group, &mut state, &usage, Some("b"));
+        let (ordered, _) = ordered_members(&group, &mut state, &usage, &no_resets, Some("b"));
         assert_eq!(ordered[0].slug, "b");
     }
 
     #[test]
-    fn smart_and_pace_degrade_to_order_with_a_note() {
+    fn smart_orders_soonest_reset_first() {
         let group = RoutingGroup {
             id: "g".into(),
             slug: "daily".into(),
@@ -327,9 +346,49 @@ mod tests {
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;
-        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, None);
+        // a 的额度马上重置：先花 a，别浪费在等待上（magpie smart 语义）
+        let resets = |slug: &str| if slug == "a" { Some(1_000) } else { Some(9_000) };
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &resets, None);
+        assert_eq!(ordered[0].slug, "a");
+    }
+
+    #[test]
+    fn pace_orders_latest_reset_first() {
+        let group = RoutingGroup {
+            id: "g".into(),
+            slug: "daily".into(),
+            name: "日常".into(),
+            strategy: "pace".into(),
+            members: vec![member("a", "m1"), member("b", "m2")],
+            created_ms: 0,
+        };
+        let mut state = std::collections::HashMap::new();
+        let no_usage = |_: &str| 0i64;
+        // b 刚重置完（重置最晚）：周期余量最足，先用 b（magpie pace 的近似）
+        let resets = |slug: &str| if slug == "a" { Some(1_000) } else { Some(9_000) };
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &resets, None);
+        assert_eq!(ordered[0].slug, "b");
+    }
+
+    #[test]
+    fn smart_and_pace_degrade_to_order_without_snapshots() {
+        let group = RoutingGroup {
+            id: "g".into(),
+            slug: "daily".into(),
+            name: "日常".into(),
+            strategy: "smart".into(),
+            members: vec![member("a", "m1"), member("b", "m2")],
+            created_ms: 0,
+        };
+        let mut state = std::collections::HashMap::new();
+        let no_usage = |_: &str| 0i64;
+        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, None);
         assert_eq!(ordered.len(), 2, "降级为 order 仍给出全部成员");
         assert!(note.is_some_and(|n| n.contains("order")), "降级要在 trace 里说明");
+        let pace = RoutingGroup { strategy: "pace".into(), ..group.clone() };
+        let (ordered, note) = ordered_members(&pace, &mut state, &no_usage, &no_resets, None);
+        assert_eq!(ordered.len(), 2);
+        assert!(note.is_some_and(|n| n.contains("order")));
     }
 
     #[test]
