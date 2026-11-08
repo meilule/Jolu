@@ -162,6 +162,30 @@ export interface ScanResult {
   errors: string[]
 }
 
+/** 本机导入扫描草稿（P4.3）：键不出后端，keyMasked 只是掩码 */
+export interface ImportDraftDto {
+  /** 稳定引用，apply 原样回传给后端 */
+  reference: string
+  /** 来源应用：cc-switch / claude-code / codex */
+  source: string
+  /** 来源里的位置（settings.json env / config.toml / …） */
+  from: string
+  name: string
+  baseUrl: string
+  protocol: "openai" | "anthropic"
+  keyMasked: string
+}
+
+/** 单来源读取失败不拖垮其它：错误条目只有 source 与 error，不可勾选 */
+export interface ImportSourceErrorDto {
+  source: string
+  error: string
+}
+
+export interface ImportScanDto {
+  drafts: (ImportDraftDto | ImportSourceErrorDto)[]
+}
+
 export interface CollectionStatusDto {
   ok: boolean
   errors: string[]
@@ -357,6 +381,8 @@ export interface AppSettings {
   notify_task_resumed: boolean
   /** 任务提醒：完成与失败（含需要处理、等待超时）时通知 */
   notify_task_finished: boolean
+  /** 隐私脱敏（P5）：网关中转的请求在离开本机前按固定规则换成占位符；旧版设置缺省为关 */
+  privacy_masking?: boolean
 }
 
 export interface ProxyStatusDto {
@@ -558,6 +584,10 @@ export const api = {
     context1m: input.context_1m ?? null,
   }),
   removeConnection: (id: string) => invoke<void>("remove_connection", { id }),
+  /** 本机导入（P4.3）：扫描 CC Switch / Claude Code / Codex 的现有上游为草稿；Jolu 自己接线的地址被后端跳过 */
+  providersImportScan: () => invoke<ImportScanDto>("providers_import_scan"),
+  /** 按引用落库为自定义连接；键由后端重读原文，返回创建的连接名列表并广播 connections-changed */
+  providersImportApply: (references: string[]) => invoke<string[]>("providers_import_apply", { references }),
   fetchCredentials: (id: string) => invoke<FetchResult>("fetch_credentials", { id }),
   replaceApiKey: (id: string, secret: string) => invoke<void>("replace_api_key", { id, secret }),
   renameConnection: (id: string, name: string) => invoke<void>("rename_connection", { id, name }),

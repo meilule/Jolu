@@ -1,13 +1,15 @@
 import { ContentTransition, LoadingSurface } from "@/components/ui/LoadingSurface"
 import { useEffect, useState } from "react"
-import { Blocks, Code, Hexagon, Info, Plus, UsersRound } from "lucide-react"
+import { Blocks, Code, FolderInput, Hexagon, Info, Plus, UsersRound } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { isTauri } from "@/lib/api"
 import { PROVIDERS, canConnect, connectionBadge, connectionProviderId, type ProviderId, type ProviderEntry } from "@/lib/providerCatalog"
 import { useConnections } from "@/hooks/useConnections"
 import { PlatformLogo } from "@/components/brand/PlatformLogo"
 import { JoluButton } from "@/components/ui/JoluButton"
 import { Tip } from "@/components/ui/Tip"
 import { AccountConnectDialog } from "@/components/providers/AccountConnectDialog"
+import { ImportDialog } from "@/components/providers/ImportDialog"
 import { AccountsPanel } from "@/components/providers/AccountsPanel"
 import type { Connection } from "@/types"
 
@@ -20,13 +22,32 @@ export function ProvidersView({ initialTab = "connect", accountTarget, onAccount
   const [tab, setTab] = useState<ProvidersTab>(accountTarget ? "accounts" : initialTab)
   const conn = useConnections()
   const [connecting, setConnecting] = useState<ProviderId | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
   useEffect(() => { if (accountTarget) setTab("accounts") }, [accountTarget])
 
   return (
     <div className={cn("flex w-full flex-col gap-3", tab === "accounts" && "h-full min-h-0")}>
-      <div role="tablist" aria-label="供应商" className="jolu-tablist h-11">
-        <TabButton active={tab === "connect"} icon={<Blocks aria-hidden className="size-[17px]" />} onClick={() => setTab("connect")}>供应商连接</TabButton>
-        <TabButton active={tab === "accounts"} icon={<UsersRound aria-hidden className="size-[17px]" />} onClick={() => setTab("accounts")}>账号管理</TabButton>
+      <div className="flex h-11 items-center justify-between gap-4">
+        <div role="tablist" aria-label="供应商" className="jolu-tablist h-11">
+          <TabButton active={tab === "connect"} icon={<Blocks aria-hidden className="size-[17px]" />} onClick={() => setTab("connect")}>供应商连接</TabButton>
+          <TabButton active={tab === "accounts"} icon={<UsersRound aria-hidden className="size-[17px]" />} onClick={() => setTab("accounts")}>账号管理</TabButton>
+        </div>
+        {/* 待确认：画板 05 页头右侧没有画操作位，位置沿用页头右侧惯例 */}
+        {isTauri ? (
+          <JoluButton variant="soft" onClick={() => setImportOpen(true)}>
+            <FolderInput aria-hidden />
+            从本机导入
+          </JoluButton>
+        ) : (
+          <Tip label="桌面运行时才能读取本机配置" side="left">
+            <span className="flex">
+              <JoluButton variant="soft" disabled>
+                <FolderInput aria-hidden />
+                从本机导入
+              </JoluButton>
+            </span>
+          </Tip>
+        )}
       </div>
 
       <ContentTransition identity={`${tab}-${conn.loading && !conn.connections.length}`} className={cn("flex flex-col gap-3",tab === "accounts" && "min-h-0 flex-1")}>
@@ -44,6 +65,9 @@ export function ProvidersView({ initialTab = "connect", accountTarget, onAccount
           onSaved={() => void conn.reload()}
         />
       )}
+
+      {/* 导入成功后由后端广播 connections-changed，useConnections 的既有监听会自动刷新列表 */}
+      {importOpen && <ImportDialog onClose={() => setImportOpen(false)} />}
     </div>
   )
 }

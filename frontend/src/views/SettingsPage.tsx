@@ -7,6 +7,7 @@ import { useSettings } from "@/hooks/useSettings"
 import { GeneralSection } from "@/components/settings/GeneralSection"
 import { AppearanceSection } from "@/components/settings/AppearanceSection"
 import { NetworkSection } from "@/components/settings/NetworkSection"
+import { PrivacySection } from "@/components/settings/PrivacySection"
 import { DataSection } from "@/components/settings/DataSection"
 import { NotificationSection } from "@/components/settings/NotificationSection"
 import { AboutSection } from "@/components/settings/AboutSection"
@@ -102,7 +103,13 @@ export function SettingsPage({ section, navigationRequest, onOpenSkills }: {
           {cfg.loading && !cfg.ready ? <LoadingSurface layout="settings" label="正在读取设置" /> : <>
           {tab === "general" && <GeneralSection cfg={cfg} />}
           {tab === "appearance" && <AppearanceSection cfg={cfg} />}
-          {tab === "network" && <NetworkSection cfg={cfg} setDirty={setDirty} />}
+          {tab === "network" && (
+            <>
+              <NetworkSection cfg={cfg} setDirty={setDirty} />
+              {/* 待确认：隐私脱敏在 Jolu.pen 模块 G 没有画板，暂挂「网络与代理」页尾 */}
+              <PrivacySection />
+            </>
+          )}
           {tab === "data" && <DataSection cfg={cfg} onOpenSkills={onOpenSkills} />}
           {tab === "notifications" && <NotificationSection cfg={cfg} setDirty={setDirty} />}
           {tab === "about" && <AboutSection />}
