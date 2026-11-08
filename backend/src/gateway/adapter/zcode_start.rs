@@ -176,6 +176,45 @@ fn dress(body: &mut Value, device: &str, session: &str) {
     body["metadata"] = Value::Object(metadata);
 }
 
+/* ───────────────────────── ③3 忙碌重试（magpie `askBusy` 同款） ───────────────────────── */
+
+/// 429 后每次重问的等待秒数（magpie `BUSY_WAITS` = [1000, 2000] 同款：ZCode 自己的
+/// 客户端等 1 秒、2 秒各重问一次，之后才认输）。
+const BUSY_WAITS_SECS: [u64; 2] = [1, 2];
+
+/// 一次忙碌等待的实际时长：响应带可解析为秒数的 Retry-After 时取
+/// min(Retry-After, 对应间隔)，否则等间隔本身（HTTP 日期形式不解析——上游实际
+/// 返回的都是秒数形式，解析不了就按 ZCode 客户端自己的节奏等）。
+fn busy_wait(response: &Response, wait_secs: u64) -> std::time::Duration {
+    let retry_after = response
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
+    std::time::Duration::from_secs(retry_after.unwrap_or(wait_secs).min(wait_secs))
+}
+
+/// 忙碌重试的骨架：先问一次；429 时按 [`BUSY_WAITS_SECS`] 的间隔重问，最多两次
+/// （`send` 每次发出**同一个**请求——同一着装后的请求体与同一头，见 [`forward`]）；
+/// 两次后仍 429 就把最后一次响应交回调用方。任务规格对任意 429 都重问（magpie
+/// 只重问 3008/3009/3010 忙碌码）：Start Plan 的 429 兼有额度语义，多问两次的
+/// 代价是固定的 3 秒上限，换来的是并发偶发上限不把请求打回给 agent。
+async fn ask_busy<F, Fut>(mut send: F) -> Response
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Response>,
+{
+    let mut response = send().await;
+    for wait in BUSY_WAITS_SECS {
+        if response.status() != StatusCode::TOO_MANY_REQUESTS {
+            return response;
+        }
+        tokio::time::sleep(busy_wait(&response, wait)).await;
+        response = send().await;
+    }
+    response
+}
+
 /// Start Plan 的 messages 转发。`session` 是调用方会话键（cache 与 x-session-id 用）。
 pub(crate) async fn forward(
     deps: std::sync::Arc<crate::proxy::ProxyDeps>,
@@ -217,20 +256,137 @@ pub(crate) async fn forward(
         "x-session-id",
         HeaderValue::from_str(session).unwrap_or(HeaderValue::from_static("")),
     );
-    // Start Plan 通道不吃路径查询（Claude Code 的 ?beta=true 剥掉——magpie startURL 同款）
-    direct::forward(
-        deps,
-        &target,
-        value["model"].as_str().unwrap_or_default().to_string(),
-        Method::POST,
-        "/v1/messages",
-        &headers,
-        dressed.into(),
-    )
+    // Start Plan 通道不吃路径查询（Claude Code 的 ?beta=true 剥掉——magpie startURL 同款）。
+    // 发出走忙碌重试（③3）：着装只做一次，闭包每次重用同一份着装后的请求体与同一头——
+    // 重复着装会重排 cache_control 并让 prompt cache 失效。
+    let model = value["model"].as_str().unwrap_or_default().to_string();
+    ask_busy(move || {
+        let deps = deps.clone();
+        let target = target.clone();
+        let headers = headers.clone();
+        let dressed = dressed.clone();
+        let model = model.clone();
+        async move {
+            direct::forward(
+                deps,
+                &target,
+                model,
+                Method::POST,
+                "/v1/messages",
+                &headers,
+                dressed.into(),
+            )
+            .await
+        }
+    })
     .await
 }
 
 /// Start Plan 的模型清单（静态：免费套餐的四个模型少 GLM-5.3）。
 pub(crate) fn models() -> Vec<String> {
     START_MODELS.iter().map(|m| m.to_string()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    /// canned 响应的请求骨架：第 n 次调用返回 `sequence[n]`，序号越界后重复最后一个；
+    /// `hits` 记录请求次数。Retry-After 给 "0" 让忙碌等待即时完成，测试不必真睡。
+    fn canned_sequence(
+        sequence: Vec<(StatusCode, Option<&'static str>)>,
+        hits: Arc<AtomicUsize>,
+    ) -> impl FnMut() -> std::future::Ready<Response> + Send {
+        let sequence = Arc::new(Mutex::new(sequence));
+        move || {
+            hits.fetch_add(1, Ordering::SeqCst);
+            let (status, retry_after) = {
+                let mut slot = sequence.lock().unwrap();
+                if slot.len() > 1 { slot.remove(0) } else { slot[0] }
+            };
+            let mut builder = Response::builder().status(status);
+            if let Some(value) = retry_after {
+                builder = builder.header("retry-after", value);
+            }
+            std::future::ready(builder.body(axum::body::Body::empty()).unwrap())
+        }
+    }
+
+    #[test]
+    fn busy_wait_prefers_retry_after_but_caps_at_interval() {
+        let with_header = |value: &'static str| {
+            Response::builder()
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .header("retry-after", value)
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        // Retry-After 比间隔大：取间隔
+        assert_eq!(busy_wait(&with_header("7"), 2), std::time::Duration::from_secs(2));
+        // Retry-After 比间隔小：等它说的
+        assert_eq!(busy_wait(&with_header("1"), 2), std::time::Duration::from_secs(1));
+        // 解析不了（HTTP 日期形式）：按间隔等
+        assert_eq!(
+            busy_wait(&with_header("Fri, 31 Dec 2021 23:59:59 GMT"), 2),
+            std::time::Duration::from_secs(2)
+        );
+        // 没带 Retry-After：按间隔等
+        let bare = Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert_eq!(busy_wait(&bare, 1), std::time::Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn ask_busy_retries_429_twice_and_returns_first_success() {
+        // 429 → 429 → 200：第三次成功，共发 3 次请求；Retry-After 给 0 让等待即时完成
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let send = canned_sequence(
+            vec![
+                (StatusCode::TOO_MANY_REQUESTS, Some("0")),
+                (StatusCode::TOO_MANY_REQUESTS, Some("0")),
+                (StatusCode::OK, None),
+            ],
+            counter,
+        );
+        let response = ask_busy(send).await;
+        assert_eq!(hits.load(Ordering::SeqCst), 3, "两次重问后应该有第三次请求");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn ask_busy_gives_up_after_two_retries_and_returns_last_429() {
+        // 一直 429：最多 3 次请求（首发 + 两次重问），返回最后一次 429
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let send = canned_sequence(vec![(StatusCode::TOO_MANY_REQUESTS, Some("0"))], counter);
+        let response = ask_busy(send).await;
+        assert_eq!(hits.load(Ordering::SeqCst), 3, "首发之外最多重问两次");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn ask_busy_passes_non_429_through_without_retry() {
+        // 非 429（如 401）一次都不重问
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let send = canned_sequence(vec![(StatusCode::UNAUTHORIZED, None)], counter);
+        let response = ask_busy(send).await;
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "非 429 不重问");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn ask_busy_returns_200_immediately_when_first_answer_succeeds() {
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let send = canned_sequence(vec![(StatusCode::OK, None)], counter);
+        let response = ask_busy(send).await;
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }

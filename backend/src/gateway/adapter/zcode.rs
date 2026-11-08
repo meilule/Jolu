@@ -106,12 +106,8 @@ fn segment(value: &Value, key: &str) -> Result<String, String> {
         .replace('+', "%20"))
 }
 
-async fn material_at(deps: &Arc<ProxyDeps>, id: &str, origin: &str) -> Result<String, String> {
-    let _guard = crate::gateway::subscription::lock(id).await;
-    let (secret, session) = {
-        let conn = deps.db.lock().map_err(|_| "无法读取 ZCode 授权")?;
-        bound(&conn, id)?
-    };
+/// ZCode 上游请求的公共 client（代理模式 / 测试直连的处理与 material_at 一致）。
+fn zcode_http(origin: &str) -> Result<reqwest::Client, String> {
     let builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(15))
@@ -134,7 +130,67 @@ async fn material_at(deps: &Arc<ProxyDeps>, id: &str, origin: &str) -> Result<St
             },
         }
     };
-    let client = builder.build().map_err(|_| "无法创建 ZCode 授权连接")?;
+    builder.build().map_err(|_| "无法创建 ZCode 授权连接".into())
+}
+
+/// 团队套餐坐席（magpie `zcode_team.go` 同款）：setting.json 选定的 org/project →
+/// 项目 api_keys 里的 `zcode-team-api-key`。团队套餐的额度在**项目 Key** 上，
+/// 个人 Coding Plan Key 打上游会 1113「余额不足」。
+///
+/// 不代建 Key：ZCode 客户端切到团队套餐时会自己生成；Jolu 缺 Key 时报错让用户
+/// 在客户端里切一次，不做额外的远端副作用。
+async fn team_credential(deps: &Arc<ProxyDeps>, id: &str) -> Result<(String, &'static str), String> {
+    let _guard = crate::gateway::subscription::lock(id).await;
+    let home = crate::creds::home().ok_or("无法定位用户目录")?;
+    let Some(selection) = crate::zcode_quota::team_selection_at(&home) else {
+        return Err("ZCode 未选定团队套餐".into());
+    };
+    // 业务根与鉴权形态按家族：Z.ai 的业务令牌走 Bearer，BigModel 的裸放（magpie 同款）
+    let (biz, auth_header, base) = match selection.family.as_str() {
+        "bigmodel" => (
+            "https://bigmodel.cn".to_string(),
+            selection.access_token.clone(),
+            "https://open.bigmodel.cn/api/anthropic",
+        ),
+        _ => (
+            "https://api.z.ai".to_string(),
+            format!("Bearer {}", selection.access_token),
+            "https://api.z.ai/api/anthropic",
+        ),
+    };
+    let client = zcode_http(biz.as_str())?;
+    let url = format!(
+        "{biz}/api/biz/v1/organization/{}/projects/{}/api_keys",
+        selection.org, selection.project
+    );
+    let mut request = client.request(Method::GET, &url).header("authorization", &auth_header);
+    if selection.family == "bigmodel" {
+        request = request
+            .header("Bigmodel-Organization", &selection.org)
+            .header("Bigmodel-Project", &selection.project);
+    }
+    request = request.header("Set-Language", "en").header("Accept-Language", "en-US,en");
+    let keys = data(request.send().await.map_err(|_| "ZCode 团队项目凭据查询失败")?).await?;
+    let list = keys.as_array().ok_or("ZCode 团队项目凭据列表无效")?;
+    // 项目 Key：ZCode 用的是 zcode-team-api-key（keyType 2）
+    let entry = list
+        .iter()
+        .find(|k| k["name"] == "zcode-team-api-key" || k["keyType"] == 2)
+        .ok_or("团队项目还没有 zcode-team-api-key：请在 ZCode 客户端里切到该套餐一次以生成；Jolu 不代建 Key")?;
+    let token = segment(entry, "apiKey")?;
+    Ok((
+        url::form_urlencoded::byte_serialize(token.as_bytes()).collect::<String>().replace('+', "%20"),
+        base,
+    ))
+}
+
+async fn material_at(deps: &Arc<ProxyDeps>, id: &str, origin: &str) -> Result<String, String> {
+    let _guard = crate::gateway::subscription::lock(id).await;
+    let (secret, session) = {
+        let conn = deps.db.lock().map_err(|_| "无法读取 ZCode 授权")?;
+        bound(&conn, id)?
+    };
+    let client = zcode_http(origin)?;
     let request = |method, url: String| {
         client
             .request(method, url)
@@ -238,7 +294,11 @@ async fn material_at(deps: &Arc<ProxyDeps>, id: &str, origin: &str) -> Result<St
 pub(crate) async fn models(deps: &Arc<ProxyDeps>, id: &str) -> Result<Vec<String>, String> {
     // 先直读本机凭据的 Coding Plan Key（新路径），失败再退回 OAuth 换取链；
     // 上游按账号家族分开：z.ai 账号去 api.z.ai，BigModel 账号去 open.bigmodel.cn。
-    if let Ok((key, base, _jwt)) = forward_credential(id) {
+    let mut credential = forward_credential(id).ok().map(|(key, base, _jwt)| (key, base));
+    if let Ok((team_key, team_base)) = team_credential(deps, id).await {
+        credential = Some((team_key, team_base));
+    }
+    if let Some((key, base)) = credential {
         return tokio::task::spawn_blocking(move || {
             crate::connections::fetch_models("zcode", Some("anthropic"), base, &key)
         })
@@ -263,6 +323,22 @@ pub(crate) fn start_plan_models() -> Option<Vec<String>> {
     super::zcode_start::jwt_at().map(|_| super::zcode_start::models())
 }
 
+/* ───────────────────── ③5 free_first 开关（magpie `FREE_FIRST` 同款） ───────────────────── */
+
+/// 设置项 `zcode_free_first` 的进程级镜像（gateway/mask.rs 的 `set_enabled` 同款）：
+/// 网关转发链拿不到 Tauri 状态，启动时按设置初始化、`zcode_free_first_set` 命令
+/// 运行时改。默认关闭 = 现状（Coding Plan Key 先、余额类失败落 Start Plan）。
+static FREE_FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 设置页改 `zcode_free_first` / 启动初始化时同步进程级开关。
+pub(crate) fn set_free_first(on: bool) {
+    FREE_FIRST.store(on, std::sync::atomic::Ordering::Release);
+}
+
+fn free_first() -> bool {
+    FREE_FIRST.load(std::sync::atomic::Ordering::Acquire)
+}
+
 pub(crate) async fn forward(
     deps: Arc<ProxyDeps>,
     entry: &PoolEntry,
@@ -276,13 +352,29 @@ pub(crate) async fn forward(
             "ZCode 订阅使用 Anthropic Messages 协议",
         );
     }
-    // 凭据走两条链：先直读本机 ZCode 凭据的 Coding Plan Key（z.ai 账号的常规来源），
-    // 失败再退回 `material_at` 的 OAuth 换取链——它慢且对 z.ai 账号经常 401，但
-    // 供应商页登录的产品功能仍依赖它，且本机凭据缺失时它是唯一来源。旧链的
-    // 报错语义保持原样（401 + 原文案），新链失败则静默换链，不打断请求。
-    let (token, base) = match forward_credential(&entry.connection_id) {
-        Ok((key, base, _jwt)) => (key, base),
-        Err(_) => {
+    // ③5 free_first：开启且本机有登录会话 JWT 时，先试免费的 Start Plan 通道
+    // （额度在 zcode.z.ai 自己的端点上）；JWT 缺失时直接走下面的现有顺序，不报错。
+    // 落回判定取「非 2xx 即落回」的粗口径：Start Plan 的拒绝语义（忙碌 429、额度
+    // 用尽 1113/1005、风控文案）上游随时会变，细分类容易在语义漂移时漏落回；
+    // 保守判定的代价只是多付一次已完成的请求，不会把可用的 Coding Plan 拒之门外。
+    if free_first() && super::zcode_start::jwt_at().is_some() {
+        let attempt =
+            super::zcode_start::forward(deps.clone(), entry, protocol, body.clone(), session).await;
+        if attempt.status().is_success() {
+            return attempt;
+        }
+    }
+    // 凭据走三条链（对齐 magpie zcodeOwn）：个人 Coding Plan Key 先取；ZCode 切到
+    // 团队套餐时项目 Key **覆盖**（团队额度在项目 Key 上，个人 Key 会 1113）；
+    // 两条都拿不到再退回 `material_at` 的 OAuth 换取链——供应商页登录的产品功能
+    // 仍依赖它。各链失败静默换链，不打断请求。
+    let mut credential = forward_credential(&entry.connection_id).ok().map(|(key, base, _jwt)| (key, base));
+    if let Ok((team_key, team_base)) = team_credential(&deps, &entry.connection_id).await {
+        credential = Some((team_key, team_base));
+    }
+    let (token, base) = match credential {
+        Some((key, base)) => (key, base),
+        None => {
             let (origin, base) = {
                 match deps.db.lock() {
                     Ok(conn) => match bound(&conn, &entry.connection_id) {

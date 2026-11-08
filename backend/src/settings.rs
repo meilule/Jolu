@@ -143,6 +143,12 @@ pub struct Settings {
     /// 换成占位符，回复回来再换回真值（见 gateway/mask.rs）。默认关闭，旧配置文件缺字段按关闭处理。
     #[serde(default)]
     pub privacy_masking: bool,
+    /// ZCode Start Plan 优先（③5）：开启后 ZCode 来源的凭据顺序变为「免费的
+    /// Start Plan 通道（登录会话 JWT）先试，失败落 Coding Plan Key」；关闭时
+    /// Coding Plan Key 先、429/402 余额类失败落 Start Plan。默认关闭，旧配置
+    /// 文件缺字段按关闭处理。
+    #[serde(default)]
+    pub zcode_free_first: bool,
 }
 
 fn default_kind() -> String { "api".into() }
@@ -264,6 +270,7 @@ impl Default for Settings {
             notify_task_resumed: true,
             notify_task_finished: true,
             privacy_masking: false,
+            zcode_free_first: false,
         }
     }
 }
@@ -611,6 +618,23 @@ mod notify_settings_tests {
         assert!(super::Store::load(&dir).get().privacy_masking);
         let back: Settings = serde_json::from_value(serde_json::to_value(store.get()).unwrap()).unwrap();
         assert!(back.privacy_masking);
+        std::fs::remove_file(dir.join("settings.json")).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn zcode_free_first_defaults_off_and_survives_reload() {
+        // 旧设置文件没有该字段：按关闭处理，绝不悄悄开启
+        let old: Settings = serde_json::from_str(r#"{"island_platform":"claude","dnd":false,"island_visible":true}"#).unwrap();
+        assert!(!old.zcode_free_first);
+        assert!(!Settings::default().zcode_free_first);
+        // 打开后落盘并重新读回
+        let dir = std::env::temp_dir().join(format!("jolu-zcode-free-first-settings-{}", std::process::id()));
+        let store = super::Store::load(&dir);
+        store.try_update(|settings| settings.zcode_free_first = true).unwrap();
+        assert!(super::Store::load(&dir).get().zcode_free_first);
+        let back: Settings = serde_json::from_value(serde_json::to_value(store.get()).unwrap()).unwrap();
+        assert!(back.zcode_free_first);
         std::fs::remove_file(dir.join("settings.json")).unwrap();
         std::fs::remove_dir(dir).unwrap();
     }

@@ -2254,6 +2254,23 @@ fn privacy_masking_set(app: tauri::AppHandle, on: bool) -> Result<settings::Sett
     Ok(next)
 }
 
+/// ZCode Start Plan 优先开关（③5，gateway/adapter/zcode.rs）：开启后 ZCode 来源
+/// 先试免费的 Start Plan 通道（会话 JWT），非 2xx 再落 Coding Plan Key；关闭时
+/// 保持现状（Coding Plan Key 先、429/402 余额类失败落 Start Plan）。进程级开关
+/// 改完立即生效，不需要重启代理；前端接入口 = `settings.zcode_free_first` 字段
+/// + 本命令（界面接入口待设计稿确认后再接）。
+#[tauri::command]
+fn zcode_free_first_set(app: tauri::AppHandle, on: bool) -> Result<settings::Settings, String> {
+    let next = app
+        .state::<Cfg>()
+        .0
+        .try_update(|settings| settings.zcode_free_first = on)
+        .map_err(|error| format!("保存 ZCode Start Plan 优先设置失败：{error}"))?;
+    crate::gateway::adapter::zcode::set_free_first(next.zcode_free_first);
+    let _ = app.emit("settings-changed", next.clone());
+    Ok(next)
+}
+
 /// 连接进出模型池。
 #[tauri::command]
 fn gateway_set_serve(app: tauri::AppHandle, connection_id: String, enabled: bool) -> Result<(), String> {
@@ -2515,6 +2532,29 @@ fn gateway_profiles_apply(app: tauri::AppHandle, name: String) -> Result<crate::
         message.push_str(&format!("；跳过 {}", skipped.join("、")));
     }
     Ok(crate::gateway::profiles::ApplyResult { switched, skipped, message })
+}
+
+/// 本机导入扫描：CC Switch / Claude Code / Codex 的现有上游读成草稿。
+/// 键不出后端——草稿里只有掩码，落库由 `providers_import_apply` 重读原文。
+#[tauri::command]
+fn providers_import_scan() -> Result<serde_json::Value, String> {
+    crate::gateway::import_sources::scan()
+}
+
+/// 按引用落库导入的连接（走既有 `connections::add`：加密 / slug / 掩码全在正路里）。
+#[tauri::command]
+async fn providers_import_apply(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, Db>,
+    references: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let pool = db.0.clone();
+    let created = with_database(pool, move |conn| {
+        crate::gateway::import_sources::apply(conn, &references)
+    })
+    .await?;
+    let _ = app.emit("connections-changed", ());
+    Ok(created)
 }
 
 /// 路由分组列表。
@@ -3994,6 +4034,8 @@ pub fn run() {
             gateway_group_create,
             gateway_routing_group_update,
             gateway_routing_group_delete,
+            providers_import_scan,
+            providers_import_apply,
             gateway_profiles_list,
             gateway_profiles_save,
             gateway_profiles_delete,
@@ -4006,6 +4048,7 @@ pub fn run() {
             gateway_wiring_set,
             gateway_escape,
             privacy_masking_set,
+            zcode_free_first_set,
             gateway_groups,
             gateway_group_create,
             gateway_group_rename,
@@ -4141,6 +4184,9 @@ pub fn run() {
             net::init(&app.state::<Cfg>().0.get()); // 任务 2.3：出站请求按已保存的联网方式发出
             // P5 隐私脱敏：按设置初始化进程级开关（privacy_masking_set 运行时改）
             crate::gateway::mask::set_enabled(app.state::<Cfg>().0.get().privacy_masking);
+            // ③5 ZCode Start Plan 优先：按设置初始化进程级开关（zcode_free_first_set 运行时改）。
+            // 字段默认 false，与静态默认一致；用户开启过则重启后仍要生效，必须回读一次。
+            crate::gateway::adapter::zcode::set_free_first(app.state::<Cfg>().0.get().zcode_free_first);
             let startup_plan = startup::plan(automatic, app.state::<Cfg>().0.get().silent_startup, first_install);
             STARTUP_REQUESTED.store(startup_plan.show_main, Ordering::Release);
             if startup_plan.show_main { let _ = show_startup(&handle); }
