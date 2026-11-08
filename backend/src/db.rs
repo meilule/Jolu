@@ -222,6 +222,13 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
             sort       INTEGER NOT NULL DEFAULT 0,
             created_ms INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS gateway_middleware (
+            name         TEXT PRIMARY KEY,
+            kind         TEXT NOT NULL,
+            config_json  TEXT NOT NULL,
+            enabled      INTEGER NOT NULL DEFAULT 1,
+            sort         INTEGER NOT NULL DEFAULT 0
+        );
         CREATE TABLE IF NOT EXISTS routing_groups (
             id           TEXT PRIMARY KEY,
             slug         TEXT UNIQUE NOT NULL,

@@ -4,6 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use axum::http::{HeaderMap, StatusCode};
+use serde_json::Value;
 use axum::response::{IntoResponse, Response};
 
 use crate::gateway::activity::RouteMeta;
@@ -365,12 +366,36 @@ pub(crate) async fn handle(
     protocol: CallerProtocol,
     deps: Arc<ProxyDeps>,
     headers: HeaderMap,
-    body: axum::body::Bytes,
+    mut body: axum::body::Bytes,
     path_and_query: &str,
 ) -> Response {
     let started = std::time::Instant::now();
     let request_id = crate::gateway::activity::next_request_id();
     let agent = agent_from_headers(&headers);
+    // 中间件链（P6.1）：model-map / param-override 在选路之前执行，失败隔离——
+    // 单个中间件出错只跳过自己；映射后的 id 是路由、流水与用量记账的 id。
+    let middleware_list = deps
+        .db
+        .lock()
+        .ok()
+        .and_then(|conn| crate::gateway::middleware::list(&conn).ok())
+        .unwrap_or_default();
+    let mut body_value = serde_json::from_slice::<Value>(&body).ok();
+    let middleware_outcome = body_value.as_mut().map(|value| crate::gateway::middleware::apply_chain(&middleware_list, value));
+    if let Some(value) = body_value.as_ref() {
+        if let Ok(bytes) = serde_json::to_vec(value) {
+            body = bytes.into();
+        }
+    }
+    if let Some(outcome) = &middleware_outcome {
+        if let Some(from) = &outcome.mapped_from {
+            let to = extract_model(&body).unwrap_or_default();
+            eprintln!("[中间件] model-map：{from} → {to}");
+        }
+        for reason in &outcome.skipped {
+            eprintln!("[中间件] 跳过：{reason}");
+        }
+    }
     let Some(raw_model) = extract_model(&body) else {
         return error_response(StatusCode::BAD_REQUEST, "请求体缺少 model 字段或不是有效 JSON");
     };
