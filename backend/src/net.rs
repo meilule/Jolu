@@ -97,8 +97,13 @@ fn builder_for(mode: &NetMode) -> reqwest::blocking::ClientBuilder {
     }
 }
 
-/// 跟随系统时，只在 reqwest 自己处理不了的情况下接手：环境变量没有设置 HTTP(S) 代理、
-/// 注册表开启了系统代理、且 `ProxyServer` 按协议分开写。其余情况交给 reqwest 原样处理。
+/// 跟随系统时接手注册表代理：环境变量没有设置 HTTP(S) 代理、注册表开启了系统代理。
+///
+/// 曾经只在 `ProxyServer` 按协议分开写（含 `=`）时接手，单机整串（`127.0.0.1:7897`）
+/// 交给 reqwest 原样处理——但实测 reqwest 对注册表 bypass 的解析在本机回环上不可靠：
+/// 代理客户端退出后，发往 `127.0.0.1` 的请求仍被送进死代理（gateway 对本机 mock 上游
+/// 的调用、模型清单拉取全部失败）。所以两种写法都接手，并**显式排除回环**——回环流量
+/// 永远不该进代理（网关自己就监听在回环上）。
 fn system_per_protocol_proxy() -> Option<reqwest::Proxy> {
     if first_env(&["HTTP_PROXY", "http_proxy"]).is_some() || first_env(&["HTTPS_PROXY", "https_proxy"]).is_some() {
         return None;
@@ -107,12 +112,20 @@ fn system_per_protocol_proxy() -> Option<reqwest::Proxy> {
     if !registry.enabled {
         return None;
     }
-    let server = registry.server.filter(|server| server.contains('='))?;
-    let url = parse_proxy_server(&server)?;
-    let no_proxy = match first_env(&["NO_PROXY", "no_proxy"]) {
-        Some(value) => reqwest::NoProxy::from_string(&value),
-        None => registry.bypass.as_deref().map(registry_no_proxy).and_then(|list| reqwest::NoProxy::from_string(&list)),
+    // 按协议分开写（http=…;https=…）取各自地址；单机整串（host:port）全协议共用
+    let url = match registry.server.as_deref().filter(|server| server.contains('=')) {
+        Some(server) => parse_proxy_server(server)?,
+        None => parse_proxy_server(registry.server.as_deref()?)?,
     };
+    // 排除清单：NO_PROXY 环境变量优先，否则注册表 bypass；回环恒排除
+    let list = match first_env(&["NO_PROXY", "no_proxy"]) {
+        Some(value) => value,
+        None => {
+            let bypass = registry.bypass.as_deref().map(registry_no_proxy).unwrap_or_default();
+            if bypass.is_empty() { LOOPBACK_NO_PROXY.to_string() } else { format!("{bypass},{LOOPBACK_NO_PROXY}") }
+        }
+    };
+    let no_proxy = reqwest::NoProxy::from_string(&list);
     reqwest::Proxy::all(url).ok().map(|proxy| proxy.no_proxy(no_proxy))
 }
 
