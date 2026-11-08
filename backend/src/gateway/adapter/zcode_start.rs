@@ -204,7 +204,9 @@ pub(crate) async fn forward(
     let mut target = entry.clone();
     target.secret = Some(jwt);
     target.base_url = Some(START_BASE.into());
-    target.protocol = "anthropic".into();
+    // Start Plan 端点要 Authorization: Bearer <JWT>（anthropic 的 x-api-key 会被 401 拒）；
+    // 借 openai 协议的鉴权形态，anthropic-version 由下面的调用方头自带。
+    target.protocol = "openai".into();
     let mut headers = HeaderMap::new();
     headers.insert("content-type", HeaderValue::from_static("application/json"));
     headers.insert("HTTP-Referer", HeaderValue::from_static(ZCODE_SITE));
