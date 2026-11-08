@@ -14,6 +14,7 @@ pub mod gemini_subscription;
 pub mod workbuddy;
 mod workbuddy_request;
 pub mod zcode;
+pub mod zcode_start;
 pub mod qoder;
 mod qoder_chat;
 mod qoder_cosy;

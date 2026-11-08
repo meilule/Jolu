@@ -664,7 +664,7 @@ async fn forward_one(
                         "codex" | "opencode" => crate::gateway::adapter::codex::forward(deps.clone(), entry, protocol, body.clone()).await,
                         "claude" => crate::gateway::adapter::claude::forward(deps.clone(), entry, session, body.clone()).await,
                         "grok" => crate::gateway::adapter::grok::forward(deps.clone(), entry, protocol, body.clone()).await,
-                        "zcode" => crate::gateway::adapter::zcode::forward(deps.clone(), entry, protocol, body.clone()).await,
+                        "zcode" => crate::gateway::adapter::zcode::forward(deps.clone(), entry, protocol, body.clone(), session).await,
                         _ => {
                             // 只说 Chat 的来源（WorkBuddy / Qoder / Trae）：Anthropic 调用方（Claude Code）经协议转换后转发，回复再转回
                             let anthropic = protocol == CallerProtocol::Anthropic;

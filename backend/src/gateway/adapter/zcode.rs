@@ -258,11 +258,17 @@ pub(crate) async fn models(deps: &Arc<ProxyDeps>, id: &str) -> Result<Vec<String
     .map_err(|_| "ZCode 模型查询失败")?
 }
 
+/// Start Plan 的静态清单（免费套餐：GLM-5.3-Flash / GLM-5.2 / GLM-5-Turbo）。
+pub(crate) fn start_plan_models() -> Option<Vec<String>> {
+    super::zcode_start::jwt_at().map(|_| super::zcode_start::models())
+}
+
 pub(crate) async fn forward(
     deps: Arc<ProxyDeps>,
     entry: &PoolEntry,
     protocol: CallerProtocol,
     body: Bytes,
+    session: &str,
 ) -> Response {
     if protocol != CallerProtocol::Anthropic {
         return error_response(
@@ -319,16 +325,25 @@ pub(crate) async fn forward(
     // 返回「Invalid request body: Input should be a valid dictionary」（400）。
     let mut headers = HeaderMap::new();
     headers.insert("content-type", HeaderValue::from_static("application/json"));
-    super::direct::forward(
-        deps,
+    let response = super::direct::forward(
+        deps.clone(),
         &target,
         model.into(),
         Method::POST,
         "/v1/messages",
         &headers,
-        body,
+        body.clone(),
     )
-    .await
+    .await;
+    // Start Plan 兜底：Coding Plan Key 认证通过但账号没有对应资源包（429/1113、402），
+    // 而登录会话的 JWT 在——免费 Start Plan 的额度在 zcode.z.ai 自己的端点上
+    // （用会话 JWT + ZCode 同款着装请求）。有 Coding Plan 的账号不受影响。
+    let billing = response.status() == StatusCode::TOO_MANY_REQUESTS
+        || response.status() == StatusCode::PAYMENT_REQUIRED;
+    if billing && super::zcode_start::jwt_at().is_some() {
+        return super::zcode_start::forward(deps, entry, protocol, body, session).await;
+    }
+    response
 }
 
 #[cfg(all(test, windows))]
