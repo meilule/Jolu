@@ -222,6 +222,14 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
             sort       INTEGER NOT NULL DEFAULT 0,
             created_ms INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS routing_groups (
+            id           TEXT PRIMARY KEY,
+            slug         TEXT UNIQUE NOT NULL,
+            name         TEXT NOT NULL,
+            strategy     TEXT NOT NULL DEFAULT 'order',
+            members_json TEXT NOT NULL DEFAULT '[]',
+            created_ms   INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS agent_group_members (
             agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
             group_id TEXT NOT NULL REFERENCES agent_groups(id) ON DELETE CASCADE,

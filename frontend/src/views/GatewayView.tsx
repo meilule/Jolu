@@ -69,6 +69,8 @@ export function GatewayView() {
   const [catalog, setCatalog] = useState<CatalogModelDto[]>([])
   /** Claude Code 接线时写进 settings.json 的默认模型（`<来源>/<模型>`）；空串表示不改模型 */
   const [claudeModelChoice, setClaudeModelChoice] = useState("")
+  /** Profile（配置一键切换）列表；接线面板里保存 / 应用 */
+  const [profiles, setProfiles] = useState<{ name: string; agents: Record<string, string>; created_ms: number }[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [tick, setTick] = useState(0)
@@ -88,13 +90,14 @@ export function GatewayView() {
       return
     }
     try {
-      const [nextStatus, nextGroups, nextCatalog, nextCapabilities] = await Promise.all([
-        gatewayApi.status(), gatewayApi.groups(), gatewayApi.catalog(), gatewayApi.sourceCapabilities(),
+      const [nextStatus, nextGroups, nextCatalog, nextCapabilities, nextProfiles] = await Promise.all([
+        gatewayApi.status(), gatewayApi.groups(), gatewayApi.catalog(), gatewayApi.sourceCapabilities(), gatewayApi.profilesList(),
       ])
       setCapabilities(nextCapabilities)
       setStatus(nextStatus)
       setGroups(nextGroups)
       setCatalog(nextCatalog)
+      setProfiles(nextProfiles)
     } catch (error) {
       toast.danger("读取统一网关失败", String(error))
     } finally {
@@ -235,6 +238,9 @@ export function GatewayView() {
     setDialog({ kind: "confirm", title: `接入 ${agentLabel(agent)}？`, description: detail, label: "确认接入", work: () => run(() => gatewayApi.setWiring(agent, true, model), `已接入 ${agentLabel(agent)}`, true) })
   }
   const confirmUnwire = (agent: string) => setDialog({ kind: "confirm", title: `断开 ${agentLabel(agent)}？`, description: "将恢复这个工具接入前的连接配置，后续请求不再通过 Jolu 统一网关。", label: "确认断开", danger: true, work: () => run(() => gatewayApi.setWiring(agent, false), `已断开 ${agentLabel(agent)}`, true) })
+  const profileApply = (name: string) => setDialog({ kind: "confirm", title: `应用 Profile「${name}」？`, description: "将把这套配置里各工具的主模型重新写入当前已接线的工具；配置被外部改写的会跳过。", label: "应用", work: () => run(async () => { const result = await gatewayApi.profilesApply(name); await refresh(); return result.message }, name, true) })
+  const profileSave = (name: string) => setDialog({ kind: "confirm", title: `保存 Profile「${name}」？`, description: "把当前所有已接线工具的主模型存成这套配置；之后可一键切回。", label: "保存", work: () => run(async () => { await gatewayApi.profilesSave(name); await refresh(); return "已保存" }, name, true) })
+  const profileDelete = (name: string) => setDialog({ kind: "confirm", title: `删除 Profile「${name}」？`, description: "只删除这份快照，不影响工具当前配置。", label: "删除", danger: true, work: () => run(() => gatewayApi.profilesDelete(name), "已删除", true) })
   const confirmAccept = (agent: string) => setDialog({ kind: "confirm", title: `接受 ${agentLabel(agent)} 的现有配置？`, description: "将以工具当前的外部配置为准，结束 Jolu 对这份接线记录的管理。确认前请核对配置变动。", label: "接受现状", work: () => run(() => gatewayApi.acceptWiring(agent), "已接受现状", true) })
 
   const unwire = async (agent: string) => {
@@ -380,7 +386,7 @@ export function GatewayView() {
         }} />
       )}
       {dialog?.kind === "serve-conflict" && <MessageDialog title="这个来源没有加入模型池" tone="danger" message={dialog.message} onClose={() => setDialog({ kind: "manage" })} />}
-      {dialog?.kind === "wiring" && <WiringDialog agents={agents} models={claudeModels} modelChoice={claudeModel} onModelChoice={setClaudeModelChoice} busy={busy} onClose={() => setDialog(null)} onWire={(agent) => { setDialog(null); wire(agent) }} onUnwire={confirmUnwire} onAccept={confirmAccept} />}
+      {dialog?.kind === "wiring" && <WiringDialog agents={agents} models={claudeModels} modelChoice={claudeModel} onModelChoice={setClaudeModelChoice} profiles={profiles} onProfileApply={profileApply} onProfileSave={profileSave} onProfileDelete={profileDelete} busy={busy} onClose={() => setDialog(null)} onWire={(agent) => { setDialog(null); wire(agent) }} onUnwire={confirmUnwire} onAccept={confirmAccept} />}
       {dialog?.kind === "codex" && <CodexDialog returnFocusTo={accessTrigger.current} mode={agents.find((entry) => entry.agent === "codex")?.codex_mode ?? "provider"} busy={busy} onClose={() => setDialog(null)} onConfirm={() => run(() => gatewayApi.setWiring("codex", true), "已接入 Codex", true)} />}
       {dialog?.kind === "gemini" && <GeminiDialog returnFocusTo={accessTrigger.current} busy={busy} onClose={() => setDialog(null)} onConfirm={() => run(() => gatewayApi.setWiring("gemini", true), "已接入 Gemini CLI", true)} />}
       {dialog?.kind === "restore-failed" && <MessageDialog title="没能恢复工具配置" tone="danger" message={dialog.message} action={{ label: "重试断开", onClick: async () => { setDialog(null); await unwire(dialog.agent) } }} onClose={() => setDialog(null)} />}

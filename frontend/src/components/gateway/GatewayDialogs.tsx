@@ -81,18 +81,25 @@ export function RenameDialog({ connection, busy, onClose, onSave }: { connection
  * `ANTHROPIC_MODEL`——它压过 /model 的选择，写了切换只在本会话生效。
  * 断开时按快照还原用户原来的全部模型配置。不选模型也能接（只写地址和令牌）。
  */
-export function WiringDialog({ agents, models, modelChoice, onModelChoice, busy, onClose, onWire, onUnwire, onAccept }: {
+export function WiringDialog({ agents, models, modelChoice, onModelChoice, profiles, onProfileApply, onProfileSave, onProfileDelete, busy, onClose, onWire, onUnwire, onAccept }: {
   agents: WiringStatusDto[]
   /** 可选的 `<来源>/<模型>` 列表（来自模型目录，只含已接入来源） */
   models: string[]
   modelChoice: string
   onModelChoice: (value: string) => void
+  /** Profile（配置一键切换）：保存当前全部接线的主模型，应用时逐个重放 */
+  profiles: { name: string; agents: Record<string, string>; created_ms: number }[]
+  onProfileApply: (name: string) => void
+  onProfileSave: (name: string) => void
+  onProfileDelete: (name: string) => void
   busy: boolean
   onClose: () => void
   onWire: (agent: string) => void
   onUnwire: (agent: string) => void
   onAccept: (agent: string) => void
 }) {
+  const [profileName, setProfileName] = useState("")
+  const [profileOpen, setProfileOpen] = useState(false)
   const claude = agents.find((entry) => entry.agent === "claude-code")
   return (
     <Modal busy={busy} title="Agent 接线" onClose={onClose} footer={<Button label="关闭" disabled={busy} onClick={onClose} />}>
@@ -133,6 +140,36 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, busy,
         ))}
       </div>
       <span className="text-[8.5px] text-jolu-muted">同一工具的第二份安装（WSL、便携版）暂不支持，只在主安装上接线。</span>
+      {/* Profile：把全部接线的主模型存成一个快照，一次切回（待画板确认前的最小可用版） */}
+      <div className="flex flex-col gap-1 rounded-lg border border-jolu-border bg-jolu-side px-2.5 py-2">
+        <button type="button" onClick={() => setProfileOpen((open) => !open)}
+          className="flex items-center justify-between text-[9.5px] text-jolu-text outline-none">
+          <span>Profiles · 配置一键切换（待确认）</span>
+          <span className="text-jolu-muted">{profileOpen ? "收起 ▲" : `展开 ▼（已有 ${profiles.length} 个）`}</span>
+        </button>
+        {profileOpen && (
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-1.5">
+              <input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="Profile 名称（保存当前接线）"
+                className="h-8 min-w-0 flex-1 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent" />
+              <Button label="保存当前" disabled={busy || profileName.trim() === ""} onClick={() => { onProfileSave(profileName.trim()); setProfileName("") }} />
+            </div>
+            {profiles.length === 0 ? (
+              <span className="text-[8.5px] text-jolu-muted">还没有 Profile：接好各工具的模型后，保存成一套，之后一键切回。</span>
+            ) : (
+              profiles.map((profile) => (
+                <div key={profile.name} className="flex items-center gap-2 rounded-lg bg-jolu-bg px-2 py-1.5">
+                  <span className="min-w-0 flex-1 truncate text-[10.5px] text-jolu-text">{profile.name}</span>
+                  <span className="shrink-0 text-[8.5px] text-jolu-muted">{Object.keys(profile.agents).length} 个工具</span>
+                  <Button label="应用" primary disabled={busy} onClick={() => onProfileApply(profile.name)} />
+                  <Button label="删除" disabled={busy} onClick={() => onProfileDelete(profile.name)} />
+                </div>
+              ))
+            )}
+            <span className="text-[8.5px] text-jolu-muted">应用只影响「当前已接线」的工具；配置被外部改写的会跳过并说明。</span>
+          </div>
+        )}
+      </div>
     </Modal>
   )
 }

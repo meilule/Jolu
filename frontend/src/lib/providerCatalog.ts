@@ -9,7 +9,7 @@ import type { PlatformId } from "@/types"
  *   none    平台不提供该方式，不展示入口
  */
 export type ModeState = "ready" | "pending" | "none"
-export type ProviderId = PlatformId | "workbuddy-ai" | "trae-cn" | "qoder-cn" | "zcode-bigmodel"
+export type ProviderId = PlatformId | "workbuddy-ai" | "trae-cn" | "qoder-cn" | "zcode-bigmodel" | "deepseek" | "kimi" | "minimax" | "stepfun" | "qwen" | "openrouter" | "together" | "fireworks" | "siliconflow" | "groq" | "ollama" | "lmstudio"
 
 export interface ProviderEntry {
   id: ProviderId
@@ -51,6 +51,23 @@ export const PROVIDERS: readonly ProviderEntry[] = [
   { id: "qoder", platformId: "qoder", edition: "global", name: "Qoder", access: "账号登录 / 可用模型服务", subscription: "ready", apiKey: "none" },
   { id: "workbuddy", platformId: "workbuddy", edition: "cn", name: "WorkBuddy", access: "账号登录 / 原工具配置模型", subscription: "ready", apiKey: "none" },
   { id: "workbuddy-ai", platformId: "workbuddy", edition: "ai", name: "WorkBuddy AI", access: "账号登录 / 原工具配置模型", subscription: "ready", apiKey: "none" },
+  /*
+   * 预设库（P4.1，对齐 magpie 的 provider presets）：OpenAI / Anthropic 兼容的常见厂商。
+   * 都映射到 platformId "custom"（自定义连接），只是预填名称与 Base URL、锁定协议，
+   * 用户粘贴 Key 即可；不做任何厂商特化逻辑——按 AGENTS.md，不能凭 UI 推断能力。
+   */
+  { id: "deepseek", platformId: "custom", name: "DeepSeek", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "https://api.deepseek.com/v1", locked: false } },
+  { id: "kimi", platformId: "custom", name: "Kimi（月之暗面）", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "https://api.moonshot.cn/v1", locked: false } },
+  { id: "minimax", platformId: "custom", name: "MiniMax", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "https://api.minimax.chat/v1", locked: false } },
+  { id: "stepfun", platformId: "custom", name: "StepFun（阶跃星辰）", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "https://api.stepfun.com/v1", locked: false } },
+  { id: "qwen", platformId: "custom", name: "Qwen（通义千问）", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "https://dashscope.aliyuncs.com/compatible-mode/v1", locked: false } },
+  { id: "openrouter", platformId: "custom", name: "OpenRouter", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "https://openrouter.ai/api/v1", locked: false } },
+  { id: "together", platformId: "custom", name: "Together", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "https://api.together.xyz/v1", locked: false } },
+  { id: "fireworks", platformId: "custom", name: "Fireworks", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "https://api.fireworks.ai/inference/v1", locked: false } },
+  { id: "siliconflow", platformId: "custom", name: "SiliconFlow（硅基流动）", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "https://api.siliconflow.cn/v1", locked: false } },
+  { id: "groq", platformId: "custom", name: "Groq", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "https://api.groq.com/openai/v1", locked: false } },
+  { id: "ollama", platformId: "custom", name: "Ollama（本机）", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "http://127.0.0.1:11434/v1", locked: false } },
+  { id: "lmstudio", platformId: "custom", name: "LM Studio（本机）", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "http://127.0.0.1:1234/v1", locked: false } },
   // Trae 不在原画板里，按鼠鼠要求保留并已补进 Jolu.pen 画板 05 / 06 / 29
   { id: "trae-cn", platformId: "trae", edition: "cn", name: "Trae CN", access: "账号登录 / 本机登录", subscription: "ready", apiKey: "none" },
   { id: "trae", platformId: "trae", edition: "global", name: "Trae", access: "账号登录 / 本机登录", subscription: "ready", apiKey: "none" },

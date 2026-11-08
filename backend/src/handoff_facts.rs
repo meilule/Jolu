@@ -113,12 +113,13 @@ fn clip(text: &str, limit: usize) -> String {
 // 每遍扫描里，任何一次向前查看都有长度上限，或者扫描后整段跳过，保证整体线性（病态输入也不会退化成 O(n²)）。
 
 const MASK: &str = "***";
-/// 无键名的前缀 Key（前缀之后至少 16 位才遮）
-const PREFIX_KEYS: [&str; 26] = [
+/// 无键名的前缀 Key（前缀之后至少 16 位才遮）。
+/// 交接事实区（redact）与网关隐私脱敏（gateway/mask.rs）共用同一份清单。
+pub(crate) const PREFIX_KEYS: [&str; 26] = [
     "sk-", "sk_", "rk_", "gsk_", "npm_", "ya29.", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "glpat-", "xoxa-", "xoxb-", "xoxp-", "xoxs-", "xoxr-", "xapp-", "hf_", "dop_v1_",
     "shpat_", "AKIA", "ASIA", "AIza", "pplx-",
 ];
-const PREFIX_MIN: usize = 16;
+pub(crate) const PREFIX_MIN: usize = 16;
 /// 键名最长这么多字，更长的标识符不当作键名（同时保证扫描线性）
 const IDENT_MAX: usize = 128;
 /// 单个值最多向前取这么多字

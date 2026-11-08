@@ -212,6 +212,17 @@ pub fn wire_agents(app: &tauri::AppHandle, agents: &[String], model: Option<&str
     let port = settings.proxy_port;
     let instance = settings.instance_id.clone();
     let instance_short: String = instance.chars().take(8).collect();
+    // 1M 自动标记（magpie mark1M 同款）：主模型上下文超过 200K 时写入带 [1m] 的名字，
+    // 否则 Claude Code 按 200K 截断。元数据缺失按不标记处理——宁可少标，不虚标。
+    let model = model.map(|m| {
+        if m.ends_with("[1m]") || m.ends_with("[1M]") {
+            m.to_string()
+        } else if crate::gateway::models_dev::exceeds_200k(app, m) {
+            format!("{m}[1m]")
+        } else {
+            m.to_string()
+        }
+    });
     let backup_dir = app
         .path()
         .app_data_dir()
@@ -249,7 +260,7 @@ pub fn wire_agents(app: &tauri::AppHandle, agents: &[String], model: Option<&str
                 &instance_short,
                 &backup_dir,
                 prior_snapshot.as_deref(),
-                model,
+                model.as_deref(),
                 prior_model.as_deref(),
                 |snapshot, applied| {
                     let state = app.state::<crate::Db>();

@@ -18,7 +18,13 @@ pub mod bridge;
 pub mod catalog;
 pub mod escape;
 pub mod groups;
+pub mod routing_groups;
+pub mod profiles;
+pub mod models_dev;
 pub mod identity;
+pub mod import_sources;
+/// 隐私脱敏（P5）：网关中转的请求出机前换占位符、响应回来再换回（参照 magpie masking）。
+pub mod mask;
 pub mod route_log;
 pub mod route;
 pub(crate) mod sessions;

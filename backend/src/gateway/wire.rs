@@ -438,19 +438,172 @@ pub(crate) async fn handle(
         )
     };
 
-    if let RouteDecision::Direct(entry, _) | RouteDecision::Subscription(entry) = &decision {
-        if !route::source_is_current(&deps, entry) {
-            return error_response(StatusCode::SERVICE_UNAVAILABLE, "来源已关闭或配置已变化，请刷新后重试");
+    // ── 候选列表 ──
+    // 普通模型：decide 产出一个候选。`group/<slug>`：路由分组按策略展开为有序候选
+    // （主选 + 兜底），成员失败时按可转移错误换下一个——对齐 magpie 的 fallback 语义。
+    let mut group_note: Option<String> = None;
+    let candidates: Vec<(route::PoolEntry, String)> = if let Some(group_slug) = model.strip_prefix("group/") {
+        let group = deps
+            .db
+            .lock()
+            .ok()
+            .and_then(|conn| crate::gateway::routing_groups::get(&conn, group_slug).ok().flatten());
+        let Some(group) = group else {
+            return error_response(StatusCode::NOT_FOUND, &format!("没有名为「{group_slug}」的路由分组"));
+        };
+        // 会话已绑定的成员提到最前（prompt cache 值得保留，与单模型亲和同语义）
+        let bound = state.affinity.lock().ok().and_then(|affinity| {
+            let connection_id = affinity.get(&session)?;
+            pool.iter().find(|e| e.connection_id == connection_id).map(|e| e.slug.clone())
+        });
+        let usage_of = |slug: &str| -> i64 {
+            deps.db
+                .try_lock()
+                .ok()
+                .and_then(|conn| route::member_usage(&conn, slug).ok())
+                .unwrap_or(0)
+        };
+        let (ordered, note) = {
+            let mut rotate = crate::gateway::routing_groups::rotate_state();
+            crate::gateway::routing_groups::ordered_members(&group, &mut rotate, &usage_of, bound.as_deref())
+        };
+        group_note = note;
+        let (expanded, skipped) = crate::gateway::routing_groups::expand(&ordered, 0, &|slug| {
+            deps.db
+                .lock()
+                .ok()
+                .and_then(|conn| crate::gateway::routing_groups::get(&conn, slug).ok().flatten())
+                .map(|group| group.members)
+        });
+        for reason in &skipped {
+            eprintln!("[路由分组] 跳过成员：{reason}");
         }
+        expanded
+            .into_iter()
+            .filter_map(|member| {
+                let entry = pool.iter().find(|e| e.slug == member.slug)?.clone();
+                Some((entry, member.model))
+            })
+            .collect()
+    } else {
+        match decision {
+            RouteDecision::Direct(entry, upstream_model) => vec![(entry.clone(), upstream_model)],
+            RouteDecision::Subscription(entry) => vec![(entry.clone(), String::new())],
+            RouteDecision::Reject { kind, message, retry_after } => {
+                let status = match kind {
+                    route::RejectKind::BadRequest => StatusCode::BAD_REQUEST,
+                    route::RejectKind::NotFound => StatusCode::NOT_FOUND,
+                    route::RejectKind::Unauthorized => StatusCode::UNAUTHORIZED,
+                    route::RejectKind::PaymentRequired => StatusCode::PAYMENT_REQUIRED,
+                    route::RejectKind::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
+                    route::RejectKind::ServiceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+                };
+                record_route(&deps, request_id, &meta, None, None, Some(status.as_u16()), "rejected", started);
+                return match retry_after {
+                    Some(seconds) => error_response_with_retry(status, &message, seconds),
+                    None => error_response(status, &message),
+                };
+            }
+        }
+    };
+    if candidates.is_empty() {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            group_note.as_deref().unwrap_or("路由分组的成员都不在模型池中：请检查分组配置"),
+        );
     }
-    // 选路成功：先发开始事件，再交给上游。guard 保证请求中途被取消时也有结束事件。
-    let begin = |entry: &route::PoolEntry, meta: &RouteMeta| begin_route(&deps, request_id, meta, entry, started);
+
+    // ── 候选循环 ──
+    // 主选失败且属可转移错误（401/402/403/408/429/5xx）时换下一个成员；
+    // 请求本身的 4xx（400/404/413/422…）是确定性的，转移只会重复，直接回给调用方。
+    let total = candidates.len();
+    for (index, (entry, upstream_model)) in candidates.into_iter().enumerate() {
+        let last = index + 1 == total;
+        if !route::source_is_current(&deps, &entry) {
+            if last {
+                return error_response(StatusCode::SERVICE_UNAVAILABLE, "来源已关闭或配置已变化，请刷新后重试");
+            }
+            eprintln!("[路由] 成员「{}」配置已变化，跳过换下一个候选", entry.slug);
+            continue;
+        }
+        let meta = linked(&meta, &entry);
+        // 订阅适配器从请求体读模型：分组成员的模型与请求不同时要重写 body 的 model 字段
+        let try_body = if upstream_model.is_empty() || upstream_model == model {
+            body.clone()
+        } else {
+            match rewrite_body_model(&body, &upstream_model) {
+                Ok(bytes) => bytes,
+                Err(_) => body.clone(),
+            }
+        };
+        let response = forward_one(
+            &deps,
+            &entry,
+            protocol,
+            &upstream_model,
+            &try_body,
+            path_and_query,
+            &headers,
+            &session,
+            request_id,
+            meta,
+            started,
+            &model,
+        )
+        .await;
+        if !is_retryable_status(response.status()) || last {
+            return response;
+        }
+        eprintln!("[路由] 成员「{}」返回 {}，转移下一个候选", entry.slug, response.status());
+    }
+    error_response(StatusCode::SERVICE_UNAVAILABLE, "没有可用的候选成员")
+}
+
+/// 可转移的上游错误：账号级失败（401/402/403）、限流（429/408）与服务端错误（5xx）
+/// 都值得换下一个候选；请求本身的 4xx（格式、模型不存在等）是确定性的，转移只会重复。
+fn is_retryable_status(status: StatusCode) -> bool {
+    status.is_server_error()
+        || matches!(status.as_u16(), 401 | 402 | 403 | 408 | 429)
+}
+
+/// 把请求体 model 字段改写为候选成员的模型（分组成员各有各的模型）。
+fn rewrite_body_model(body: &[u8], model: &str) -> Result<axum::body::Bytes, String> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(body).map_err(|error| format!("请求体不是有效 JSON：{error}"))?;
+    value["model"] = serde_json::Value::String(model.to_string());
+    Ok(axum::body::Bytes::from(value.to_string()))
+}
+
+/// 单个候选的转发：Direct / Subscription 两类分发（原主路径逻辑原样搬入），
+/// 每次尝试独立记流水、发开始/结束事件，成功时会话绑定到该来源（亲和）。
+#[allow(clippy::too_many_arguments)]
+async fn forward_one(
+    deps: &Arc<ProxyDeps>,
+    entry: &route::PoolEntry,
+    protocol: CallerProtocol,
+    upstream_model: &str,
+    body: &axum::body::Bytes,
+    path_and_query: &str,
+    headers: &HeaderMap,
+    session: &str,
+    request_id: u64,
+    meta: RouteMeta,
+    started: std::time::Instant,
+    requested_model: &str,
+) -> Response {
+    let begin = |entry: &route::PoolEntry, meta: &RouteMeta| begin_route(deps, request_id, meta, entry, started);
     let outcome = |response: &Response| if response.status().is_success() { "ok" } else { "failed" };
-    match decision {
-        RouteDecision::Direct(entry, upstream_model) => {
-            let meta = linked(&meta, entry);
+    let bind = |entry: &route::PoolEntry| {
+        if let Some(affinity) = deps.affinity.as_ref() {
+            if let Ok(mut guard) = affinity.lock() {
+                guard.bind(session, &entry.connection_id, now_ms());
+            }
+        }
+    };
+    match entry.kind.as_str() {
+        "api" => {
             if entry.protocol != protocol.wire_name() {
-                let response = error_response(
+                return error_response(
                     StatusCode::BAD_REQUEST,
                     &format!(
                         "连接「{}」只提供 {} 协议端点，不能服务 {} 请求；请为该连接选择 {} 兼容地址",
@@ -460,24 +613,22 @@ pub(crate) async fn handle(
                         wire_label(protocol),
                     ),
                 );
-                record_route(&deps, request_id, &meta, Some(&entry.slug), None, Some(400), "failed", started);
-                return response;
             }
             let guard = begin(entry, &meta);
-            let upstream_for_log = upstream_model.clone();
+            let upstream_for_log = upstream_model.to_string();
             let response = crate::gateway::adapter::direct::forward(
                 deps.clone(),
                 entry,
-                upstream_model,
+                upstream_model.to_string(),
                 axum::http::Method::POST,
                 path_and_query,
-                &headers,
-                body,
+                headers,
+                body.clone(),
             )
             .await;
             guard.finish();
             record_route(
-                &deps,
+                deps,
                 request_id,
                 &meta,
                 Some(&entry.slug),
@@ -486,19 +637,15 @@ pub(crate) async fn handle(
                 outcome(&response),
                 started,
             );
-            note_outcome(&deps, !response.status().is_success(), &format!("连接「{}」返回 {}", entry.slug, response.status()));
-            // 成功路径补写会话绑定（decide_with_affinity 内部已续期，这里覆盖冷却后恢复等场景）
+            note_outcome(deps, !response.status().is_success(), &format!("连接「{}」返回 {}", entry.slug, response.status()));
             if response.status().is_success() {
-                if let Ok(mut affinity) = state.affinity.lock() {
-                    affinity.bind(&session, &entry.connection_id, now_ms());
-                }
+                bind(entry);
             }
             response
         }
-        RouteDecision::Subscription(entry) => {
-            let meta = linked(&meta, entry);
+        // 订阅来源：按平台分发到各自适配器；协议不匹配本地直接返回，不发开始事件
+        _ => {
             let platform = entry.platform.as_str();
-            // 协议不匹配或平台未接入：本地直接返回，不发开始事件（不会显示成「运行中」）
             let unsupported = match platform {
                 "codex" | "opencode" if protocol == CallerProtocol::Anthropic => {
                     Some(error_response(StatusCode::BAD_REQUEST, "Codex 订阅只服务 OpenAI 协议请求"))
@@ -514,17 +661,17 @@ pub(crate) async fn handle(
                 None => {
                     let guard = begin(entry, &meta);
                     let response = match platform {
-                        "codex" | "opencode" => crate::gateway::adapter::codex::forward(deps.clone(), entry, protocol, body).await,
-                        "claude" => crate::gateway::adapter::claude::forward(deps.clone(), entry, &session, body).await,
-                        "grok" => crate::gateway::adapter::grok::forward(deps.clone(), entry, protocol, body).await,
-                        "zcode" => crate::gateway::adapter::zcode::forward(deps.clone(), entry, protocol, body).await,
+                        "codex" | "opencode" => crate::gateway::adapter::codex::forward(deps.clone(), entry, protocol, body.clone()).await,
+                        "claude" => crate::gateway::adapter::claude::forward(deps.clone(), entry, session, body.clone()).await,
+                        "grok" => crate::gateway::adapter::grok::forward(deps.clone(), entry, protocol, body.clone()).await,
+                        "zcode" => crate::gateway::adapter::zcode::forward(deps.clone(), entry, protocol, body.clone()).await,
                         _ => {
                             // 只说 Chat 的来源（WorkBuddy / Qoder / Trae）：Anthropic 调用方（Claude Code）经协议转换后转发，回复再转回
                             let anthropic = protocol == CallerProtocol::Anthropic;
                             let converted = if anthropic {
-                                crate::gateway::translate::anthropic_request(&body).map(|b| (CallerProtocol::Chat, b))
+                                crate::gateway::translate::anthropic_request(body).map(|b| (CallerProtocol::Chat, b))
                             } else {
-                                Ok((protocol, body))
+                                Ok((protocol, body.clone()))
                             };
                             match converted {
                                 Err(e) => error_response(StatusCode::BAD_REQUEST, &e),
@@ -532,9 +679,9 @@ pub(crate) async fn handle(
                                     let response = match platform {
                                         "workbuddy" => crate::gateway::adapter::workbuddy::forward(deps.clone(), entry, protocol, body).await,
                                         "qoder" => crate::gateway::adapter::qoder::forward(deps.clone(), entry, protocol, body).await,
-                                        _ => crate::gateway::adapter::trae::forward(deps.clone(), entry, protocol, body, &session).await,
+                                        _ => crate::gateway::adapter::trae::forward(deps.clone(), entry, protocol, body, session).await,
                                     };
-                                    if anthropic { crate::gateway::translate::anthropic_response(response, &model).await } else { response }
+                                    if anthropic { crate::gateway::translate::anthropic_response(response, requested_model).await } else { response }
                                 }
                             }
                         }
@@ -544,7 +691,7 @@ pub(crate) async fn handle(
                 }
             };
             record_route(
-                &deps,
+                deps,
                 request_id,
                 &meta,
                 Some(&entry.slug),
@@ -553,26 +700,13 @@ pub(crate) async fn handle(
                 outcome(&response),
                 started,
             );
-            response
-        }
-        RouteDecision::Reject { kind, message, retry_after } => {
-            let status = match kind {
-                route::RejectKind::BadRequest => StatusCode::BAD_REQUEST,
-                route::RejectKind::NotFound => StatusCode::NOT_FOUND,
-                route::RejectKind::Unauthorized => StatusCode::UNAUTHORIZED,
-                route::RejectKind::PaymentRequired => StatusCode::PAYMENT_REQUIRED,
-                route::RejectKind::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
-                route::RejectKind::ServiceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
-            };
-            record_route(&deps, request_id, &meta, None, None, Some(status.as_u16()), "rejected", started);
-            match retry_after {
-                Some(seconds) => error_response_with_retry(status, &message, seconds),
-                None => error_response(status, &message),
+            if response.status().is_success() {
+                bind(entry);
             }
+            response
         }
     }
 }
-
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -2233,6 +2233,21 @@ fn gateway_set_mode(
     Ok(next)
 }
 
+/// 隐私脱敏开关（P5，gateway/mask.rs）：只影响网关中转模式的请求 / 响应。
+/// 进程级开关改完立即生效，不需要重启代理；前端接入口 = `settings.privacy_masking` 字段
+/// + 本命令（界面待设计稿确认后再接）。
+#[tauri::command]
+fn privacy_masking_set(app: tauri::AppHandle, on: bool) -> Result<settings::Settings, String> {
+    let next = app
+        .state::<Cfg>()
+        .0
+        .try_update(|settings| settings.privacy_masking = on)
+        .map_err(|error| format!("保存隐私脱敏设置失败：{error}"))?;
+    crate::gateway::mask::set_enabled(next.privacy_masking);
+    let _ = app.emit("settings-changed", next.clone());
+    Ok(next)
+}
+
 /// 连接进出模型池。
 #[tauri::command]
 fn gateway_set_serve(app: tauri::AppHandle, connection_id: String, enabled: bool) -> Result<(), String> {
@@ -2394,7 +2409,137 @@ fn gateway_set_slug(app: tauri::AppHandle, connection_id: String, slug: String) 
 fn gateway_catalog(app: tauri::AppHandle) -> Result<Vec<crate::gateway::catalog::CatalogModel>, String> {
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-    crate::gateway::catalog::list(&conn).map_err(|error| error.to_string())
+    let mut out = crate::gateway::catalog::list(&conn).map_err(|error| error.to_string())?;
+    // 路由分组也是可选的模型 id（`group/<分组slug>`），进目录供接线与 Profile 选择
+    if let Ok(groups) = crate::gateway::routing_groups::list(&conn) {
+        for group in groups {
+            out.push(crate::gateway::catalog::CatalogModel {
+                id: format!("group/{}", group.slug),
+                source: group.name,
+                slug: "group".into(),
+                model: group.slug,
+                kind: "group".into(),
+                status: "connected".into(),
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Profile 列表。
+#[tauri::command]
+fn gateway_profiles_list(app: tauri::AppHandle) -> Result<Vec<crate::gateway::profiles::Profile>, String> {
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    crate::gateway::profiles::list(&conn).map_err(|error| error.to_string())
+}
+
+/// 保存当前已接线 agent 的主模型为一个 Profile。
+#[tauri::command]
+fn gateway_profiles_save(app: tauri::AppHandle, name: String) -> Result<crate::gateway::profiles::Profile, String> {
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    let agents = crate::gateway::profiles::capture_current(&conn)?;
+    crate::gateway::profiles::save(&conn, &name, &agents)
+}
+
+/// 删除 Profile。
+#[tauri::command]
+fn gateway_profiles_delete(app: tauri::AppHandle, name: String) -> Result<bool, String> {
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    crate::gateway::profiles::delete(&conn, &name)
+}
+
+/// 应用 Profile：对「当前已接线且在 Profile 里」的 agent 逐个重放接线。
+///
+/// 走 [`gateway::escape::wire_agents`] 的完整路径（备份 / 原子写 / 快照 / 1M 标记）；
+/// 未接线与配置漂移的 agent 跳过并说明——Profile 不静默覆盖用户的手动改动。
+#[tauri::command]
+fn gateway_profiles_apply(app: tauri::AppHandle, name: String) -> Result<crate::gateway::profiles::ApplyResult, String> {
+    let state = app.state::<Db>();
+    let profile = {
+        let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+        crate::gateway::profiles::get(&conn, &name)?.ok_or_else(|| format!("没有名为「{name}」的 Profile"))?
+    };
+    // 当前已接线且有主模型决策的 agent 才参与切换
+    let wired = {
+        let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+        crate::gateway::profiles::capture_current(&conn)?
+    };
+    let mut switched = Vec::new();
+    let mut skipped = Vec::new();
+    for (agent, model) in &profile.agents {
+        if !wired.contains_key(agent) {
+            skipped.push(agent.clone());
+            continue;
+        }
+        match crate::gateway::escape::wire_agents(&app, std::slice::from_ref(agent), Some(model)) {
+            Ok(_) => switched.push(format!("{agent} → {model}")),
+            Err(error) => skipped.push(format!("{agent}（{error}）")),
+        }
+    }
+    if switched.is_empty() {
+        return Err(format!(
+            "没有可切换的 agent：{}",
+            if skipped.is_empty() { "Profile 里没有已接线的成员".into() } else { format!("跳过：{}", skipped.join("、")) }
+        ));
+    }
+    let mut message = format!("已切换 {}", switched.join("、"));
+    if !skipped.is_empty() {
+        message.push_str(&format!("；跳过 {}", skipped.join("、")));
+    }
+    Ok(crate::gateway::profiles::ApplyResult { switched, skipped, message })
+}
+
+/// 路由分组列表。
+#[tauri::command]
+fn gateway_routing_group_list(app: tauri::AppHandle) -> Result<Vec<crate::gateway::routing_groups::RoutingGroup>, String> {
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    crate::gateway::routing_groups::list(&conn).map_err(|error| error.to_string())
+}
+
+/// 创建路由分组。成员是 `[{slug, model}]`；slug 为来源 id，模型可带或不带 `[1m]` 标记。
+#[tauri::command]
+fn gateway_routing_group_create(
+    app: tauri::AppHandle,
+    slug: String,
+    name: String,
+    strategy: String,
+    members: Vec<crate::gateway::routing_groups::GroupMember>,
+) -> Result<crate::gateway::routing_groups::RoutingGroup, String> {
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    let group = crate::gateway::routing_groups::create(&conn, &slug, &name, &strategy, &members)?;
+    let _ = app.emit("gateway-catalog-changed", ());
+    Ok(group)
+}
+
+/// 更新路由分组（名称 / 策略 / 成员，均可选）。
+#[tauri::command]
+fn gateway_routing_group_update(
+    app: tauri::AppHandle,
+    slug: String,
+    name: Option<String>,
+    strategy: Option<String>,
+    members: Option<Vec<crate::gateway::routing_groups::GroupMember>>,
+) -> Result<(), String> {
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    crate::gateway::routing_groups::update(&conn, &slug, name.as_deref(), strategy.as_deref(), members.as_deref())?;
+    let _ = app.emit("gateway-catalog-changed", ());
+    Ok(())
+}
+
+/// 删除路由分组。
+#[tauri::command]
+fn gateway_routing_group_delete(app: tauri::AppHandle, slug: String) -> Result<(), String> {
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    crate::gateway::routing_groups::delete(&conn, &slug)?;
+    let _ = app.emit("gateway-catalog-changed", ());
+    Ok(())
 }
 
 /// 路由流水：最近 20 条网关请求（不含提示词与凭证）。
@@ -3819,12 +3964,23 @@ pub fn run() {
             gateway_set_mode,
             gateway_set_default_source,
             gateway_refresh_models,
+            gateway_routing_group_list,
+            gateway_routing_group_create,
+            gateway_group_create,
+            gateway_routing_group_update,
+            gateway_routing_group_delete,
+            gateway_profiles_list,
+            gateway_profiles_save,
+            gateway_profiles_delete,
+            gateway_profiles_apply,
+            gateway_group_delete,
             gateway_set_serve,
             gateway_set_serve_many,
             gateway_source_usage,
             gateway_source_capabilities,
             gateway_wiring_set,
             gateway_escape,
+            privacy_masking_set,
             gateway_groups,
             gateway_group_create,
             gateway_group_rename,
@@ -3958,6 +4114,8 @@ pub fn run() {
             FIRST_INSTALL.store(first_install, Ordering::Release);
             app.manage(Cfg(settings::Store::load(&data_dir)));
             net::init(&app.state::<Cfg>().0.get()); // 任务 2.3：出站请求按已保存的联网方式发出
+            // P5 隐私脱敏：按设置初始化进程级开关（privacy_masking_set 运行时改）
+            crate::gateway::mask::set_enabled(app.state::<Cfg>().0.get().privacy_masking);
             let startup_plan = startup::plan(automatic, app.state::<Cfg>().0.get().silent_startup, first_install);
             STARTUP_REQUESTED.store(startup_plan.show_main, Ordering::Release);
             if startup_plan.show_main { let _ = show_startup(&handle); }

@@ -167,6 +167,16 @@ pub(crate) fn historical_slug_message(conn: &rusqlite::Connection, slug: &str) -
     }
 }
 
+/// 成员已用量（路由分组 usage 策略用）：按来源 slug 数流水条数。
+/// 只数已发出的请求（rejected 是没发出去的，不算消耗）。
+pub(crate) fn member_usage(conn: &rusqlite::Connection, slug: &str) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM gateway_route_log WHERE source = ?1 AND result = 'ok'",
+        [slug],
+        |r| r.get(0),
+    )
+}
+
 /// 会话亲和表：会话键 → 已应答的连接 id。
 /// prompt cache 有前缀一致性——换连接等于缓存全失效按写重算，所以会话黏住首个应答的连接
 /// （对齐 magpie 的 Stays 语义）。LRU 上限 [`AFFINITY_CAP`]，进程重启自然清空。

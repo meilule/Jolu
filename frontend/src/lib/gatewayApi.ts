@@ -175,6 +175,19 @@ export const gatewayApi = {
   setDefaultSource: (connectionId: string | null) => invoke<string | null>("gateway_set_default_source", { connectionId }),
   /** 实时拉取某来源的模型清单并落库；订阅类来源缓存为空时界面靠它脱离「0 模型」。 */
   refreshModels: (connectionId: string) => invoke<string[]>("gateway_refresh_models", { connectionId }),
+  /** Profile（配置一键切换）：保存当前已接线 agent 的主模型快照，应用时逐个重放接线。 */
+  profilesList: () => invoke<{ name: string; agents: Record<string, string>; created_ms: number }[]>("gateway_profiles_list"),
+  profilesSave: (name: string) => invoke<{ name: string; agents: Record<string, string>; created_ms: number }>("gateway_profiles_save", { name }),
+  profilesDelete: (name: string) => invoke<boolean>("gateway_profiles_delete", { name }),
+  profilesApply: (name: string) =>
+    invoke<{ switched: string[]; skipped: string[]; message: string }>("gateway_profiles_apply", { name }),
+  /** 路由分组（`group/<slug>`）：成员按策略分摊与转移。界面为待确认的最小可用版。 */
+  groupList: () => invoke<{ id: string; slug: string; name: string; strategy: string; members: { slug: string; model: string }[]; created_ms: number }[]>("gateway_routing_group_list"),
+  groupCreate: (slug: string, name: string, strategy: string, members: { slug: string; model: string }[]) =>
+    invoke<unknown>("gateway_routing_group_create", { slug, name, strategy, members }),
+  groupUpdate: (slug: string, patch: { name?: string; strategy?: string; members?: { slug: string; model: string }[] }) =>
+    invoke<unknown>("gateway_routing_group_update", { slug, ...patch }),
+  groupDelete: (slug: string) => invoke<unknown>("gateway_routing_group_delete", { slug }),
   /** 连接进出模型池 */
   setServe: (connectionId: string, enabled: boolean) =>
     invoke<void>("gateway_set_serve", { connectionId, enabled }),

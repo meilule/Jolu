@@ -25,7 +25,23 @@ import {
 
 test("供应商目录保留自定义与现有平台，地区版本独立展示", () => {
   // ZCode 拆成国内 / 国际两条（各有上游与账号家族），所以名称与 edition 清单都多一项。
-  assert.deepEqual(PROVIDERS.map((p) => p.name), ["自定义供应商", "Claude Code", "Codex", "Gemini", "Grok", "OpenCode", "ZCode 国内版", "ZCode 国际版", "Qoder CN", "Qoder", "WorkBuddy", "WorkBuddy AI", "Trae CN", "Trae"])
+  // 预设库插在 ZCode 与 Qoder 之间（P4.1），Qoder / WorkBuddy / Trae 的地区版本仍在最后
+  assert.deepEqual(PROVIDERS.map((p) => p.name), [
+    "自定义供应商", "Claude Code", "Codex", "Gemini", "Grok", "OpenCode",
+    "ZCode 国内版", "ZCode 国际版",
+    "Qoder CN", "Qoder", "WorkBuddy", "WorkBuddy AI",
+    "DeepSeek", "Kimi（月之暗面）", "MiniMax", "StepFun（阶跃星辰）", "Qwen（通义千问）",
+    "OpenRouter", "Together", "Fireworks", "SiliconFlow（硅基流动）", "Groq", "Ollama（本机）", "LM Studio（本机）",
+    "Trae CN", "Trae",
+  ])
+  // 预设库（P4.1）都映射到 custom 平台：只预填地址与协议，不做厂商特化
+  const presets = PROVIDERS.filter((p) => p.id.startsWith("deepseek") || ["kimi", "minimax", "stepfun", "qwen", "openrouter", "together", "fireworks", "siliconflow", "groq", "ollama", "lmstudio"].includes(p.id))
+  assert.ok(presets.length >= 12, `预设库应有 12 个以上条目，实际 ${presets.length}`)
+  for (const p of presets) {
+    assert.equal(p.platformId, "custom", `${p.id} 预设必须映射到 custom 平台`)
+    assert.equal(p.subscription, "none", `${p.id} 预设没有订阅登录`)
+    assert.ok(p.baseUrl?.value.startsWith("http"), `${p.id} 预设要预填地址`)
+  }
   assert.deepEqual(PROVIDERS.filter(p => p.edition).map(p => [p.id, p.platformId, p.edition]), [
     ["zcode-bigmodel", "zcode", "bigmodel"], ["zcode", "zcode", "zai"],
     ["qoder-cn", "qoder", "cn"], ["qoder", "qoder", "global"],

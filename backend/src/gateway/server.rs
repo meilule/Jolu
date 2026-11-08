@@ -351,11 +351,18 @@ async fn split(request: Request) -> Result<(String, HeaderMap, axum::body::Bytes
 }
 
 /// `POST /v1/messages`（Anthropic Messages 协议入口）。
+/// 隐私脱敏（P5）：鉴权后、选路前脱敏请求体；响应回来后把占位符换回真值。
 async fn messages(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Response {
     match split(request).await {
         Ok((path, headers, body)) => {
-            crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Anthropic, deps, headers, body, &path)
-                .await
+            let body = match crate::gateway::mask::prepare_request(body) {
+                Ok(body) => body,
+                Err(response) => return response,
+            };
+            let response =
+                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Anthropic, deps, headers, body, &path)
+                    .await;
+            crate::gateway::mask::restore_response(response).await
         }
         Err(response) => response,
     }
@@ -365,8 +372,14 @@ async fn messages(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Respo
 async fn chat(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Response {
     match split(request).await {
         Ok((path, headers, body)) => {
-            crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Chat, deps, headers, body, &path)
-                .await
+            let body = match crate::gateway::mask::prepare_request(body) {
+                Ok(body) => body,
+                Err(response) => return response,
+            };
+            let response =
+                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Chat, deps, headers, body, &path)
+                    .await;
+            crate::gateway::mask::restore_response(response).await
         }
         Err(response) => response,
     }
@@ -376,8 +389,14 @@ async fn chat(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Response 
 async fn responses(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Response {
     match split(request).await {
         Ok((path, headers, body)) => {
-            crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Responses, deps, headers, body, &path)
-                .await
+            let body = match crate::gateway::mask::prepare_request(body) {
+                Ok(body) => body,
+                Err(response) => return response,
+            };
+            let response =
+                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Responses, deps, headers, body, &path)
+                    .await;
+            crate::gateway::mask::restore_response(response).await
         }
         Err(response) => response,
     }
@@ -848,6 +867,72 @@ mod tests {
         assert!(request.contains("x-api-key: sk-upstream-key"), "{request}");
         assert!(!request.contains("jolu-claude-code"), "调用方令牌不能漏给上游：{request}");
         assert!(request.contains("\"model\":\"kimi-k2\""), "模型名必须已改写：{request}");
+    }
+
+    /// 隐私脱敏（P5）端到端：开启后上游只见占位符，调用方从回复里拿回真值。
+    #[tokio::test]
+    async fn privacy_masking_masks_upstream_body_and_restores_response() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let _gate = crate::gateway::mask::test_support::GATE.lock().unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let upstream_addr = listener.local_addr().unwrap();
+        let upstream = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut raw = Vec::new();
+            let mut chunk = [0u8; 8192];
+            loop {
+                let n = socket.read(&mut chunk).await.unwrap();
+                if n == 0 { break; }
+                raw.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&raw);
+                let Some(split) = text.find("\r\n\r\n") else { continue };
+                let length = text[..split]
+                    .lines()
+                    .find_map(|l| l.split_once(':'))
+                    .filter(|(k, _)| k.trim().eq_ignore_ascii_case("content-length"))
+                    .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if raw.len() >= split + 4 + length { break; }
+            }
+            let request = String::from_utf8_lossy(&raw).to_string();
+            assert!(!request.contains("abcdefgh12345"), "原文不能出机：{request}");
+            // 上游把收到的占位符原样回显（模型复述用户给的密钥的场景）
+            let at = request.find("{{JOLU_").expect("上游应收到占位符");
+            let end = request[at..].find("}}").unwrap() + at + 2;
+            let body = format!(r#"{{"content":[{{"text":"echo {}"}}]}}"#, &request[at..end]);
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            socket.write_all(head.as_bytes()).await.unwrap();
+            socket.write_all(body.as_bytes()).await.unwrap();
+            socket.flush().await.unwrap();
+        });
+
+        let deps = crate::proxy::test_support::bare_deps();
+        {
+            let conn = deps.db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO connections(id,platform,kind,name,secret,masked,base_url,protocol,serve_enabled,created_ms,slug)
+                 VALUES('c-mask','custom','api','Mask','sk-upstream-key','****',?1,'anthropic',1,1,'mask')",
+                [format!("http://{upstream_addr}")],
+            )
+            .unwrap();
+        }
+        crate::gateway::mask::set_enabled(true);
+        let base = spawn_router(deps).await;
+        let res = reqwest::Client::builder().no_proxy().build().unwrap()
+            .post(format!("{base}/v1/messages"))
+            .header("content-type", "application/json")
+            .header("x-api-key", "jolu-claude-code")
+            .body(r#"{"model":"mask/m1","max_tokens":8,"messages":[{"role":"user","content":"密钥 token=abcdefgh12345 保存好"}]}"#)
+            .send()
+            .await
+            .unwrap();
+        crate::gateway::mask::set_enabled(false);
+        assert_eq!(res.status(), reqwest::StatusCode::OK);
+        let body = res.text().await.unwrap();
+        // 上游只回显了占位符本体；换回后调用方看到的是原值
+        assert!(body.contains("abcdefgh12345"), "调用方要拿回真值：{body}");
+        assert!(!body.contains("JOLU_"), "占位符不能露给调用方：{body}");
+        upstream.await.unwrap();
     }
 
     /// 用收集器替换事件回调，返回 deps 与事件列表。

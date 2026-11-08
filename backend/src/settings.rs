@@ -139,6 +139,10 @@ pub struct Settings {
     /// 任务提醒：任务完成与失败（含「需要处理」「等待超时」）时通知。
     #[serde(default = "yes")]
     pub notify_task_finished: bool,
+    /// 隐私脱敏（P5）：开启后网关中转模式在请求出机前把密钥 / 私钥 / 令牌 / 邮箱等
+    /// 换成占位符，回复回来再换回真值（见 gateway/mask.rs）。默认关闭，旧配置文件缺字段按关闭处理。
+    #[serde(default)]
+    pub privacy_masking: bool,
 }
 
 fn default_kind() -> String { "api".into() }
@@ -259,6 +263,7 @@ impl Default for Settings {
             network_proxy_url: None,
             notify_task_resumed: true,
             notify_task_finished: true,
+            privacy_masking: false,
         }
     }
 }
@@ -591,6 +596,23 @@ mod notify_settings_tests {
         assert!(settings.notify_task_resumed && settings.notify_task_finished);
         let defaults = Settings::default();
         assert!(defaults.notify_task_resumed && defaults.notify_task_finished);
+    }
+
+    #[test]
+    fn privacy_masking_defaults_off_and_survives_reload() {
+        // 旧设置文件没有该字段：按关闭处理，绝不悄悄开启
+        let old: Settings = serde_json::from_str(r#"{"island_platform":"claude","dnd":false,"island_visible":true}"#).unwrap();
+        assert!(!old.privacy_masking);
+        assert!(!Settings::default().privacy_masking);
+        // 打开后落盘并重新读回
+        let dir = std::env::temp_dir().join(format!("jolu-privacy-masking-settings-{}", std::process::id()));
+        let store = super::Store::load(&dir);
+        store.try_update(|settings| settings.privacy_masking = true).unwrap();
+        assert!(super::Store::load(&dir).get().privacy_masking);
+        let back: Settings = serde_json::from_value(serde_json::to_value(store.get()).unwrap()).unwrap();
+        assert!(back.privacy_masking);
+        std::fs::remove_file(dir.join("settings.json")).unwrap();
+        std::fs::remove_dir(dir).unwrap();
     }
 }
 // 任务 2.5 结束
