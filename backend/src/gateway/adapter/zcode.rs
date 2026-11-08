@@ -10,7 +10,7 @@ use crate::{
 };
 use axum::{
     body::Bytes,
-    http::{HeaderMap, Method, StatusCode},
+    http::{HeaderMap, HeaderValue, Method, StatusCode},
     response::Response,
 };
 use serde_json::{json, Value};
@@ -315,13 +315,17 @@ pub(crate) async fn forward(
     target.secret = Some(token);
     target.base_url = Some(base.into());
     target.protocol = "anthropic".into();
+    // 请求体是 JSON：必须带上 content-type，否则上游按非对象解析，
+    // 返回「Invalid request body: Input should be a valid dictionary」（400）。
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
     super::direct::forward(
         deps,
         &target,
         model.into(),
         Method::POST,
         "/v1/messages",
-        &HeaderMap::new(),
+        &headers,
         body,
     )
     .await
