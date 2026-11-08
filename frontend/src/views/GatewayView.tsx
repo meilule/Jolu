@@ -163,18 +163,18 @@ export function GatewayView() {
    */
   const claudeModels = useMemo(() => {
     const seen = new Set<string>()
-    const out: string[] = []
+    const out: { id: string; context?: number }[] = []
     for (const model of catalog) {
       if (!model.slug || !shownSlugs.has(model.slug)) continue
       const id = `${model.slug}/${model.model}`
       if (seen.has(id)) continue
       seen.add(id)
-      out.push(id)
+      out.push({ id, context: model.context_window })
     }
     return out
   }, [catalog, shownSlugs])
   // 列表变化（刚接入新来源 / 目录刷新）时补一个默认值，但不动用户已经选过的
-  const claudeModel = claudeModelChoice || claudeModels[0] || ""
+  const claudeModel = claudeModelChoice || claudeModels[0]?.id || ""
 
   /* ── 「只看」：按 Agent 分组筛选会话 ── */
   const views: SessionView[] = useMemo(() => {

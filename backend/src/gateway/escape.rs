@@ -236,7 +236,7 @@ pub fn wire_agents(app: &tauri::AppHandle, agents: &[String], model: Option<&str
             }
             // 已经接线且文件仍是我们的值：幂等跳过，不重复快照。
             // 需要重新应用时沿用上一次保存的原值（A4：重新应用不重新快照）。
-            let (prior_snapshot, prior_model) = {
+            let (prior_snapshot, prior_model, prior_label) = {
                 let state = app.state::<crate::Db>();
                 let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
                 match wiring_store::load(&conn, agent) {
@@ -247,13 +247,18 @@ pub fn wire_agents(app: &tauri::AppHandle, agents: &[String], model: Option<&str
                             wired.push(agent.clone());
                             continue;
                         }
-                        let model = record.applied().and_then(|a| a.model);
-                        (record.original_json, model)
+                        let applied = record.applied();
+                        let model = applied.as_ref().and_then(|a| a.model.clone());
+                        let label = applied.as_ref().and_then(|a| a.label.clone());
+                        (record.original_json, model, label)
                     }
-                    None => (None, None),
+                    None => (None, None, None),
                 }
             };
             // 先读原值、算好要写的值（快照已过滤所有网关值），写 pending 后再落盘
+            // 显示名 / 描述：models.dev 只读缓存（缺失退回模型 id 本身；不联网不阻塞）
+            let label = model.as_ref().map(|m| crate::gateway::models_dev::display_label(app, m));
+            let description = model.as_ref().map(|m| crate::gateway::models_dev::description_of(app, m)).filter(|d| !d.is_empty());
             let (snapshot, _applied) = crate::gateway::wiring::wire(
                 agent,
                 port,
@@ -261,7 +266,10 @@ pub fn wire_agents(app: &tauri::AppHandle, agents: &[String], model: Option<&str
                 &backup_dir,
                 prior_snapshot.as_deref(),
                 model.as_deref(),
+                label.as_deref(),
+                description.as_deref(),
                 prior_model.as_deref(),
+                prior_label.as_deref(),
                 |snapshot, applied| {
                     let state = app.state::<crate::Db>();
                     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;

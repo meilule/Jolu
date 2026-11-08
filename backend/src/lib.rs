@@ -2410,6 +2410,14 @@ fn gateway_catalog(app: tauri::AppHandle) -> Result<Vec<crate::gateway::catalog:
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
     let mut out = crate::gateway::catalog::list(&conn).map_err(|error| error.to_string())?;
+    // models.dev 元数据并入（P4.2）：只读缓存，过期时后台刷新——目录命令不阻塞 20 秒
+    crate::gateway::models_dev::refresh_if_stale(&app);
+    let meta_catalog = crate::gateway::models_dev::cached(&app);
+    let merge_meta = |model: &str| {
+        meta_catalog
+            .as_ref()
+            .and_then(|catalog| crate::gateway::models_dev::lookup_meta(catalog, model))
+    };
     // 路由分组也是可选的模型 id（`group/<分组slug>`），进目录供接线与 Profile 选择
     if let Ok(groups) = crate::gateway::routing_groups::list(&conn) {
         for group in groups {
@@ -2420,7 +2428,18 @@ fn gateway_catalog(app: tauri::AppHandle) -> Result<Vec<crate::gateway::catalog:
                 model: group.slug,
                 kind: "group".into(),
                 status: "connected".into(),
+                context_window: None,
+                max_output: None,
+                label: None,
             });
+        }
+    }
+    // 元数据按模型 id 并入（models.dev 的 id 带厂商前缀，lookup_meta 做末段忽略大小写匹配）
+    for entry in out.iter_mut() {
+        if let Some(meta) = merge_meta(&entry.model) {
+            entry.context_window = Some(meta.context_window).filter(|v| *v > 0);
+            entry.max_output = Some(meta.max_output).filter(|v| *v > 0);
+            entry.label = Some(meta.label).filter(|l| !l.is_empty());
         }
     }
     Ok(out)

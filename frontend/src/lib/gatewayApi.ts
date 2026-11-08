@@ -36,6 +36,10 @@ export interface CatalogModelDto {
   model: string
   kind: "auth" | "api" | string
   status: string
+  /** models.dev 元数据（P4.2）：缺失表示目录里没有这个模型的资料 */
+  context_window?: number
+  max_output?: number
+  label?: string
 }
 
 export interface RouteLogDto {

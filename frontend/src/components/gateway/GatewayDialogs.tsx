@@ -83,8 +83,8 @@ export function RenameDialog({ connection, busy, onClose, onSave }: { connection
  */
 export function WiringDialog({ agents, models, modelChoice, onModelChoice, profiles, onProfileApply, onProfileSave, onProfileDelete, busy, onClose, onWire, onUnwire, onAccept }: {
   agents: WiringStatusDto[]
-  /** 可选的 `<来源>/<模型>` 列表（来自模型目录，只含已接入来源） */
-  models: string[]
+  /** 可选的 `<来源>/<模型>` 列表（来自模型目录，只含已接入来源；context 为 models.dev 上下文窗口） */
+  models: { id: string; context?: number }[]
   modelChoice: string
   onModelChoice: (value: string) => void
   /** Profile（配置一键切换）：保存当前全部接线的主模型，应用时逐个重放 */
@@ -116,7 +116,11 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, profi
               onChange={(event) => onModelChoice(event.target.value)}
               className="h-8 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent"
             >
-              {models.map((model) => <option key={model} value={model}>{model}</option>)}
+              {models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.context ? `${model.id} · ${model.context >= 1_000_000 ? `${(model.context / 1_000_000).toFixed(1).replace(/\.0$/, "")}M` : `${Math.round(model.context / 1000)}K`}` : model.id}
+                </option>
+              ))}
             </select>
           )}
           <span className="text-[8.5px] text-jolu-muted">

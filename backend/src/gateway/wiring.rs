@@ -95,7 +95,8 @@ fn claude_env_keys() -> Vec<String> {
 /// `model` 是主模型：写了它，就同时写顶层 `model`、`ANTHROPIC_SMALL_FAST_MODEL` 与全部档位 env
 /// （默认跟随主模型）、删掉 `ANTHROPIC_MODEL` 与各档的旧「关于」键；没写它，就只接地址和令牌，
 /// 用户的模型配置原样保留。
-fn claude_wire(text: &str, base: &str, token: &str, model: Option<&str>) -> Result<String, String> {
+#[allow(clippy::too_many_arguments)]
+fn claude_wire(text: &str, base: &str, token: &str, model: Option<&str>, label: Option<&str>, description: Option<&str>) -> Result<String, String> {
     let mut root: serde_json::Value =
         serde_json::from_str(text).map_err(|error| format!("settings.json 不是有效 JSON：{error}"))?;
     let object = root.as_object_mut().ok_or("settings.json 顶层不是对象")?;
@@ -110,11 +111,19 @@ fn claude_wire(text: &str, base: &str, token: &str, model: Option<&str>) -> Resu
     if let Some(model) = model.map(str::trim).filter(|m| !m.is_empty()) {
         // 主模型的 env 覆盖必须移除：它压过 /model 的选择（magpie writeTiers 同款动作）
         env.remove("ANTHROPIC_MODEL");
+        // 显示名 / 描述：models.dev 的 label 优先，没有就退回模型 id 本身
+        let name = label.map(str::trim).filter(|l| !l.is_empty()).unwrap_or(model);
+        let description = description.map(str::trim).filter(|d| !d.is_empty());
         for tier in CLAUDE_TIERS {
             env.insert(claude_tier_env(tier).into(), serde_json::Value::String(model.into()));
             for about in CLAUDE_ABOUT {
                 // 档位换模型后旧的「关于」值会指错模型，先清掉；断开时按快照还原用户的
                 env.remove(&format!("{}{about}", claude_tier_env(tier)));
+            }
+            // /model 菜单的档位标签与描述（magpie claudeAbout 同款）；能力键不猜
+            env.insert(format!("{}{}", claude_tier_env(tier), "_NAME"), serde_json::Value::String(name.into()));
+            if let Some(description) = description {
+                env.insert(format!("{}{}", claude_tier_env(tier), "_DESCRIPTION"), serde_json::Value::String(description.into()));
             }
         }
         env.insert("ANTHROPIC_SMALL_FAST_MODEL".into(), serde_json::Value::String(model.into()));
@@ -133,7 +142,8 @@ fn claude_snapshot_is_structured(saved: &serde_json::Value) -> bool {
 ///
 /// `prior_model` 是上一次接线写下的主模型（取自接线记录的 applied）：没有快照时，
 /// 顶层 `model` 与各档位键若等于它，就是我们写的，要删——不能把网关来源名留给用户。
-fn claude_restore(text: &str, saved: Option<&serde_json::Value>, prior_model: Option<&str>) -> Result<String, String> {
+#[allow(clippy::too_many_arguments)]
+fn claude_restore(text: &str, saved: Option<&serde_json::Value>, prior_model: Option<&str>, prior_label: Option<&str>) -> Result<String, String> {
     let mut root: serde_json::Value =
         serde_json::from_str(text).map_err(|error| format!("settings.json 不是有效 JSON：{error}"))?;
     let Some(object) = root.as_object_mut() else { return Ok(text.to_string()) };
@@ -143,8 +153,12 @@ fn claude_restore(text: &str, saved: Option<&serde_json::Value>, prior_model: Op
     let env_saved = structured
         .and_then(|s| s.get("env"))
         .or(legacy_env);
-    let ours = |value: &str| -> bool {
-        is_gateway_value(value) || prior_model.is_some_and(|model| value.trim() == model.trim())
+    let ours = |value: &str, key: &str| -> bool {
+        is_gateway_value(value)
+            || prior_model.is_some_and(|model| value.trim() == model.trim())
+            || prior_label.is_some_and(|label| {
+                (key.ends_with("_NAME") || key.ends_with("_DESCRIPTION")) && value.trim() == label.trim()
+            })
     };
     let restore_env_key = |env: &mut serde_json::Map<String, serde_json::Value>, key: &str| {
         match env_saved.and_then(|s| s.get(key)).and_then(|v| v.as_str()) {
@@ -162,7 +176,7 @@ fn claude_restore(text: &str, saved: Option<&serde_json::Value>, prior_model: Op
             let ours_value = env_saved.is_none()
                 && key != "ANTHROPIC_BASE_URL"
                 && key != "ANTHROPIC_AUTH_TOKEN"
-                && env.get(key.as_str()).and_then(|v| v.as_str()).is_some_and(|v| ours(v));
+                && env.get(key.as_str()).and_then(|v| v.as_str()).is_some_and(|v| ours(v, &key));
             if ours_value {
                 env.remove(key.as_str());
                 continue;
@@ -180,7 +194,7 @@ fn claude_restore(text: &str, saved: Option<&serde_json::Value>, prior_model: Op
     } else if structured.is_some() {
         object.remove("model");
     } else if let Some(current) = object.get("model").and_then(|v| v.as_str()) {
-        if ours(current) {
+        if ours(current, "model") {
             object.remove("model");
         }
     }
@@ -207,14 +221,18 @@ fn claude_current_token(text: &str) -> Option<String> {
 /// 模型名还原成网关来源名。
 ///
 /// 快照结构：`{"env": {键: 原值}, "model": 顶层model原值}`；`model` 只在用户本来就有时出现。
-fn claude_snapshot(text: &str, prior_model: Option<&str>) -> Option<serde_json::Value> {
+fn claude_snapshot(text: &str, prior_model: Option<&str>, prior_label: Option<&str>) -> Option<serde_json::Value> {
     let root: serde_json::Value = serde_json::from_str(text).ok()?;
     let mut saved = serde_json::Map::new();
     let mut env_saved = serde_json::Map::new();
     if let Some(env) = root.get("env").and_then(|e| e.as_object()) {
         for key in claude_env_keys() {
             if let Some(value) = env.get(&key).and_then(|v| v.as_str()) {
-                let ours = prior_model.is_some_and(|model| value.trim() == model.trim());
+                // 上次接线写下的值不是用户原值：主模型键按 prior_model、「关于」键按 prior_label
+                let ours = prior_model.is_some_and(|model| value.trim() == model.trim())
+                    || prior_label.is_some_and(|label| {
+                        (key.ends_with("_NAME") || key.ends_with("_DESCRIPTION")) && value.trim() == label.trim()
+                    });
                 if !is_gateway_value(value) && !ours {
                     env_saved.insert(key, serde_json::Value::String(value.to_string()));
                 }
@@ -847,7 +865,10 @@ pub(crate) fn wire(
     backup_dir: &Path,
     prior_snapshot: Option<&str>,
     model: Option<&str>,
+    label: Option<&str>,
+    description: Option<&str>,
     prior_model: Option<&str>,
+    prior_label: Option<&str>,
     before_write: impl FnOnce(Option<&str>, &Applied) -> Result<(), String>,
 ) -> Result<(Option<String>, Applied), String> {
     let path = config_path(agent).ok_or("未找到用户目录")?;
@@ -868,9 +889,9 @@ pub(crate) fn wire(
     let mut extra_files: Vec<(PathBuf, Vec<u8>)> = Vec::new();
     let (next, snapshot) = match agent {
         "claude-code" => {
-            let snapshot = claude_snapshot(&original, prior_model);
+            let snapshot = claude_snapshot(&original, prior_model, prior_label);
             let text = if original.trim().is_empty() { "{}" } else { original.as_str() };
-            (claude_wire(text, &base, &token, model)?, snapshot)
+            (claude_wire(text, &base, &token, model, label, description)?, snapshot)
         }
         "codex" => {
             let snapshot = codex_snapshot(&original);
@@ -904,6 +925,9 @@ pub(crate) fn wire(
         mode: (agent == "codex").then(|| if codex_oauth { "oauth" } else { "provider" }.to_string()),
         model: (agent == "claude-code")
             .then(|| model.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string))
+            .flatten(),
+        label: (agent == "claude-code")
+            .then(|| label.map(str::trim).filter(|l| !l.is_empty()).map(str::to_string))
             .flatten(),
     };
     let snapshot = effective_snapshot(prior_snapshot, snapshot);
@@ -988,9 +1012,11 @@ pub(crate) fn unwire(
             if !points_at_gateway(&base, port) && !is_gateway_value(&base) && !token.starts_with("jolu-") {
                 return Ok(false);
             }
-            // 上次接线写下的主模型：没有快照时靠它识别「哪些模型键是我们写的」
-            let prior_model = record.and_then(|r| r.applied()).and_then(|a| a.model);
-            claude_restore(&original, saved.as_ref(), prior_model.as_deref())?
+            // 上次接线写下的主模型与显示名：没有快照时靠它们识别「哪些键是我们写的」
+            let applied = record.and_then(|r| r.applied());
+            let prior_model = applied.as_ref().and_then(|a| a.model.clone());
+            let prior_label = applied.as_ref().and_then(|a| a.label.clone());
+            claude_restore(&original, saved.as_ref(), prior_model.as_deref(), prior_label.as_deref())?
         }
         "codex" => {
             let points_at_us = codex_effective_base(&original).is_some_and(|base| is_gateway_value(&base))
@@ -1049,14 +1075,14 @@ mod tests {
     #[test]
     fn claude_wire_and_restore_round_trip_preserves_other_fields() {
         let original = r#"{"env":{"SOME_KEY":"keep","ANTHROPIC_BASE_URL":"https://old"}}"#;
-        let snapshot = claude_snapshot(original, None).unwrap();
-        let wired = claude_wire(original, "http://127.0.0.1:12731", "jolu-claude-code", None).unwrap();
+        let snapshot = claude_snapshot(original, None, None).unwrap();
+        let wired = claude_wire(original, "http://127.0.0.1:12731", "jolu-claude-code", None, None, None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&wired).unwrap();
         assert_eq!(value["env"]["SOME_KEY"], "keep");
         assert_eq!(value["env"]["ANTHROPIC_BASE_URL"], "http://127.0.0.1:12731");
         assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], "jolu-claude-code");
         // 还原回原值
-        let restored = claude_restore(&wired, Some(&snapshot), None).unwrap();
+        let restored = claude_restore(&wired, Some(&snapshot), None, None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&restored).unwrap();
         assert_eq!(value["env"]["ANTHROPIC_BASE_URL"], "https://old");
         assert_eq!(value["env"]["SOME_KEY"], "keep");
@@ -1067,7 +1093,7 @@ mod tests {
     fn claude_wire_writes_main_model_into_tiers_and_top_level() {
         // magpie writeTiers 语义：主模型写顶层 model、四档 env 与 small-fast 全部跟随；
         // ANTHROPIC_MODEL 必须删除——它压过 /model 的选择，写了切换只在本会话生效。
-        let wired = claude_wire("{}", "http://127.0.0.1:12731", "jolu-claude-code", Some("zcode/glm-4.6")).unwrap();
+        let wired = claude_wire("{}", "http://127.0.0.1:12731", "jolu-claude-code", Some("zcode/glm-4.6"), Some("zcode/glm-4.6 显示名"), Some("zcode/glm-4.6 的描述，用于 /model 菜单")).unwrap();
         let value: serde_json::Value = serde_json::from_str(&wired).unwrap();
         assert_eq!(value["model"], "zcode/glm-4.6", "主模型在 settings 顶层");
         assert!(value["env"].get("ANTHROPIC_MODEL").is_none(), "ANTHROPIC_MODEL 要删掉");
@@ -1075,8 +1101,11 @@ mod tests {
             assert_eq!(value["env"][claude_tier_env(tier)], "zcode/glm-4.6", "{tier} 档跟随主模型");
         }
         assert_eq!(value["env"]["ANTHROPIC_SMALL_FAST_MODEL"], "zcode/glm-4.6", "后台小任务也要能路由");
-        // 各档的旧「关于」键被清掉，/model 菜单不再张冠李戴
-        assert!(value["env"].get(format!("{}{}", claude_tier_env("opus"), "_NAME")).is_none());
+        // 每档写入显示名与描述（/model 菜单的档位标签），旧「关于」值被覆盖不再张冠李戴
+        for tier in CLAUDE_TIERS {
+            assert_eq!(value["env"][format!("{}{}", claude_tier_env(tier), "_NAME")], "zcode/glm-4.6 显示名");
+            assert_eq!(value["env"][format!("{}{}", claude_tier_env(tier), "_DESCRIPTION")], "zcode/glm-4.6 的描述，用于 /model 菜单");
+        }
     }
 
     #[test]
@@ -1085,17 +1114,21 @@ mod tests {
         // 断开时还原成用户写的。
         let name_key = format!("{}{}", claude_tier_env("opus"), "_NAME");
         let original = serde_json::json!({"env": {&name_key: "我的自定义 Opus"}});
-        let snapshot = claude_snapshot(serde_json::to_string(&original).unwrap().as_str(), None).unwrap();
+        let snapshot = claude_snapshot(serde_json::to_string(&original).unwrap().as_str(), None, None).unwrap();
+        // 无显示名（label=None）：旧「关于」值清掉，/model 退回显示模型 id
         let wired = claude_wire(
             &serde_json::to_string(&original).unwrap(),
             "http://127.0.0.1:12731",
             "tok",
             Some("zcode/glm-4.6"),
+            None,
+            None,
         )
         .unwrap();
         let value: serde_json::Value = serde_json::from_str(&wired).unwrap();
-        assert!(value["env"].get(&name_key).is_none(), "接线期间旧「关于」值要清掉");
-        let restored = claude_restore(&wired, Some(&snapshot), None).unwrap();
+        // label 缺省时退回模型 id 本身——旧「关于」值照样被覆盖，不再指错模型
+        assert_eq!(value["env"][&name_key], "zcode/glm-4.6");
+        let restored = claude_restore(&wired, Some(&snapshot), None, None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&restored).unwrap();
         assert_eq!(value["env"][&name_key], "我的自定义 Opus");
     }
@@ -1104,12 +1137,12 @@ mod tests {
     fn claude_wire_stashes_and_removes_cloud_switches() {
         // 云开关会把请求引去 Bedrock/Vertex、绕过 ANTHROPIC_BASE_URL：接线期间移除，断开还原
         let original = r#"{"env":{"CLAUDE_CODE_USE_BEDROCK":"1","AWS_REGION":"us-east-1"}}"#;
-        let snapshot = claude_snapshot(original, None).unwrap();
-        let wired = claude_wire(original, "http://127.0.0.1:12731", "tok", Some("zcode/glm-4.6")).unwrap();
+        let snapshot = claude_snapshot(original, None, None).unwrap();
+        let wired = claude_wire(original, "http://127.0.0.1:12731", "tok", Some("zcode/glm-4.6"), Some("zcode/glm-4.6 显示名"), Some("zcode/glm-4.6 的描述，用于 /model 菜单")).unwrap();
         let value: serde_json::Value = serde_json::from_str(&wired).unwrap();
         assert!(value["env"].get("CLAUDE_CODE_USE_BEDROCK").is_none(), "云开关接线期间要移除");
         assert_eq!(value["env"]["AWS_REGION"], "us-east-1", "云专属变量不动");
-        let restored = claude_restore(&wired, Some(&snapshot), None).unwrap();
+        let restored = claude_restore(&wired, Some(&snapshot), None, None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&restored).unwrap();
         assert_eq!(value["env"]["CLAUDE_CODE_USE_BEDROCK"], "1");
     }
@@ -1118,7 +1151,7 @@ mod tests {
     fn claude_wire_without_model_leaves_existing_mapping_untouched() {
         // 不给模型时不写也不删：用户可能已经把映射配在别处（环境变量 / 命令行）。
         let original = r#"{"env":{"ANTHROPIC_MODEL":"already/set"}}"#;
-        let wired = claude_wire(original, "http://127.0.0.1:12731", "jolu-claude-code", None).unwrap();
+        let wired = claude_wire(original, "http://127.0.0.1:12731", "jolu-claude-code", None, None, None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&wired).unwrap();
         assert_eq!(value["env"]["ANTHROPIC_MODEL"], "already/set");
         assert!(value["env"].get("ANTHROPIC_SMALL_FAST_MODEL").is_none(), "没给模型就不该凭空加键");
@@ -1127,7 +1160,7 @@ mod tests {
 
     #[test]
     fn claude_wire_ignores_blank_model() {
-        let wired = claude_wire("{}", "http://127.0.0.1:12731", "tok", Some("   ")).unwrap();
+        let wired = claude_wire("{}", "http://127.0.0.1:12731", "tok", Some("   "), Some("    显示名"), Some("    的描述，用于 /model 菜单")).unwrap();
         let value: serde_json::Value = serde_json::from_str(&wired).unwrap();
         assert!(value.get("model").is_none(), "空白模型名不应写成空字符串");
     }
@@ -1136,12 +1169,12 @@ mod tests {
     fn claude_restore_puts_back_the_original_model_mapping() {
         // 用户本来就有自己的档位映射：断开接线必须还原成他的，而不是删掉。
         let original = r#"{"env":{"ANTHROPIC_MODEL":"user/own","ANTHROPIC_SMALL_FAST_MODEL":"user/fast","ANTHROPIC_DEFAULT_OPUS_MODEL":"user/opus"},"model":"user-main"}"#;
-        let snapshot = claude_snapshot(original, None).unwrap();
-        let wired = claude_wire(original, "http://127.0.0.1:12731", "jolu-claude-code", Some("zcode/glm-4.6")).unwrap();
+        let snapshot = claude_snapshot(original, None, None).unwrap();
+        let wired = claude_wire(original, "http://127.0.0.1:12731", "jolu-claude-code", Some("zcode/glm-4.6"), Some("zcode/glm-4.6 显示名"), Some("zcode/glm-4.6 的描述，用于 /model 菜单")).unwrap();
         let value: serde_json::Value = serde_json::from_str(&wired).unwrap();
         assert_eq!(value["model"], "zcode/glm-4.6", "顶层 model 换成主模型");
         assert!(value["env"].get("ANTHROPIC_MODEL").is_none());
-        let restored = claude_restore(&wired, Some(&snapshot), None).unwrap();
+        let restored = claude_restore(&wired, Some(&snapshot), None, None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&restored).unwrap();
         assert_eq!(value["env"]["ANTHROPIC_MODEL"], "user/own");
         assert_eq!(value["env"]["ANTHROPIC_SMALL_FAST_MODEL"], "user/fast");
@@ -1152,9 +1185,9 @@ mod tests {
     #[test]
     fn claude_restore_removes_model_keys_we_added() {
         // 用户原本没有模型映射：断开后要删掉，不能留下指向网关来源的模型名。
-        let wired = claude_wire("{}", "http://127.0.0.1:12731", "jolu-claude-code", Some("zcode/glm-4.6")).unwrap();
+        let wired = claude_wire("{}", "http://127.0.0.1:12731", "jolu-claude-code", Some("zcode/glm-4.6"), Some("zcode/glm-4.6 显示名"), Some("zcode/glm-4.6 的描述，用于 /model 菜单")).unwrap();
         // prior_model 来自接线记录的 applied：断开时靠它识别「顶层 model / 档位键是我们写的」
-        let restored = claude_restore(&wired, None, Some("zcode/glm-4.6")).unwrap();
+        let restored = claude_restore(&wired, None, Some("zcode/glm-4.6"), Some("zcode/glm-4.6 显示名")).unwrap();
         let value: serde_json::Value = serde_json::from_str(&restored).unwrap();
         assert!(value.get("env").is_none(), "全部是网关写入的键，env 段要清空");
         assert!(value.get("model").is_none(), "顶层 model 也要清掉");
@@ -1163,9 +1196,9 @@ mod tests {
     #[test]
     fn claude_restore_accepts_legacy_flat_snapshot() {
         // 升级兼容：旧版接线记录的快照是 env 键的平面表，没有 env 子对象。
-        let wired = claude_wire("{}", "http://127.0.0.1:12731", "tok", None).unwrap();
+        let wired = claude_wire("{}", "http://127.0.0.1:12731", "tok", None, None, None).unwrap();
         let legacy = serde_json::json!({"ANTHROPIC_BASE_URL": "https://old.example"});
-        let restored = claude_restore(&wired, Some(&legacy), None).unwrap();
+        let restored = claude_restore(&wired, Some(&legacy), None, None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&restored).unwrap();
         assert_eq!(value["env"]["ANTHROPIC_BASE_URL"], "https://old.example");
         assert!(value["env"].get("ANTHROPIC_AUTH_TOKEN").is_none());
@@ -1174,7 +1207,7 @@ mod tests {
     #[test]
     fn claude_snapshot_records_top_level_model() {
         let original = r#"{"model":"user-main","env":{"ANTHROPIC_BASE_URL":"https://old"}}"#;
-        let snapshot = claude_snapshot(original, None).unwrap();
+        let snapshot = claude_snapshot(original, None, None).unwrap();
         assert_eq!(snapshot["model"], "user-main");
         assert_eq!(snapshot["env"]["ANTHROPIC_BASE_URL"], "https://old");
     }
@@ -1182,7 +1215,7 @@ mod tests {
     #[test]
     fn claude_restore_cleans_empty_env() {
         let wired = r#"{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:12731","ANTHROPIC_AUTH_TOKEN":"jolu-claude-code"}}"#;
-        let restored = claude_restore(wired, None, None).unwrap();
+        let restored = claude_restore(wired, None, None, None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&restored).unwrap();
         assert!(value.get("env").is_none(), "只装了网关配置的 env 段要整个清掉");
     }
@@ -1192,10 +1225,10 @@ mod tests {
         // 重新接线时，上一次写进去的网关地址 / 令牌 / 主模型不能被当成用户原来的上游
         let rewire = r#"{"model":"zcode/glm-4.6","env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:12731","ANTHROPIC_AUTH_TOKEN":"jolu-claude-code.abcdef12","ANTHROPIC_DEFAULT_OPUS_MODEL":"zcode/glm-4.6","KEEP":"1"}}"#;
         // 快照只收接线键清单里的用户原值；KEEP 这种接线不触碰的键不在清单里，本就不收
-        let snapshot = claude_snapshot(rewire, Some("zcode/glm-4.6"));
+        let snapshot = claude_snapshot(rewire, Some("zcode/glm-4.6"), Some("zcode/glm-4.6 显示名"));
         assert!(snapshot.is_none(), "管理范围内的键全是网关值时应视为没有原值");
         let mixed = r#"{"env":{"ANTHROPIC_BASE_URL":"https://real.example","ANTHROPIC_AUTH_TOKEN":"jolu-claude-code"}}"#;
-        let snapshot = claude_snapshot(mixed, None).unwrap();
+        let snapshot = claude_snapshot(mixed, None, None).unwrap();
         assert_eq!(snapshot["env"]["ANTHROPIC_BASE_URL"], "https://real.example");
         assert!(snapshot["env"].get("ANTHROPIC_AUTH_TOKEN").is_none());
     }
@@ -1398,14 +1431,14 @@ mod tests {
 
         // 直接调纯函数模拟 wire/unwire（真实 wire() 依赖用户目录，测不到临时路径）
         let original = std::fs::read_to_string(&config).unwrap();
-        let snapshot = claude_snapshot(&original, None).unwrap();
-        let wired = claude_wire(&original, "http://127.0.0.1:12731", "jolu-claude-code.abcd1234", None).unwrap();
+        let snapshot = claude_snapshot(&original, None, None).unwrap();
+        let wired = claude_wire(&original, "http://127.0.0.1:12731", "jolu-claude-code.abcd1234", None, None, None).unwrap();
         std::fs::write(&config, &wired).unwrap();
         assert!(ours("claude-code", &wired, 12731, "abcd1234"));
         assert!(!ours("claude-code", &wired, 12732, "abcd1234"));
 
         // 还原
-        let restored = claude_restore(&wired, Some(&snapshot), None).unwrap();
+        let restored = claude_restore(&wired, Some(&snapshot), None, None).unwrap();
         std::fs::write(&config, &restored).unwrap();
         let value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
         assert_eq!(value["env"]["ANTHROPIC_BASE_URL"], "https://api.anthropic.com", "还原回原上游");

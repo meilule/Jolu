@@ -11,6 +11,13 @@ pub struct CatalogModel {
     pub model: String,
     pub kind: String,
     pub status: String,
+    /// models.dev 元数据（P4.2）：缓存缺失时为 None，前端不展示该列
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 pub fn list(conn: &Connection) -> rusqlite::Result<Vec<CatalogModel>> {
@@ -60,6 +67,9 @@ pub fn list(conn: &Connection) -> rusqlite::Result<Vec<CatalogModel>> {
                 model,
                 kind: kind.clone(),
                 status: status.clone(),
+                context_window: None,
+                max_output: None,
+                label: None,
             });
         }
     }

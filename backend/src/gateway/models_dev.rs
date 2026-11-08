@@ -19,6 +19,12 @@ pub(crate) struct ModelMeta {
     /// 最大输出（tokens）；0 = 未知
     #[serde(default, skip_serializing_if = "is_zero")]
     pub max_output: i64,
+    /// 显示名（Claude Code 档位的 _NAME 用）；空 = 未知
+    #[serde(default)]
+    pub label: String,
+    /// 描述（档位的 _DESCRIPTION 用）；空 = 未知
+    #[serde(default)]
+    pub description: String,
 }
 
 fn is_zero(v: &i64) -> bool {
@@ -70,13 +76,73 @@ pub(crate) fn lookup(app: &tauri::AppHandle, model: &str) -> Result<ModelMeta, S
 }
 
 /// 主模型 id 是否超过 200K 上下文（wiring 写入时的 1M 标记依据，magpie `mark1M` 同款）。
-/// 未知（元数据缺失）按 false 处理——宁可少标记，不虚标。
+/// 只读缓存：元数据缺失（缓存还没被目录页的后台刷新填上）按 false 处理——宁可少标记，不虚标。
 pub(crate) fn exceeds_200k(app: &tauri::AppHandle, model: &str) -> bool {
-    matches!(lookup(app, model), Ok(meta) if meta.context_window > 200_000)
+    cached(app)
+        .and_then(|catalog| lookup_meta(&catalog, model))
+        .is_some_and(|meta| meta.context_window > 200_000)
+}
+
+/// 模型的显示名（档位 _NAME 用）：缓存里的 label 优先，缺失时退回模型 id 本身。
+pub(crate) fn display_label(app: &tauri::AppHandle, model: &str) -> String {
+    cached(app)
+        .and_then(|catalog| lookup_meta(&catalog, model))
+        .map(|meta| meta.label)
+        .filter(|l| !l.trim().is_empty())
+        .unwrap_or_else(|| model.to_string())
+}
+
+/// 模型的描述（档位 _DESCRIPTION 用）；未知返回空。
+pub(crate) fn description_of(app: &tauri::AppHandle, model: &str) -> String {
+    cached(app)
+        .and_then(|catalog| lookup_meta(&catalog, model))
+        .map(|meta| meta.description)
+        .unwrap_or_default()
 }
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+/// 在 models.dev 目录里找一个模型：精确 id → 末段匹配（`zai-org/GLM-5.3-Flash` 的
+/// 末段是 `GLM-5.3-Flash`）→ 忽略大小写。Jolu 侧的模型 id 大小写不保证一致。
+pub(crate) fn lookup_meta(catalog: &CachedCatalog, model: &str) -> Option<ModelMeta> {
+    let wanted = model.trim();
+    if let Some(meta) = catalog.models.get(wanted) {
+        return Some(meta.clone());
+    }
+    let lower = wanted.to_ascii_lowercase();
+    for (id, meta) in &catalog.models {
+        if id.eq_ignore_ascii_case(wanted) {
+            return Some(meta.clone());
+        }
+        if let Some((_, tail)) = id.rsplit_once('/') {
+            if tail.eq_ignore_ascii_case(wanted) || id.to_ascii_lowercase().ends_with(&format!("/{lower}")) {
+                return Some(meta.clone());
+            }
+        }
+    }
+    None
+}
+
+/// 只读缓存（不联网）：接线 / 目录展示用——阻塞 20 秒的拉取只能发生在后台。
+pub(crate) fn cached(app: &tauri::AppHandle) -> Option<CachedCatalog> {
+    let path = cache_path(app)?;
+    read_cache(&path)
+}
+
+/// 缓存过期或缺失时在后台拉取刷新（不阻塞调用方）；失败静默——下次再试。
+pub(crate) fn refresh_if_stale(app: &tauri::AppHandle) {
+    let Some(path) = cache_path(app) else { return };
+    let stale = read_cache(&path).is_none_or(|c| now_ms() - c.fetched_ms >= TTL_MS);
+    if !stale {
+        return;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Ok(new) = fetch() {
+            let _ = std::fs::write(&path, serde_json::to_string(&new).unwrap_or_default());
+        }
+    });
 }
 
 fn read_cache(path: &PathBuf) -> Option<CachedCatalog> {
@@ -116,7 +182,7 @@ fn fetch() -> Result<CachedCatalog, String> {
                     .and_then(|l| l.get("output"))
                     .and_then(Value::as_i64)
                     .unwrap_or(0);
-                models.insert(id.clone(), ModelMeta { context_window, max_output });
+                models.insert(id.clone(), ModelMeta { context_window, max_output, label: String::new(), description: String::new() });
             }
         }
     }
@@ -144,6 +210,8 @@ mod tests {
                             ModelMeta {
                                 context_window: meta["limit"]["context"].as_i64().unwrap_or(0),
                                 max_output: meta["limit"]["output"].as_i64().unwrap_or(0),
+                                label: meta["name"].as_str().unwrap_or_default().to_string(),
+                                description: String::new(),
                             },
                         );
                     }
@@ -168,7 +236,7 @@ mod tests {
         let path = dir.join("models-dev.json");
         let catalog = CachedCatalog {
             fetched_ms: now_ms(),
-            models: std::collections::BTreeMap::from([("glm-5.3".into(), ModelMeta { context_window: 200_000, max_output: 0 })]),
+            models: std::collections::BTreeMap::from([("glm-5.3".into(), ModelMeta { context_window: 200_000, max_output: 0, label: String::new(), description: String::new() })]),
         };
         std::fs::write(&path, serde_json::to_string(&catalog).unwrap()).unwrap();
         let loaded = read_cache(&path).unwrap();
