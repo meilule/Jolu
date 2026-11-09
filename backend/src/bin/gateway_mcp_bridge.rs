@@ -23,7 +23,12 @@ fn main() {
         callback_url: std::env::var("JOLU_BRIDGE_CALLBACK").unwrap_or_default(),
         session: std::env::var("JOLU_BRIDGE_SESSION").unwrap_or_default(),
     };
-    let client = reqwest::Client::new();
+    // 桥只向本机回调地址发请求（JOLU_BRIDGE_CALLBACK 由网关注入的回环端口）：
+    // 回环流量不该进代理，显式 no_proxy——否则代理客户端退出后回调会静默失败。
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("桥的 HTTP 客户端应当可用");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

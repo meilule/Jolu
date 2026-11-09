@@ -152,7 +152,9 @@ fn read_cache(path: &PathBuf) -> Option<CachedCatalog> {
 
 /// 拉取并解析 models.dev。顶层是厂商 → { models: { id: { … } } }，摊平成 id → 元数据。
 fn fetch() -> Result<CachedCatalog, String> {
-    let client = reqwest::blocking::Client::builder()
+    // 走 net::blocking_builder：尊重设置里的联网方式（裸 builder 会按 reqwest 默认
+    // 探测环境变量与注册表，用户选直连也照样走系统代理）
+    let client = crate::net::blocking_builder()
         .timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(|error| format!("无法创建 models.dev 客户端：{error}"))?;
