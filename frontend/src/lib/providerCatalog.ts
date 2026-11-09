@@ -39,11 +39,11 @@ export const PROVIDERS: readonly ProviderEntry[] = [
    * 以前只有一条、没有 edition，登录时统一传 "default"，后端只认 BigModel，
    * 导致 z.ai 账号授权后拿不到凭据（连接 secret 为空，网关报「缺少完整授权」）。
    */
-  { id: "zcode-bigmodel", platformId: "zcode", edition: "bigmodel", name: "ZCode 国内版", access: "订阅套餐 / API Key", subscription: "ready", apiKey: "ready", baseUrl:{value:"https://open.bigmodel.cn/api/anthropic",locked:true}, baseUrlChoices:[
+  { id: "zcode-bigmodel", platformId: "zcode", edition: "bigmodel", name: "ZCode 国内版", access: "BigModel 账号登录 / API Key", subscription: "ready", apiKey: "ready", baseUrl:{value:"https://open.bigmodel.cn/api/anthropic",locked:true}, baseUrlChoices:[
     {label:"国内 · Anthropic",value:"https://open.bigmodel.cn/api/anthropic",protocol:"anthropic"},
     {label:"国内 · OpenAI",value:"https://open.bigmodel.cn/api/coding/paas/v4",protocol:"openai"},
   ] },
-  { id: "zcode", platformId: "zcode", edition: "zai", name: "ZCode 国际版", access: "订阅套餐 / API Key", subscription: "ready", apiKey: "ready", baseUrl:{value:"https://api.z.ai/api/anthropic",locked:true}, baseUrlChoices:[
+  { id: "zcode", platformId: "zcode", edition: "zai", name: "ZCode 国际版", access: "Z.ai 账号登录 / API Key", subscription: "ready", apiKey: "ready", baseUrl:{value:"https://api.z.ai/api/anthropic",locked:true}, baseUrlChoices:[
     {label:"国际 · Anthropic",value:"https://api.z.ai/api/anthropic",protocol:"anthropic"},
     {label:"国际 · OpenAI",value:"https://api.z.ai/api/coding/paas/v4",protocol:"openai"},
   ] },

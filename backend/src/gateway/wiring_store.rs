@@ -45,6 +45,9 @@ pub struct Applied {
     /// 快照排除逻辑同 model：我们写下的显示名不是用户原值。
     #[serde(default)]
     pub label: Option<String>,
+    /// 只对 Claude Code：写进 `CLAUDE_CODE_SUBAGENT_MODEL` 的 subagent 独立模型；None = 跟随主模型。
+    #[serde(default)]
+    pub subagent_model: Option<String>,
 }
 
 pub fn load(conn: &Connection, agent: &str) -> Option<WiringRecord> {
@@ -174,7 +177,7 @@ mod tests {
     #[test]
     fn pending_then_wired_then_idle_round_trip() {
         let conn = db();
-        let applied = Applied { base: "http://127.0.0.1:12731".into(), token: Some("jolu-codex.abcd1234".into()), provider: None, mode: Some("provider".into()), model: None, label: None };
+        let applied = Applied { base: "http://127.0.0.1:12731".into(), token: Some("jolu-codex.abcd1234".into()), provider: None, mode: Some("provider".into()), model: None, label: None, subagent_model: None };
         mark_pending(&conn, "codex", "instance-1", "relay", Some(r#"{"model_provider":"openai"}"#), &applied, Some("jolu-codex.abcd1234")).unwrap();
         let record = load(&conn, "codex").unwrap();
         assert_eq!(record.state, "pending");

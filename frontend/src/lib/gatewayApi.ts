@@ -42,6 +42,25 @@ export interface CatalogModelDto {
   label?: string
 }
 
+/** 命名客户端 Key 的列表条目（与后端 `ClientKeySummary` 一致，不含原文）。 */
+export interface ClientKeySummaryDto {
+  name: string
+  masked: string
+  tokens_per_day: number | null
+  requests_per_day: number | null
+  created_ms: number
+  last_used_ms: number | null
+  today_requests: number
+}
+
+/** 签发结果：`key` 是原文，仅此一次可见。 */
+export interface IssuedClientKeyDto {
+  name: string
+  key: string
+  tokens_per_day: number | null
+  requests_per_day: number | null
+}
+
 export interface RouteLogDto {
   /** 自增流水 id：分页的稳定行标识（旧版后端不返回） */
   id?: number
@@ -179,6 +198,22 @@ export const gatewayApi = {
   setDefaultSource: (connectionId: string | null) => invoke<string | null>("gateway_set_default_source", { connectionId }),
   /** 实时拉取某来源的模型清单并落库；订阅类来源缓存为空时界面靠它脱离「0 模型」。 */
   refreshModels: (connectionId: string) => invoke<string[]>("gateway_refresh_models", { connectionId }),
+  /* ── 局域网共享与命名客户端 Key（P8.3 后端已就绪） ── */
+
+  /** 局域网共享开关；绑定地址在网关下次启动监听时生效。 */
+  setSharedLan: (on: boolean) => invoke<{ gateway_shared_lan?: boolean }>("gateway_shared_lan_set", { on }),
+  /** 客户端 Key 列表：只有掩码与限额，原文不出后端。 */
+  clientKeys: () => invoke<ClientKeySummaryDto[]>("gateway_client_keys_list"),
+  /** 签发客户端 Key：**原文只返回这一次**（关闭后无法再查看）。 */
+  issueClientKey: (name: string, requestsPerDay?: number | null, tokensPerDay?: number | null) =>
+    invoke<IssuedClientKeyDto>("gateway_client_key_issue", {
+      name,
+      requestsPerDay: requestsPerDay ?? null,
+      tokensPerDay: tokensPerDay ?? null,
+    }),
+  /** 撤销客户端 Key：删除立即失效，历史流水归属保留。 */
+  revokeClientKey: (name: string) => invoke<void>("gateway_client_key_revoke", { name }),
+
   /** Profile（配置一键切换）：保存当前已接线 agent 的主模型快照，应用时逐个重放接线。 */
   profilesList: () => invoke<{ name: string; agents: Record<string, string>; created_ms: number }[]>("gateway_profiles_list"),
   profilesSave: (name: string) => invoke<{ name: string; agents: Record<string, string>; created_ms: number }>("gateway_profiles_save", { name }),
@@ -202,7 +237,8 @@ export const gatewayApi = {
   sourceUsage: () => invoke<SourceUsageDto[]>("gateway_source_usage"),
   /** 接入 / 断开单个工具 */
   /** 接入 / 断开工具。`model` 只对 Claude Code 有意义（`<来源>/<模型>`），不传则不改模型映射。 */
-  setWiring: (agent: string, wired: boolean, model?: string | null) => invoke<string>("gateway_wiring_set", { agent, wired, model: model ?? null }),
+  setWiring: (agent: string, wired: boolean, model?: string | null, subagentModel?: string | null) =>
+    invoke<string>("gateway_wiring_set", { agent, wired, model: model ?? null, subagentModel: subagentModel ?? null }),
   /** 接受漂移：只清接线记录，不改用户的配置文件 */
   acceptWiring: (agent: string) => invoke<void>("gateway_wiring_accept", { agent }),
   /** 逃生门：还原全部接线并停网关 */

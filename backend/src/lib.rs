@@ -2378,16 +2378,28 @@ fn gateway_source_capabilities(app: tauri::AppHandle) -> Result<Vec<crate::gatew
 /// 并移除 `ANTHROPIC_MODEL`（它压过 /model 的选择）与各档旧的「关于」键；断开时按快照还原。
 /// 不传（或传空）时只接地址和令牌，用户的模型配置原样保留。
 #[tauri::command]
-fn gateway_wiring_set(app: tauri::AppHandle, agent: String, wired: bool, model: Option<String>) -> Result<String, String> {
-    let result = gateway_wiring_set_inner(&app, agent, wired, model.as_deref());
+fn gateway_wiring_set(
+    app: tauri::AppHandle,
+    agent: String,
+    wired: bool,
+    model: Option<String>,
+    subagent_model: Option<String>,
+) -> Result<String, String> {
+    let result = gateway_wiring_set_inner(&app, agent, wired, model.as_deref(), subagent_model.as_deref());
     let _ = app.emit("gateway-wiring-changed", ());
     result
 }
 
-fn gateway_wiring_set_inner(app: &tauri::AppHandle, agent: String, wired: bool, model: Option<&str>) -> Result<String, String> {
+fn gateway_wiring_set_inner(
+    app: &tauri::AppHandle,
+    agent: String,
+    wired: bool,
+    model: Option<&str>,
+    subagent_model: Option<&str>,
+) -> Result<String, String> {
     let app = app.clone();
     if wired {
-        let wired_agents = crate::gateway::escape::wire_agents(&app, std::slice::from_ref(&agent), model)?;
+        let wired_agents = crate::gateway::escape::wire_agents(&app, std::slice::from_ref(&agent), model, subagent_model)?;
         Ok(format!("已接入 {}", wired_agents.join("、")))
     } else {
         let settings = app.state::<Cfg>().0.get();
@@ -2570,7 +2582,7 @@ fn gateway_profiles_apply(app: tauri::AppHandle, name: String) -> Result<crate::
             skipped.push(agent.clone());
             continue;
         }
-        match crate::gateway::escape::wire_agents(&app, std::slice::from_ref(agent), Some(model)) {
+        match crate::gateway::escape::wire_agents(&app, std::slice::from_ref(agent), Some(model), None) {
             Ok(_) => switched.push(format!("{agent} → {model}")),
             Err(error) => skipped.push(format!("{agent}（{error}）")),
         }

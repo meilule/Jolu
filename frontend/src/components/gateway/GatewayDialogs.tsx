@@ -81,12 +81,15 @@ export function RenameDialog({ connection, busy, onClose, onSave }: { connection
  * `ANTHROPIC_MODEL`——它压过 /model 的选择，写了切换只在本会话生效。
  * 断开时按快照还原用户原来的全部模型配置。不选模型也能接（只写地址和令牌）。
  */
-export function WiringDialog({ agents, models, modelChoice, onModelChoice, profiles, onProfileApply, onProfileSave, onProfileDelete, busy, onClose, onWire, onUnwire, onAccept }: {
+export function WiringDialog({ agents, models, modelChoice, onModelChoice, subagentChoice, onSubagentChoice, profiles, onProfileApply, onProfileSave, onProfileDelete, busy, onClose, onWire, onUnwire, onAccept }: {
   agents: WiringStatusDto[]
   /** 可选的 `<来源>/<模型>` 列表（来自模型目录，只含已接入来源；context 为 models.dev 上下文窗口） */
   models: { id: string; context?: number }[]
   modelChoice: string
   onModelChoice: (value: string) => void
+  /** Claude Code 的 subagent 独立模型；空串 = 跟随主模型 */
+  subagentChoice: string
+  onSubagentChoice: (value: string) => void
   /** Profile（配置一键切换）：保存当前全部接线的主模型，应用时逐个重放 */
   profiles: { name: string; agents: Record<string, string>; created_ms: number }[]
   onProfileApply: (name: string) => void
@@ -127,6 +130,20 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, profi
             {modelChoice
               ? "写入 settings.json 顶层 model 与全部档位（opus/sonnet/haiku/fable/small-fast 跟随主模型）；ANTHROPIC_MODEL 会被移除，/model 切换不再被覆盖。断开时还原你原来的全部模型配置。"
               : "不选则只接地址和令牌，你的模型配置原样保留；Claude Code 会发自带模型名，需要「默认来源」兜底才能路由。"}
+          </span>
+          {/* subagent 独立模型：留空跟随主模型（Claude Code 缺省），这与 magpie 的 Quiet 字段同语义 */}
+          <span className="mt-1 text-[9.5px] text-jolu-text">Subagent 模型</span>
+          <select
+            value={subagentChoice}
+            disabled={busy}
+            onChange={(event) => onSubagentChoice(event.target.value)}
+            className="h-8 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent"
+          >
+            <option value="">跟随主模型</option>
+            {models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
+          </select>
+          <span className="text-[8.5px] text-jolu-muted">
+            Claude Code 的子代理任务（Task 工具）用它；留空即跟随主模型，也是 Claude Code 的缺省行为。
           </span>
         </div>
       )}

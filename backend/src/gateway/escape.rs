@@ -202,7 +202,13 @@ pub fn startup(app: &tauri::AppHandle) {
 /// `model` 只用于 Claude Code：网关按 `<来源>/<模型>` 选路，不写模型映射的话工具会发它
 /// 自带的模型别名，请求无法路由（用户看到的就是「接好了但识别不出模型」）。
 /// 其它 agent 忽略这个参数。
-pub fn wire_agents(app: &tauri::AppHandle, agents: &[String], model: Option<&str>) -> Result<Vec<String>, String> {
+/// `model` 是主模型；`subagent_model` 是 subagent 独立模型（只对 Claude Code，None = 跟随主模型）。
+pub fn wire_agents(
+    app: &tauri::AppHandle,
+    agents: &[String],
+    model: Option<&str>,
+    subagent_model: Option<&str>,
+) -> Result<Vec<String>, String> {
     let settings = app.state::<crate::Cfg>().0.get();
     // 只有正在运行的模型入口才能接管工具：接到一个没在监听的端口会让工具全部失败。
     let (mode, _) = crate::gateway::mode_from(&settings);
@@ -236,7 +242,7 @@ pub fn wire_agents(app: &tauri::AppHandle, agents: &[String], model: Option<&str
             }
             // 已经接线且文件仍是我们的值：幂等跳过，不重复快照。
             // 需要重新应用时沿用上一次保存的原值（A4：重新应用不重新快照）。
-            let (prior_snapshot, prior_model, prior_label) = {
+            let (prior_snapshot, prior_model, prior_label, prior_subagent) = {
                 let state = app.state::<crate::Db>();
                 let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
                 match wiring_store::load(&conn, agent) {
@@ -250,9 +256,10 @@ pub fn wire_agents(app: &tauri::AppHandle, agents: &[String], model: Option<&str
                         let applied = record.applied();
                         let model = applied.as_ref().and_then(|a| a.model.clone());
                         let label = applied.as_ref().and_then(|a| a.label.clone());
-                        (record.original_json, model, label)
+                        let subagent = applied.as_ref().and_then(|a| a.subagent_model.clone());
+                        (record.original_json, model, label, subagent)
                     }
-                    None => (None, None, None),
+                    None => (None, None, None, None),
                 }
             };
             // 先读原值、算好要写的值（快照已过滤所有网关值），写 pending 后再落盘
@@ -270,6 +277,8 @@ pub fn wire_agents(app: &tauri::AppHandle, agents: &[String], model: Option<&str
                 description.as_deref(),
                 prior_model.as_deref(),
                 prior_label.as_deref(),
+                subagent_model,
+                prior_subagent.as_deref(),
                 |snapshot, applied| {
                     let state = app.state::<crate::Db>();
                     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
