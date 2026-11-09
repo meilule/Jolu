@@ -8,6 +8,7 @@ import { GeneralSection } from "@/components/settings/GeneralSection"
 import { AppearanceSection } from "@/components/settings/AppearanceSection"
 import { NetworkSection } from "@/components/settings/NetworkSection"
 import { PrivacySection } from "@/components/settings/PrivacySection"
+import { OpsSection } from "@/components/settings/OpsSection"
 import { DataSection } from "@/components/settings/DataSection"
 import { NotificationSection } from "@/components/settings/NotificationSection"
 import { AboutSection } from "@/components/settings/AboutSection"
@@ -110,7 +111,14 @@ export function SettingsPage({ section, navigationRequest, onOpenSkills }: {
               <PrivacySection />
             </>
           )}
-          {tab === "data" && <DataSection cfg={cfg} onOpenSkills={onOpenSkills} />}
+          {tab === "data" && (
+            <>
+              <DataSection cfg={cfg} onOpenSkills={onOpenSkills} />
+              {/* 待确认：批次 G 运维项（保持唤醒 / warm-up / OTLP / Agent 版本）在 Jolu.pen 模块 G 没有画板，
+                  暂挂「数据与存储」页尾——这四项都跟本机运行与数据外发相关 */}
+              <OpsSection />
+            </>
+          )}
           {tab === "notifications" && <NotificationSection cfg={cfg} setDirty={setDirty} />}
           {tab === "about" && <AboutSection />}
           </>}

@@ -32,4 +32,52 @@ export const settingsApi = {
   setTaskNotify: (resumed: boolean | null, finished: boolean | null) => invoke<AppSettings>("set_task_notify", { resumed, finished }),
   /** 设置 · 隐私脱敏（P5，画板待确认）：开关立即生效并广播 settings-changed；返回最新设置 */
   privacyMaskingSet: (on: boolean) => invoke<AppSettings>("privacy_masking_set", { on }),
+  /** 批次 G：保持系统唤醒；不支持的系统上打开会报错，不假装成功 */
+  setKeepAwake: (on: boolean) => invoke<AppSettings>("set_keep_awake", { on }),
+  /** 批次 G：每日 warm-up 开关与触发小时（后端按 0–23 截断） */
+  setWarmup: (enabled: boolean, hour: number) => invoke<AppSettings>("set_warmup", { enabled, hour }),
+  /** 批次 G：OTLP 导出端点；传 null 关闭导出，保存前后端会校验协议并补 /v1/metrics */
+  setOtlpEndpoint: (endpoint: string | null) => invoke<AppSettings>("set_otlp_endpoint", { endpoint }),
+  /** 批次 G：按天导出聚合用量到 OTLP 端点（不含会话与凭据） */
+  otlpExportUsage: (endpoint: string, days: number, authorization: string | null) =>
+    invoke<OtlpExportResultDto>("otlp_export_usage", { endpoint, days, authorization }),
+  /** 批次 G：各 agent CLI 的版本与建议更新命令（只读，不自动升级） */
+  agentVersions: () => invoke<AgentVersionRow[]>("agent_versions"),
+  /** 批次 G：探测 WSL 与其中 agent 的安装情况（只读） */
+  wslProbeAgents: () => invoke<WslProbeDto>("wsl_probe_agents"),
+}
+
+/** OTLP 导出结果：成功时带上实际请求的地址与数据点数 */
+export interface OtlpExportResultDto {
+  endpoint: string
+  points: number
+  status: number | null
+  response: string | null
+}
+
+/** 一个 agent 的版本检测结果（与后端 `agent_version::AgentVersion` 一致） */
+export interface AgentVersionRow {
+  agent: string
+  name: string
+  found: boolean
+  version: string | null
+  raw: string | null
+  update_command: string | null
+  update_note: string
+}
+
+export interface WslAgentRow {
+  agent: string
+  found: boolean
+  path: string | null
+  config_path: string
+  config_exists: boolean
+}
+
+export interface WslProbeDto {
+  available: boolean
+  reason: string | null
+  distros: string[]
+  default_distro: string | null
+  agents: WslAgentRow[]
 }

@@ -383,6 +383,16 @@ export interface AppSettings {
   notify_task_finished: boolean
   /** 隐私脱敏（P5）：网关中转的请求在离开本机前按固定规则换成占位符；旧版设置缺省为关 */
   privacy_masking?: boolean
+  /** 保持系统唤醒（批次 G）：运行期间不进入睡眠；只在 Windows 生效 */
+  keep_awake?: boolean
+  /** 每日 warm-up（批次 G）：每天定时发一条最小请求保活；默认关，会消耗额度 */
+  warmup_enabled?: boolean
+  /** warm-up 触发的本地小时（0–23），默认 9 */
+  warmup_hour?: number
+  /** 上次完成 warm-up 的本地日期 YYYY-MM-DD；没有记录为 null */
+  warmup_last_date?: string | null
+  /** OTLP 用量导出端点；为空表示不导出 */
+  otlp_endpoint?: string | null
 }
 
 export interface ProxyStatusDto {

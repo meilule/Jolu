@@ -23,7 +23,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::notify::TaskNotice;
 use crate::quota::QuotaState;
 
-type Shared = Arc<Mutex<Connection>>;
+pub(crate) type Shared = Arc<Mutex<Connection>>;
 
 /// 前端订阅的变化事件：任务或运行状态变化后发出
 pub const CHANGED: &str = "automation-changed";
@@ -1634,7 +1634,7 @@ fn engine() -> &'static Engine {
 
 static SCHEMA_READY: AtomicBool = AtomicBool::new(false);
 
-fn shared(app: &AppHandle) -> Shared {
+pub(crate) fn shared(app: &AppHandle) -> Shared {
     app.state::<crate::Db>().0.clone()
 }
 
@@ -1698,7 +1698,56 @@ pub fn start(app: AppHandle) {
     if let Err(error) = spawned { eprintln!("[自动化] 调度线程启动失败：{error}"); }
 }
 
+/// 每日 warm-up（批次 G §3.12）：复用这个 30 秒一次的调度循环，不另起线程。
+///
+/// 默认关闭；到点且今天没发过才发一条最小请求。执行放在后台线程里，
+/// 不阻塞调度循环自己的任务检查（一次 warm-up 可能要几十秒）。
+fn warmup_tick(app: &AppHandle) {
+    // 已经在跑就别叠加：warm-up 是低频操作，重复触发只会浪费额度
+    static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if RUNNING.load(std::sync::atomic::Ordering::Acquire) { return; }
+    let settings = app.state::<crate::Cfg>().0.get();
+    let today = crate::warmup::local_today();
+    if crate::warmup::should_fire(
+        settings.warmup_enabled,
+        settings.warmup_hour,
+        settings.warmup_last_date.as_deref(),
+        &today,
+        crate::warmup::local_hour(),
+    )
+    .is_err()
+    {
+        return;
+    }
+    RUNNING.store(true, std::sync::atomic::Ordering::Release);
+    let app = app.clone();
+    let spawned = std::thread::Builder::new().name("jolu-warmup".into()).spawn(move || {
+        let outcome = {
+            let db = shared(&app);
+            match crate::warmup_run::pick_agent(&db) {
+                Some(platform) => crate::warmup_run::run_once(&platform),
+                None => crate::warmup_run::WarmupOutcome {
+                    status: "skipped".into(),
+                    platform: None,
+                    detail: "没有可用的已接线 Agent（当前登录账号需与接线账号一致）".into(),
+                },
+            }
+        };
+        // 只有真正跑成功才记日期；失败留到下一个 tick 重试，不把失败当已发
+        if outcome.status == "ok" {
+            let _ = app.state::<crate::Cfg>().0.try_update(|settings| {
+                settings.warmup_last_date = Some(crate::warmup::local_today());
+            });
+            let _ = app.emit("settings-changed", app.state::<crate::Cfg>().0.get());
+        }
+        let _ = app.emit("warmup-finished", &outcome);
+        RUNNING.store(false, std::sync::atomic::Ordering::Release);
+    });
+    if spawned.is_err() { RUNNING.store(false, std::sync::atomic::Ordering::Release); }
+}
+
 fn tick(app: &AppHandle) {
+    warmup_tick(app);
     let db = shared(app);
     let now = now_ms();
     let due = with_conn(&db, |conn| {

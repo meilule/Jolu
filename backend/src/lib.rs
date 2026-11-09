@@ -62,6 +62,12 @@ mod trae_browser_auth;
 mod grok_browser_auth;
 mod zcode_browser_auth;
 mod cli_browser_auth;
+mod agent_version;
+mod keep_awake;
+mod wsl_probe;
+mod otlp;
+mod warmup;
+mod warmup_run;
 mod settings;
 mod session_titles;
 mod watcher;
@@ -1325,6 +1331,43 @@ fn data_paths(app: &tauri::AppHandle) -> Result<(std::path::PathBuf, std::path::
     Ok((directory.clone(), directory.join("usage.db")))
 }
 
+/// 各 agent CLI 的版本与建议更新命令（只读：不自动执行升级）。
+/// 版本读不到、命令不在 PATH、安装方式认不出来都如实分开表达，不猜。
+#[tauri::command]
+async fn agent_versions() -> Result<Vec<agent_version::AgentVersion>, String> {
+    tauri::async_runtime::spawn_blocking(agent_version::detect)
+        .await
+        .map_err(|error| format!("检测 Agent 版本失败：{error}"))
+}
+
+/// 探测 WSL 与其中各 agent 的安装情况（只读，不写 WSL 内文件）。
+#[tauri::command]
+async fn wsl_probe_agents() -> Result<wsl_probe::WslProbe, String> {
+    tauri::async_runtime::spawn_blocking(wsl_probe::probe)
+        .await
+        .map_err(|error| format!("探测 WSL 失败：{error}"))
+}
+
+/// 导出最近 `days` 天的用量到 OTLP 端点（批次 G §3.12）。
+///
+/// 只导聚合值（平台 + 模型 + token 计数），不含会话、连接、Key 或请求正文。
+/// 端点与认证头由调用方传；认证头只在本函数内使用，不回显任何值。
+#[tauri::command]
+async fn otlp_export_usage(
+    app: tauri::AppHandle, endpoint: String, authorization: Option<String>, days: u32,
+) -> Result<otlp::OtlpExportResult, String> {
+    let span_days = days.clamp(1, 90) as i64;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let since_ms = now_ms - span_days * 24 * 60 * 60 * 1000;
+    let db = app.state::<Db>().0.clone();
+    let points = with_database(db, move |conn| otlp::aggregate(conn, since_ms, now_ms)).await?;
+    let mut headers = Vec::new();
+    if let Some(value) = authorization.filter(|v| !v.trim().is_empty()) {
+        headers.push(("authorization".to_string(), value));
+    }
+    otlp::export(&endpoint, &headers, &points, now_ms).await
+}
+
 #[tauri::command]
 fn data_info(app: tauri::AppHandle) -> Result<DataInfo, String> {
     let (_, database) = data_paths(&app)?;
@@ -1420,6 +1463,34 @@ fn set_autostart(on: bool) -> Result<bool, String> {
     }
 }
 
+/// 每日 warm-up 设置（批次 G §3.12）：开关与触发小时。
+/// 打开时清掉上次日期，让今天就能按新设置跑一次。
+#[tauri::command]
+fn set_warmup(app: tauri::AppHandle, enabled: bool, hour: u32) -> Result<settings::Settings, String> {
+    let hour = hour.min(23);
+    let next = app.state::<Cfg>().0.try_update(|settings| {
+        let turning_on = enabled && !settings.warmup_enabled;
+        settings.warmup_enabled = enabled;
+        settings.warmup_hour = hour;
+        if turning_on { settings.warmup_last_date = None; }
+    })?;
+    let _ = app.emit("settings-changed", &next);
+    Ok(next)
+}
+
+/// OTLP 导出端点设置（批次 G §3.12）：留空即关闭导出。
+/// 存之前先校验协议与格式，避免把明显写错的地址存下来。
+#[tauri::command]
+fn set_otlp_endpoint(app: tauri::AppHandle, endpoint: Option<String>) -> Result<settings::Settings, String> {
+    let normalized = match endpoint.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => Some(otlp::metrics_url(value)?),
+        None => None,
+    };
+    let next = app.state::<Cfg>().0.try_update(|settings| settings.otlp_endpoint = normalized)?;
+    let _ = app.emit("settings-changed", &next);
+    Ok(next)
+}
+
 #[tauri::command]
 fn set_dock_enabled(app: tauri::AppHandle, on: bool) -> Result<settings::Settings, String> {
     if !on { FIRST_INSTALL_INTRO.store(false, Ordering::Release); }
@@ -1445,6 +1516,16 @@ fn set_silent_startup(app: tauri::AppHandle, on: bool) -> Result<settings::Setti
         set_autostart(true)?;
     }
     let next = app.state::<Cfg>().0.try_update(|settings| settings.silent_startup = on)?;
+    let _ = app.emit("settings-changed", &next);
+    Ok(next)
+}
+
+/// 保持系统唤醒（批次 G §3.12）：开启后运行期间不让系统进入睡眠。
+/// 切换立即生效；不支持的系统上打开会报错，不假装成功。
+#[tauri::command]
+fn set_keep_awake(app: tauri::AppHandle, on: bool) -> Result<settings::Settings, String> {
+    let applied = keep_awake::set(on)?;
+    let next = app.state::<Cfg>().0.try_update(|settings| settings.keep_awake = applied)?;
     let _ = app.emit("settings-changed", &next);
     Ok(next)
 }
@@ -3593,6 +3674,8 @@ fn initialize_app(app: &tauri::AppHandle, data_dir: &std::path::Path) -> Result<
         app.manage(DbRead(Arc::new(pool)));
         // 自动化调度（模块 E）：建表、恢复中断的运行并开始按时检查
         automation::start(app.clone());
+        // 保持系统唤醒（批次 G）：按上次保存的选择恢复；失败只记录，不影响启动
+        keep_awake::restore(app.state::<Cfg>().0.get().keep_awake);
     }
 
     // 恢复已有用户的停靠状态；首次安装先展示自由态灵动岛，再自动贴上边缘。
@@ -4032,11 +4115,17 @@ pub fn run() {
             tray_summary::tray_summary_get, tray_summary::tray_summary_fit,
             scan_local_sessions,
             collection_status,
+            agent_versions,
+            wsl_probe_agents,
+            otlp_export_usage,
             data_info,
             open_data_directory,
             autostart_status,
             set_autostart,
             set_silent_startup,
+            set_keep_awake,
+            set_warmup,
+            set_otlp_endpoint,
             resize_island,
             live_usage,
             connection_kind,
@@ -4350,6 +4439,8 @@ pub fn run() {
                 }
             }
             proxy::shutdown_and_restore(app);
+            // 保持唤醒按线程生效，进程退出前显式交还电源策略
+            keep_awake::shutdown();
             // 任务 3.1 开始
             session_handoff::shutdown();
             // 任务 3.1 结束

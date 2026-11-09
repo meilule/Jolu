@@ -108,6 +108,22 @@ pub struct Settings {
     /// 且无鉴权，监听地址必须保持回环。改动在下一次网关启动时生效。
     #[serde(default)]
     pub gateway_shared_lan: bool,
+    /// 保持系统唤醒（批次 G §3.12）：开启后运行期间不进入睡眠，避免自动化任务被挂起。
+    /// 只在 Windows 生效；其他平台打开会如实报错。默认关闭。
+    #[serde(default)]
+    pub keep_awake: bool,
+    /// 每日 warm-up（批次 G §3.12）：每天定时向网关发一条最小请求，保活订阅通道。
+    /// **默认关闭**：会真实消耗额度，必须由用户显式打开。`warmup_hour` 为本地小时（0–23）。
+    #[serde(default)]
+    pub warmup_enabled: bool,
+    #[serde(default = "default_warmup_hour")]
+    pub warmup_hour: u32,
+    /// 上次完成 warm-up 的日期（本地 `YYYY-MM-DD`），避免同一天重复发。
+    #[serde(default)]
+    pub warmup_last_date: Option<String>,
+    /// OTLP 用量导出端点（批次 G §3.12）：为空表示不导出。只导聚合值，不含会话与凭据。
+    #[serde(default)]
+    pub otlp_endpoint: Option<String>,
     /// 本实例标识：接线 token 带它的前 8 位，用来识别「这个配置是哪个 Jolu 写的」。
     /// 首次启动生成后固定，正式版、验收版、改名测试包各自不同。
     #[serde(default)]
@@ -173,6 +189,8 @@ fn default_proxy_mode() -> String { "observe".into() }
 fn default_update_interval() -> u32 { 30 }
 fn default_cost_currency() -> String { "USD".into() }
 fn default_gateway_circuit() -> u32 { 5 }
+/// warm-up 默认在本地 9 点触发；只在用户打开开关后才生效。
+fn default_warmup_hour() -> u32 { 9 }
 fn default_default_page() -> String { "last".into() }
 fn default_main_zoom() -> u16 { 100 }
 fn default_list_density() -> String { "comfortable".into() }
@@ -264,6 +282,11 @@ impl Default for Settings {
             gateway_circuit_threshold: default_gateway_circuit(),
             gateway_auto_escape: true,
             gateway_shared_lan: false,
+            keep_awake: false,
+            warmup_enabled: false,
+            warmup_hour: default_warmup_hour(),
+            warmup_last_date: None,
+            otlp_endpoint: None,
             instance_id: String::new(),
             gateway_wiring: std::collections::BTreeMap::new(),
             default_page: default_default_page(),
