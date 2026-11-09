@@ -74,6 +74,10 @@ pub(crate) struct Outcome {
     pub mapped_from: Option<String>,
     /// 被隔离跳过的中间件（配置无效 / 执行出错），trace 用
     pub skipped: Vec<String>,
+    /// word-guard 命中阻断词时的拒绝原因；`Some` 表示请求应当被拒发
+    pub blocked: Option<String>,
+    /// system-prompt 是否真的追加了内容（trace 用）
+    pub injected_prompt: bool,
 }
 
 /// 按顺序执行启用的中间件，原地改写请求体。
@@ -89,10 +93,18 @@ pub(crate) fn apply_chain(middlewares: &[Middleware], body: &mut Value) -> Outco
         let result = match middleware.kind.as_str() {
             "model-map" => apply_model_map(&middleware.config, body, &mut outcome),
             "param-override" => apply_param_override(&middleware.config, body),
+            "system-prompt" => apply_system_prompt(&middleware.config, body),
+            "word-guard" => apply_word_guard(&middleware.config, body, &mut outcome),
+            "think-tags" => Ok(()), // 响应侧中间件：请求阶段无事可做（见 restore_chain）
             _ => Err(format!("未知中间件类型「{}」", middleware.kind)),
         };
-        if let Err(error) = result {
-            outcome.skipped.push(format!("{}（{error}）", middleware.name));
+        match result {
+            Ok(()) => {}
+            Err(error) => outcome.skipped.push(format!("{}（{error}）", middleware.name)),
+        }
+        // word-guard 的 block 判定：命中即拒发，后续中间件不再执行
+        if outcome.blocked.is_some() {
+            break;
         }
     }
     outcome
@@ -140,6 +152,156 @@ fn apply_param_override(config: &Value, body: &mut Value) -> Result<(), String> 
         }
     }
     Ok(())
+}
+
+/// system-prompt：`{"prompt": "...", "agents": ["claude-code"], "models": []}`。
+///
+/// 命中条件：`agents` / `models` 为空表示不限，否则请求的 agent / model 要在其中。
+/// 形态兼容：Anthropic 的 `system` 是字符串或块数组；OpenAI 的 system 是 messages 里的
+/// `role: "system"`。两种都追加，且**不替换**原有系统提示（网关不该抹掉 agent 自己的指令）。
+fn apply_system_prompt(config: &Value, body: &mut Value) -> Result<(), String> {
+    let prompt = config
+        .get("prompt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .ok_or("system-prompt 的 prompt 为空")?;
+    // Anthropic 形态：顶层 system
+    match body.get_mut("system") {
+        Some(Value::String(text)) => {
+            *text = format!("{text}
+
+{prompt}");
+            return Ok(());
+        }
+        Some(Value::Array(blocks)) => {
+            blocks.push(serde_json::json!({"type": "text", "text": prompt}));
+            return Ok(());
+        }
+        Some(Value::Null) | None => {}
+        Some(_) => return Err("system 字段类型不支持（既不是字符串也不是数组）".into()),
+    }
+    // OpenAI 形态：messages 里的 system 消息
+    if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
+        if let Some(system) = messages.iter_mut().find(|m| m["role"] == "system") {
+            match system.get_mut("content") {
+                Some(Value::String(text)) => {
+                    *text = format!("{text}
+
+{prompt}");
+                    return Ok(());
+                }
+                Some(Value::Array(blocks)) => {
+                    blocks.push(serde_json::json!({"type": "text", "text": prompt}));
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+        // 没有任何 system 消息：插一条在最前
+        messages.insert(0, serde_json::json!({"role": "system", "content": prompt}));
+    }
+    Ok(())
+}
+
+/// word-guard：`{"block": ["词"], "mask": ["词"]}`。
+///
+/// - `block` 命中的词出现时**整条请求拒发**（`Outcome.blocked`）；
+/// - `mask` 命中的词在请求体里替换为 `***`（只处理字符串值，等价于 P5 脱敏的粗粒度版）。
+/// 两者都只作用于请求侧；响应侧不处理（magpie 的 word-guard 会处理回复，Jolu 暂不跟进——
+/// 响应改写会破坏流式增量语义，见模块注释）。
+fn apply_word_guard(config: &Value, body: &mut Value, outcome: &mut Outcome) -> Result<(), String> {
+    let block: Vec<&str> = config
+        .get("block")
+        .and_then(Value::as_array)
+        .map(|list| list.iter().filter_map(Value::as_str).filter(|w| !w.is_empty()).collect())
+        .unwrap_or_default();
+    let mask: Vec<&str> = config
+        .get("mask")
+        .and_then(Value::as_array)
+        .map(|list| list.iter().filter_map(Value::as_str).filter(|w| !w.is_empty()).collect())
+        .unwrap_or_default();
+    if block.is_empty() && mask.is_empty() {
+        return Err("word-guard 的 block / mask 都为空".into());
+    }
+    // 先扫 block：命中就拒发，不再做 mask
+    if !block.is_empty() {
+        let hit = scan_strings(body, &block);
+        if let Some(word) = hit {
+            outcome.blocked = Some(format!("请求包含被拦截的内容（「{word}」）"));
+            return Ok(());
+        }
+    }
+    if !mask.is_empty() {
+        mask_strings(body, &mask);
+    }
+    Ok(())
+}
+
+/// 在请求体的所有字符串值里找第一个命中词（读到即返回，不做全量替换）。
+fn scan_strings(value: &Value, words: &[&str]) -> Option<String> {
+    match value {
+        Value::String(text) => words.iter().find(|w| text.contains(**w)).map(|w| w.to_string()),
+        Value::Array(items) => items.iter().find_map(|item| scan_strings(item, words)),
+        Value::Object(map) => map.values().find_map(|item| scan_strings(item, words)),
+        _ => None,
+    }
+}
+
+/// 把请求体所有字符串值里的命中词替换为 `***`。
+fn mask_strings(value: &mut Value, words: &[&str]) {
+    match value {
+        Value::String(text) => {
+            for word in words {
+                if text.contains(word) {
+                    *text = text.replace(word, "***");
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|item| mask_strings(item, words)),
+        Value::Object(map) => map.values_mut().for_each(|item| mask_strings(item, words)),
+        _ => {}
+    }
+}
+
+/// 响应侧中间件链（目前只有 think-tags）：
+/// `{"mode": "strip"}` 剥掉 `<think>…</think>`；`{"mode": "wrap"}` 暂无请求侧效果。
+///
+/// 只用于**非流式**响应体：流式增量里剥标签会拆散跨块标签，破坏 SSE 语义，
+/// 所以流式响应不处理（模块注释写明这个边界）。
+pub(crate) fn restore_chain(middlewares: &[Middleware], text: &str) -> String {
+    let mut out = text.to_string();
+    for middleware in middlewares {
+        if !middleware.enabled || middleware.kind != "think-tags" {
+            continue;
+        }
+        let mode = middleware.config.get("mode").and_then(Value::as_str).unwrap_or("strip");
+        if mode == "strip" {
+            out = strip_think_tags(&out);
+        }
+    }
+    out
+}
+
+/// 剥掉 `<think>…</think>` 段（含标签），忽略大小写与空白差异。
+fn strip_think_tags(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    loop {
+        let lower = rest.to_ascii_lowercase();
+        let Some(start) = lower.find("<think>") else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..start]);
+        let after_open = start + "<think>".len();
+        match lower[after_open..].find("</think>") {
+            Some(end) => rest = &rest[after_open + end + "</think>".len()..],
+            // 没有闭合标签：把剩下全丢掉（未闭合的思考段不该进用户可见文本）
+            None => break,
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -211,6 +373,97 @@ mod tests {
         let outcome = apply_chain(&[disabled, unknown], &mut body);
         assert_eq!(body["model"], "fast", "禁用的不执行");
         assert_eq!(outcome.skipped.len(), 1, "未知类型进 skipped");
+    }
+
+    #[test]
+    fn system_prompt_appends_to_anthropic_string_and_array() {
+        // 字符串形态：追加，不替换
+        let m = middleware("system-prompt", json!({"prompt": "始终用中文回答"}));
+        let mut body = json!({"model": "m", "system": "原有指令"});
+        apply_chain(&[m.clone()], &mut body);
+        assert_eq!(body["system"], "原有指令
+
+始终用中文回答", "追加而不是替换");
+
+        // 块数组形态：push 一个新 text 块
+        let mut body = json!({"model": "m", "system": [{"type": "text", "text": "原有"}]});
+        apply_chain(&[m], &mut body);
+        let blocks = body["system"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[1]["text"], "始终用中文回答");
+    }
+
+    #[test]
+    fn system_prompt_falls_back_to_openai_system_message() {
+        // OpenAI 形态：没有顶层 system，messages 里也没有 system 时插入一条
+        let m = middleware("system-prompt", json!({"prompt": "注入"}));
+        let mut body = json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]});
+        apply_chain(&[m], &mut body);
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], "注入");
+        assert_eq!(messages[1]["role"], "user", "原消息保留在后面");
+    }
+
+    #[test]
+    fn system_prompt_rejects_empty_prompt() {
+        let m = middleware("system-prompt", json!({"prompt": "   "}));
+        let mut body = json!({"model": "m", "system": "原有"});
+        let outcome = apply_chain(&[m], &mut body);
+        assert_eq!(body["system"], "原有", "配置无效时不改请求");
+        assert_eq!(outcome.skipped.len(), 1);
+    }
+
+    #[test]
+    fn word_guard_blocks_on_hit_and_masks_otherwise() {
+        // block 命中：拒发，且不继续执行后面的中间件
+        let chain = [
+            middleware("word-guard", json!({"block": ["机密项目"]})),
+            middleware("param-override", json!({"set": {"max_tokens": 999}})),
+        ];
+        let mut body = json!({"model": "m", "messages": [{"role": "user", "content": "谈谈机密项目"}]});
+        let outcome = apply_chain(&chain, &mut body);
+        assert!(outcome.blocked.is_some(), "命中阻断词要拒发");
+        assert_eq!(body["max_tokens"], json!(null), "拒发后不再执行后续中间件");
+
+        // mask：替换为 ***
+        let m = middleware("word-guard", json!({"mask": ["1234"]}));
+        let mut body = json!({"model": "m", "messages": [{"role": "user", "content": "卡号 1234 结尾"}]});
+        let outcome = apply_chain(&[m], &mut body);
+        assert!(outcome.blocked.is_none());
+        assert_eq!(body["messages"][0]["content"], "卡号 *** 结尾");
+    }
+
+    #[test]
+    fn word_guard_rejects_empty_config() {
+        let m = middleware("word-guard", json!({}));
+        let mut body = json!({"model": "m"});
+        let outcome = apply_chain(&[m], &mut body);
+        assert_eq!(outcome.skipped.len(), 1, "空配置要报错而不是静默放行");
+    }
+
+    #[test]
+    fn think_tags_strips_thinking_blocks() {
+        assert_eq!(strip_think_tags("前<think>思考中</think>后"), "前后");
+        assert_eq!(strip_think_tags("<THINK>大写</THINK>ok"), "ok");
+        assert_eq!(strip_think_tags("没有标签"), "没有标签");
+        // 未闭合：剩下全丢（未闭合的思考段不该进用户可见文本）
+        assert_eq!(strip_think_tags("前<think>没闭合"), "前");
+        // 多个段
+        assert_eq!(strip_think_tags("a<think>1</think>b<think>2</think>c"), "abc");
+    }
+
+    #[test]
+    fn restore_chain_only_touches_think_tags() {
+        let chain = [
+            middleware("think-tags", json!({"mode": "strip"})),
+            middleware("model-map", json!({"mapping": {}})),
+        ];
+        assert_eq!(restore_chain(&chain, "答<think>x</think>案"), "答案");
+        // 禁用的不生效
+        let mut disabled = middleware("think-tags", json!({"mode": "strip"}));
+        disabled.enabled = false;
+        assert_eq!(restore_chain(&[disabled], "答<think>x</think>案"), "答<think>x</think>案");
     }
 
     #[test]

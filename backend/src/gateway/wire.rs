@@ -398,6 +398,10 @@ pub(crate) async fn handle(
         for reason in &outcome.skipped {
             eprintln!("[中间件] 跳过：{reason}");
         }
+        // word-guard 命中阻断词：进 provider 之前拒发（与 magpie 的中间件语义一致）
+        if let Some(reason) = &outcome.blocked {
+            return error_response(StatusCode::BAD_REQUEST, reason);
+        }
     }
     let Some(raw_model) = extract_model(&body) else {
         return error_response(StatusCode::BAD_REQUEST, "请求体缺少 model 字段或不是有效 JSON");

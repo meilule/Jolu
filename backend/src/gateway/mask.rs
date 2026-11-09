@@ -756,6 +756,39 @@ pub(crate) fn prepare_request(body: axum::body::Bytes) -> Result<axum::body::Byt
 ///
 /// 回填是尽力而为：占位符本身不是机密，恢复不了最多原样露出占位符，不构成泄漏；
 /// 这与请求侧「失败即拒发」不同——响应已经从上游回来了，拦下它没有安全收益。
+/// 响应侧中间件的装饰层（think-tags）：只处理**非流式** JSON 响应。
+///
+/// 流式增量里剥 `<think>` 会拆散跨块标签、破坏 SSE 语义，所以 `text/event-stream`
+/// 原样放行（这个边界写在 `middleware.rs` 的 `restore_chain` 注释里）。
+pub(crate) async fn restore_middleware(response: Response, middlewares: &[crate::gateway::middleware::Middleware]) -> Response {
+    if !middlewares.iter().any(|m| m.enabled && m.kind == "think-tags") {
+        return response;
+    }
+    let is_stream = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("event-stream"));
+    if is_stream {
+        return response;
+    }
+    let (mut parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
+        // 读不出来就交回原响应——响应侧中间件是装饰，不能因此让请求失败
+        return Response::from_parts(parts, axum::body::Body::empty());
+    };
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        return Response::from_parts(parts, axum::body::Body::from(bytes));
+    };
+    let next = crate::gateway::middleware::restore_chain(middlewares, text);
+    let next_bytes = next.into_bytes();
+    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+    if let Ok(value) = axum::http::HeaderValue::from_str(&next_bytes.len().to_string()) {
+        parts.headers.insert(axum::http::header::CONTENT_LENGTH, value);
+    }
+    Response::from_parts(parts, axum::body::Body::from(next_bytes))
+}
+
 pub(crate) async fn restore_response(response: Response) -> Response {
     let Some(masker) = request_masker() else { return response };
     // 本进程从没遮过任何值：响应里不可能有占位符，直接放行

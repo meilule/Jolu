@@ -439,9 +439,17 @@ async fn messages(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Respo
                 Err(response) => return response,
             };
             let response =
-                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Anthropic, deps, headers, body, &path, client_key)
+                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Anthropic, deps.clone(), headers, body, &path, client_key)
                     .await;
-            crate::gateway::mask::restore_response(response).await
+            let response = crate::gateway::mask::restore_response(response).await;
+            // 响应侧中间件（think-tags）：非流式 JSON 才处理
+            let middlewares = deps
+                .db
+                .lock()
+                .ok()
+                .and_then(|conn| crate::gateway::middleware::list(&conn).ok())
+                .unwrap_or_default();
+            crate::gateway::mask::restore_middleware(response, &middlewares).await
         }
         Err(response) => response,
     }
@@ -457,9 +465,17 @@ async fn chat(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Response 
                 Err(response) => return response,
             };
             let response =
-                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Chat, deps, headers, body, &path, client_key)
+                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Chat, deps.clone(), headers, body, &path, client_key)
                     .await;
-            crate::gateway::mask::restore_response(response).await
+            let response = crate::gateway::mask::restore_response(response).await;
+            // 响应侧中间件（think-tags）：非流式 JSON 才处理
+            let middlewares = deps
+                .db
+                .lock()
+                .ok()
+                .and_then(|conn| crate::gateway::middleware::list(&conn).ok())
+                .unwrap_or_default();
+            crate::gateway::mask::restore_middleware(response, &middlewares).await
         }
         Err(response) => response,
     }
@@ -475,9 +491,17 @@ async fn responses(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Resp
                 Err(response) => return response,
             };
             let response =
-                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Responses, deps, headers, body, &path, client_key)
+                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Responses, deps.clone(), headers, body, &path, client_key)
                     .await;
-            crate::gateway::mask::restore_response(response).await
+            let response = crate::gateway::mask::restore_response(response).await;
+            // 响应侧中间件（think-tags）：非流式 JSON 才处理
+            let middlewares = deps
+                .db
+                .lock()
+                .ok()
+                .and_then(|conn| crate::gateway::middleware::list(&conn).ok())
+                .unwrap_or_default();
+            crate::gateway::mask::restore_middleware(response, &middlewares).await
         }
         Err(response) => response,
     }
