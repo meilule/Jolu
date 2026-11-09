@@ -371,6 +371,16 @@ impl RequestLimitRefusal {
         Self { message, status, retry_after_seconds: 0 }
     }
 
+    /// 预算或状态读取失败：503，不带 Retry-After。
+    pub(crate) fn unavailable(message: &str) -> Self {
+        Self { message: message.to_string(), status: 503, retry_after_seconds: 0 }
+    }
+
+    /// 额度到量：429，带距重置的秒数。
+    pub(crate) fn limited(message: String, retry_after_seconds: i64) -> Self {
+        Self { message, status: 429, retry_after_seconds }
+    }
+
     /// 只有限额拒绝才给 Retry-After：确定性的拒绝带它会让客户端反复重试。
     pub(crate) fn retry_after(&self) -> Option<i64> {
         (self.status == 429).then_some(self.retry_after_seconds.max(1))
@@ -385,9 +395,8 @@ impl RequestLimitRefusal {
 /// 流水只保留最近约 1000 行：单日成功请求超出保留范围时计数是下限，
 /// 限流会偏保守（提前拒绝），不会放超。
 ///
-/// `tokens_per_day` 字段本期只保存、不强制：精确 Token 计数依赖用量归账时序
-/// （响应结束后才拿得到用量，无法在请求前预留），强行计数会把请求管线改乱；
-/// 限额判断只看请求数。
+/// `tokens_per_day` 不在这里判断：用量要等响应结束才知道，由 `gateway::budget`
+/// 在 wire 层做「预扣 + 回冲」（请求前按估算预扣，结束按实际用量记账）。
 ///
 /// 除请求数上限外，还检查三项固定约束（**先于**计数判断，命中即拒）：
 /// 过期时间、只读 Key 的非 GET 请求、模型白名单。

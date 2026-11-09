@@ -22,7 +22,7 @@ export interface RoutingGroupDto {
   slug: string
   name: string
   strategy: string
-  members: { slug: string; model: string }[]
+  members: RoutingMember[]
   created_ms: number
 }
 
@@ -30,15 +30,20 @@ export interface RoutingGroupDto {
 export interface RoutingMember {
   slug: string
   model: string
+  /** 临时暂停到这个时刻（毫秒）；缺省或 null = 未暂停。保存分组时必须原样带回，否则后端会清掉。 */
+  paused_until_ms?: number | null
 }
 
-/** 策略文案（下拉与列表行共用；smart / pace 依赖额度快照，当前按顺序执行）。 */
+/**
+ * 策略文案（下拉与列表行共用）。smart / pace 按额度快照里的重置时间排序；
+ * 成员都没有额度数据时退回顺序；额度用满的成员排到最后（不剔除）。
+ */
 export const ROUTING_STRATEGIES: readonly { value: string; text: string }[] = [
   { value: "order", text: "顺序（失败换下一个）" },
   { value: "rotate", text: "轮转（逐请求换）" },
   { value: "usage", text: "用量最少优先" },
-  { value: "smart", text: "智能（待额度快照，暂按顺序）" },
-  { value: "pace", text: "配速（待额度快照，暂按顺序）" },
+  { value: "smart", text: "智能（重置最近的先用）" },
+  { value: "pace", text: "配速（余量最足的先用）" },
 ]
 
 /** 策略显示文案；未知值原样返回，不悄悄替换成默认策略。 */
@@ -59,6 +64,33 @@ export function selectableCatalog(models: CatalogEntry[]): CatalogEntry[] {
 /** 成员是否已勾选（按 slug + model 匹配）。 */
 export function hasRoutingMember(members: RoutingMember[], member: RoutingMember): boolean {
   return members.some((item) => item.slug === member.slug && item.model === member.model)
+}
+
+/** 暂停时长选项（分钟）：到期自动恢复，与后端 `GroupMember::is_paused` 一致。 */
+export const PAUSE_CHOICES: readonly { minutes: number; text: string }[] = [
+  { minutes: 30, text: "30 分钟" },
+  { minutes: 60, text: "1 小时" },
+  { minutes: 240, text: "4 小时" },
+  { minutes: 1440, text: "24 小时" },
+]
+
+const sameMember = (a: RoutingMember, b: RoutingMember) => a.slug === b.slug && a.model === b.model
+
+/** 设置 / 清除某个成员的暂停到期时间（null = 恢复）；其他成员原样保留。 */
+export function pauseMember(members: RoutingMember[], member: RoutingMember, untilMs: number | null): RoutingMember[] {
+  return members.map((item) => (sameMember(item, member) ? { ...item, paused_until_ms: untilMs } : item))
+}
+
+/** 成员此刻是否在暂停中（到期视为已恢复）。 */
+export function isMemberPaused(member: RoutingMember, now: number): boolean {
+  return typeof member.paused_until_ms === "number" && member.paused_until_ms > now
+}
+
+/** 暂停中的成员给「暂停至 HH:MM」，否则为空串。 */
+export function pausedText(member: RoutingMember, now: number): string {
+  if (!isMemberPaused(member, now)) return ""
+  const until = new Date(member.paused_until_ms as number)
+  return `暂停至 ${until.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`
 }
 
 /** 勾选 / 取消勾选一个成员：已存在则移除，否则追加到末尾。 */

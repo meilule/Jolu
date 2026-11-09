@@ -419,18 +419,27 @@ pub(crate) async fn handle(
                 Some(&model),
                 true,
             ) {
-                Ok(Some(refusal)) => {
-                    let status = StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::TOO_MANY_REQUESTS);
-                    return match refusal.retry_after() {
-                        Some(seconds) => error_response_with_retry(status, &refusal.message, seconds as u64),
-                        None => error_response(status, &refusal.message),
-                    };
-                }
+                Ok(Some(refusal)) => return refusal_response(&refusal),
                 Err(reason) => return error_response(StatusCode::SERVICE_UNAVAILABLE, &reason),
                 Ok(None) => {}
             }
         }
     }
+    // 命名 Key 的每日 Token 预算（budget.rs）：先按估算预扣，响应结束按实际用量回冲
+    let reservation = match client_key.as_deref() {
+        Some(name) => match deps.db.lock() {
+            Ok(conn) => match crate::gateway::budget::reserve(&conn, name, &body, chrono::Local::now()) {
+                Ok(reservation) => reservation,
+                Err(refusal) => return refusal_response(&refusal),
+            },
+            Err(_) => return error_response(StatusCode::SERVICE_UNAVAILABLE, "网关状态暂不可用，请稍后重试"),
+        },
+        None => None,
+    };
+    let budget_db = deps.db.clone();
+    // 以下选路与转发包在一个 async 块里：块内的 `return` 只结束这个块，
+    // 返回的响应统一在块外套上 Token 计量。
+    let response = async {
     let meta = RouteMeta {
         session: session_identity(agent.as_deref(), &headers, &body),
         agent: agent.clone(),
@@ -634,6 +643,21 @@ pub(crate) async fn handle(
         eprintln!("[路由] 成员「{}」返回 {}，转移下一个候选", entry.slug, response.status());
     }
     error_response(StatusCode::SERVICE_UNAVAILABLE, "没有可用的候选成员")
+    }
+    .await;
+    match reservation {
+        Some(reservation) => crate::gateway::budget::meter(response, reservation, budget_db),
+        None => response,
+    }
+}
+
+/// 命名 Key 的拒绝 → 响应：状态按拒绝种类，只有限额拒绝带 Retry-After。
+fn refusal_response(refusal: &crate::gateway::access::RequestLimitRefusal) -> Response {
+    let status = StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::TOO_MANY_REQUESTS);
+    match refusal.retry_after() {
+        Some(seconds) => error_response_with_retry(status, &refusal.message, seconds as u64),
+        None => error_response(status, &refusal.message),
+    }
 }
 
 /// 可转移的上游错误：账号级失败（401/402/403）、限流（429/408）与服务端错误（5xx）

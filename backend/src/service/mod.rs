@@ -32,6 +32,7 @@ pub mod gateway {
     pub mod catalog;
     pub mod client_keys;
     pub mod groups;
+    pub mod middleware;
     pub mod quota;
     pub mod status;
 }

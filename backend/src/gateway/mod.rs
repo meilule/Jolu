@@ -14,6 +14,7 @@
 pub mod activity;
 pub mod adapter;
 pub mod access;
+pub mod budget;
 pub mod bridge;
 pub mod catalog;
 pub mod escape;

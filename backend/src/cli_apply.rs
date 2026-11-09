@@ -353,7 +353,7 @@ fn write_pair_expected(
     }
     write(first, first_bytes.clone())?;
     if let Err(error) = write(second, second_bytes) {
-        if std::fs::read(first).ok().as_ref() != Some(&first_bytes) {
+        if crate::steady::read(first).ok().as_ref() != Some(&first_bytes) {
             return Err(format!(
                 "{error}；首个文件被外部修改，无法自动回滚，请从备份恢复"
             ));
@@ -368,7 +368,7 @@ fn write_pair_expected(
 }
 
 fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, String> {
-    match std::fs::read(path) {
+    match crate::steady::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(_) => Err(format!("无法读取配置文件 {}", path.display())),
@@ -410,7 +410,7 @@ fn backup_file(path: &Path, backup_dir: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .as_nanos();
     let target = backup_dir.join(format!("{name}.{stamp}.bak.dpapi"));
-    let bytes = std::fs::read(path).map_err(|_| "读取备份源文件失败")?;
+    let bytes = crate::steady::read(path).map_err(|_| "读取备份源文件失败")?;
     let protected = crate::auth_snapshot::protect(&bytes, name.as_bytes(), true)?;
     std::fs::write(target, protected).map_err(|_| "保存加密备份失败")?;
     Ok(())

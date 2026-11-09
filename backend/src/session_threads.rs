@@ -1043,23 +1043,25 @@ fn session_cost(conn: &Connection, platform: &str, session_id: &str) -> rusqlite
     let mut stmt = conn.prepare(
         "SELECT r.model, r.input_tokens, r.output_tokens, r.cache_write_tokens, r.cache_read_tokens,
                 r.input_known * r.output_known * r.cache_write_known * r.cache_read_known, m.reasoning, m.tool
-         FROM requests r LEFT JOIN request_metrics m ON m.request_id = r.id
+         , r.ts FROM requests r LEFT JOIN request_metrics m ON m.request_id = r.id
          WHERE r.platform = ?1 AND r.session_id = ?2",
     )?;
     let rows = stmt.query_map(rusqlite::params![platform, session_id], |r| {
-        Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?, r.get::<_, i64>(5)? != 0, r.get::<_, Option<i64>>(6)?, r.get::<_, Option<i64>>(7)?))
+        Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?, r.get::<_, i64>(5)? != 0, r.get::<_, Option<i64>>(6)?, r.get::<_, Option<i64>>(7)?, r.get::<_, i64>(8)?))
     })?;
     let (mut cost, mut priced, mut count) = (0.0, 0i64, 0i64);
     let mut models: Vec<String> = Vec::new();
     for row in rows {
-        let (model, input, output, cache_write, cache_read, known, reasoning, tool) = row?;
+        let (model, input, output, cache_write, cache_read, known, reasoning, tool, ts) = row?;
         count += 1;
         if known {
-            if let Some(c) = crate::pricing::estimate_usage(Some(platform), model.as_deref(), crate::pricing::Usage {
+            // 按请求自身时间计价（峰谷价），不随查看时刻变化
+            let at = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now);
+            if let Some(c) = crate::pricing::estimate_usage_at(Some(platform), model.as_deref(), crate::pricing::Usage {
                 input, output, cache_write, cache_read,
                 reasoning: reasoning.unwrap_or(0), tool: tool.unwrap_or(0),
                 long_prompt: input > crate::pricing::GEMINI_LONG_PROMPT_TOKENS,
-            }) {
+            }, at) {
                 cost += c;
                 priced += 1;
             }

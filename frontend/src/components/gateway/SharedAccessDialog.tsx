@@ -8,7 +8,7 @@ import { Button, Modal } from "./GatewayDialogs"
 import {
   EXPIRY_CHOICES,
   KEY_ONCE_NOTICE,
-  TOKENS_NOT_ENFORCED_NOTICE,
+  TOKENS_LIMIT_NOTICE,
   constraintTags,
   expiresAtFrom,
   isExhausted,
@@ -26,7 +26,7 @@ import {
  * - 共享开启后网关绑 0.0.0.0，鉴权切**严格**（命名 Key 比对），宽松模式被关掉；
  * - 绑定地址在下次 `proxy::start` 生效，所以开关旁要提示「重启网关监听」；
  * - 观测模式永不共享（透传上游凭证且无鉴权）；
- * - `requests_per_day` 到量直接 429（进 provider 之前），`tokens_per_day` 只记录不强制；
+ * - `requests_per_day` 到量直接 429（进 provider 之前），`tokens_per_day` 预扣 + 回冲强制（budget.rs）；
  * - Key 原文只在签发时返回一次。
  */
 export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run }: {
@@ -176,7 +176,7 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
           </label>
         </div>
         <span className="text-[8.5px] text-jolu-muted">
-          上限与白名单留空表示不限。只读 Key 只能查询（如读取模型列表），不能发起对话。{TOKENS_NOT_ENFORCED_NOTICE}
+          上限与白名单留空表示不限。只读 Key 只能查询（如读取模型列表），不能发起对话。{TOKENS_LIMIT_NOTICE}
         </span>
       </div>
 

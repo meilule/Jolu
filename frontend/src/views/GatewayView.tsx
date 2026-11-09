@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Cable, Network, Settings2, ShieldAlert } from "lucide-react"
+import { Cable, Layers, Network, Settings2, ShieldAlert } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api, invoke, isTauri } from "@/lib/api"
 import {
@@ -13,6 +13,7 @@ import { useGatewaySessions } from "@/hooks/useGatewaySessions"
 import { useToast } from "@/components/ui/Toast"
 import { ConfirmDialog as ActionConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { SharedAccessDialog } from "@/components/gateway/SharedAccessDialog"
+import { MiddlewareDialog } from "@/components/gateway/MiddlewareDialog"
 import { GatewayAccessBar } from "@/components/gateway/GatewayAccessBar"
 import { SessionGraph, type GraphSource } from "@/components/gateway/SessionGraph"
 import { RouteLogPanel } from "@/components/gateway/RouteLogPanel"
@@ -36,6 +37,7 @@ type Dialog =
   | { kind: "serve-conflict"; message: string }
   | { kind: "wiring" }
   | { kind: "shared" }
+  | { kind: "middleware" }
   | { kind: "codex" }
   | { kind: "gemini" }
   | { kind: "restore-failed"; message: string; agent: string }
@@ -358,6 +360,11 @@ export function GatewayView() {
           <Network aria-hidden className="size-3.5 text-jolu-muted" />
           局域网共享
         </button>
+        <button type="button" onClick={() => setDialog({ kind: "middleware" })} title="选路前改写请求：模型改名、参数覆盖、系统提示、敏感词、思考段（待确认）"
+          className="jolu-control motion-button flex h-9 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-[11.5px] text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
+          <Layers aria-hidden className="size-3.5 text-jolu-muted" />
+          中间件
+        </button>
         <button type="button" onClick={() => setDialog({ kind: "manage" })} title="加入 / 移出模型池、改名与菜单 id、分组与排序"
           className="jolu-control motion-button flex h-9 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-[11.5px] text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
           <Settings2 aria-hidden className="size-3.5 text-jolu-muted" />
@@ -401,6 +408,7 @@ export function GatewayView() {
       )}
       {dialog?.kind === "serve-conflict" && <MessageDialog title="这个来源没有加入模型池" tone="danger" message={dialog.message} onClose={() => setDialog({ kind: "manage" })} />}
       {dialog?.kind === "shared" && <SharedAccessDialog shared={sharedLan} busy={busy} onSharedChange={(on) => { setSharedLan(on); void run(() => gatewayApi.setSharedLan(on), on ? "已开启局域网共享（重启接入后监听生效）" : "已关闭局域网共享", true).then((ok) => { if (!ok) setSharedLan(!on) }) }} onClose={() => setDialog(null)} run={(work, title) => run(work, title)} />}
+      {dialog?.kind === "middleware" && <MiddlewareDialog busy={busy} onClose={() => setDialog(null)} run={(work, title) => run(work, title)} />}
       {dialog?.kind === "wiring" && <WiringDialog agents={agents} models={claudeModels} modelChoice={claudeModel} onModelChoice={setClaudeModelChoice} subagentChoice={claudeSubagent} onSubagentChoice={setClaudeSubagent} profiles={profiles} onProfileApply={profileApply} onProfileSave={profileSave} onProfileDelete={profileDelete} busy={busy} onClose={() => setDialog(null)} onWire={(agent) => { setDialog(null); wire(agent) }} onUnwire={confirmUnwire} onAccept={confirmAccept} />}
       {dialog?.kind === "codex" && <CodexDialog returnFocusTo={accessTrigger.current} mode={agents.find((entry) => entry.agent === "codex")?.codex_mode ?? "provider"} busy={busy} onClose={() => setDialog(null)} onConfirm={() => run(() => gatewayApi.setWiring("codex", true), "已接入 Codex", true)} />}
       {dialog?.kind === "gemini" && <GeminiDialog returnFocusTo={accessTrigger.current} busy={busy} onClose={() => setDialog(null)} onConfirm={() => run(() => gatewayApi.setWiring("gemini", true), "已接入 Gemini CLI", true)} />}

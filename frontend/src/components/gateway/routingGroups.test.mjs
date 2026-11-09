@@ -14,13 +14,13 @@ const catalog = [
   { id: "empty/y", source: "坏数据", slug: "empty", model: "", kind: "api", status: "connected" },
 ]
 
-test("策略文案：五个策略，smart / pace 标注待额度快照，未知值原样返回", () => {
+test("策略文案：五个策略，smart / pace 说明按额度重置时间排序，未知值原样返回", () => {
   assert.equal(ROUTING_STRATEGIES.length, 5)
   assert.equal(strategyText("order"), "顺序（失败换下一个）")
   assert.equal(strategyText("rotate"), "轮转（逐请求换）")
   assert.equal(strategyText("usage"), "用量最少优先")
-  assert.equal(strategyText("smart"), "智能（待额度快照，暂按顺序）")
-  assert.equal(strategyText("pace"), "配速（待额度快照，暂按顺序）")
+  assert.equal(strategyText("smart"), "智能（重置最近的先用）")
+  assert.equal(strategyText("pace"), "配速（余量最足的先用）")
   assert.equal(strategyText("mystery"), "mystery")
 })
 
@@ -66,4 +66,27 @@ test("分组 id 校验：小写字母数字连字符，不以连字符开头", (
   assert.equal(routingSlugError("a b"), "只能使用小写字母、数字和连字符。")
   assert.equal(routingSlugError("a_b"), "只能使用小写字母、数字和连字符。")
   assert.equal(routingSlugError("-abc"), "不能以连字符开头。")
+})
+
+const { PAUSE_CHOICES, pauseMember, pausedText, isMemberPaused } = await import("./routingGroups.ts")
+
+test("暂停成员：设到期时间、恢复清除；其他成员与已有字段不受影响", () => {
+  const members = [{ slug: "a", model: "m1" }, { slug: "b", model: "m2" }]
+  const paused = pauseMember(members, { slug: "a", model: "m1" }, 5_000)
+  assert.deepEqual(paused, [{ slug: "a", model: "m1", paused_until_ms: 5_000 }, { slug: "b", model: "m2" }])
+  assert.deepEqual(pauseMember(paused, { slug: "a", model: "m1" }, null), [{ slug: "a", model: "m1", paused_until_ms: null }, { slug: "b", model: "m2" }])
+})
+
+test("勾选切换保留其他成员的暂停字段", () => {
+  const members = [{ slug: "a", model: "m1", paused_until_ms: 9_000 }]
+  assert.deepEqual(toggleRoutingMember(members, { slug: "b", model: "m2" }), [{ slug: "a", model: "m1", paused_until_ms: 9_000 }, { slug: "b", model: "m2" }])
+})
+
+test("暂停判定与文案：到期视为恢复", () => {
+  assert.equal(isMemberPaused({ slug: "a", model: "m", paused_until_ms: 2_000 }, 1_000), true)
+  assert.equal(isMemberPaused({ slug: "a", model: "m", paused_until_ms: 1_000 }, 1_000), false)
+  assert.equal(isMemberPaused({ slug: "a", model: "m" }, 1_000), false)
+  assert.equal(pausedText({ slug: "a", model: "m" }, 1_000), "")
+  assert.match(pausedText({ slug: "a", model: "m", paused_until_ms: 1_000 + 3_600_000 }, 1_000), /^暂停至 /)
+  assert.ok(PAUSE_CHOICES.length >= 3 && PAUSE_CHOICES.every((choice) => choice.minutes > 0))
 })

@@ -37,7 +37,7 @@ pub(crate) fn claude_dir() -> Option<PathBuf> {
 }
 
 fn read_json(path: &PathBuf) -> Option<Value> {
-    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    serde_json::from_str(&crate::steady::read_to_string(path).ok()?).ok()
 }
 
 /// 原生平台的凭证格式必须由其专用适配器验证，禁止猜测通用 token 键。
@@ -147,7 +147,7 @@ fn str_at(v: &Value, path: &[&str]) -> Option<String> {
 /// 读取一份配置快照。损坏或正在写入的配置不能回退成启动器中的旧凭证。
 fn claude_settings() -> Result<Option<Value>, ()> {
     let Some(dir) = claude_dir() else { return Ok(None); };
-    let text = match std::fs::read_to_string(dir.join("settings.json")) {
+    let text = match crate::steady::read_to_string(dir.join("settings.json")) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(()),
@@ -222,7 +222,7 @@ pub fn local_base_url(platform: &str, kind: &str) -> Option<String> {
 /// 配置缺失或暂时不可解析（写了一半）时返回 None，由调用方跳过本次。
 pub fn codex_api_base_url() -> Option<String> {
     let dir = codex_dir()?;
-    let text = std::fs::read_to_string(dir.join("config.toml")).ok()?;
+    let text = crate::steady::read_to_string(dir.join("config.toml")).ok()?;
     codex_provider(&text).ok()?.0
 }
 
@@ -234,7 +234,7 @@ pub fn local_grok_auth() -> Result<String, String> {
     let path = home().map(|h| h.join(".grok").join("auth.json"))
         .filter(|p| p.exists())
         .ok_or_else(|| "未找到本机 Grok 凭证（~/.grok/auth.json），请先 grok login".to_string())?;
-    let content = std::fs::read_to_string(&path)
+    let content = crate::steady::read_to_string(&path)
         .map_err(|e| format!("读取 Grok 凭证失败: {e}"))?;
     let now = chrono::Utc::now().timestamp();
     parse_grok_auth_json(&content, now)
@@ -345,7 +345,7 @@ pub fn local_connections(platform: &str, kind: &str) -> Result<Vec<crate::connec
         }
         return Ok(out);
     }
-    let (base_url, env_key) = match std::fs::read_to_string(dir.join("config.toml")) {
+    let (base_url, env_key) = match crate::steady::read_to_string(dir.join("config.toml")) {
         Ok(text) => codex_provider(&text)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, None),
         Err(_) => return Err("无法读取 Codex config.toml".into()),

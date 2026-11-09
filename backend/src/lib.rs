@@ -69,6 +69,8 @@ mod otlp;
 mod warmup;
 mod warmup_run;
 mod settings;
+mod steady;
+mod zcode_version;
 mod session_titles;
 mod watcher;
 mod validation;
@@ -2269,6 +2271,44 @@ fn gateway_shared_lan_set(app: tauri::AppHandle, on: bool) -> Result<settings::S
     Ok(next)
 }
 
+/// 本机 ZCode 客户端版本与 Jolu 适配版本的比对（C6）：本机更新时界面提示着装常量可能过期。
+#[tauri::command]
+async fn zcode_version_check() -> Result<zcode_version::VersionCheck, String> {
+    tauri::async_runtime::spawn_blocking(|| zcode_version::check(zcode_version::installed_version()))
+        .await
+        .map_err(|_| "无法读取 ZCode 版本".to_string())
+}
+
+/// 网关中间件（选路前改写请求体）：列表按执行顺序返回。
+#[tauri::command]
+fn gateway_middleware_list(app: tauri::AppHandle) -> Result<Vec<crate::gateway::middleware::Middleware>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "无法读取网关状态")?;
+    service::gateway::middleware::list(&conn)
+}
+
+/// 新增或覆盖一个中间件：配置先在样例请求上试跑，跑不通不保存。下一个请求即生效。
+#[tauri::command]
+fn gateway_middleware_save(
+    app: tauri::AppHandle,
+    name: String,
+    kind: String,
+    config: serde_json::Value,
+    enabled: bool,
+    sort: i64,
+) -> Result<crate::gateway::middleware::Middleware, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "无法写入网关状态")?;
+    service::gateway::middleware::save(&conn, &name, &kind, config, enabled, sort)
+}
+
+#[tauri::command]
+fn gateway_middleware_delete(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "无法写入网关状态")?;
+    service::gateway::middleware::delete(&conn, &name)
+}
+
 /// 列出命名客户端 Key：名称 + 掩码 + 限额 + 最近使用与当日计数。
 /// Key 原文不出后端——列表里只有掩码，原文仅在签发结果里出现一次。
 #[tauri::command]
@@ -2280,7 +2320,7 @@ fn gateway_client_keys_list(app: tauri::AppHandle) -> Result<Vec<crate::gateway:
 
 /// 签发一把命名客户端 Key，返回结果里带 Key 原文（只此一次，复制给客户端）。
 /// `tokens_per_day` / `requests_per_day` 传 None 表示不限；请求数限额即时生效，
-/// Token 限额本期只保存不强制（见 access.rs::check_client_key_limit 的说明）。
+/// Token 限额由 `gateway::budget` 预扣 + 回冲强制（超量 429，次日零点重置）。
 #[tauri::command]
 fn gateway_client_key_issue(
     app: tauri::AppHandle,
@@ -4148,6 +4188,10 @@ pub fn run() {
             gateway_client_keys_list,
             gateway_client_key_issue,
             gateway_client_key_revoke,
+            gateway_middleware_list,
+            zcode_version_check,
+            gateway_middleware_save,
+            gateway_middleware_delete,
             fx_rate,
             set_cost_currency,
             gateway_set_mode,
@@ -4311,6 +4355,17 @@ pub fn run() {
             // ③5 ZCode Start Plan 优先：按设置初始化进程级开关（zcode_free_first_set 运行时改）。
             // 字段默认 false，与静态默认一致；用户开启过则重启后仍要生效，必须回读一次。
             crate::gateway::adapter::zcode::set_free_first(app.state::<Cfg>().0.get().zcode_free_first);
+            // C6：本机 ZCode 比 Jolu 适配的版本新时记一条日志（界面提示走 zcode_version_check）。
+            // 读注册表放后台线程，不拖慢启动。
+            std::thread::spawn(|| {
+                let check = zcode_version::check(zcode_version::installed_version());
+                if check.newer {
+                    eprintln!(
+                        "[ZCode] 本机 ZCode {} 比 Jolu 适配的 {} 新：Start Plan 着装常量可能需要更新（见 docs/todo/2026-11-09-zcode-version-follow.md）",
+                        check.installed.as_deref().unwrap_or("?"), check.expected
+                    );
+                }
+            });
             let startup_plan = startup::plan(automatic, app.state::<Cfg>().0.get().silent_startup, first_install);
             STARTUP_REQUESTED.store(startup_plan.show_main, Ordering::Release);
             if startup_plan.show_main { let _ = show_startup(&handle); }

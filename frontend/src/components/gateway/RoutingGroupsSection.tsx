@@ -6,8 +6,8 @@ import { gatewayApi, type CatalogModelDto } from "@/lib/gatewayApi"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { Button } from "./GatewayDialogs"
 import {
-  ROUTING_STRATEGIES, hasRoutingMember, offCatalogMembers, routingMemberId, routingSlugError,
-  selectableCatalog, strategyText, toggleRoutingMember,
+  PAUSE_CHOICES, ROUTING_STRATEGIES, hasRoutingMember, isMemberPaused, offCatalogMembers, pauseMember, pausedText,
+  routingMemberId, routingSlugError, selectableCatalog, strategyText, toggleRoutingMember,
   type RoutingGroupDto, type RoutingMember,
 } from "./routingGroups"
 
@@ -131,6 +131,9 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
                           <span className="shrink-0 font-mono text-[10px] text-jolu-muted">（{group.slug}）</span>
                           <span className="shrink-0 text-[10px] text-jolu-muted">· {strategyText(group.strategy)}</span>
                           <span className="shrink-0 text-[10px] text-jolu-muted">· {group.members.length} 个成员</span>
+                          {group.members.some((member) => isMemberPaused(member, Date.now())) && (
+                            <span className="shrink-0 text-[10px] text-jolu-warn">· {group.members.filter((member) => isMemberPaused(member, Date.now())).length} 个暂停中</span>
+                          )}
                         </button>
                         <button type="button" className={cn(ICON_BUTTON, "hover:text-jolu-danger")} title="删除路由分组" aria-label={`删除路由分组 ${group.name}`}
                           disabled={busy} onClick={() => setConfirmDelete(group)}>
@@ -242,9 +245,38 @@ function MemberPicker({ catalog, members, disabled, onChange }: {
             onChange={() => onChange(toggleRoutingMember(members, row.member))} className="size-3.5 accent-[var(--jolu-accent)]" />
           <code className="min-w-0 flex-1 truncate font-mono text-jolu-text">{routingMemberId(row.member)}</code>
           {row.off && <span className="shrink-0 text-[9px] text-jolu-warn">不在目录</span>}
+          {hasRoutingMember(members, row.member) && (
+            <PauseControl member={members.find((item) => item.slug === row.member.slug && item.model === row.member.model) ?? row.member}
+              disabled={disabled} onChange={(until) => onChange(pauseMember(members, row.member, until))} />
+          )}
         </label>
       ))}
       {rows.length === 0 && <p className="px-2.5 py-3 text-[10.5px] text-jolu-muted">模型目录为空：先在来源行「拉取」模型清单，再来勾选成员。</p>}
     </div>
+  )
+}
+
+/**
+ * 成员暂停（待确认：Jolu.pen 无画板）。暂停中的成员不参与选路，到期自动恢复；
+ * 全员暂停时网关如实报「所有成员均暂停」。改动随「保存」一起写入。
+ */
+function PauseControl({ member, disabled, onChange }: { member: RoutingMember; disabled?: boolean; onChange: (untilMs: number | null) => void }) {
+  const now = Date.now()
+  const paused = isMemberPaused(member, now)
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      {paused && <span className="text-[9px] text-jolu-warn">{pausedText(member, now)}</span>}
+      <select value="" disabled={disabled} aria-label={`暂停 ${routingMemberId(member)}`}
+        onChange={(event) => {
+          const value = event.target.value
+          if (value === "resume") onChange(null)
+          else if (value) onChange(Date.now() + Number(value) * 60_000)
+        }}
+        className="h-5 rounded border border-jolu-border bg-jolu-bg px-1 text-[9px] text-jolu-muted outline-none focus:border-jolu-accent">
+        <option value="">{paused ? "调整" : "暂停"}</option>
+        {PAUSE_CHOICES.map((choice) => <option key={choice.minutes} value={choice.minutes}>暂停 {choice.text}</option>)}
+        {paused && <option value="resume">立即恢复</option>}
+      </select>
+    </span>
   )
 }

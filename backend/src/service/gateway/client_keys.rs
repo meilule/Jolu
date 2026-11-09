@@ -17,7 +17,7 @@ pub fn list(conn: &Connection) -> Result<Vec<ClientKeySummary>, String> {
 /// 签发一把命名客户端 Key，返回结果里带 Key 原文（只此一次，复制给客户端）。
 ///
 /// `tokens_per_day` / `requests_per_day` 传 None 表示不限；请求数限额即时生效，
-/// Token 限额本期只保存不强制（见 `access::check_client_key_limit` 的说明）。
+/// Token 限额由 `gateway::budget` 预扣 + 回冲强制（超量 429，次日零点重置）。
 pub fn issue(
     conn: &Connection,
     name: &str,

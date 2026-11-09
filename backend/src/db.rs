@@ -1990,9 +1990,10 @@ pub fn trend_at_scoped(
                 SUM(total_tokens), SUM({FRESH_INPUT_SQL}), SUM(output_tokens),
                 SUM(cache_write_tokens), SUM(cache_read_tokens), SUM(input_tokens),
                 MIN(input_known), MIN(output_known), MIN(cache_write_known),
-                MIN(cache_read_known), MIN(total_known), MIN({FRESH_INPUT_KNOWN_SQL})
+                MIN(cache_read_known), MIN(total_known), MIN({FRESH_INPUT_KNOWN_SQL}),
+                MIN(ts), (ts / 3600000) % 168 AS hour_of_week
          FROM requests WHERE ts >= ?1 AND ts < ?2{EXCLUDE_DEGENERATE_SQL}{}
-         GROUP BY bucket_index, platform, model",
+         GROUP BY bucket_index, platform, model, hour_of_week",
         filter.clause
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -2021,6 +2022,7 @@ pub fn trend_at_scoped(
             ],
             (9..=13).all(|index| row.get::<_, i64>(index).unwrap_or(0) != 0),
             [13,14,10,11,12].map(|index| row.get::<_, i64>(index).unwrap_or(0) != 0),
+            row.get::<_, i64>(15)?,
         ))
     };
     let rows: Vec<_> = stmt
@@ -2029,7 +2031,9 @@ pub fn trend_at_scoped(
             map,
         )?
         .collect::<Result<_, _>>()?;
-    for (index, row_platform, row_model, sums, fields_known, known) in rows {
+    // 同一桶内再按「一周中的第几个小时」拆行（峰谷价只取决于 UTC 小时与星期），
+    // 每行用行内任一请求的时刻计价，费用不随查看时刻变化；Token 照常累加回桶里。
+    for (index, row_platform, row_model, sums, fields_known, known, sample_ts) in rows {
         if index < 0 || (index as usize) >= buckets.len() {
             continue;
         }
@@ -2046,8 +2050,10 @@ pub fn trend_at_scoped(
         // （见 QUOTA-13），这里先减一次就会重复扣减，费用被系统性低估。
         match fields_known
             .then(|| {
-                crate::pricing::estimate(
-                    Some(&row_platform), row_model.as_deref(), raw_input, output, cache_write, cache_read,
+                crate::pricing::estimate_usage_at(
+                    Some(&row_platform), row_model.as_deref(),
+                    crate::pricing::Usage { input: raw_input, output, cache_write, cache_read, ..Default::default() },
+                    chrono::DateTime::from_timestamp_millis(sample_ts).unwrap_or_else(chrono::Utc::now),
                 )
             })
             .flatten()
@@ -2172,17 +2178,20 @@ pub fn cost_estimate_at_scoped(
                 SUM(cache_read_tokens), SUM(total_tokens), MIN(input_known), MIN(output_known),
                 MIN(cache_write_known), MIN(cache_read_known), MIN(total_known), MIN({FRESH_INPUT_KNOWN_SQL}),
                 SUM(COALESCE(m.reasoning, 0)), SUM(COALESCE(m.tool, 0)),
-                CASE WHEN platform = 'gemini' AND input_tokens > {long} THEN 1 ELSE 0 END AS long_prompt
+                CASE WHEN platform = 'gemini' AND input_tokens > {long} THEN 1 ELSE 0 END AS long_prompt,
+                MIN(ts), (ts / 3600000) % 168 AS hour_of_week
          FROM requests LEFT JOIN request_metrics m ON m.request_id = requests.id
          WHERE ts >= ?1 AND ts < ?2{EXCLUDE_DEGENERATE_SQL}{}
-         GROUP BY platform, model, long_prompt",
+         GROUP BY platform, model, long_prompt, hour_of_week",
         filter.clause, long = crate::pricing::GEMINI_LONG_PROMPT_TOKENS
     );
     let mut stmt = conn.prepare(&sql)?;
-    let map = |r: &rusqlite::Row| -> rusqlite::Result<(String, Option<String>, i64, i64, i64, i64, i64, bool, i64, i64, bool)> {
+    // 峰谷价只取决于 UTC 小时与星期：按「一周中的第几个小时」分桶（纪元起每 168 小时一周，
+    // 同桶的 UTC 小时与星期相同），每桶用桶内任一请求的时刻计价，金额不随查看时刻变化。
+    let map = |r: &rusqlite::Row| -> rusqlite::Result<(String, Option<String>, i64, i64, i64, i64, i64, bool, i64, i64, bool, i64)> {
         Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?,
             (7..=11).all(|index| r.get::<_, i32>(index).unwrap_or(0) != 0),
-            r.get(13)?, r.get(14)?, r.get::<_, i32>(15)? != 0))
+            r.get(13)?, r.get(14)?, r.get::<_, i32>(15)? != 0, r.get(16)?))
     };
     let rows: Vec<_> = stmt
         .query_map(rusqlite::params_from_iter(filter.params(&[start, end])), map)?
@@ -2191,14 +2200,15 @@ pub fn cost_estimate_at_scoped(
     let mut amount = 0.0;
     let mut uncovered = 0i64;
     let mut complete = true;
-    for (row_platform, model, i, o, cw, cr, total, fields_known, reasoning, tool, long_prompt) in rows {
+    for (row_platform, model, i, o, cw, cr, total, fields_known, reasoning, tool, long_prompt, sample_ts) in rows {
         if !fields_known {
             complete = false;
             continue;
         }
-        match crate::pricing::estimate_usage(Some(&row_platform), model.as_deref(), crate::pricing::Usage {
+        let at = chrono::DateTime::from_timestamp_millis(sample_ts).unwrap_or_else(chrono::Utc::now);
+        match crate::pricing::estimate_usage_at(Some(&row_platform), model.as_deref(), crate::pricing::Usage {
             input: i, output: o, cache_write: cw, cache_read: cr, reasoning, tool, long_prompt,
-        }) {
+        }, at) {
             Some(v) => amount += v,
             // 价目表没有该模型：计入未覆盖，不当成 0 元悄悄吞掉
             None => uncovered += total,
@@ -2286,12 +2296,14 @@ pub fn request_log_at_scoped(
             time: dt.map(|d| d.format("%H:%M:%S").to_string()).unwrap_or_default(),
             date: dt.map(|d| d.format("%Y/%m/%d").to_string()).unwrap_or_default(),
             cost_estimate: input.zip(output).zip(cache_write).zip(cache_read)
-                .and_then(|(((input, output), cache_write), cache_read)| crate::pricing::estimate_usage(
+                .and_then(|(((input, output), cache_write), cache_read)| crate::pricing::estimate_usage_at(
                     Some(&row_platform), model.as_deref(), crate::pricing::Usage {
                         input, output, cache_write, cache_read,
                         reasoning: reasoning.unwrap_or(0), tool: tool.unwrap_or(0),
                         long_prompt: input > crate::pricing::GEMINI_LONG_PROMPT_TOKENS,
                     },
+                    // 按请求自身时间计价（峰谷价），不随查看时刻变化
+                    chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now),
                 )),
             model,
             input_semantics: r.get(14)?,
@@ -2462,6 +2474,36 @@ mod tests {
         assert_eq!(result.points.len(), 3);
         assert_eq!(result.points.first().unwrap().label, "01/10");
         assert_eq!(result.points.last().unwrap().label, "01/12");
+    }
+
+    #[test]
+    fn cost_totals_and_request_log_price_each_request_at_its_own_time() {
+        // DeepSeek：周六全天谷时半价，周一 07:00 UTC 峰时。两条同量请求合计应为峰时单价的 1.5 倍，
+        // 请求日志里两条的费用比为 0.5——不随查看时刻变化。
+        let mut conn = Connection::open_in_memory().unwrap();
+        init(&conn).unwrap();
+        let saturday = chrono::Utc.with_ymd_and_hms(2026, 11, 7, 12, 0, 0).unwrap().timestamp_millis();
+        let monday = chrono::Utc.with_ymd_and_hms(2026, 11, 9, 7, 0, 0).unwrap().timestamp_millis();
+        let record = |key: &str, ts: i64| RequestRecord {
+            platform: "zcode".into(), source: "local".into(), dedup_key: key.into(), session_id: None, ts,
+            model: Some("deepseek-v4-flash".into()), input_tokens: Some(1_000_000), output_tokens: Some(100_000),
+            cache_read_tokens: Some(0), cache_write_tokens: Some(0), total_tokens: Some(1_100_000), effort: None,
+        };
+        insert_records(&mut conn, &[record("off-peak", saturday), record("peak", monday)]).unwrap();
+        let range = Some(CustomRange { start: saturday - 1, end: Some(monday + 1) });
+        let peak_one = crate::pricing::estimate_usage_at(Some("zcode"), Some("deepseek-v4-flash"), crate::pricing::Usage {
+            input: 1_000_000, output: 100_000, ..Default::default()
+        }, chrono::DateTime::from_timestamp_millis(monday).unwrap()).unwrap();
+        let cost = cost_estimate_at(&conn, "zcode", "custom", range, None, monday + 1).unwrap();
+        assert!((cost.amount - peak_one * 1.5).abs() < 1e-9, "合计 {} 应为峰时单条 {} 的 1.5 倍", cost.amount, peak_one);
+        let log = request_log_at(&conn, "zcode", "custom", 1, range, None, monday + 1).unwrap();
+        let costs: Vec<f64> = log.rows.iter().filter_map(|row| row.cost_estimate).collect();
+        assert_eq!(costs.len(), 2);
+        let (low, high) = (costs[0].min(costs[1]), costs[0].max(costs[1]));
+        assert!((low / high - 0.5).abs() < 1e-9, "日志费用比 {}", low / high);
+        let trend = trend_at(&conn, "zcode", "custom", range, None, monday + 1).unwrap();
+        let trend_cost: f64 = trend.points.iter().filter_map(|point| point.cost).sum();
+        assert!((trend_cost - peak_one * 1.5).abs() < 1e-9, "趋势合计 {trend_cost}");
     }
 
     #[test]

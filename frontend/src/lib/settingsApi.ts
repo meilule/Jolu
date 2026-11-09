@@ -32,6 +32,8 @@ export const settingsApi = {
   setTaskNotify: (resumed: boolean | null, finished: boolean | null) => invoke<AppSettings>("set_task_notify", { resumed, finished }),
   /** 设置 · 隐私脱敏（P5，画板待确认）：开关立即生效并广播 settings-changed；返回最新设置 */
   privacyMaskingSet: (on: boolean) => invoke<AppSettings>("privacy_masking_set", { on }),
+  /** ZCode 通道顺序（画板待确认）：开 = 先试免费 Start Plan；立即生效，不用重启网关 */
+  zcodeFreeFirstSet: (on: boolean) => invoke<AppSettings>("zcode_free_first_set", { on }),
   /** 批次 G：保持系统唤醒；不支持的系统上打开会报错，不假装成功 */
   setKeepAwake: (on: boolean) => invoke<AppSettings>("set_keep_awake", { on }),
   /** 批次 G：每日 warm-up 开关与触发小时（后端按 0–23 截断） */

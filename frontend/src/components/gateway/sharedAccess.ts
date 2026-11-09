@@ -2,7 +2,8 @@
  * 局域网共享与命名客户端 Key 的展示逻辑（纯函数，供 `SharedAccessDialog` 与 node 测试共用）。
  *
  * 后端语义（`backend/src/gateway/access.rs`）：
- * - `requests_per_day` 到量即拒（429，进 provider 之前）；`tokens_per_day` **只存不强制**，
+ * - `requests_per_day` 到量即拒（429，进 provider 之前）；`tokens_per_day` 由 `gateway/budget.rs`
+ * 预扣 + 回冲强制：请求前按估算预扣，响应结束按实际用量记账，超量 429、次日零点重置，
  *   界面上必须如实标注，不能让用户以为 Token 上限也在生效
  * - `today_requests` 只数「当日 result = ok」的流水，被拒与上游失败不计
  * - `last_used_ms` 为 null 表示从未使用
@@ -55,8 +56,8 @@ export function sharingWithoutKeys(shared: boolean, keyCount: number): boolean {
 /** 签发结果页的警示文案：Key 原文只显示一次，这是后端的行为，不能承诺「以后还能看」。 */
 export const KEY_ONCE_NOTICE = "这个 Key 只显示这一次，关闭后无法再查看；请现在复制并保存到客户端。"
 
-/** Token 上限的如实标注（后端只记录不强制，不能让用户误以为生效）。 */
-export const TOKENS_NOT_ENFORCED_NOTICE = "每日 Token 上限本期只记录，不做强制拦截；请求数上限会立即生效。"
+/** Token 上限的口径说明：请求前按估算预扣，可能比实际用量更早拒绝。 */
+export const TOKENS_LIMIT_NOTICE = "每日 Token 上限按「输入 + 输出」计，请求前先按估算预扣、结束后按实际用量回冲，临近上限时可能提前拒绝；两项上限都在次日零点重置。"
 
 /* ───── 签发约束：有效期、模型白名单、只读（后端 `issue_client_key` 的可选参数） ───── */
 

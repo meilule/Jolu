@@ -80,7 +80,7 @@ pub(crate) fn read_current_base(platform: ProxyPlatform) -> Result<Option<String
             let Some(path) = claude_settings_path() else {
                 return Err("未找到用户主目录".into());
             };
-            let text = std::fs::read_to_string(&path)
+            let text = crate::steady::read_to_string(&path)
                 .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
             claude_read_base(&text)
         }
@@ -88,7 +88,7 @@ pub(crate) fn read_current_base(platform: ProxyPlatform) -> Result<Option<String
             let Some(path) = codex_config_path() else {
                 return Err("未找到用户主目录".into());
             };
-            let text = std::fs::read_to_string(&path)
+            let text = crate::steady::read_to_string(&path)
                 .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
             Ok(codex_read_base(&text)?.1)
         }
@@ -137,7 +137,7 @@ fn write_claude_file(value: Option<&str>) -> Result<(), String> {
     let Some(path) = claude_settings_path() else {
         return Err("未找到用户主目录".into());
     };
-    let text = std::fs::read_to_string(&path)
+    let text = crate::steady::read_to_string(&path)
         .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
     let next = claude_write_base(&text, value)?;
     write_atomic(&path, next.into_bytes())
@@ -210,7 +210,7 @@ pub(crate) fn probe_original(platform: ProxyPlatform) -> Result<String, String> 
             let Some(path) = claude_settings_path() else {
                 return Err("未找到用户主目录".into());
             };
-            let text = std::fs::read_to_string(&path)
+            let text = crate::steady::read_to_string(&path)
                 .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
             claude_read_base(&text)?.ok_or_else(|| {
                 "官方订阅直连（无网关 base_url）暂不支持接管，待实测 CLI 兼容性后开放".to_string()
@@ -220,7 +220,7 @@ pub(crate) fn probe_original(platform: ProxyPlatform) -> Result<String, String> 
             let Some(path) = codex_config_path() else {
                 return Err("未找到用户主目录".into());
             };
-            let text = std::fs::read_to_string(&path)
+            let text = crate::steady::read_to_string(&path)
                 .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
             let (provider, base) = codex_read_base(&text)?;
             let provider = provider.ok_or_else(|| {
@@ -257,7 +257,7 @@ fn write_codex_current_provider(value: Option<&str>) -> Result<(), String> {
     let Some(path) = codex_config_path() else {
         return Err("未找到用户主目录".into());
     };
-    let text = std::fs::read_to_string(&path)
+    let text = crate::steady::read_to_string(&path)
         .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
     let provider = codex_provider_name(&text)?;
     let next = codex_write_base(&text, &provider, value)?;

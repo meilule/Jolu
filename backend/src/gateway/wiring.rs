@@ -391,7 +391,7 @@ fn codex_effective_base(text: &str) -> Option<String> {
 /// 是否已登录 ChatGPT（`auth.json` 里有 OAuth tokens，而不是只有 API Key）。
 fn codex_oauth_logged_in() -> bool {
     let Some(dir) = crate::creds::codex_dir() else { return false };
-    let Ok(text) = std::fs::read_to_string(dir.join("auth.json")) else { return false };
+    let Ok(text) = crate::steady::read_to_string(dir.join("auth.json")) else { return false };
     let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else { return false };
     value
         .pointer("/tokens/access_token")
@@ -597,7 +597,7 @@ fn gemini_current_token(text: &str) -> Option<String> {
 }
 
 fn gemini_settings_text() -> Option<String> {
-    std::fs::read_to_string(gemini_settings_path()?).ok()
+    crate::steady::read_to_string(gemini_settings_path()?).ok()
 }
 
 /// ZCode：`provider` JSON 的 `options.baseURL` + `apiKey`（结构对齐 magpie zcode.go 的字段名）。
@@ -725,7 +725,7 @@ fn write_atomic(path: &Path, bytes: Vec<u8>) -> Result<(), String> {
 
 /// 写前备份到应用数据目录（沿用 cli_apply 的纪律：备份失败则不写）。
 fn backup(path: &Path, backup_dir: &Path) -> Result<(), String> {
-    if !path.exists() {
+    if !crate::steady::exists(&path) {
         return Ok(());
     }
     std::fs::create_dir_all(backup_dir).map_err(|error| format!("创建备份目录失败：{error}"))?;
@@ -836,7 +836,7 @@ pub fn status_with(agent: &str, port: u16, record: Option<&WiringRecord>) -> Wir
             codex_mode,
         };
     }
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let text = crate::steady::read_to_string(&path).unwrap_or_default();
     if record.is_some_and(|r| r.state == "pending") {
         return WiringStatus {
             agent: agent.into(),
@@ -920,8 +920,8 @@ pub(crate) fn wire(
     let path = config_path(agent).ok_or("未找到用户目录")?;
     let base = format!("http://127.0.0.1:{port}");
     let token = token_for(agent, instance_short);
-    let original = if path.exists() {
-        std::fs::read_to_string(&path).map_err(|error| format!("读取 {} 失败：{error}", path.display()))?
+    let original = if crate::steady::exists(&path) {
+        crate::steady::read_to_string(&path).map_err(|error| format!("读取 {} 失败：{error}", path.display()))?
     } else {
         String::new()
     };
@@ -987,7 +987,7 @@ pub(crate) fn wire(
 
 /// 多个文件按顺序写；中途失败就把已经写的文件还原，避免 `.env` 改了、settings 没改的半接管。
 fn write_all_with_rollback(files: &[(PathBuf, Vec<u8>)]) -> Result<(), String> {
-    let originals: Vec<Option<Vec<u8>>> = files.iter().map(|(path, _)| std::fs::read(path).ok()).collect();
+    let originals: Vec<Option<Vec<u8>>> = files.iter().map(|(path, _)| crate::steady::read(path).ok()).collect();
     for (index, (path, bytes)) in files.iter().enumerate() {
         if let Err(error) = write_atomic(path, bytes.clone()) {
             for (done, (done_path, _)) in files[..index].iter().enumerate() {
@@ -1014,11 +1014,11 @@ pub(crate) fn unwire(
 ) -> Result<bool, String> {
     let path = config_path(agent).ok_or("未找到用户目录")?;
     // Gemini 可能只剩 settings.json 被改过（.env 被外部删了），仍然要还原 auth。
-    if !path.exists() && agent != "gemini" {
+    if !crate::steady::exists(&path) && agent != "gemini" {
         return Ok(false);
     }
-    let original = if path.exists() {
-        std::fs::read_to_string(&path).map_err(|error| format!("读取 {} 失败：{error}", path.display()))?
+    let original = if crate::steady::exists(&path) {
+        crate::steady::read_to_string(&path).map_err(|error| format!("读取 {} 失败：{error}", path.display()))?
     } else {
         String::new()
     };
@@ -1111,7 +1111,7 @@ pub(crate) fn reconcile_pending(agent: &str, port: u16, record: &WiringRecord) -
         return "unchanged";
     }
     let Some(path) = config_path(agent) else { return "idle" };
-    let Ok(text) = std::fs::read_to_string(&path) else { return "idle" };
+    let Ok(text) = crate::steady::read_to_string(&path) else { return "idle" };
     let applied = record.applied();
     let wrote = applied
         .as_ref()

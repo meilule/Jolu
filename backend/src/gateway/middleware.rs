@@ -265,7 +265,7 @@ fn mask_strings(value: &mut Value, words: &[&str]) {
 }
 
 /// 响应侧中间件链（目前只有 think-tags）：
-/// `{"mode": "strip"}` 剥掉 `<think>…</think>`；`{"mode": "wrap"}` 暂无请求侧效果。
+/// `{"mode": "strip"}` 剥掉 `<think>…</think>`；`{"mode": "wrap"}` 把独立的思考字段包进 `<think>` 放到正文前。
 ///
 /// 只用于**非流式**响应体：流式增量里剥标签会拆散跨块标签，破坏 SSE 语义，
 /// 所以流式响应不处理（模块注释写明这个边界）。
@@ -276,11 +276,48 @@ pub(crate) fn restore_chain(middlewares: &[Middleware], text: &str) -> String {
             continue;
         }
         let mode = middleware.config.get("mode").and_then(Value::as_str).unwrap_or("strip");
-        if mode == "strip" {
-            out = strip_think_tags(&out);
+        match mode {
+            "strip" => out = strip_think_tags(&out),
+            "wrap" => out = wrap_reasoning(&out),
+            _ => {}
         }
     }
     out
+}
+
+/// wrap：把独立字段里的思考内容包进 `<think>…</think>`，放到正文之前——给只认
+/// 正文、不认 `reasoning_content` / thinking 块的客户端看思考过程。
+/// - OpenAI Chat：`choices[].message.reasoning_content` 并入 `content` 并移除原字段；
+/// - Anthropic Messages：`thinking` 块改成同位置的文本块（签名随块丢弃，客户端不再回传）。
+/// 不是 JSON 或没有思考内容时原样返回（保持字节不变）。
+fn wrap_reasoning(text: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<Value>(text) else {
+        return text.to_string();
+    };
+    let mut changed = false;
+    if let Some(choices) = value.get_mut("choices").and_then(Value::as_array_mut) {
+        for choice in choices {
+            let Some(message) = choice.get_mut("message").and_then(Value::as_object_mut) else { continue };
+            let Some(reasoning) = message.get("reasoning_content").and_then(Value::as_str).filter(|r| !r.is_empty()).map(str::to_string) else {
+                continue;
+            };
+            let content = message.get("content").and_then(Value::as_str).unwrap_or("").to_string();
+            message.insert("content".into(), Value::String(format!("<think>{reasoning}</think>{content}")));
+            message.remove("reasoning_content");
+            changed = true;
+        }
+    }
+    if let Some(blocks) = value.get_mut("content").and_then(Value::as_array_mut) {
+        for block in blocks.iter_mut() {
+            if block.get("type").and_then(Value::as_str) != Some("thinking") {
+                continue;
+            }
+            let thinking = block.get("thinking").and_then(Value::as_str).unwrap_or("").to_string();
+            *block = serde_json::json!({"type": "text", "text": format!("<think>{thinking}</think>")});
+            changed = true;
+        }
+    }
+    if changed { value.to_string() } else { text.to_string() }
 }
 
 /// 剥掉 `<think>…</think>` 段（含标签），忽略大小写与空白差异。
@@ -451,6 +488,24 @@ mod tests {
         assert_eq!(strip_think_tags("前<think>没闭合"), "前");
         // 多个段
         assert_eq!(strip_think_tags("a<think>1</think>b<think>2</think>c"), "abc");
+    }
+
+    #[test]
+    fn wrap_mode_moves_reasoning_into_think_tags_for_both_protocols() {
+        let chain = [middleware("think-tags", json!({"mode": "wrap"}))];
+        // OpenAI Chat：reasoning_content 包进 <think> 放到正文前，原字段移除
+        let openai = json!({"choices": [{"message": {"role": "assistant", "reasoning_content": "先想", "content": "答案"}}]}).to_string();
+        let wrapped: Value = serde_json::from_str(&restore_chain(&chain, &openai)).unwrap();
+        assert_eq!(wrapped["choices"][0]["message"]["content"], "<think>先想</think>答案");
+        assert!(wrapped["choices"][0]["message"].get("reasoning_content").is_none());
+        // Anthropic Messages：thinking 块改成文本块里的 <think>
+        let anthropic = json!({"content": [{"type": "thinking", "thinking": "先想", "signature": "s"}, {"type": "text", "text": "答案"}]}).to_string();
+        let wrapped: Value = serde_json::from_str(&restore_chain(&chain, &anthropic)).unwrap();
+        assert_eq!(wrapped["content"], json!([{"type": "text", "text": "<think>先想</think>"}, {"type": "text", "text": "答案"}]));
+        // 没有思考内容 / 不是 JSON：原样返回
+        let plain = json!({"choices": [{"message": {"content": "答案"}}]}).to_string();
+        assert_eq!(restore_chain(&chain, &plain), plain);
+        assert_eq!(restore_chain(&chain, "not json"), "not json");
     }
 
     #[test]

@@ -59,6 +59,22 @@ export interface ClientKeySummaryDto {
   today_requests: number
 }
 
+/** 路由分组成员（与后端 `GroupMember` 一致）：`paused_until_ms` 缺省 = 未暂停，保存时须原样带回。 */
+export interface GroupMemberDto {
+  slug: string
+  model: string
+  paused_until_ms?: number | null
+}
+
+/** 网关中间件（与后端 `gateway::middleware::Middleware` 一致）。 */
+export interface MiddlewareDto {
+  name: string
+  kind: string
+  config: Record<string, unknown>
+  enabled: boolean
+  sort: number
+}
+
 /** 签发结果：`key` 是原文，仅此一次可见。 */
 export interface IssuedClientKeyDto {
   name: string
@@ -231,6 +247,12 @@ export const gatewayApi = {
   /** 撤销客户端 Key：删除立即失效，历史流水归属保留。 */
   revokeClientKey: (name: string) => invoke<void>("gateway_client_key_revoke", { name }),
 
+  /** 网关中间件：按 sort 顺序在选路前改写请求体；保存前后端会试跑配置，跑不通拒绝保存。 */
+  middlewares: () => invoke<MiddlewareDto[]>("gateway_middleware_list"),
+  saveMiddleware: (row: MiddlewareDto) =>
+    invoke<MiddlewareDto>("gateway_middleware_save", { name: row.name, kind: row.kind, config: row.config, enabled: row.enabled, sort: row.sort }),
+  deleteMiddleware: (name: string) => invoke<void>("gateway_middleware_delete", { name }),
+
   /** Profile（配置一键切换）：保存当前已接线 agent 的主模型快照，应用时逐个重放接线。 */
   profilesList: () => invoke<{ name: string; agents: Record<string, string>; created_ms: number }[]>("gateway_profiles_list"),
   profilesSave: (name: string) => invoke<{ name: string; agents: Record<string, string>; created_ms: number }>("gateway_profiles_save", { name }),
@@ -238,10 +260,10 @@ export const gatewayApi = {
   profilesApply: (name: string) =>
     invoke<{ switched: string[]; skipped: string[]; message: string }>("gateway_profiles_apply", { name }),
   /** 路由分组（`group/<slug>`）：成员按策略分摊与转移。界面为待确认的最小可用版。 */
-  groupList: () => invoke<{ id: string; slug: string; name: string; strategy: string; members: { slug: string; model: string }[]; created_ms: number }[]>("gateway_routing_group_list"),
-  groupCreate: (slug: string, name: string, strategy: string, members: { slug: string; model: string }[]) =>
+  groupList: () => invoke<{ id: string; slug: string; name: string; strategy: string; members: GroupMemberDto[]; created_ms: number }[]>("gateway_routing_group_list"),
+  groupCreate: (slug: string, name: string, strategy: string, members: GroupMemberDto[]) =>
     invoke<unknown>("gateway_routing_group_create", { slug, name, strategy, members }),
-  groupUpdate: (slug: string, patch: { name?: string; strategy?: string; members?: { slug: string; model: string }[] }) =>
+  groupUpdate: (slug: string, patch: { name?: string; strategy?: string; members?: GroupMemberDto[] }) =>
     invoke<unknown>("gateway_routing_group_update", { slug, ...patch }),
   groupDelete: (slug: string) => invoke<unknown>("gateway_routing_group_delete", { slug }),
   /** 连接进出模型池 */

@@ -191,16 +191,18 @@ fn load(conn: &Connection, f: &StatsFilter, calls: bool) -> rusqlite::Result<Vec
         };
         let reasoning: Option<i64> = r.get(22)?;
         let tool: Option<i64> = r.get(23)?;
+        let ts: i64 = r.get(4)?;
+        // 金额与下面的单价快照都按请求自身的时间计价（峰谷价依赖它），不随查看时刻变化
+        let at = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now);
         let cost = input.zip(output).zip(cache_write).zip(cache_read).and_then(|(((input, output), cache_write), cache_read)| {
-            crate::pricing::estimate_usage(Some(&platform), model.as_deref(), crate::pricing::Usage {
+            crate::pricing::estimate_usage_at(Some(&platform), model.as_deref(), crate::pricing::Usage {
                 input, output, cache_write, cache_read,
                 reasoning: reasoning.unwrap_or(0), tool: tool.unwrap_or(0),
                 long_prompt: input > crate::pricing::GEMINI_LONG_PROMPT_TOKENS,
-            })
+            }, at)
         });
         let status_code: Option<i64> = r.get(20)?;
         let outcome: Option<String> = r.get(21)?;
-        let ts: i64 = r.get(4)?;
         // 单价快照：只在能计价时取，时间用请求自身的时间戳（峰谷价依赖它）
         let price = cost.and_then(|_| {
             let at = chrono::DateTime::from_timestamp_millis(ts)?;
@@ -874,6 +876,28 @@ mod tests {
 
     fn filter(start: i64, end: i64) -> StatsFilter {
         StatsFilter { start, end, ..Default::default() }
+    }
+
+    #[test]
+    fn call_cost_is_priced_at_request_time_like_its_price_snapshot() {
+        // DeepSeek 周末全天谷时（半价），工作日 07:00 UTC 是峰时。按请求时间计价，
+        // 两条同量请求的费用比应为 0.5，且与单价拆解的「谷时」标记一致——不能随查看时刻变化。
+        let saturday = chrono::Utc.with_ymd_and_hms(2026, 11, 7, 12, 0, 0).unwrap().timestamp_millis();
+        let monday = chrono::Utc.with_ymd_and_hms(2026, 11, 9, 7, 0, 0).unwrap().timestamp_millis();
+        let tokens = [Some(1_000_000), Some(100_000), Some(0), Some(0), Some(1_100_000)];
+        let (conn, path) = seeded(&[
+            rec("zcode", "off-peak", saturday, "deepseek-v4-flash", tokens, None),
+            rec("zcode", "peak", monday, "deepseek-v4-flash", tokens, None),
+        ]);
+        let page = calls(&conn, &filter(saturday - 1, monday + 1), 1).unwrap();
+        let row = |key: &str| page.rows.iter().find(|row| row.call_id == key).unwrap();
+        let (off, peak) = (row("off-peak"), row("peak"));
+        assert_eq!(off.price.as_ref().map(|p| p.off_peak), Some(true));
+        assert_eq!(peak.price.as_ref().map(|p| p.off_peak), Some(false));
+        let ratio = off.cost.unwrap() / peak.cost.unwrap();
+        assert!((ratio - 0.5).abs() < 1e-9, "谷时应半价，实际比值 {ratio}");
+        drop(conn);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

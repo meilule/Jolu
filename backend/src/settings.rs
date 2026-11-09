@@ -312,11 +312,27 @@ pub struct Store {
 impl Store {
     pub fn load(dir: &std::path::Path) -> Self {
         let path = dir.join("settings.json");
-        // 缺失字段逐项补默认值，保留旧版本已经保存的连接；仅无法解析时回落。
-        let mut inner = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<Settings>(&s).ok())
-            .unwrap_or_default();
+        // 缺失字段逐项补默认值，保留旧版本已经保存的连接。主文件存在却读不出（截断、
+        // 写坏）时：先把坏文件另存为 `.corrupt` 留证，再回读上一版好的（`.lastgood`，
+        // 对齐 magpie lastgood）；两者都没有才回落默认值——不能因为一次坏写丢掉全部设置。
+        let parse = |text: &str| serde_json::from_str::<Settings>(text).ok();
+        let mut inner = match crate::steady::read_to_string(&path) {
+            Ok(text) => match parse(&text) {
+                Some(settings) => settings,
+                None => {
+                    let _ = std::fs::write(path.with_extension("json.corrupt"), text.as_bytes());
+                    let restored = crate::steady::read_to_string(path.with_extension("json.lastgood"))
+                        .ok()
+                        .and_then(|text| parse(&text));
+                    eprintln!(
+                        "[设置] settings.json 无法解析，已另存为 settings.json.corrupt；{}",
+                        if restored.is_some() { "已回读上一版设置" } else { "没有可用的上一版，使用默认设置" }
+                    );
+                    restored.unwrap_or_default()
+                }
+            },
+            Err(_) => Settings::default(),
+        };
         // 实例标识必须落盘：每次启动换一个会让「另一个 Jolu 接管」误判。
         if inner.instance_id.trim().is_empty() {
             inner.instance_id = new_instance_id();
@@ -366,6 +382,8 @@ impl Store {
             let _ = std::fs::remove_file(&temporary);
             return Err(format!("设置保存失败：{error}"));
         }
+        // 保存成功后留一份上一版好的；它写失败不影响本次保存（只是少了一层兜底）
+        let _ = std::fs::write(self.path.with_extension("json.lastgood"), &json);
         *guard = next.clone();
         Ok(next)
     }
@@ -409,6 +427,34 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_settings_fall_back_to_last_good_copy_and_keep_the_broken_file() {
+        let dir = std::env::temp_dir().join(format!("jolu-settings-lastgood-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = super::Store::load(&dir);
+        store.try_update(|s| { s.theme = "dark".into(); s.island_platform = "codex".into(); }).unwrap();
+        assert!(dir.join("settings.json.lastgood").exists(), "保存成功要留一份上一版");
+        // 主文件被截断成坏 JSON：回读上一版，而不是回落默认值丢掉全部设置
+        std::fs::write(dir.join("settings.json"), "{\"theme\": \"da").unwrap();
+        let restored = super::Store::load(&dir).get();
+        assert_eq!(restored.theme, "dark");
+        assert_eq!(restored.island_platform, "codex");
+        assert_eq!(std::fs::read_to_string(dir.join("settings.json.corrupt")).unwrap(), "{\"theme\": \"da", "坏文件另存留证");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unreadable_settings_without_last_good_copy_still_keep_the_broken_file() {
+        let dir = std::env::temp_dir().join(format!("jolu-settings-no-lastgood-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.json"), "not json").unwrap();
+        let store = super::Store::load(&dir);
+        assert_eq!(store.get().theme, "light", "没有上一版时才回落默认值");
+        assert_eq!(std::fs::read_to_string(dir.join("settings.json.corrupt")).unwrap(), "not json");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn failed_save_keeps_previous_settings() {
         let dir = std::env::temp_dir().join(format!("island-settings-failure-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -417,7 +463,7 @@ mod tests {
         assert!(store.try_update(|s| s.theme = "dark".into()).is_err());
         assert_eq!(store.get().theme, "light", "失败写入不能伪装成已保存");
         std::fs::remove_dir(dir.join("settings.json")).unwrap();
-        std::fs::remove_dir(dir).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -437,7 +483,7 @@ mod tests {
         store.try_update(|s| s.theme = "system".into()).unwrap();
         assert_eq!(serde_json::to_value(store.get()).unwrap(), serde_json::to_value(super::Store::load(&dir).get()).unwrap());
         std::fs::remove_file(dir.join("settings.json")).unwrap();
-        std::fs::remove_dir(dir).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -455,7 +501,7 @@ mod tests {
         assert_eq!(restored.island_platform, "codex");
         assert_eq!(restored.island_kind, "auth");
         std::fs::remove_file(dir.join("settings.json")).unwrap();
-        std::fs::remove_dir(dir).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -472,7 +518,7 @@ mod tests {
         assert_eq!(store.get().dock.offset, 32.0);
         assert_eq!(super::Store::load(&dir).get().dock.offset, 32.0);
         std::fs::remove_file(dir.join("settings.json")).unwrap();
-        std::fs::remove_dir(dir).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -526,7 +572,7 @@ mod tests {
             assert_eq!(super::Store::load(&dir).get().auto_check_updates, enabled);
         }
         std::fs::remove_file(dir.join("settings.json")).unwrap();
-        std::fs::remove_dir(dir).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -540,7 +586,7 @@ mod tests {
             assert!(restored.island_visible);
         }
         std::fs::remove_file(dir.join("settings.json")).unwrap();
-        std::fs::remove_dir(dir).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -651,7 +697,7 @@ mod notify_settings_tests {
         let back: Settings = serde_json::from_value(serde_json::to_value(store.get()).unwrap()).unwrap();
         assert!(back.privacy_masking);
         std::fs::remove_file(dir.join("settings.json")).unwrap();
-        std::fs::remove_dir(dir).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -668,7 +714,7 @@ mod notify_settings_tests {
         let back: Settings = serde_json::from_value(serde_json::to_value(store.get()).unwrap()).unwrap();
         assert!(back.zcode_free_first);
         std::fs::remove_file(dir.join("settings.json")).unwrap();
-        std::fs::remove_dir(dir).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 // 任务 2.5 结束

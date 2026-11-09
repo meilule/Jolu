@@ -16,6 +16,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { useToast } from "@/components/ui/Toast"
 import { Button, Modal, orderGroups } from "./GatewayDialogs"
 import { RoutingGroupsSection } from "./RoutingGroupsSection"
+import { ZcodeChannelOption } from "./ZcodeChannelOption"
 import { StatusCapsule } from "./StatusCapsule"
 import type { Connection } from "@/types"
 
@@ -352,6 +353,7 @@ export function SourceManageDialog({
         </div>
 
         <RoutingGroupsSection catalog={catalog} busy={busy} run={run} />
+        {connections.some((connection) => connection.platformId === "zcode") && <ZcodeChannelOption busy={busy} run={run} />}
       </Modal>
 
       {confirm && <ConfirmDialog title={confirm.title} description={confirm.description} confirmLabel={confirm.label} danger={confirm.danger}

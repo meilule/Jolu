@@ -383,6 +383,8 @@ export interface AppSettings {
   notify_task_finished: boolean
   /** 隐私脱敏（P5）：网关中转的请求在离开本机前按固定规则换成占位符；旧版设置缺省为关 */
   privacy_masking?: boolean
+  /** ZCode 通道顺序：true = 先试免费 Start Plan，再落 Coding Plan；旧版设置缺省为关 */
+  zcode_free_first?: boolean
   /** 保持系统唤醒（批次 G）：运行期间不进入睡眠；只在 Windows 生效 */
   keep_awake?: boolean
   /** 每日 warm-up（批次 G）：每天定时发一条最小请求保活；默认关，会消耗额度 */

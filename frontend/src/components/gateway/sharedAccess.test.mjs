@@ -8,7 +8,7 @@ const {
   lastUsedText,
   sharingWithoutKeys,
   KEY_ONCE_NOTICE,
-  TOKENS_NOT_ENFORCED_NOTICE,
+  TOKENS_LIMIT_NOTICE,
 } = await import("./sharedAccess.ts")
 
 test("每日上限未设置时显示「不限」而不是 0", () => {
@@ -48,11 +48,11 @@ test("开了共享但没有 Key 属于危险态", () => {
   assert.equal(sharingWithoutKeys(false, 0), false, "没开共享就不是危险态")
 })
 
-test("Key 原文只显示一次与 Token 上限不强制都要如实标注", () => {
+test("Key 原文只显示一次与 Token 上限的预扣口径都要如实标注", () => {
   assert.match(KEY_ONCE_NOTICE, /只显示这一次/)
   assert.match(KEY_ONCE_NOTICE, /无法再查看/)
-  assert.match(TOKENS_NOT_ENFORCED_NOTICE, /只记录/)
-  assert.match(TOKENS_NOT_ENFORCED_NOTICE, /不做强制拦截/)
+  assert.match(TOKENS_LIMIT_NOTICE, /预扣/)
+  assert.match(TOKENS_LIMIT_NOTICE, /回冲/)
 })
 
 const { EXPIRY_CHOICES, expiresAtFrom, parseModelList, isExpired, constraintTags } = await import("./sharedAccess.ts")
