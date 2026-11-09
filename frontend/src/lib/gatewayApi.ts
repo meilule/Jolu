@@ -49,6 +49,12 @@ export interface ClientKeySummaryDto {
   tokens_per_day: number | null
   requests_per_day: number | null
   created_ms: number
+  /** 过期时间（毫秒）；null = 永不过期 */
+  expires_ms: number | null
+  /** 模型白名单；null = 不限 */
+  models: string[] | null
+  /** 只读：只放行查询类请求 */
+  read_only: boolean
   last_used_ms: number | null
   today_requests: number
 }
@@ -59,6 +65,9 @@ export interface IssuedClientKeyDto {
   key: string
   tokens_per_day: number | null
   requests_per_day: number | null
+  expires_ms: number | null
+  models: string[] | null
+  read_only: boolean
 }
 
 export interface RouteLogDto {
@@ -205,11 +214,19 @@ export const gatewayApi = {
   /** 客户端 Key 列表：只有掩码与限额，原文不出后端。 */
   clientKeys: () => invoke<ClientKeySummaryDto[]>("gateway_client_keys_list"),
   /** 签发客户端 Key：**原文只返回这一次**（关闭后无法再查看）。 */
-  issueClientKey: (name: string, requestsPerDay?: number | null, tokensPerDay?: number | null) =>
+  issueClientKey: (
+    name: string,
+    requestsPerDay?: number | null,
+    tokensPerDay?: number | null,
+    options?: { expiresMs?: number | null; models?: string[] | null; readOnly?: boolean },
+  ) =>
     invoke<IssuedClientKeyDto>("gateway_client_key_issue", {
       name,
       requestsPerDay: requestsPerDay ?? null,
       tokensPerDay: tokensPerDay ?? null,
+      expiresMs: options?.expiresMs ?? null,
+      models: options?.models ?? null,
+      readOnly: options?.readOnly ?? false,
     }),
   /** 撤销客户端 Key：删除立即失效，历史流水归属保留。 */
   revokeClientKey: (name: string) => invoke<void>("gateway_client_key_revoke", { name }),

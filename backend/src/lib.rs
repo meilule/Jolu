@@ -2223,10 +2223,13 @@ fn gateway_client_key_issue(
     name: String,
     tokens_per_day: Option<i64>,
     requests_per_day: Option<i64>,
+    expires_ms: Option<i64>,
+    models: Option<Vec<String>>,
+    read_only: Option<bool>,
 ) -> Result<crate::gateway::access::IssuedClientKey, String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "无法读取网关状态")?;
-    crate::gateway::access::client_key_issue(&conn, &name, tokens_per_day, requests_per_day)
+    crate::gateway::access::client_key_issue(&conn, &name, tokens_per_day, requests_per_day, expires_ms, models, read_only.unwrap_or(false))
 }
 
 /// 撤销命名客户端 Key（删除行，立即失效；流水里的历史归属保留）。

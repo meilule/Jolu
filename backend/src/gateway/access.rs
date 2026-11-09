@@ -31,10 +31,23 @@ fn client_store_init(conn: &Connection) -> Result<(), String> {
             protected        TEXT NOT NULL,
             tokens_per_day   INTEGER,
             requests_per_day INTEGER,
-            created_ms       INTEGER NOT NULL
+            created_ms       INTEGER NOT NULL,
+            expires_ms       INTEGER,
+            models_json      TEXT,
+            read_only        INTEGER NOT NULL DEFAULT 0
         )",
     )
-    .map_err(|_| "无法准备网关客户端密钥存储".into())
+    .map_err(|_| "无法准备网关客户端密钥存储".to_string())?;
+    // 旧库补列：已存在时 ALTER 报错，忽略即可（幂等）
+    let migrations: [&str; 3] = [
+        "ALTER TABLE gateway_client_keys ADD COLUMN expires_ms INTEGER",
+        "ALTER TABLE gateway_client_keys ADD COLUMN models_json TEXT",
+        "ALTER TABLE gateway_client_keys ADD COLUMN read_only INTEGER NOT NULL DEFAULT 0",
+    ];
+    for statement in migrations {
+        let _ = conn.execute(statement, rusqlite::params![]);
+    }
+    Ok(())
 }
 
 fn load(conn: &Connection) -> Result<Option<String>, String> {
@@ -125,6 +138,12 @@ pub struct IssuedClientKey {
     pub key: String,
     pub tokens_per_day: Option<i64>,
     pub requests_per_day: Option<i64>,
+    /// 过期时间（毫秒）；None = 永不过期
+    pub expires_ms: Option<i64>,
+    /// 模型白名单；None = 不限
+    pub models: Option<Vec<String>>,
+    /// 只读：只放行 GET（读取类）
+    pub read_only: bool,
 }
 
 /// 列表条目：只有掩码与限额，Key 原文不出后端。
@@ -135,6 +154,12 @@ pub struct ClientKeySummary {
     pub tokens_per_day: Option<i64>,
     pub requests_per_day: Option<i64>,
     pub created_ms: i64,
+    /// 过期时间（毫秒）；None = 永不过期
+    pub expires_ms: Option<i64>,
+    /// 模型白名单；None = 不限
+    pub models: Option<Vec<String>>,
+    /// 只读：只放行 GET
+    pub read_only: bool,
     /// 最近一次计入流水的时间（保留范围内）；从未使用为 None
     pub last_used_ms: Option<i64>,
     /// 当日已计入限额的成功请求数（口径见 [`check_client_key_limit`]）
@@ -159,11 +184,17 @@ fn client_key_violation(error: &rusqlite::Error, name: &str) -> String {
 
 /// 签发一把命名客户端 Key。名称唯一；限额留空（None）表示不限。
 /// 加密或写库失败时旧数据不受影响（INSERT 原子），调用方重试即可。
+/// `expires_ms` / `models` / `read_only` 是可选的额外约束：过期、模型不在白名单、
+/// 只读 Key 收到非 GET 请求，都在鉴权阶段拒绝（见 [`check_client_key_limits`]）。
+#[allow(clippy::too_many_arguments)]
 pub fn client_key_issue(
     conn: &Connection,
     name: &str,
     tokens_per_day: Option<i64>,
     requests_per_day: Option<i64>,
+    expires_ms: Option<i64>,
+    models: Option<Vec<String>>,
+    read_only: bool,
 ) -> Result<IssuedClientKey, String> {
     client_store_init(conn)?;
     let name = name.trim();
@@ -178,20 +209,34 @@ pub fn client_key_issue(
             return Err(format!("{label}只能留空（不限）或填正整数，当前为 {}", limit.unwrap_or(0)));
         }
     }
+    // 过期时间必须是未来
+    if expires_ms.is_some_and(|ms| ms <= chrono::Local::now().timestamp_millis()) {
+        return Err("过期时间必须在将来".into());
+    }
+    let models = models.map(|list| {
+        list.into_iter().map(|m| m.trim().to_string()).filter(|m| !m.is_empty()).collect::<Vec<_>>()
+    }).filter(|list: &Vec<String>| !list.is_empty());
     let key = generate_client_key()?;
     let protected = crate::auth_snapshot::protect(key.as_bytes(), CLIENT_KEY_ENTROPY, true)?;
+    let models_json = match &models {
+        Some(list) => Some(serde_json::to_string(list).map_err(|error| format!("模型白名单序列化失败：{error}"))?),
+        None => None,
+    };
     conn.execute(
-        "INSERT INTO gateway_client_keys(name, protected, tokens_per_day, requests_per_day, created_ms) VALUES(?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO gateway_client_keys(name, protected, tokens_per_day, requests_per_day, created_ms, expires_ms, models_json, read_only) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         rusqlite::params![
             name,
             hex_encode(&protected),
             tokens_per_day,
             requests_per_day,
             chrono::Local::now().timestamp_millis(),
+            expires_ms,
+            models_json,
+            read_only as i64,
         ],
     )
     .map_err(|error| client_key_violation(&error, name))?;
-    Ok(IssuedClientKey { name: name.to_string(), key, tokens_per_day, requests_per_day })
+    Ok(IssuedClientKey { name: name.to_string(), key, tokens_per_day, requests_per_day, expires_ms, models, read_only })
 }
 
 /// 撤销 = 删除行。撤销后该 Key 立即失效（鉴权查表），但流水里的历史归属保留。
@@ -218,7 +263,7 @@ fn decrypt_client_key(name: &str, protected: &str) -> Result<String, String> {
 pub fn client_keys_list(conn: &Connection) -> Result<Vec<ClientKeySummary>, String> {
     client_store_init(conn)?;
     let mut stmt = conn
-        .prepare("SELECT name, protected, tokens_per_day, requests_per_day, created_ms FROM gateway_client_keys ORDER BY created_ms, name")
+        .prepare("SELECT name, protected, tokens_per_day, requests_per_day, created_ms, expires_ms, models_json, read_only FROM gateway_client_keys ORDER BY created_ms, name")
         .map_err(|_| "无法读取网关客户端密钥".to_string())?;
     let rows = stmt
         .query_map([], |row| {
@@ -228,21 +273,31 @@ pub fn client_keys_list(conn: &Connection) -> Result<Vec<ClientKeySummary>, Stri
                 row.get::<_, Option<i64>>(2)?,
                 row.get::<_, Option<i64>>(3)?,
                 row.get::<_, i64>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, i64>(7)?,
             ))
         })
         .map_err(|_| "无法读取网关客户端密钥".to_string())?;
     let mut out = Vec::new();
     for row in rows {
-        let (name, protected, tokens_per_day, requests_per_day, created_ms) =
+        let (name, protected, tokens_per_day, requests_per_day, created_ms, expires_ms, models_json, read_only) =
             row.map_err(|_| "无法读取网关客户端密钥".to_string())?;
         let (last_used_ms, today_requests) = client_key_usage(conn, &name)?;
         let key = decrypt_client_key(&name, &protected)?;
+        let models = models_json
+            .as_deref()
+            .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
+            .filter(|list| !list.is_empty());
         out.push(ClientKeySummary {
             masked: format!("••••••••{}", &key[key.len() - 4..]),
             name,
             tokens_per_day,
             requests_per_day,
             created_ms,
+            expires_ms,
+            models,
+            read_only: read_only != 0,
             last_used_ms,
             today_requests,
         });
@@ -319,22 +374,71 @@ pub(crate) struct RequestLimitRefusal {
 /// `tokens_per_day` 字段本期只保存、不强制：精确 Token 计数依赖用量归账时序
 /// （响应结束后才拿得到用量，无法在请求前预留），强行计数会把请求管线改乱；
 /// 限额判断只看请求数。
+///
+/// 除请求数上限外，还检查三项固定约束（**先于**计数判断，命中即拒）：
+/// 过期时间、只读 Key 的非 GET 请求、模型白名单。
 pub(crate) fn check_client_key_limit(
     conn: &Connection,
     name: &str,
     now: chrono::DateTime<chrono::Local>,
 ) -> Result<Option<RequestLimitRefusal>, String> {
+    check_client_key_limit_for(conn, name, now, None, true)
+}
+
+/// 带请求上下文的限额检查：`model` 是请求的模型名、`is_read` 表示是否为读取类请求。
+pub(crate) fn check_client_key_limit_for(
+    conn: &Connection,
+    name: &str,
+    now: chrono::DateTime<chrono::Local>,
+    model: Option<&str>,
+    is_write: bool,
+) -> Result<Option<RequestLimitRefusal>, String> {
     client_store_init(conn)?;
-    let limit: Option<Option<i64>> = conn
+    let row: Option<(Option<i64>, Option<i64>, Option<String>, i64)> = conn
         .query_row(
-            "SELECT requests_per_day FROM gateway_client_keys WHERE name = ?1",
+            "SELECT requests_per_day, expires_ms, models_json, read_only FROM gateway_client_keys WHERE name = ?1",
             [name],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()
         .map_err(|_| "无法读取网关客户端密钥".to_string())?;
-    let Some(Some(limit)) = limit else {
-        return Ok(None); // Key 已被撤销（鉴权已放行到这一步）或未设请求数限额
+    let Some((limit, expires_ms, models_json, read_only)) = row else {
+        return Ok(None); // Key 已被撤销
+    };
+    // 1) 过期：立即失效
+    if expires_ms.is_some_and(|ms| ms <= now.timestamp_millis()) {
+        return Ok(Some(RequestLimitRefusal {
+            message: format!("客户端 Key「{name}」已过期，请重新签发"),
+            retry_after_seconds: 1,
+        }));
+    }
+    // 2) 只读：非 GET 一律拒
+    if read_only != 0 && is_write {
+        return Ok(Some(RequestLimitRefusal {
+            message: format!("客户端 Key「{name}」是只读 Key：只允许查询类请求"),
+            retry_after_seconds: 1,
+        }));
+    }
+    // 3) 模型白名单
+    if let Some(list) = models_json
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
+        .filter(|list| !list.is_empty())
+    {
+        let allowed = model.is_some_and(|model| list.iter().any(|m| m == model));
+        if !allowed {
+            return Ok(Some(RequestLimitRefusal {
+                message: format!(
+                    "客户端 Key「{name}」不允许使用模型「{}」；可用模型：{}",
+                    model.unwrap_or("（未指定）"),
+                    list.join("、")
+                ),
+                retry_after_seconds: 1,
+            }));
+        }
+    }
+    let Some(limit) = limit else {
+        return Ok(None); // 未设请求数限额
     };
     let (start_ms, reset_ms) = day_window(now);
     let used: i64 = conn
@@ -777,11 +881,11 @@ mod tests {
     #[test]
     fn client_key_issue_mask_and_revoke_roundtrip() {
         let conn = migrated_conn();
-        let issued = client_key_issue(&conn, "  lab-agent  ", None, Some(5)).unwrap();
+        let issued = client_key_issue(&conn, "  lab-agent  ", None, Some(5), None, None, false).unwrap();
         assert!(issued.key.starts_with("jolu-client-"), "原文前缀固定：{}", issued.key);
         assert_eq!(issued.name, "lab-agent", "名称去掉首尾空白");
         // 名称唯一：重复签发明确报错，不静默覆盖
-        assert!(client_key_issue(&conn, "lab-agent", None, None).is_err());
+        assert!(client_key_issue(&conn, "lab-agent", None, None, None, None, false).is_err());
         // 列表：只有掩码，原文不出后端；限额与计数可见
         let list = client_keys_list(&conn).unwrap();
         assert_eq!(list.len(), 1);
@@ -795,21 +899,21 @@ mod tests {
         assert!(client_key_revoke(&conn, "missing").is_err());
         client_key_revoke(&conn, "lab-agent").unwrap();
         assert!(client_keys_list(&conn).unwrap().is_empty());
-        let again = client_key_issue(&conn, "lab-agent", None, None).unwrap();
+        let again = client_key_issue(&conn, "lab-agent", None, None, None, None, false).unwrap();
         assert_ne!(issued.key, again.key);
         // 非法输入：空名、控制字符、超长名称、非正数限额
-        assert!(client_key_issue(&conn, "", None, None).is_err());
-        assert!(client_key_issue(&conn, "bad\u{0007}name", None, None).is_err());
-        assert!(client_key_issue(&conn, &"x".repeat(65), None, None).is_err());
-        assert!(client_key_issue(&conn, "ok", Some(0), None).is_err());
-        assert!(client_key_issue(&conn, "ok", None, Some(-1)).is_err());
+        assert!(client_key_issue(&conn, "", None, None, None, None, false).is_err());
+        assert!(client_key_issue(&conn, "bad\u{0007}name", None, None, None, None, false).is_err());
+        assert!(client_key_issue(&conn, &"x".repeat(65), None, None, None, None, false).is_err());
+        assert!(client_key_issue(&conn, "ok", Some(0), None, None, None, false).is_err());
+        assert!(client_key_issue(&conn, "ok", None, Some(-1), None, None, false).is_err());
     }
 
     #[test]
     fn named_client_keys_pass_strict_auth_and_revoke_closes_them() {
         let conn = migrated_conn();
         current(&conn).unwrap(); // 开通手动 Key，关闭「旧安装无密钥全放行」分支
-        let issued = client_key_issue(&conn, "lab-agent", None, None).unwrap();
+        let issued = client_key_issue(&conn, "lab-agent", None, None, None, None, false).unwrap();
         // 宽松模式不受命名 Key 影响：任意令牌照旧放行，且不带 Key 名
         let relaxed = authorize_detail(&conn, Some(&issued.key), "/v1/models", true).unwrap();
         assert!(relaxed.allowed && relaxed.client_key.is_none());
@@ -827,10 +931,48 @@ mod tests {
     }
 
     #[test]
+    fn client_key_expiry_whitelist_and_read_only_are_enforced() {
+        let conn = migrated_conn();
+        let now = chrono::Local::now();
+
+        // 过期：签发时要求未来，这里直接改库模拟已过期
+        client_key_issue(&conn, "expired", None, None, None, None, false).unwrap();
+        conn.execute("UPDATE gateway_client_keys SET expires_ms = ?1 WHERE name = 'expired'", [now.timestamp_millis() - 1000]).unwrap();
+        let refusal = check_client_key_limit_for(&conn, "expired", now, Some("m"), false).unwrap();
+        assert!(refusal.is_some_and(|r| r.message.contains("已过期")), "过期 Key 要立即失效");
+
+        // 只读：写请求被拒，读请求放行
+        client_key_issue(&conn, "reader", None, None, None, None, true).unwrap();
+        let refusal = check_client_key_limit_for(&conn, "reader", now, Some("m"), true).unwrap();
+        assert!(refusal.is_some_and(|r| r.message.contains("只读")), "只读 Key 不接写请求");
+        assert!(check_client_key_limit_for(&conn, "reader", now, Some("m"), false).unwrap().is_none(), "只读 Key 允许读");
+
+        // 模型白名单：不在列表里拒绝，在列表里放行
+        client_key_issue(&conn, "scoped", None, None, None, Some(vec!["glm-5.3".into(), "glm-5.2".into()]), false).unwrap();
+        let refusal = check_client_key_limit_for(&conn, "scoped", now, Some("gpt-5"), true).unwrap();
+        assert!(refusal.is_some_and(|r| r.message.contains("不允许使用模型") && r.message.contains("glm-5.3")), "白名单外要拒绝并列出可用模型");
+        assert!(check_client_key_limit_for(&conn, "scoped", now, Some("glm-5.3"), true).unwrap().is_none(), "白名单内放行");
+
+        // 三约束都没设：正常放行
+        client_key_issue(&conn, "plain", None, None, None, None, false).unwrap();
+        assert!(check_client_key_limit_for(&conn, "plain", now, Some("any"), true).unwrap().is_none());
+    }
+
+    #[test]
+    fn client_key_issue_rejects_past_expiry_and_blank_whitelist() {
+        let conn = migrated_conn();
+        let past = chrono::Local::now().timestamp_millis() - 1000;
+        assert!(client_key_issue(&conn, "bad-ttl", None, None, Some(past), None, false).is_err(), "过期时间必须在将来");
+        // 空白模型名被过滤掉；全空白的白名单等于没设（不限）
+        let issued = client_key_issue(&conn, "blank-models", None, None, None, Some(vec!["  ".into(), "".into()]), false).unwrap();
+        assert!(issued.models.is_none(), "全空白的白名单按未设处理");
+    }
+
+    #[test]
     fn request_limit_counts_today_ok_rows_and_says_reset_time() {
         let conn = migrated_conn();
-        client_key_issue(&conn, "quota", None, Some(3)).unwrap();
-        client_key_issue(&conn, "free", None, None).unwrap();
+        client_key_issue(&conn, "quota", None, Some(3), None, None, false).unwrap();
+        client_key_issue(&conn, "free", None, None, None, None, false).unwrap();
         let now = chrono::Local::now();
         let row = |result: &'static str, client: &'static str| super::super::route_log::NewEntry {
             agent: None,
@@ -892,7 +1034,7 @@ mod tests {
         let issued = {
             let conn = deps.db.lock().unwrap();
             current(&conn).unwrap(); // 关闭「旧安装无密钥全放行」分支
-            client_key_issue(&conn, "lan-agent", None, Some(1)).unwrap()
+            client_key_issue(&conn, "lan-agent", None, Some(1), None, None, false).unwrap()
         };
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());

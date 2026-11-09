@@ -409,6 +409,24 @@ pub(crate) async fn handle(
     // 规范名 = 剥掉 Claude Code 的 [1m]/[1M] 窗口标记。路由、流水、用量、上游
     // 全部用规范名，避免同一模型在统计里出现两行、上游收到不认识的后缀。
     let model = route::canonical_model(&raw_model).to_string();
+    // 命名 Key 的模型白名单：中间件在 body 之前跑，拿不到模型名，所以在读到模型后补这道检查
+    if let Some(name) = client_key.as_deref() {
+        if let Ok(conn) = deps.db.lock() {
+            match crate::gateway::access::check_client_key_limit_for(
+                &conn,
+                name,
+                chrono::Local::now(),
+                Some(&model),
+                true,
+            ) {
+                Ok(Some(refusal)) => {
+                    return error_response_with_retry(StatusCode::TOO_MANY_REQUESTS, &refusal.message, refusal.retry_after_seconds.max(1) as u64);
+                }
+                Err(reason) => return error_response(StatusCode::SERVICE_UNAVAILABLE, &reason),
+                Ok(None) => {}
+            }
+        }
+    }
     let meta = RouteMeta {
         session: session_identity(agent.as_deref(), &headers, &body),
         agent: agent.clone(),
