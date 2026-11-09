@@ -57,3 +57,53 @@ export const KEY_ONCE_NOTICE = "这个 Key 只显示这一次，关闭后无法�
 
 /** Token 上限的如实标注（后端只记录不强制，不能让用户误以为生效）。 */
 export const TOKENS_NOT_ENFORCED_NOTICE = "每日 Token 上限本期只记录，不做强制拦截；请求数上限会立即生效。"
+
+/* ───── 签发约束：有效期、模型白名单、只读（后端 `issue_client_key` 的可选参数） ───── */
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/** 有效期选项：首项永不过期；后端要求到期时间在将来，所以只给正天数。 */
+export const EXPIRY_CHOICES: readonly { days: number | null; label: string }[] = [
+  { days: null, label: "永不过期" },
+  { days: 1, label: "1 天" },
+  { days: 7, label: "7 天" },
+  { days: 30, label: "30 天" },
+  { days: 90, label: "90 天" },
+]
+
+/** 有效期 → 到期时间（毫秒）；null = 永不过期。 */
+export function expiresAtFrom(days: number | null, now: number): number | null {
+  return days === null ? null : now + days * DAY_MS
+}
+
+/**
+ * 模型白名单输入 → 列表：逗号、空白或换行分隔，去空去重；什么都没填返回 null（= 不限）。
+ * 后端同样把「全空白」当未设，这里提前归一，免得用户以为设了一个空白名单。
+ */
+export function parseModelList(raw: string): string[] | null {
+  const models = [...new Set(raw.split(/[\s,，]+/).map((part) => part.trim()).filter(Boolean))]
+  return models.length > 0 ? models : null
+}
+
+/** 是否已过期（到点即过期，与后端鉴权一致）；null 永不过期。 */
+export function isExpired(row: Pick<ClientKeySummaryDto, "expires_ms">, now: number): boolean {
+  return typeof row.expires_ms === "number" && row.expires_ms <= now
+}
+
+/** 列表行的约束标签：只列出确实设置了的约束，过期标红。 */
+export function constraintTags(
+  row: Pick<ClientKeySummaryDto, "expires_ms" | "models" | "read_only">,
+  now: number,
+): { text: string; danger: boolean }[] {
+  const tags: { text: string; danger: boolean }[] = []
+  if (typeof row.expires_ms === "number") {
+    if (isExpired(row, now)) tags.push({ text: "已过期", danger: true })
+    else {
+      const days = Math.floor((row.expires_ms - now) / DAY_MS)
+      tags.push({ text: days < 1 ? "今天过期" : `${days} 天后过期`, danger: false })
+    }
+  }
+  if (row.models && row.models.length > 0) tags.push({ text: `限 ${row.models.length} 个模型`, danger: false })
+  if (row.read_only) tags.push({ text: "只读", danger: false })
+  return tags
+}

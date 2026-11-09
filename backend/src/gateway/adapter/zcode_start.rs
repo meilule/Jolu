@@ -20,11 +20,14 @@ use serde_json::Value;
 
 pub(crate) const START_BASE: &str = "https://zcode.z.ai/api/v1/zcode-plan/anthropic";
 const ZCODE_SITE: &str = "https://zcode.z.ai";
-const APP_VERSION: &str = "3.17.2";
+// 着装请求与余额查询共用同一个 ZCode 版本（升级时只改 zcode_quota 那一处；
+// 下面的 UA 字面量由测试保证与它一致）。
+use crate::zcode_quota::{balance_url, ZCODE_APP_VERSION as APP_VERSION};
 const UA: &str = "ZCode/3.17.2 ai-sdk/anthropic/3.0.81";
 
-/// Start Plan 供给的模型（magpie 插件 START_MODELS 同款：全部除 GLM-5.3）。
-pub(crate) const START_MODELS: [&str; 3] = ["GLM-5.3-Flash", "GLM-5.2", "GLM-5-Turbo"];
+/// ZCode 客户端注册表里的模型 id 写法（magpie 插件 `MODELS`）。余额桶把模型写成小写
+/// （`glm-5.3-flash`），请求要用这里的写法；不认识的名字按桶里原样保留。
+const KNOWN_MODELS: [&str; 4] = ["GLM-5.3", "GLM-5.3-Flash", "GLM-5.2", "GLM-5-Turbo"];
 
 /// 会话 JWT（`zcodejwttoken` 解密）。Start Plan 的凭据。
 pub(crate) fn jwt_at() -> Option<String> {
@@ -226,6 +229,10 @@ pub(crate) async fn forward(
     if protocol != crate::gateway::wire::CallerProtocol::Anthropic {
         return error_response(StatusCode::BAD_REQUEST, "ZCode Start Plan 使用 Anthropic Messages 协议");
     }
+    // C5：边缘保持期内不再敲 zcode.z.ai（必然失败，且会延长防火墙的封禁）
+    if let Some(until) = EDGE.until(chrono::Utc::now().timestamp_millis()) {
+        return refused_answer(Refusal::Edge, until);
+    }
     let Some(jwt) = jwt_at() else {
         return error_response(StatusCode::UNAUTHORIZED, "ZCode 会话凭据缺失：请在原工具重新登录");
     };
@@ -234,7 +241,7 @@ pub(crate) async fn forward(
         Ok(v) => v,
         Err(_) => return error_response(StatusCode::BAD_REQUEST, "请求格式无效"),
     };
-    // Start Plan 不提供 GLM-5.3（magpie START_MODELS 同款）；未知模型如实交给上游判定
+    // 礼包外的模型如实交给上游判定（礼包清单见 [`gift_models`]）
     dress(&mut value, &device, session);
     let dressed = match serde_json::to_vec(&value) {
         Ok(bytes) => bytes,
@@ -260,7 +267,7 @@ pub(crate) async fn forward(
     // 发出走忙碌重试（③3）：着装只做一次，闭包每次重用同一份着装后的请求体与同一头——
     // 重复着装会重排 cache_control 并让 prompt cache 失效。
     let model = value["model"].as_str().unwrap_or_default().to_string();
-    ask_busy(move || {
+    let response = ask_busy(move || {
         let deps = deps.clone();
         let target = target.clone();
         let headers = headers.clone();
@@ -279,12 +286,245 @@ pub(crate) async fn forward(
             .await
         }
     })
-    .await
+    .await;
+    settle(response).await
 }
 
-/// Start Plan 的模型清单（静态：免费套餐的四个模型少 GLM-5.3）。
-pub(crate) fn models() -> Vec<String> {
-    START_MODELS.iter().map(|m| m.to_string()).collect()
+/* ───────────────────────── C1 礼包按余额过滤（magpie `startPlan` 同款） ───────────────────────── */
+
+/// 余额查询结果的缓存时长：余额有网络成本，礼包模型一天内基本不变。
+const GIFT_TTL_MS: i64 = 5 * 60_000;
+
+fn num(value: Option<&Value>) -> Option<f64> {
+    match value? {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn text<'a>(value: &'a Value, key: &str) -> &'a str {
+    value.get(key).and_then(Value::as_str).map(str::trim).unwrap_or("")
+}
+
+/// 桶属于哪个套餐：两边都有 `user_plan_id` 时按它对，否则按 `plan_id`。
+fn same_plan(bucket: &Value, plan: &Value) -> bool {
+    let (bucket_user, plan_user) = (text(bucket, "user_plan_id"), text(plan, "user_plan_id"));
+    if !bucket_user.is_empty() && !plan_user.is_empty() {
+        return bucket_user == plan_user;
+    }
+    bucket.get("plan_id").map(Value::to_string) == plan.get("plan_id").map(Value::to_string)
+}
+
+/// 桶已用完：有 `remaining_units` 看它，没有时看 used ≥ total；都没有不算用完。
+fn bucket_spent(bucket: &Value) -> bool {
+    if let Some(left) = num(bucket.get("remaining_units")) {
+        return left <= 0.0;
+    }
+    matches!(
+        (num(bucket.get("total_units")), num(bucket.get("used_units"))),
+        (Some(total), Some(used)) if used >= total
+    )
+}
+
+/// 桶声明的模型：`capabilities` 里 `model:` 开头或不带冒号的条目（`tool:` 之类不是模型）。
+fn bucket_models(bucket: &Value) -> Vec<String> {
+    bucket
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|c| c.starts_with("model:") || !c.contains(':'))
+        .map(|c| c.trim_start_matches("model:").trim().to_string())
+        .filter(|c| !c.is_empty())
+        .collect()
+}
+
+fn wire_model(name: &str) -> String {
+    KNOWN_MODELS
+        .iter()
+        .find(|known| known.eq_ignore_ascii_case(name))
+        .map_or_else(|| name.to_string(), |known| known.to_string())
+}
+
+/// 余额 `data` → 现在能花的礼包模型。`None` = 没有生效中的套餐（含读不出 `plans`）；
+/// `Some(空)` = 有生效套餐但桶都用完 / 过期——两者分开，不把「没有」说成「不知道」。
+pub(crate) fn gift_models_from_balance(data: &Value) -> Option<Vec<String>> {
+    let now = num(data.get("server_time"))
+        .filter(|n| *n > 0.0)
+        .unwrap_or_else(|| chrono::Utc::now().timestamp() as f64);
+    let plans = data.get("plans").and_then(Value::as_array)?;
+    let balances = data.get("balances").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+    let past = |v: Option<f64>| v.is_some_and(|t| t > 0.0 && t <= now);
+    let mut live_plan = false;
+    let mut models: Vec<String> = Vec::new();
+    for plan in plans {
+        let started = num(plan.get("starts_at")).is_none_or(|t| t <= now);
+        if !text(plan, "status").eq_ignore_ascii_case("active") || past(num(plan.get("ends_at"))) || !started {
+            continue;
+        }
+        live_plan = true;
+        for bucket in balances.iter().filter(|b| same_plan(b, plan)) {
+            if past(num(bucket.get("expires_at"))) || bucket_spent(bucket) {
+                continue;
+            }
+            for name in bucket_models(bucket) {
+                let name = wire_model(&name);
+                if !models.iter().any(|m| m.eq_ignore_ascii_case(&name)) {
+                    models.push(name);
+                }
+            }
+        }
+    }
+    live_plan.then_some(models)
+}
+
+/// 按会话 JWT 的哈希缓存余额结论（只缓存读成功的结果；读失败下次再问）。
+#[derive(Default)]
+struct GiftCache(std::sync::Mutex<std::collections::HashMap<String, (i64, Option<Vec<String>>)>>);
+
+impl GiftCache {
+    fn get(&self, jwt: &str, now_ms: i64) -> Option<Option<Vec<String>>> {
+        let map = self.0.lock().ok()?;
+        let (at, value) = map.get(&sha256_hex(jwt))?;
+        (now_ms - at < GIFT_TTL_MS).then(|| value.clone())
+    }
+
+    fn put(&self, jwt: &str, value: Option<Vec<String>>, now_ms: i64) {
+        if let Ok(mut map) = self.0.lock() {
+            map.retain(|_, (at, _)| now_ms - *at < GIFT_TTL_MS);
+            map.insert(sha256_hex(jwt), (now_ms, value));
+        }
+    }
+}
+
+static GIFTS: std::sync::LazyLock<GiftCache> = std::sync::LazyLock::new(GiftCache::default);
+
+/// 本机 ZCode 会话现在能花的 Start Plan 礼包模型（读 `billing/balance`，5 分钟缓存）。
+/// `Ok(None)` = 没有生效套餐；`Err` = 读不到（会话失效时给可操作的说明）。
+pub(crate) async fn gift_models() -> Result<Option<Vec<String>>, String> {
+    let jwt = jwt_at().ok_or("ZCode 会话凭据缺失：请在原工具重新登录")?;
+    let now = chrono::Utc::now().timestamp_millis();
+    if let Some(hit) = GIFTS.get(&jwt, now) {
+        return Ok(hit);
+    }
+    let (token, device) = (jwt.clone(), device_of(&jwt));
+    let body = tokio::task::spawn_blocking(move || crate::zcode_quota::plan_balance_body(&token, &device))
+        .await
+        .map_err(|_| "ZCode 余额查询失败".to_string())??;
+    let gift = gift_models_from_balance(body.get("data").unwrap_or(&Value::Null));
+    GIFTS.put(&jwt, gift.clone(), now);
+    Ok(gift)
+}
+
+/* ───────────────────────── C5 边缘防火墙保持（magpie `edge` 同款） ───────────────────────── */
+
+/// 被边缘防火墙拦下后，本进程暂停请求 zcode.z.ai 的时长（magpie `EDGE_HOLD` = 3 分钟：
+/// 防火墙按 IP 计数，期间每个账号、每个会话再敲都只会延长封禁；时长短到换网络 / 代理的
+/// 用户也不必久等）。
+const EDGE_HOLD_MS: i64 = 3 * 60_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Refusal {
+    /// 阿里云边缘防火墙的拦截页：本机网络地址被拦，与账号无关
+    Edge,
+    /// ZCode 风控（405 / 3012「unusual activity」）：账号被限制
+    Restricted,
+}
+
+/// Start Plan 的回应是否是拒绝，是哪一种（magpie `startRefused` / `EDGE_PAGE` 同款判定）。
+fn refusal_of(status: StatusCode, body: &str) -> Option<Refusal> {
+    if status.as_u16() < 400 {
+        return None;
+    }
+    let lower = body.to_ascii_lowercase();
+    let code_3012 = serde_json::from_str::<Value>(body).ok().is_some_and(|v| {
+        [v.get("code"), v.pointer("/error/code")]
+            .into_iter()
+            .flatten()
+            .any(|c| c.as_i64() == Some(3012) || c.as_str() == Some("3012"))
+    });
+    let refused = status == StatusCode::METHOD_NOT_ALLOWED
+        || lower.contains("unusual activity")
+        || lower.contains("request has been blocked")
+        || code_3012;
+    if !refused {
+        return None;
+    }
+    if lower.contains("errors.aliyun.com") || lower.contains("<html") {
+        Some(Refusal::Edge)
+    } else {
+        Some(Refusal::Restricted)
+    }
+}
+
+/// 进程级的边缘保持：所有账号都从同一个出口地址出去，所以保持属于进程而不是账号。
+#[derive(Default)]
+struct EdgeHold(std::sync::Mutex<Option<i64>>);
+
+impl EdgeHold {
+    fn until(&self, now_ms: i64) -> Option<i64> {
+        let until = (*self.0.lock().ok()?)?;
+        (now_ms < until).then_some(until)
+    }
+
+    fn hold(&self, now_ms: i64) {
+        if let Ok(mut slot) = self.0.lock() {
+            *slot = Some(now_ms + EDGE_HOLD_MS);
+        }
+    }
+
+    fn clear(&self) {
+        if let Ok(mut slot) = self.0.lock() {
+            *slot = None;
+        }
+    }
+}
+
+static EDGE: std::sync::LazyLock<EdgeHold> = std::sync::LazyLock::new(EdgeHold::default);
+
+/// 拒绝的回应：都落在网关的可转移错误里（503 / 403），路由分组会换下一个成员。
+fn refused_answer(kind: Refusal, until_ms: i64) -> Response {
+    match kind {
+        Refusal::Edge => {
+            let until = chrono::DateTime::from_timestamp_millis(until_ms)
+                .map(|t| t.with_timezone(&chrono::Local).format("%H:%M:%S").to_string())
+                .unwrap_or_default();
+            error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &format!("ZCode Start Plan 被服务商的网络防火墙拦截（本机网络地址，与账号无关）：{until} 前不再请求；可稍后重试，或切换网络 / 代理"),
+            )
+        }
+        Refusal::Restricted => error_response(
+            StatusCode::FORBIDDEN,
+            "ZCode 风控限制了该账号（405 / code 3012「unusual activity」）：ZCode 客户端在该账号上也会失败，只能联系 ZCode 客服解除",
+        ),
+    }
+}
+
+/// 把 Start Plan 的上游回应按边缘保持规则收尾：成功清除保持；拒绝改写成可读的
+/// 可转移错误（拦截页同时开始保持）；其他失败原样交回。
+async fn settle(response: Response) -> Response {
+    if response.status().is_success() {
+        EDGE.clear();
+        return response;
+    }
+    if response.status().as_u16() < 400 {
+        return response;
+    }
+    let (parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, 256 * 1024).await.unwrap_or_default();
+    match refusal_of(parts.status, &String::from_utf8_lossy(&bytes)) {
+        Some(Refusal::Edge) => {
+            let now = chrono::Utc::now().timestamp_millis();
+            EDGE.hold(now);
+            refused_answer(Refusal::Edge, now + EDGE_HOLD_MS)
+        }
+        Some(Refusal::Restricted) => refused_answer(Refusal::Restricted, 0),
+        None => Response::from_parts(parts, axum::body::Body::from(bytes)),
+    }
 }
 
 #[cfg(test)]
@@ -388,5 +628,140 @@ mod tests {
         let response = ask_busy(send).await;
         assert_eq!(hits.load(Ordering::SeqCst), 1);
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /* ───── C1 礼包按余额过滤 ───── */
+
+    fn balance(plans: Value, balances: Value) -> Value {
+        serde_json::json!({ "server_time": 1_000_000i64, "plans": plans, "balances": balances })
+    }
+
+    #[test]
+    fn gift_models_lists_live_bucket_models_in_wire_casing() {
+        let body = balance(
+            serde_json::json!([{ "user_plan_id": "u1", "plan_id": "start", "status": "active", "starts_at": 900_000i64, "ends_at": 2_000_000i64 }]),
+            serde_json::json!([
+                { "user_plan_id": "u1", "capabilities": ["model:glm-5.3-flash"], "remaining_units": 10 },
+                { "user_plan_id": "u1", "capabilities": ["model:glm-5.2", "tool:web-search", "glm-5-turbo"], "remaining_units": 5 },
+                { "user_plan_id": "u1", "capabilities": ["model:glm-future-preview"], "remaining_units": 5 }
+            ]),
+        );
+        // 已知模型还原成 ZCode 请求里的大小写，未知模型按桶里写的原样保留；tool: 能力不算模型
+        assert_eq!(
+            gift_models_from_balance(&body),
+            Some(vec!["GLM-5.3-Flash".to_string(), "GLM-5.2".into(), "GLM-5-Turbo".into(), "glm-future-preview".into()])
+        );
+    }
+
+    #[test]
+    fn gift_models_skip_spent_expired_and_foreign_buckets() {
+        let body = balance(
+            serde_json::json!([{ "user_plan_id": "u1", "plan_id": "start", "status": "active", "ends_at": 2_000_000i64 }]),
+            serde_json::json!([
+                { "user_plan_id": "u1", "capabilities": ["model:glm-5.3"], "remaining_units": 0 },
+                { "user_plan_id": "u1", "capabilities": ["model:glm-5.2"], "used_units": 100, "total_units": 100 },
+                { "user_plan_id": "u1", "capabilities": ["model:glm-5-turbo"], "remaining_units": 5, "expires_at": 999_999i64 },
+                { "user_plan_id": "other", "capabilities": ["model:glm-5.3-flash"], "remaining_units": 5 }
+            ]),
+        );
+        // 有生效套餐但桶都用完 / 过期 / 不属于它：Some(空)，与「读不到余额」区分
+        assert_eq!(gift_models_from_balance(&body), Some(vec![]));
+    }
+
+    #[test]
+    fn gift_models_are_none_without_a_live_plan() {
+        let bucket = serde_json::json!([{ "user_plan_id": "u1", "capabilities": ["model:glm-5.2"], "remaining_units": 5 }]);
+        for plan in [
+            serde_json::json!({ "user_plan_id": "u1", "status": "expired" }),
+            serde_json::json!({ "user_plan_id": "u1", "status": "active", "ends_at": 999_999i64 }),
+            serde_json::json!({ "user_plan_id": "u1", "status": "active", "starts_at": 1_000_001i64 }),
+        ] {
+            assert_eq!(gift_models_from_balance(&balance(serde_json::json!([plan]), bucket.clone())), None);
+        }
+        assert_eq!(gift_models_from_balance(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn gift_cache_expires_after_ttl_and_is_keyed_by_session() {
+        let cache = GiftCache::default();
+        cache.put("jwt-a", Some(vec!["GLM-5.2".into()]), 1_000);
+        assert_eq!(cache.get("jwt-a", 1_000 + GIFT_TTL_MS - 1), Some(Some(vec!["GLM-5.2".to_string()])));
+        assert_eq!(cache.get("jwt-b", 1_000), None);
+        assert_eq!(cache.get("jwt-a", 1_000 + GIFT_TTL_MS), None);
+    }
+
+    #[test]
+    fn balance_url_carries_app_version_and_ua_matches_it() {
+        assert!(balance_url().ends_with(&format!("?app_version={APP_VERSION}")));
+        assert!(UA.starts_with(&format!("ZCode/{APP_VERSION} ")));
+    }
+
+    /* ───── C5 边缘防火墙保持 ───── */
+
+    #[test]
+    fn refusal_kind_tells_edge_page_from_account_restriction() {
+        let page = "<html><body>blocked, see errors.aliyun.com</body></html>";
+        assert_eq!(refusal_of(StatusCode::METHOD_NOT_ALLOWED, page), Some(Refusal::Edge));
+        // 不是拒绝（405 / 风控文案）的 HTML 错误页——例如代理的 502——不算边缘拦截
+        assert_eq!(refusal_of(StatusCode::BAD_GATEWAY, "<html>bad gateway</html>"), None);
+        let restricted = r#"{"code":3012,"msg":"request has been blocked due to unusual activity"}"#;
+        assert_eq!(refusal_of(StatusCode::METHOD_NOT_ALLOWED, restricted), Some(Refusal::Restricted));
+        assert_eq!(refusal_of(StatusCode::METHOD_NOT_ALLOWED, "{}"), Some(Refusal::Restricted));
+        assert_eq!(refusal_of(StatusCode::TOO_MANY_REQUESTS, r#"{"code":1113}"#), None);
+        assert_eq!(refusal_of(StatusCode::OK, page), None);
+    }
+
+    #[test]
+    fn edge_hold_lasts_its_window_and_clears_on_success() {
+        let hold = EdgeHold::default();
+        assert_eq!(hold.until(0), None);
+        hold.hold(1_000);
+        assert_eq!(hold.until(1_000 + EDGE_HOLD_MS - 1), Some(1_000 + EDGE_HOLD_MS));
+        assert_eq!(hold.until(1_000 + EDGE_HOLD_MS), None);
+        hold.hold(5_000);
+        hold.clear();
+        assert_eq!(hold.until(5_001), None);
+    }
+
+    #[tokio::test]
+    async fn refusal_answers_are_transferable_and_readable() {
+        // 503 / 403 都在网关的可转移错误里，路由分组会换下一个成员
+        let edge = refused_answer(Refusal::Edge, 1_000 + EDGE_HOLD_MS);
+        assert_eq!(edge.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let text = String::from_utf8(axum::body::to_bytes(edge.into_body(), 4096).await.unwrap().to_vec()).unwrap();
+        assert!(text.contains("网络防火墙"), "{text}");
+        let restricted = refused_answer(Refusal::Restricted, 0);
+        assert_eq!(restricted.status(), StatusCode::FORBIDDEN);
+        let text = String::from_utf8(axum::body::to_bytes(restricted.into_body(), 4096).await.unwrap().to_vec()).unwrap();
+        assert!(text.contains("3012"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod local {
+    /// 真机只读：用本机 ZCode 会话读一次余额，打印礼包模型（模型名不是敏感值，令牌不打印）。
+    #[tokio::test]
+    #[ignore = "需要本机 ZCode 登录与网络；仅显式只读执行"]
+    async fn local_start_plan_gift_readonly_smoke() {
+        let present = super::jwt_at().is_some();
+        println!("ZCode session jwt present: {present}");
+        let Some(jwt) = super::jwt_at() else { return };
+        println!("Start Plan gift: {:?}", super::gift_models().await);
+        // 结构摘要：套餐名 / 状态 / 起止，桶的归属与能力——都不含令牌与用户标识
+        let device = super::device_of(&jwt);
+        let body = tokio::task::spawn_blocking(move || crate::zcode_quota::plan_balance_body(&jwt, &device)).await.unwrap();
+        match body {
+            Ok(body) => {
+                let data = &body["data"];
+                println!("server_time={} plans={}", data["server_time"], data["plans"].as_array().map_or(0, Vec::len));
+                for plan in data["plans"].as_array().into_iter().flatten() {
+                    println!("  plan name={} status={} starts={} ends={}", plan["name"], plan["status"], plan["starts_at"], plan["ends_at"]);
+                }
+                for bucket in data["balances"].as_array().into_iter().flatten() {
+                    println!("  bucket show={} caps={} remaining={} expires={}", bucket["show_name"], bucket["capabilities"], bucket["remaining_units"], bucket["expires_at"]);
+                }
+            }
+            Err(error) => println!("balance error: {error}"),
+        }
     }
 }

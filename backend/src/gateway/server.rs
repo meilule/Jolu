@@ -120,25 +120,35 @@ fn authorize_and_limit(
         return Err(GateFailure::Unauthorized);
     }
     if let Some(name) = outcome.client_key.as_deref() {
-        if is_billable(method, path) {
-            let verdict = super::access::check_client_key_limit(&conn, name, chrono::Local::now())
-                .map_err(|_| GateFailure::Store("无法读取网关客户端密钥，请在 Jolu 中重试"))?;
-            if let Some(refusal) = verdict {
-                return Err(GateFailure::Limit(refusal));
-            }
+        // 每个请求都查（过期的 Key 读模型清单也要拒）；读取类请求不受只读与
+        // 当日请求数限制。模型白名单要等 wire 层读到模型名再查。
+        let verdict = super::access::check_client_key_limit_for(
+            &conn,
+            name,
+            chrono::Local::now(),
+            None,
+            is_billable(method, path),
+        )
+        .map_err(|_| GateFailure::Store("无法读取网关客户端密钥，请在 Jolu 中重试"))?;
+        if let Some(refusal) = verdict {
+            return Err(GateFailure::Limit(refusal));
         }
     }
     Ok(outcome.client_key)
 }
 
-/// 限额 429：JSON 错误体 + Retry-After（距重置的秒数），与 wire.rs 的限流响应同形状。
+/// 命名 Key 的拒绝：JSON 错误体，状态按拒绝种类（过期 401 / 只读与白名单 403 /
+/// 限额 429）；只有限额带 Retry-After（距重置的秒数），与 wire.rs 的限流响应同形状。
 fn limit_response(refusal: &super::access::RequestLimitRefusal) -> Response {
+    let status = StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::TOO_MANY_REQUESTS);
     let mut response = json_response(
-        StatusCode::TOO_MANY_REQUESTS,
+        status,
         serde_json::json!({"error": {"type": "jolu_gateway_key_limit", "message": refusal.message}}).to_string(),
     );
-    if let Ok(value) = axum::http::HeaderValue::from_str(&refusal.retry_after_seconds.to_string()) {
-        response.headers_mut().insert(axum::http::header::RETRY_AFTER, value);
+    if let Some(seconds) = refusal.retry_after() {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&seconds.to_string()) {
+            response.headers_mut().insert(axum::http::header::RETRY_AFTER, value);
+        }
     }
     response
 }

@@ -25,10 +25,21 @@ use sha2::{Digest, Sha256};
 use serde_json::Value;
 use std::path::Path;
 
-/// ZCode 账号额度端点（官方客户端同源，非公开文档 API）。
-const ZCODE_BALANCE_URL: &str = "https://zcode.z.ai/api/v1/zcode-plan/billing/balance";
+/// 冒充的 ZCode 客户端版本：额度查询与 Start Plan 着装请求（`gateway::adapter::zcode_start`）
+/// 共用这一处。余额端点按真实 `app_version` 判定能力（magpie 插件 APP_VERSION 注释，
+/// 来源 zai-org/ZCode `zaiStartPlanBilling.ts`），旧版本号可能拿到不同的礼包结论。
+/// **ZCode 升级后同步更新**，并按 `gateway::zcode_start_prompt` 模块头核对着装常量。
+pub(crate) const ZCODE_APP_VERSION: &str = "3.17.2";
+
+/// ZCode 账号额度端点（官方客户端同源，非公开文档 API），带上客户端版本。
+pub(crate) fn balance_url() -> String {
+    format!("https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version={ZCODE_APP_VERSION}")
+}
+
 /// 该端点按官方客户端识别请求；UA 之外的字段都不猜。
-const ZCODE_USER_AGENT: &str = "ZCode/3.14.3";
+fn zcode_user_agent() -> String {
+    format!("ZCode/{ZCODE_APP_VERSION}")
+}
 
 /// Coding Plan Key 的 providerId 决定它属于哪个站点：`bigmodel*` 中国站、`zai*` 国际站。
 /// 其他 providerId 哪怕写了同一个 access type 也不猜（可能被用户赋予别的含义）。
@@ -498,7 +509,7 @@ fn account_json(
     };
     let mut request = client.get(url).header(reqwest::header::AUTHORIZATION, authorization);
     if let Some(mid) = device_mid {
-        request = request.header("X-Device-Mid", mid).header(reqwest::header::USER_AGENT, ZCODE_USER_AGENT);
+        request = request.header("X-Device-Mid", mid).header(reqwest::header::USER_AGENT, zcode_user_agent());
     }
     let response = request.send().map_err(|_| QuotaState::Failed { reason: "ZCode 账号查询网络失败".into() })?;
     let status = response.status().as_u16();
@@ -687,12 +698,26 @@ fn balance_state(body: &Value, email: Option<String>) -> QuotaState {
 fn query_zcode_plan_balance(token: &str, email: Option<String>, unchanged: impl Fn() -> bool) -> QuotaState {
     let client = match crate::quota::client() { Ok(client) => client, Err(_) => return QuotaState::Failed { reason: "无法创建 ZCode 查询客户端".into() } };
     let mid = device_mid();
-    let body = match account_json(&client, ZCODE_BALANCE_URL, token, AuthScheme::Bearer, Some(&mid)) { Ok(body) => body, Err(state) => return state };
+    let body = match account_json(&client, &balance_url(), token, AuthScheme::Bearer, Some(&mid)) { Ok(body) => body, Err(state) => return state };
     // 查询期间切换账号/令牌时丢弃旧账号结果。
     if !unchanged() {
         return QuotaState::Failed { reason: "ZCode 登录在查询期间发生变化，请刷新".into() };
     }
     balance_state(&body, email)
+}
+
+/// 网关读 Start Plan 礼包用的余额原文（`gateway::adapter::zcode_start::gift_models`）。
+/// `device` 由调用方给稳定的设备号（与着装请求一致）；失败只回可展示的原因，不回显上游 msg。
+pub(crate) fn plan_balance_body(token: &str, device: &str) -> Result<Value, String> {
+    let client = crate::quota::client().map_err(|_| "无法创建 ZCode 查询客户端".to_string())?;
+    account_json(&client, &balance_url(), token, AuthScheme::Bearer, Some(device)).map_err(|state| match state {
+        QuotaState::Unauthorized { .. } => "ZCode 会话已失效，请在原工具重新登录".to_string(),
+        QuotaState::Forbidden { reason }
+        | QuotaState::RateLimited { reason }
+        | QuotaState::Failed { reason }
+        | QuotaState::Unsupported { reason } => reason,
+        QuotaState::Ok { .. } => "ZCode 余额查询失败".to_string(),
+    })
 }
 
 #[cfg(test)]

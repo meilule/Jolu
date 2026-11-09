@@ -6,9 +6,13 @@ import { useToast } from "@/components/ui/Toast"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { Button, Modal } from "./GatewayDialogs"
 import {
+  EXPIRY_CHOICES,
   KEY_ONCE_NOTICE,
   TOKENS_NOT_ENFORCED_NOTICE,
+  constraintTags,
+  expiresAtFrom,
   isExhausted,
+  parseModelList,
   lastUsedText,
   limitText,
   sharingWithoutKeys,
@@ -40,7 +44,8 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [issuing, setIssuing] = useState(false)
-  const [form, setForm] = useState({ name: "", requests: "", tokens: "" })
+  const emptyForm = { name: "", requests: "", tokens: "", expiryDays: null as number | null, models: "", readOnly: false }
+  const [form, setForm] = useState(emptyForm)
   const [issued, setIssued] = useState<IssuedClientKeyDto | null>(null)
   const [revoking, setRevoking] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
@@ -74,9 +79,13 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
     }
     setIssuing(true)
     const ok = await run(async () => {
-      const created = await gatewayApi.issueClientKey(name, parseLimit(form.requests), parseLimit(form.tokens))
+      const created = await gatewayApi.issueClientKey(name, parseLimit(form.requests), parseLimit(form.tokens), {
+        expiresMs: expiresAtFrom(form.expiryDays, Date.now()),
+        models: parseModelList(form.models),
+        readOnly: form.readOnly,
+      })
       setIssued(created)
-      setForm({ name: "", requests: "", tokens: "" })
+      setForm(emptyForm)
       await load()
       return created
     }, "已签发客户端 Key")
@@ -148,7 +157,27 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
             className="h-8 w-[118px] rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent" />
           <Button label={issuing ? "签发中…" : "签发"} primary disabled={busy || issuing || form.name.trim() === ""} onClick={() => void issue()} />
         </div>
-        <span className="text-[8.5px] text-jolu-muted">上限留空表示不限。{TOKENS_NOT_ENFORCED_NOTICE}</span>
+        {/* 待确认：有效期 / 模型白名单 / 只读三项约束在 Jolu.pen 中同样没有画板 */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <select value={form.expiryDays ?? ""} aria-label="有效期"
+            onChange={(event) => setForm({ ...form, expiryDays: event.target.value === "" ? null : Number(event.target.value) })}
+            className="h-8 w-[104px] rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent">
+            {EXPIRY_CHOICES.map((choice) => (
+              <option key={choice.label} value={choice.days ?? ""}>{choice.days === null ? choice.label : `有效 ${choice.label}`}</option>
+            ))}
+          </select>
+          <input value={form.models} onChange={(event) => setForm({ ...form, models: event.target.value })}
+            placeholder="模型白名单，逗号分隔，例如 zcode/GLM-5.2"
+            className="h-8 min-w-[180px] flex-1 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent" />
+          <label className="flex h-8 items-center gap-1.5 text-[10.5px] text-jolu-text">
+            <input type="checkbox" checked={form.readOnly} onChange={(event) => setForm({ ...form, readOnly: event.target.checked })}
+              className="size-3.5 accent-jolu-accent" />
+            只读
+          </label>
+        </div>
+        <span className="text-[8.5px] text-jolu-muted">
+          上限与白名单留空表示不限。只读 Key 只能查询（如读取模型列表），不能发起对话。{TOKENS_NOT_ENFORCED_NOTICE}
+        </span>
       </div>
 
       {/* 签发成功：Key 原文只此一次 */}
@@ -191,7 +220,16 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
             {rows.map((row) => (
               <div key={row.name}
                 className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1.2fr)_88px_96px_88px_56px] items-center gap-2 border-t border-jolu-border px-2.5 py-1.5 text-[10px]">
-                <span className="truncate text-jolu-text" title={row.name}>{row.name}</span>
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate text-jolu-text" title={row.name}>{row.name}</span>
+                  {constraintTags(row, Date.now()).length > 0 && (
+                    <span className="flex flex-wrap gap-1" title={row.models?.join("、")}>
+                      {constraintTags(row, Date.now()).map((tag) => (
+                        <span key={tag.text} className={cn("text-[8.5px]", tag.danger ? "text-jolu-danger" : "text-jolu-muted")}>{tag.text}</span>
+                      ))}
+                    </span>
+                  )}
+                </span>
                 <code className="truncate font-mono text-[9.5px] text-jolu-muted" title={row.masked}>{row.masked}</code>
                 <span className="text-jolu-text">{limitText(row.requests_per_day)}</span>
                 <span className={cn("tnum", isExhausted(row) ? "text-jolu-danger" : "text-jolu-text")} title={isExhausted(row) ? "今日额度已用满，后续请求会被拒绝" : undefined}>

@@ -360,7 +360,21 @@ fn day_window(now: chrono::DateTime<chrono::Local>) -> (i64, i64) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RequestLimitRefusal {
     pub message: String,
+    /// 拒绝的 HTTP 状态：过期 401（凭据失效）、只读 / 白名单 403（重试也没用）、
+    /// 当日请求数到量 429（只有它带 Retry-After，客户端等到重置再来）
+    pub status: u16,
     pub retry_after_seconds: i64,
+}
+
+impl RequestLimitRefusal {
+    fn denied(status: u16, message: String) -> Self {
+        Self { message, status, retry_after_seconds: 0 }
+    }
+
+    /// 只有限额拒绝才给 Retry-After：确定性的拒绝带它会让客户端反复重试。
+    pub(crate) fn retry_after(&self) -> Option<i64> {
+        (self.status == 429).then_some(self.retry_after_seconds.max(1))
+    }
 }
 
 /// 命名 Key 的当日请求限额，在请求进入任何上游适配器之前检查（对齐 magpie
@@ -385,7 +399,9 @@ pub(crate) fn check_client_key_limit(
     check_client_key_limit_for(conn, name, now, None, true)
 }
 
-/// 带请求上下文的限额检查：`model` 是请求的模型名、`is_read` 表示是否为读取类请求。
+/// 带请求上下文的限额检查：`model` 是请求的模型名（入口读 body 之前为 None，
+/// 这时跳过白名单，由 wire 层带模型名再查）；`is_write` 为 false 的读取类请求
+/// 只查过期，不受只读与当日请求数限制（读取不计费）。
 pub(crate) fn check_client_key_limit_for(
     conn: &Connection,
     name: &str,
@@ -407,38 +423,29 @@ pub(crate) fn check_client_key_limit_for(
     };
     // 1) 过期：立即失效
     if expires_ms.is_some_and(|ms| ms <= now.timestamp_millis()) {
-        return Ok(Some(RequestLimitRefusal {
-            message: format!("客户端 Key「{name}」已过期，请重新签发"),
-            retry_after_seconds: 1,
-        }));
+        return Ok(Some(RequestLimitRefusal::denied(401, format!("客户端 Key「{name}」已过期，请重新签发"))));
     }
     // 2) 只读：非 GET 一律拒
     if read_only != 0 && is_write {
-        return Ok(Some(RequestLimitRefusal {
-            message: format!("客户端 Key「{name}」是只读 Key：只允许查询类请求"),
-            retry_after_seconds: 1,
-        }));
+        return Ok(Some(RequestLimitRefusal::denied(403, format!("客户端 Key「{name}」是只读 Key：只允许查询类请求"))));
     }
     // 3) 模型白名单
-    if let Some(list) = models_json
-        .as_deref()
-        .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
-        .filter(|list| !list.is_empty())
-    {
-        let allowed = model.is_some_and(|model| list.iter().any(|m| m == model));
-        if !allowed {
-            return Ok(Some(RequestLimitRefusal {
-                message: format!(
-                    "客户端 Key「{name}」不允许使用模型「{}」；可用模型：{}",
-                    model.unwrap_or("（未指定）"),
-                    list.join("、")
-                ),
-                retry_after_seconds: 1,
-            }));
+    if let (Some(model), Some(list)) = (
+        model,
+        models_json
+            .as_deref()
+            .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
+            .filter(|list| !list.is_empty()),
+    ) {
+        if !list.iter().any(|m| m == model) {
+            return Ok(Some(RequestLimitRefusal::denied(
+                403,
+                format!("客户端 Key「{name}」不允许使用模型「{model}」；可用模型：{}", list.join("、")),
+            )));
         }
     }
-    let Some(limit) = limit else {
-        return Ok(None); // 未设请求数限额
+    let Some(limit) = limit.filter(|_| is_write) else {
+        return Ok(None); // 未设请求数限额，或读取类请求（不计费）
     };
     let (start_ms, reset_ms) = day_window(now);
     let used: i64 = conn
@@ -459,6 +466,7 @@ pub(crate) fn check_client_key_limit_for(
             "客户端 Key「{name}」今日请求数已达上限（{limit} 条），将于 {} 重置",
             reset.format("%Y-%m-%d %H:%M")
         ),
+        status: 429,
         retry_after_seconds: ((reset_ms - now.timestamp_millis()) / 1000).max(1),
     }))
 }
@@ -956,6 +964,50 @@ mod tests {
         // 三约束都没设：正常放行
         client_key_issue(&conn, "plain", None, None, None, None, false).unwrap();
         assert!(check_client_key_limit_for(&conn, "plain", now, Some("any"), true).unwrap().is_none());
+    }
+
+    #[test]
+    fn gate_check_without_model_leaves_whitelist_to_wire_stage() {
+        // 入口（server.rs）读 body 之前拿不到模型名：此时不能按白名单拒绝，
+        // 否则设了白名单的 Key 任何请求都过不去；白名单由 wire 层带模型名再查
+        let conn = migrated_conn();
+        client_key_issue(&conn, "scoped", None, None, None, Some(vec!["glm-5.3".into()]), false).unwrap();
+        let now = chrono::Local::now();
+        assert!(check_client_key_limit_for(&conn, "scoped", now, None, true).unwrap().is_none());
+        assert!(check_client_key_limit(&conn, "scoped", now).unwrap().is_none());
+    }
+
+    #[test]
+    fn refusals_carry_status_by_kind_and_only_limits_say_retry() {
+        let conn = migrated_conn();
+        let now = chrono::Local::now();
+        client_key_issue(&conn, "expired", None, None, None, None, false).unwrap();
+        conn.execute("UPDATE gateway_client_keys SET expires_ms = ?1 WHERE name = 'expired'", [now.timestamp_millis() - 1000]).unwrap();
+        client_key_issue(&conn, "reader", None, None, None, None, true).unwrap();
+        client_key_issue(&conn, "scoped", None, None, None, Some(vec!["glm-5.3".into()]), false).unwrap();
+        let expired = check_client_key_limit_for(&conn, "expired", now, None, false).unwrap().unwrap();
+        assert_eq!((expired.status, expired.retry_after()), (401, None), "过期是凭据失效，不是限流");
+        let reader = check_client_key_limit_for(&conn, "reader", now, Some("m"), true).unwrap().unwrap();
+        assert_eq!((reader.status, reader.retry_after()), (403, None));
+        let scoped = check_client_key_limit_for(&conn, "scoped", now, Some("gpt-5"), true).unwrap().unwrap();
+        assert_eq!((scoped.status, scoped.retry_after()), (403, None), "白名单外重试也没用，不能给 Retry-After");
+    }
+
+    #[test]
+    fn reads_are_checked_for_expiry_but_not_counted_against_daily_limit() {
+        let conn = migrated_conn();
+        client_key_issue(&conn, "quota", None, Some(1), None, None, false).unwrap();
+        super::super::route_log::record(&conn, super::super::route_log::NewEntry {
+            agent: None, requested_model: "a/b", source: None, upstream_model: None, status_code: Some(200),
+            result: "ok", duration_ms: None, connection_id: None, session_platform: None, session_id: None,
+            client_key: Some("quota"),
+        });
+        let now = chrono::Local::now();
+        let limited = check_client_key_limit_for(&conn, "quota", now, None, true).unwrap().unwrap();
+        assert_eq!(limited.status, 429);
+        assert!(limited.retry_after().is_some_and(|s| s >= 1), "限额拒绝要告诉客户端何时重置");
+        // 读取类请求（GET 模型清单）不计费，到量也照常放行
+        assert!(check_client_key_limit_for(&conn, "quota", now, None, false).unwrap().is_none());
     }
 
     #[test]

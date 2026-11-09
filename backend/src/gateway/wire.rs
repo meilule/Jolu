@@ -420,7 +420,11 @@ pub(crate) async fn handle(
                 true,
             ) {
                 Ok(Some(refusal)) => {
-                    return error_response_with_retry(StatusCode::TOO_MANY_REQUESTS, &refusal.message, refusal.retry_after_seconds.max(1) as u64);
+                    let status = StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::TOO_MANY_REQUESTS);
+                    return match refusal.retry_after() {
+                        Some(seconds) => error_response_with_retry(status, &refusal.message, seconds as u64),
+                        None => error_response(status, &refusal.message),
+                    };
                 }
                 Err(reason) => return error_response(StatusCode::SERVICE_UNAVAILABLE, &reason),
                 Ok(None) => {}

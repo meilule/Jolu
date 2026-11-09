@@ -292,6 +292,18 @@ async fn material_at(deps: &Arc<ProxyDeps>, id: &str, origin: &str) -> Result<St
 }
 
 pub(crate) async fn models(deps: &Arc<ProxyDeps>, id: &str) -> Result<Vec<String>, String> {
+    match coding_plan_models(deps, id).await {
+        Ok(list) => Ok(list),
+        // C1：只有免费 Start Plan 的账号列不出 Coding Plan 模型——这时用余额里现在
+        // 还能花的礼包模型（真实数据）；读不到礼包就如实报原错，不拿静态清单冒充
+        Err(error) => match super::zcode_start::gift_models().await {
+            Ok(Some(gift)) if !gift.is_empty() => Ok(gift),
+            _ => Err(error),
+        },
+    }
+}
+
+async fn coding_plan_models(deps: &Arc<ProxyDeps>, id: &str) -> Result<Vec<String>, String> {
     // 先直读本机凭据的 Coding Plan Key（新路径），失败再退回 OAuth 换取链；
     // 上游按账号家族分开：z.ai 账号去 api.z.ai，BigModel 账号去 open.bigmodel.cn。
     let mut credential = forward_credential(id).ok().map(|(key, base, _jwt)| (key, base));
@@ -318,11 +330,6 @@ pub(crate) async fn models(deps: &Arc<ProxyDeps>, id: &str) -> Result<Vec<String
     .map_err(|_| "ZCode 模型查询失败")?
 }
 
-/// Start Plan 的静态清单（免费套餐：GLM-5.3-Flash / GLM-5.2 / GLM-5-Turbo）。
-pub(crate) fn start_plan_models() -> Option<Vec<String>> {
-    super::zcode_start::jwt_at().map(|_| super::zcode_start::models())
-}
-
 /* ───────────────────── ③5 free_first 开关（magpie `FREE_FIRST` 同款） ───────────────────── */
 
 /// 设置项 `zcode_free_first` 的进程级镜像（gateway/mask.rs 的 `set_enabled` 同款）：
@@ -339,6 +346,91 @@ fn free_first() -> bool {
     FREE_FIRST.load(std::sync::atomic::Ordering::Acquire)
 }
 
+/* ───────────────────── C2 双通道按账号记忆（magpie `routes` 同款） ───────────────────── */
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Channel {
+    /// 免费 Start Plan（zcode.z.ai，会话 JWT）
+    StartPlan,
+    /// Coding Plan Key / 团队项目 Key / OAuth 换取（api.z.ai / open.bigmodel.cn）
+    CodingPlan,
+}
+
+/// 通道记忆的有效期（magpie `routes` 的 10 分钟）：过期后按开关的默认顺序重新探测，
+/// 额度恢复的通道最迟这么久就能被重新用上。
+const CHANNEL_TTL_MS: i64 = 10 * 60_000;
+
+/// 每个连接上次成功的通道。只在进程内，重启后第一次请求重新探测（代价一次往返）。
+#[derive(Default)]
+struct ChannelMemory(std::sync::Mutex<std::collections::HashMap<String, (Channel, i64)>>);
+
+impl ChannelMemory {
+    fn get(&self, id: &str, now_ms: i64) -> Option<Channel> {
+        let map = self.0.lock().ok()?;
+        map.get(id).filter(|(_, at)| now_ms - at < CHANNEL_TTL_MS).map(|(channel, _)| *channel)
+    }
+
+    fn set(&self, id: &str, channel: Channel, now_ms: i64) {
+        if let Ok(mut map) = self.0.lock() {
+            map.insert(id.to_string(), (channel, now_ms));
+        }
+    }
+}
+
+static CHANNELS: std::sync::LazyLock<ChannelMemory> = std::sync::LazyLock::new(ChannelMemory::default);
+
+/// 本次请求的通道顺序：有记忆先走记住的那条，否则按 `zcode_free_first`；
+/// 本机没有 ZCode 会话 JWT 时 Start Plan 不可用，只走 Coding Plan。
+fn channel_order(free_first: bool, remembered: Option<Channel>, start_available: bool) -> Vec<Channel> {
+    if !start_available {
+        return vec![Channel::CodingPlan];
+    }
+    let first = remembered.unwrap_or(if free_first { Channel::StartPlan } else { Channel::CodingPlan });
+    let second = if first == Channel::StartPlan { Channel::CodingPlan } else { Channel::StartPlan };
+    vec![first, second]
+}
+
+/// 这条通道失败后是否换另一条。
+/// - Coding Plan：账单级（429/1113、402）与网络级（502/504）失败才换——两条通道主机
+///   不同，一条被网络挡住时另一条可能可达；请求本身的错（400/401/404）换了也一样。
+/// - Start Plan：非 2xx 一律换。它的拒绝语义（忙碌 429、额度用尽 1113/1005、风控文案）
+///   上游随时会变，细分类容易在语义漂移时漏落回；代价只是多一次往返。
+fn falls_back(from: Channel, status: StatusCode) -> bool {
+    match from {
+        Channel::StartPlan => !status.is_success(),
+        Channel::CodingPlan => matches!(status.as_u16(), 402 | 429 | 502 | 504),
+    }
+}
+
+/// 按顺序试通道：成功就记住这条（下次直接走它，省掉必然失败的那次往返）；
+/// 失败且该换时试下一条；都失败回最后一条的回应，记忆不变。
+async fn forward_channels<F, Fut>(
+    memory: &ChannelMemory,
+    id: &str,
+    free_first: bool,
+    start_available: bool,
+    now_ms: i64,
+    mut send: F,
+) -> Response
+where
+    F: FnMut(Channel) -> Fut,
+    Fut: std::future::Future<Output = Response>,
+{
+    let order = channel_order(free_first, memory.get(id, now_ms), start_available);
+    let mut response = error_response(StatusCode::SERVICE_UNAVAILABLE, "ZCode 没有可用的通道");
+    for (index, channel) in order.iter().copied().enumerate() {
+        response = send(channel).await;
+        if response.status().is_success() {
+            memory.set(id, channel, now_ms);
+            return response;
+        }
+        if index + 1 == order.len() || !falls_back(channel, response.status()) {
+            break;
+        }
+    }
+    response
+}
+
 pub(crate) async fn forward(
     deps: Arc<ProxyDeps>,
     entry: &PoolEntry,
@@ -352,18 +444,22 @@ pub(crate) async fn forward(
             "ZCode 订阅使用 Anthropic Messages 协议",
         );
     }
-    // ③5 free_first：开启且本机有登录会话 JWT 时，先试免费的 Start Plan 通道
-    // （额度在 zcode.z.ai 自己的端点上）；JWT 缺失时直接走下面的现有顺序，不报错。
-    // 落回判定取「非 2xx 即落回」的粗口径：Start Plan 的拒绝语义（忙碌 429、额度
-    // 用尽 1113/1005、风控文案）上游随时会变，细分类容易在语义漂移时漏落回；
-    // 保守判定的代价只是多付一次已完成的请求，不会把可用的 Coding Plan 拒之门外。
-    if free_first() && super::zcode_start::jwt_at().is_some() {
-        let attempt =
-            super::zcode_start::forward(deps.clone(), entry, protocol, body.clone(), session).await;
-        if attempt.status().is_success() {
-            return attempt;
+    let start_available = super::zcode_start::jwt_at().is_some();
+    let now = chrono::Utc::now().timestamp_millis();
+    forward_channels(&CHANNELS, &entry.connection_id, free_first(), start_available, now, |channel| {
+        let (deps, body) = (deps.clone(), body.clone());
+        async move {
+            match channel {
+                Channel::StartPlan => super::zcode_start::forward(deps, entry, protocol, body, session).await,
+                Channel::CodingPlan => coding_plan_forward(deps, entry, body).await,
+            }
         }
-    }
+    })
+    .await
+}
+
+/// Coding Plan 通道的一次转发（不含换通道——那由 [`forward_channels`] 决定）。
+async fn coding_plan_forward(deps: Arc<ProxyDeps>, entry: &PoolEntry, body: Bytes) -> Response {
     // 凭据走三条链（对齐 magpie zcodeOwn）：个人 Coding Plan Key 先取；ZCode 切到
     // 团队套餐时项目 Key **覆盖**（团队额度在项目 Key 上，个人 Key 会 1113）；
     // 两条都拿不到再退回 `material_at` 的 OAuth 换取链——供应商页登录的产品功能
@@ -417,30 +513,7 @@ pub(crate) async fn forward(
     // 返回「Invalid request body: Input should be a valid dictionary」（400）。
     let mut headers = HeaderMap::new();
     headers.insert("content-type", HeaderValue::from_static("application/json"));
-    let response = super::direct::forward(
-        deps.clone(),
-        &target,
-        model.into(),
-        Method::POST,
-        "/v1/messages",
-        &headers,
-        body.clone(),
-    )
-    .await;
-    // Start Plan 兜底：Coding Plan Key 认证通过但账号没有对应资源包（429/1113、402），
-    // 而登录会话的 JWT 在——免费 Start Plan 的额度在 zcode.z.ai 自己的端点上
-    // （用会话 JWT + ZCode 同款着装请求）。有 Coding Plan 的账号不受影响。
-    // 网络级失败（502 上游不可达）与账单级失败（429/1113、402）同样换 Start Plan
-    // 通道：两条通道的主机不同（api.z.ai vs zcode.z.ai），一条被网络环境挡住时
-    // 另一条可能可达。都失败才把最后的错误交回调用方。
-    let billing_or_network = response.status() == StatusCode::TOO_MANY_REQUESTS
-        || response.status() == StatusCode::PAYMENT_REQUIRED
-        || response.status() == StatusCode::BAD_GATEWAY
-        || response.status() == StatusCode::GATEWAY_TIMEOUT;
-    if billing_or_network && super::zcode_start::jwt_at().is_some() {
-        return super::zcode_start::forward(deps, entry, protocol, body, session).await;
-    }
-    response
+    super::direct::forward(deps, &target, model.into(), Method::POST, "/v1/messages", &headers, body).await
 }
 
 #[cfg(all(test, windows))]
@@ -566,5 +639,97 @@ mod tests {
         );
         assert!(material_at(&deps, "missing", &base).await.is_err());
         server.abort();
+    }
+}
+
+#[cfg(test)]
+mod channel_tests {
+    use super::*;
+    use std::sync::Mutex;
+    use Channel::{CodingPlan, StartPlan};
+
+    #[test]
+    fn channel_order_follows_memory_then_free_first() {
+        assert_eq!(channel_order(false, None, true), vec![CodingPlan, StartPlan]);
+        assert_eq!(channel_order(true, None, true), vec![StartPlan, CodingPlan]);
+        assert_eq!(channel_order(false, Some(StartPlan), true), vec![StartPlan, CodingPlan]);
+        assert_eq!(channel_order(true, Some(CodingPlan), true), vec![CodingPlan, StartPlan]);
+        // 没有会话 JWT 时 Start Plan 不可用，记忆也不让它出现
+        assert_eq!(channel_order(true, Some(StartPlan), false), vec![CodingPlan]);
+    }
+
+    #[test]
+    fn fall_back_rules_differ_per_channel() {
+        for status in [429, 402, 502, 504] {
+            assert!(falls_back(CodingPlan, StatusCode::from_u16(status).unwrap()), "{status}");
+        }
+        for status in [400, 401, 404] {
+            assert!(!falls_back(CodingPlan, StatusCode::from_u16(status).unwrap()), "{status}");
+        }
+        // Start Plan 的拒绝语义上游常变，非 2xx 一律落回（与原 free_first 口径一致）
+        for status in [400, 403, 429, 503] {
+            assert!(falls_back(StartPlan, StatusCode::from_u16(status).unwrap()), "{status}");
+        }
+        assert!(!falls_back(StartPlan, StatusCode::OK));
+    }
+
+    #[test]
+    fn channel_memory_expires_after_ttl() {
+        let memory = ChannelMemory::default();
+        memory.set("c1", StartPlan, 1_000);
+        assert_eq!(memory.get("c1", 1_000 + CHANNEL_TTL_MS - 1), Some(StartPlan));
+        assert_eq!(memory.get("c2", 1_000), None);
+        assert_eq!(memory.get("c1", 1_000 + CHANNEL_TTL_MS), None);
+    }
+
+    fn canned(answers: Vec<(Channel, u16)>, calls: Arc<Mutex<Vec<Channel>>>) -> impl FnMut(Channel) -> std::future::Ready<Response> {
+        move |channel| {
+            calls.lock().unwrap().push(channel);
+            let status = answers.iter().find(|(c, _)| *c == channel).map(|(_, s)| *s).unwrap();
+            std::future::ready(Response::builder().status(status).body(axum::body::Body::empty()).unwrap())
+        }
+    }
+
+    #[tokio::test]
+    async fn coding_plan_without_quota_is_skipped_after_first_fall_back() {
+        let memory = ChannelMemory::default();
+        let answers = vec![(CodingPlan, 429), (StartPlan, 200)];
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let response = forward_channels(&memory, "c1", false, true, 1_000, canned(answers.clone(), calls.clone())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(*calls.lock().unwrap(), vec![CodingPlan, StartPlan]);
+        calls.lock().unwrap().clear();
+        // 第二次直接走 Start Plan，不再先发一次必然失败的 Coding Plan
+        let response = forward_channels(&memory, "c1", false, true, 2_000, canned(answers, calls.clone())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(*calls.lock().unwrap(), vec![StartPlan]);
+    }
+
+    #[tokio::test]
+    async fn exhausted_start_plan_switches_memory_back_to_coding_plan() {
+        let memory = ChannelMemory::default();
+        memory.set("c1", StartPlan, 1_000);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let response = forward_channels(&memory, "c1", false, true, 2_000,
+            canned(vec![(StartPlan, 429), (CodingPlan, 200)], calls.clone())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(*calls.lock().unwrap(), vec![StartPlan, CodingPlan]);
+        assert_eq!(memory.get("c1", 2_000), Some(CodingPlan));
+    }
+
+    #[tokio::test]
+    async fn failures_keep_memory_and_return_last_answer() {
+        let memory = ChannelMemory::default();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let response = forward_channels(&memory, "c1", false, true, 1_000,
+            canned(vec![(CodingPlan, 429), (StartPlan, 503)], calls.clone())).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(memory.get("c1", 1_000), None);
+        // 不可转移的失败（400）不换通道
+        calls.lock().unwrap().clear();
+        let response = forward_channels(&memory, "c1", false, true, 1_000,
+            canned(vec![(CodingPlan, 400), (StartPlan, 200)], calls.clone())).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(*calls.lock().unwrap(), vec![CodingPlan]);
     }
 }
