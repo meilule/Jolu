@@ -22,7 +22,7 @@
 | 原表条目 | 实际情况 |
 |---|---|
 | C1「Start Plan 礼包按余额过滤」（`startPlan()` / `giftNames`） | **两个符号都不存在**。真实机制是 `internal/gateway/zcode_trial.go::zcodeTrialRefused`：按上游返回的两种措辞识别「这个 `-trial` 模型不能用了」，只让**该模型**休息，账号其余模型继续服务 |
-| C4「每账号并发队列」（`DEFAULT_CONCURRENCY`） | 本版本搜不到，**此项作废** |
+| ~~C4「每账号并发队列」（`DEFAULT_CONCURRENCY`）~~ | **本条结论已修正（2026-11-09 晚）**：并发限制以 **Key 级 MaxConcurrency** 的形态存在（`e215d33`，1–1000，`key_slots.go` 按槽位排队），且 `0024660` 让 Key 的槽位在账号轮到近 cap 前先占。当时按 `DEFAULT_CONCURRENCY` 符号名搜不到就判「不存在」——**按符号名搜不可靠**，功能换了名字就漏 |
 | C5「边缘防火墙保持」（`edgeHeld`） | 本版本搜不到，**此项作废** |
 | G8「Docker 镜像 + Web UI 管理」 | `Dockerfile` 用 `-tags nogui` 构建，`CMD ["serve"]` —— **镜像里没有 Web UI** |
 | G7「远程网关 = 笔记本用桌面的 providers/groups」 | 实际是 `internal/gateway/allow.go::AllowIPs`（`MAGPIE_ALLOW_IPS`）+ `MAGPIE_ADDR=0.0.0.0:3425`，即「监听全网 + IP 白名单」 |
