@@ -1,7 +1,10 @@
 # magpie 对齐剩余差距 · 第三批执行计划（2026-11-09）
 
+> ⚠️ **§2 差距总表已过期**（§2.0 的核实结论除外）。唯一权威依据是 [`2026-11-09-magpie-parity-full-audit-authoritative.md`](./2026-11-09-magpie-parity-full-audit-authoritative.md)（全量盘点，2026-11-09）。
+> 本文的 §1（ZCode 登录链路验证结论）、§3（批次 D–G 执行明细）、§4（明确不做）、§5（风险表）仍然有效——这些是**已验证事实与实施记录**，不是差距判断。
+
 **交给：鼠鼠团队**
-**状态：计划稿。本轮只写文档、不改代码。**
+**状态：批次 D/E/F/G 已全部交付（见 §0）；差距表部分已被全量盘点取代。**
 **前置：** `docs/plans/2026-11-08-magpie-parity-roadmap.md`（总路线图）、本批已完成部分见 §0
 **参照物：** [yetone/magpie](https://github.com/yetone/magpie) @ `627fd1a`；[magpie-community/plugins](https://github.com/magpie-community/plugins) `packages/zcode`（本地 `/tmp/magpie-plugins`）
 
@@ -149,7 +152,47 @@ BigModel 走的是自己的登录页（不是 `chat.z.ai`），**协议不同**�
 
 ---
 
-## 2. 差距总表（截至 2026-11-09，28 条）
+## 2. 差距总表（原表 2026-11-09 上午；下方 §2.0 为当日二次核实结果）
+
+### 2.0 对照 magpie 源码（`627fd1a`，2026-11-08）的核实结论
+
+原表有几处与 magpie 当前代码不符，**以本节为准**：
+
+1. **C1「Start Plan 礼包按余额过滤」在原表的描述有误**：magpie 里没有 `startPlan()` / `giftNames`。
+   真实机制是 `internal/gateway/zcode_trial.go::zcodeTrialRefused` —— 按上游返回的**两种具体措辞**
+   （`ZCode has no active limited quota for <model>` / `limited quota ... is exhausted`）
+   识别「这个 trial 模型不能用了」，只让**该模型**休息，账号其余模型继续服务。
+   这是「按模型粒度休息」而不是「按余额过滤目录」，且只对 `-trial` 后缀生效。
+2. **C4「每账号并发队列」在本版本不存在**：`DEFAULT_CONCURRENCY` 已搜不到。
+3. **C5「边缘防火墙保持 / edgeHeld」在本版本不存在**：`edgeHeld` 已搜不到。
+4. **C3「团队席位状态校验」确认存在**：`internal/provider/zcode_team.go`，
+   `status == EFFECTIVE && memberGrantStatus == VALID` 才可用，`UNASSIGNED` 表示管理员没给席位。
+5. **C2「双通道按账号记忆」**：magpie 侧的通道选择逻辑未在原表所指位置找到，
+   现状按「未核实」处理，不作为差距依据。
+6. **G1 搜索后端确认 9 个**（`internal/provider/search_api.go::SearchVendors`）：
+   Tavily / Brave / Exa / Firecrawl / You.com / DeepSeek / Doubao(Volcengine) / Yuanbao(Tencent) / SearXNG，
+   且 `SearchAPI` 支持多 Key 轮转（`KeyList` + `SearchPickTurns` / `SearchPickOrder`）。
+7. **G2/G4/G6/G9 均存在**：`internal/imagemcp`、`internal/library`（含 `agent_skills` / `agent_mcp`）、
+   `internal/tui` + `internal/gui`（Go 编译进主程序的 GUI，不是 Web UI）、`internal/backup` + `internal/davsync`。
+8. **G8 Docker 确认**：`Dockerfile` 用 `-tags nogui` 构建，`CMD ["serve"]`，
+   `EXPOSE 3425 3430` —— 是**无 GUI 的服务端镜像**，与原表「Docker 镜像 + Web UI 管理」不符：
+   镜像里没有 Web UI。
+9. **G7 远程网关确认**：`internal/gateway/allow.go::AllowIPs`（`MAGPIE_ALLOW_IPS`）+ `MAGPIE_ADDR=0.0.0.0:3425`，
+   形态是「监听 0.0.0.0 + IP 白名单」，不是原表说的「笔记本用桌面的 providers/groups」那种主动拉取。
+10. **§3.12 五项在 magpie 侧全部有对应实现**：`internal/awake`（含 Windows/Linux/darwin 三平台）、
+    `internal/otlp`（`otel.go`）、`internal/wslrun`、`internal/update`、以及 `internal/steady` / `stall`
+    两个当前表里没列但值得注意的基础设施（见下）。
+
+**两个未列入原表、但 magpie 有而 Jolu 没有的东西**：
+
+| 包 | 用途 | 对 Jolu 的意义 |
+|---|---|---|
+| `internal/steady` | Windows 上文件被另一进程 rename 覆盖时的重试读取：rename 瞬间文件「不存在」约 2ms，`Stat`/`ReadFile` 会读成空，导致「有账号的文件读成没账号，下次写入就把它们丢了」 | 这是数据丢失级问题。Jolu 的 `connections` 走 SQLite 所以不受影响，但 `settings.rs` / `wiring_store` 都是直接读写 JSON/配置文件，**同类风险存在** |
+| `internal/stall` | 只中止「完全停止发送」的下载，不中止「还在慢慢发」的（曾因整体 wall-clock 上限把 140 KB/s 的 83MB 更新掐断） | Jolu 的 `updater.rs` 与 `models_dev` 拉取都是简单超时，慢速大文件会被误杀 |
+
+---
+
+## 2. 差距总表（原表，2026-11-09 上午；与 §2.0 冲突处以 §2.0 为准）
 
 ### 2.1 核心体验类（6 条，最高优先）
 
