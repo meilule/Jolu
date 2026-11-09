@@ -641,10 +641,15 @@ async fn forward_at(deps: Arc<ProxyDeps>, entry: &PoolEntry, protocol: CallerPro
         Ok(v) => v,
         Err(_) => return error_response(StatusCode::BAD_REQUEST, "Qoder 请求 JSON 无效"),
     };
+    // 模型名可带本来源前缀也可不带（默认来源兜底时）：只剥本来源的前缀，别家前缀原样交给上游判定
     let prefix = format!("{}/", entry.slug);
-    let Some(model) = chat["model"].as_str().and_then(|m| m.strip_prefix(&prefix)).map(str::to_owned) else {
-        return error_response(StatusCode::BAD_REQUEST, "请选择来源和模型");
+    let Some(raw_model) = chat["model"].as_str() else {
+        return error_response(StatusCode::BAD_REQUEST, "请求缺少模型");
     };
+    let model = raw_model.strip_prefix(&prefix).unwrap_or(raw_model).trim().to_owned();
+    if model.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "请选择来源和模型");
+    }
     chat["model"] = json!(model);
     let unavailable = |e: String| {
         error_response(

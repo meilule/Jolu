@@ -151,12 +151,15 @@ pub(crate) async fn forward(
         Ok(v) => v,
         Err(_) => return error_response(StatusCode::BAD_REQUEST, "请求格式无效"),
     };
-    let Some(model) = value["model"]
-        .as_str()
-        .and_then(|m| m.split_once('/').map(|(_, m)| m))
-    else {
-        return error_response(StatusCode::BAD_REQUEST, "请选择来源和模型");
+    // 模型名可带来源前缀（`slug/model`）也可不带（默认来源兜底时）：前缀只用于选路，到上游前剥掉
+    let Some(raw_model) = value["model"].as_str() else {
+        return error_response(StatusCode::BAD_REQUEST, "请求缺少模型");
     };
+    let model = raw_model.split_once('/').map_or(raw_model, |(_, m)| m).trim();
+    if model.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "请选择来源和模型");
+    }
+    let model = model.to_string();
     let mut target = entry.clone();
     target.base_url = Some(BASE.into());
     target.secret = Some(token);

@@ -401,12 +401,17 @@ async fn forward_at(
         Err(_) => return error_response(StatusCode::BAD_REQUEST, "请求格式无效"),
     };
     super::workbuddy_request::normalize(&mut value);
-    let Some(model) = value["model"]
-        .as_str()
-        .and_then(|m| m.split_once('/').map(|(_, m)| m))
-    else {
-        return error_response(StatusCode::BAD_REQUEST, "请选择来源和模型");
+    // 模型名可带来源前缀（`slug/model`）也可不带（默认来源兜底时）：前缀只用于选路，
+    // 到上游前剥掉。早期要求必须有 `/`，会把无前缀请求在转发层再拒一次。
+    let Some(raw_model) = value["model"].as_str() else {
+        return error_response(StatusCode::BAD_REQUEST, "请求缺少模型");
     };
+    let model = raw_model.split_once('/').map_or(raw_model, |(_, m)| m).trim();
+    if model.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "请选择来源和模型");
+    }
+    let model = model.to_string();
+    value["model"] = serde_json::Value::String(model.clone());
     let site = site(&edition);
     let mut headers = HeaderMap::new();
     if let Err(e) = sign(site, &session, &mut headers) {
