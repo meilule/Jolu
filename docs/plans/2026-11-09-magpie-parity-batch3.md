@@ -35,7 +35,23 @@
 
 **实机验收（2026-11-09）**：统一网关页「局域网共享」弹窗（共享开关、危险态提示、签发表单、Key 列表空态）与「接入设置 · Claude Code · Subagent 模型」下拉（首项「跟随主模型」+ 15 个 `workbuddy-16f911/*` 模型）均已渲染正常。验收中发现并修掉一处真实缺陷：弹窗副标题里的 `**下次开启接入**` 因写死在 JSX 字符串里而原样显示星号。
 
-**未纳入本轮（待鼠鼠拍板）**：批次 G 中的 §3.11 服务函数抽层 + CLI 骨架。这是把网关核心从 Tauri 命令里抽成独立服务函数的结构性重构，风险表已标「高」，一旦动起来 E/F 批次刚验证过的接线与共享 Key 都要跟着回归，建议单独立项。
+**§3.11 服务函数抽层 + CLI 骨架（本轮已交付）**：
+
+| 目标命令 | 抽到 | 抽出的内容 |
+|---|---|---|
+| `gateway_status` | `service::gateway::status` | 快照组装；新增 `status_without_db` 处理锁失败，不再让整页报错 |
+| `gateway_group_*`（5 个） | `service::gateway::groups` | 统一的 kind 校验（写错时报错带上收到的值，而不是静默当来源） |
+| `gateway_catalog` | `service::gateway::catalog` | 目录组装 + 元数据合并；`AppHandle` 依赖（刷新触发/取缓存）留在命令侧，元数据以闭包传入 |
+| `gateway_client_keys_*`（3 个） | `service::gateway::client_keys` | 参数整理与「原文只出现一次」约束 |
+| `connection_quota` | `service::gateway::quota` | `route_for`：凭据 → 查询链的决策（原先埋在 100 多行命令体里靠顺序与 `return` 表达） |
+
+`connection_quota` 未整体搬迁：它的缓存、事件、托盘副作用都依赖 `AppHandle`，整体搬要先把回调接口设计出来，风险高于收益。抽的是其中最易错也最值得测的部分——「这个连接该走哪条查询链」。
+
+**CLI 骨架**：`backend/src/bin/jolu_cli.rs`，手写参数解析（与 `gateway_mcp_bridge` / `handoff_eval` 一致，不引入 clap 以免拖慢 tauri 构建）。子命令 `status` / `catalog [--json]` / `group list` / `keys` / `quota <id>`，**全部只读**：不启动网关监听、不写配置、不发上游请求（`quota` 只报路由结论）。写操作留在桌面端——计划里「CLI 与桌面端并发写配置」的风险等级是「中」，骨架阶段不为它引入跨进程互斥。
+
+`service::paths` 负责按 `tauri.conf.json` 的 identifier 推断数据目录；环境变量通过参数注入而不是直接读进程环境（并行测试改 `set_var` 会互相干扰）。**目录或库不存在时如实报「找不到」，不会顺手建一个空库冒充「没有用量」。**
+
+**验证**：后端 1121 测试全绿（42 ignored、新增 28）、前端 429、`tsc` 通过。CLI 实机跑过五个子命令，`status` 读出 relay / 12731 / 默认源 / 5 个 agent 的接线，`catalog` 带 models.dev 上下文窗口，`quota` 正确识别 BrowserAuth。
 
 **§3.12 小项打包（本轮已交付）**：
 

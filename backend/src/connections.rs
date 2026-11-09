@@ -1379,7 +1379,7 @@ pub(crate) fn refresh_account_fp(conn: &Sql, id: &str) -> rusqlite::Result<()> {
 /// 取出连接的凭证与地址，**仅供后端查额度/余额使用**。
 /// 返回值含凭证原值，绝不可序列化给前端或写进日志。
 #[derive(Clone, PartialEq)]
-pub(crate) struct Creds {
+pub struct Creds {
     pub paused: bool,
     pub name: String,
     pub platform: String,
@@ -1389,7 +1389,7 @@ pub(crate) struct Creds {
     pub model: Option<String>,
 }
 
-pub(crate) fn creds_of(conn: &Sql, id: &str) -> rusqlite::Result<Option<Creds>> {
+pub fn creds_of(conn: &Sql, id: &str) -> rusqlite::Result<Option<Creds>> {
     conn.query_row(
         "SELECT name, platform, kind, secret, base_url, status, model FROM connections WHERE id = ?1",
         params![id],

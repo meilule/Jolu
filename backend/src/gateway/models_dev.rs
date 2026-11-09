@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use tauri::Manager;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
-pub(crate) struct ModelMeta {
+pub struct ModelMeta {
     /// 上下文窗口（tokens）；0 = 未知
     #[serde(default)]
     pub context_window: i64,
@@ -32,7 +32,7 @@ fn is_zero(v: &i64) -> bool {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
-pub(crate) struct CachedCatalog {
+pub struct CachedCatalog {
     /// 拉取时间（毫秒）
     pub fetched_ms: i64,
     /// models.dev 的模型 id（如 "claude-sonnet-5"）→ 元数据
@@ -106,7 +106,7 @@ fn now_ms() -> i64 {
 
 /// 在 models.dev 目录里找一个模型：精确 id → 末段匹配（`zai-org/GLM-5.3-Flash` 的
 /// 末段是 `GLM-5.3-Flash`）→ 忽略大小写。Jolu 侧的模型 id 大小写不保证一致。
-pub(crate) fn lookup_meta(catalog: &CachedCatalog, model: &str) -> Option<ModelMeta> {
+pub fn lookup_meta(catalog: &CachedCatalog, model: &str) -> Option<ModelMeta> {
     let wanted = model.trim();
     if let Some(meta) = catalog.models.get(wanted) {
         return Some(meta.clone());

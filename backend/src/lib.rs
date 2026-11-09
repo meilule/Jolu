@@ -80,6 +80,7 @@ mod current_connection;
 mod login_detect;
 mod usage_stats;
 mod session_threads;
+pub mod service;
 // 模块 E · 自动化
 mod automation;
 // 模块 F · Skills 管理
@@ -2176,17 +2177,8 @@ fn fx_rate(currency: String) -> Result<FxRateDto, String> {
 
 /* ------------------------- 账号汇聚网关（模块 J） ------------------------- */
 
-/// 网关总览：模式、端口、模型池与接线状态。凭证不外泄（只给掩码与 slug）。
-#[derive(serde::Serialize)]
-struct GatewayStatus {
-    mode: String,
-    enabled: bool,
-    port: u16,
-    circuit_threshold: u32,
-    auto_escape: bool,
-    default_connection: Option<String>,
-    wiring: Vec<crate::gateway::wiring::WiringStatus>,
-}
+/// 网关总览：类型定义在 service 层（CLI 也用同一份），这里只做别名。
+type GatewayStatus = service::gateway::status::GatewayStatus;
 
 /// 设置 / 清除「默认来源」。
 ///
@@ -2230,26 +2222,14 @@ fn gateway_set_default_source(app: tauri::AppHandle, connection_id: Option<Strin
 
 #[tauri::command]
 fn gateway_status(app: tauri::AppHandle) -> GatewayStatus {
+    // 薄壳：取设置与连接 → 交给 service 组装（同一套逻辑也给 CLI 用）
     let settings = app.state::<Cfg>().0.get();
-    GatewayStatus {
-        mode: settings.proxy_mode.clone(),
-        enabled: settings.proxy_enabled,
-        port: settings.proxy_port,
-        circuit_threshold: settings.gateway_circuit_threshold,
-        auto_escape: settings.gateway_auto_escape,
-        default_connection: settings.gateway_default_connection.clone(),
-        wiring: crate::gateway::wiring::AGENTS
-            .iter()
-            .map(|agent| {
-                let record = app
-                    .state::<Db>()
-                    .0
-                    .lock()
-                    .ok()
-                    .and_then(|conn| crate::gateway::wiring_store::load(&conn, agent));
-                crate::gateway::wiring::status_with(agent, settings.proxy_port, record.as_ref())
-            })
-            .collect(),
+    let db = app.state::<Db>();
+    let guard = db.0.lock();
+    match guard {
+        // 读不到锁时仍给一份可用快照（接线一律按未接线报），而不是让整个页面报错
+        Ok(conn) => service::gateway::status::status(&settings, &conn),
+        Err(_) => service::gateway::status::status_without_db(&settings),
     }
 }
 
@@ -2295,7 +2275,7 @@ fn gateway_shared_lan_set(app: tauri::AppHandle, on: bool) -> Result<settings::S
 fn gateway_client_keys_list(app: tauri::AppHandle) -> Result<Vec<crate::gateway::access::ClientKeySummary>, String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "无法读取网关状态")?;
-    crate::gateway::access::client_keys_list(&conn)
+    service::gateway::client_keys::list(&conn)
 }
 
 /// 签发一把命名客户端 Key，返回结果里带 Key 原文（只此一次，复制给客户端）。
@@ -2313,7 +2293,9 @@ fn gateway_client_key_issue(
 ) -> Result<crate::gateway::access::IssuedClientKey, String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "无法读取网关状态")?;
-    crate::gateway::access::client_key_issue(&conn, &name, tokens_per_day, requests_per_day, expires_ms, models, read_only.unwrap_or(false))
+    service::gateway::client_keys::issue(
+        &conn, &name, tokens_per_day, requests_per_day, expires_ms, models, read_only.unwrap_or(false),
+    )
 }
 
 /// 撤销命名客户端 Key（删除行，立即失效；流水里的历史归属保留）。
@@ -2321,7 +2303,7 @@ fn gateway_client_key_issue(
 fn gateway_client_key_revoke(app: tauri::AppHandle, name: String) -> Result<(), String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "无法读取网关状态")?;
-    crate::gateway::access::client_key_revoke(&conn, &name)
+    service::gateway::client_keys::revoke(&conn, &name)
 }
 
 /// 切换网关模式（observe / relay）。切到 relay 时按当前设置启动监听；
@@ -2525,7 +2507,7 @@ fn gateway_escape(app: tauri::AppHandle) -> String {
 fn gateway_groups(app: tauri::AppHandle) -> Result<crate::gateway::groups::GroupsDto, String> {
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-    crate::gateway::groups::list(&conn).map_err(|error| error.to_string())
+    service::gateway::groups::list(&conn)
 }
 
 #[tauri::command]
@@ -2536,28 +2518,28 @@ fn gateway_group_create(
 ) -> Result<crate::gateway::groups::GroupDto, String> {
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-    crate::gateway::groups::create(&conn, &kind, &name)
+    service::gateway::groups::create(&conn, &kind, &name)
 }
 
 #[tauri::command]
 fn gateway_group_rename(app: tauri::AppHandle, kind: String, id: String, name: String) -> Result<(), String> {
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-    crate::gateway::groups::rename(&conn, &kind, &id, &name)
+    service::gateway::groups::rename(&conn, &kind, &id, &name)
 }
 
 #[tauri::command]
 fn gateway_group_delete(app: tauri::AppHandle, kind: String, id: String) -> Result<(), String> {
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-    crate::gateway::groups::delete(&conn, &kind, &id)
+    service::gateway::groups::delete(&conn, &kind, &id)
 }
 
 #[tauri::command]
 fn gateway_group_reorder(app: tauri::AppHandle, kind: String, ids: Vec<String>) -> Result<(), String> {
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-    crate::gateway::groups::reorder(&conn, &kind, &ids)
+    service::gateway::groups::reorder(&conn, &kind, &ids)
 }
 
 #[tauri::command]
@@ -2569,7 +2551,7 @@ fn gateway_group_move(
 ) -> Result<(), String> {
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-    crate::gateway::groups::move_member(&conn, &kind, &member, group_id.as_deref())
+    service::gateway::groups::move_member(&conn, &kind, &member, group_id.as_deref())
 }
 
 /// 改菜单 id。旧 id 会进入历史，之后请求旧 id 会得到 404 说明现在叫什么。
@@ -2581,44 +2563,21 @@ fn gateway_set_slug(app: tauri::AppHandle, connection_id: String, slug: String) 
 }
 
 /// 模型清单：只读数据库缓存，不打上游。
+///
+/// 薄壳：models.dev 元数据的「刷新触发 + 取缓存」依赖 `AppHandle`，留在这一侧；
+/// 目录组装与合并交给 service（CLI 用同一份，只是不触发刷新）。
 #[tauri::command]
 fn gateway_catalog(app: tauri::AppHandle) -> Result<Vec<crate::gateway::catalog::CatalogModel>, String> {
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-    let mut out = crate::gateway::catalog::list(&conn).map_err(|error| error.to_string())?;
     // models.dev 元数据并入（P4.2）：只读缓存，过期时后台刷新——目录命令不阻塞 20 秒
     crate::gateway::models_dev::refresh_if_stale(&app);
     let meta_catalog = crate::gateway::models_dev::cached(&app);
-    let merge_meta = |model: &str| {
+    service::gateway::catalog::list(&conn, &|model: &str| {
         meta_catalog
             .as_ref()
             .and_then(|catalog| crate::gateway::models_dev::lookup_meta(catalog, model))
-    };
-    // 路由分组也是可选的模型 id（`group/<分组slug>`），进目录供接线与 Profile 选择
-    if let Ok(groups) = crate::gateway::routing_groups::list(&conn) {
-        for group in groups {
-            out.push(crate::gateway::catalog::CatalogModel {
-                id: format!("group/{}", group.slug),
-                source: group.name,
-                slug: "group".into(),
-                model: group.slug,
-                kind: "group".into(),
-                status: "connected".into(),
-                context_window: None,
-                max_output: None,
-                label: None,
-            });
-        }
-    }
-    // 元数据按模型 id 并入（models.dev 的 id 带厂商前缀，lookup_meta 做末段忽略大小写匹配）
-    for entry in out.iter_mut() {
-        if let Some(meta) = merge_meta(&entry.model) {
-            entry.context_window = Some(meta.context_window).filter(|v| *v > 0);
-            entry.max_output = Some(meta.max_output).filter(|v| *v > 0);
-            entry.label = Some(meta.label).filter(|l| !l.is_empty());
-        }
-    }
-    Ok(out)
+    })
 }
 
 /// Profile 列表。
