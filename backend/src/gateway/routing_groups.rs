@@ -38,6 +38,16 @@ pub(crate) struct GroupMember {
     /// 来源 slug；嵌套分组时为 `group/<组slug>`。
     pub slug: String,
     pub model: String,
+    /// 临时暂停到这个时刻（毫秒）；None = 未暂停。旧数据缺这个字段按未暂停处理。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_until_ms: Option<i64>,
+}
+
+impl GroupMember {
+    /// 是否在 `now` 处于暂停中（已到期视为恢复）。
+    pub(crate) fn is_paused(&self, now: i64) -> bool {
+        self.paused_until_ms.is_some_and(|until| until > now)
+    }
 }
 
 pub(crate) fn normalize_strategy(strategy: &str) -> &'static str {
@@ -159,15 +169,35 @@ pub(crate) fn delete(conn: &Connection, slug: &str) -> Result<(), String> {
 /// `rotate_state` 是轮转游标（按分组 slug 记忆，进程内即可，重启归零无害）；
 /// `usage_of` 返回成员已用量（来源连接维度，wire 层从流水统计）；`affinity_member`
 /// 是该会话已绑定的成员（有则提到最前——prompt cache 值得保留，对齐既有亲和语义）。
+/// `now_ms` 用于判定暂停是否到期；`exhausted_of` 表示成员的额度是否已用满
+/// （Cap hold：用满的成员降到候选末尾而不是剔除——全员用满时仍要给出候选，
+/// 让上游按真实原因报错，而不是网关说「没有可用成员」）。
 pub(crate) fn ordered_members(
     group: &RoutingGroup,
     rotate_state: &mut std::collections::HashMap<String, u64>,
     usage_of: &dyn Fn(&str) -> i64,
     resets_of: &dyn Fn(&str) -> Option<i64>,
+    exhausted_of: &dyn Fn(&str) -> bool,
+    now_ms: i64,
     affinity_member: Option<&str>,
 ) -> (Vec<GroupMember>, Option<String>) {
-    let mut members = group.members.clone();
     let mut note: Option<String> = None;
+    // 暂停过滤：到期的自动恢复（不写库，按时间判定即可）
+    let paused: Vec<String> = group
+        .members
+        .iter()
+        .filter(|m| m.is_paused(now_ms))
+        .map(|m| m.slug.clone())
+        .collect();
+    let mut members: Vec<GroupMember> = group.members.iter().filter(|m| !m.is_paused(now_ms)).cloned().collect();
+    if members.is_empty() && !group.members.is_empty() {
+        // 全员暂停：不静默给出空列表，如实说明并把成员原样返回（含暂停中的），
+        // 让上游状态决定结果——比网关凭空说「无成员」更可解释
+        note = Some(format!("分组成员全部处于暂停中（{}），已忽略暂停继续尝试", paused.join("、")));
+        members = group.members.clone();
+    } else if !paused.is_empty() {
+        note = Some(format!("已跳过暂停中的成员：{}", paused.join("、")));
+    }
     match group.strategy.as_str() {
         "rotate" => {
             let counter = rotate_state.entry(group.slug.clone()).or_insert(0);
@@ -198,6 +228,16 @@ pub(crate) fn ordered_members(
             }
         }
         _ => {}
+    }
+    // Cap hold：额度用满的成员降到末尾（stable sort 保序），不剔除
+    let exhausted_count = members.iter().filter(|m| exhausted_of(&m.slug)).count();
+    if exhausted_count > 0 {
+        members.sort_by_key(|m| exhausted_of(&m.slug));
+        let note_text = format!("{exhausted_count} 个成员额度已用满，已排到候选末尾");
+        note = Some(match note {
+            Some(existing) => format!("{existing}；{note_text}"),
+            None => note_text,
+        });
     }
     if let Some(bound) = affinity_member {
         if let Some(index) = members.iter().position(|m| m.slug == bound) {
@@ -257,11 +297,15 @@ mod tests {
     use super::*;
 
     fn member(slug: &str, model: &str) -> GroupMember {
-        GroupMember { slug: slug.into(), model: model.into() }
+        GroupMember { slug: slug.into(), model: model.into(), paused_until_ms: None }
     }
 
     fn no_resets(_: &str) -> Option<i64> {
         None
+    }
+
+    fn no_exhausted(_: &str) -> bool {
+        false
     }
 
     fn memory_db() -> Connection {
@@ -305,13 +349,13 @@ mod tests {
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;
-        let (first, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, None);
+        let (first, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None);
         assert_eq!(first[0].slug, "a");
-        let (second, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, None);
+        let (second, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None);
         assert_eq!(second[0].slug, "b");
-        let (third, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, None);
+        let (third, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None);
         assert_eq!(third[0].slug, "c");
-        let (fourth, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, None);
+        let (fourth, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None);
         assert_eq!(fourth[0].slug, "a", "转满一圈回到开头");
     }
 
@@ -327,10 +371,10 @@ mod tests {
         };
         let mut state = std::collections::HashMap::new();
         let usage = |slug: &str| if slug == "a" { 100 } else { 3 };
-        let (ordered, _) = ordered_members(&group, &mut state, &usage, &no_resets, None);
+        let (ordered, _) = ordered_members(&group, &mut state, &usage, &no_resets, &no_exhausted, 0, None);
         assert_eq!(ordered[0].slug, "b", "用量最少的排最前");
         // 会话已绑定 b：即使 a 用量更少，亲和也要把 b 提到最前（prompt cache）
-        let (ordered, _) = ordered_members(&group, &mut state, &usage, &no_resets, Some("b"));
+        let (ordered, _) = ordered_members(&group, &mut state, &usage, &no_resets, &no_exhausted, 0, Some("b"));
         assert_eq!(ordered[0].slug, "b");
     }
 
@@ -348,7 +392,7 @@ mod tests {
         let no_usage = |_: &str| 0i64;
         // a 的额度马上重置：先花 a，别浪费在等待上（magpie smart 语义）
         let resets = |slug: &str| if slug == "a" { Some(1_000) } else { Some(9_000) };
-        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &resets, None);
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &resets, &no_exhausted, 0, None);
         assert_eq!(ordered[0].slug, "a");
     }
 
@@ -366,7 +410,7 @@ mod tests {
         let no_usage = |_: &str| 0i64;
         // b 刚重置完（重置最晚）：周期余量最足，先用 b（magpie pace 的近似）
         let resets = |slug: &str| if slug == "a" { Some(1_000) } else { Some(9_000) };
-        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &resets, None);
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &resets, &no_exhausted, 0, None);
         assert_eq!(ordered[0].slug, "b");
     }
 
@@ -382,13 +426,77 @@ mod tests {
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;
-        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, None);
+        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None);
         assert_eq!(ordered.len(), 2, "降级为 order 仍给出全部成员");
         assert!(note.is_some_and(|n| n.contains("order")), "降级要在 trace 里说明");
         let pace = RoutingGroup { strategy: "pace".into(), ..group.clone() };
-        let (ordered, note) = ordered_members(&pace, &mut state, &no_usage, &no_resets, None);
+        let (ordered, note) = ordered_members(&pace, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None);
         assert_eq!(ordered.len(), 2);
         assert!(note.is_some_and(|n| n.contains("order")));
+    }
+
+    #[test]
+    fn paused_members_are_skipped_until_their_time() {
+        let mut a = member("a", "m1");
+        a.paused_until_ms = Some(5_000);
+        let group = RoutingGroup {
+            id: "g".into(),
+            slug: "daily".into(),
+            name: "日常".into(),
+            strategy: "order".into(),
+            members: vec![a, member("b", "m2")],
+            created_ms: 0,
+        };
+        let mut state = std::collections::HashMap::new();
+        let no_usage = |_: &str| 0i64;
+        // 未到期：跳过 a
+        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 1_000, None);
+        assert_eq!(ordered.len(), 1);
+        assert_eq!(ordered[0].slug, "b");
+        assert!(note.clone().is_some_and(|n| n.contains("暂停")), "{note:?}");
+        // 已到期：恢复
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 9_000, None);
+        assert_eq!(ordered.len(), 2);
+    }
+
+    #[test]
+    fn all_members_paused_falls_back_instead_of_empty() {
+        let mut a = member("a", "m1");
+        a.paused_until_ms = Some(5_000);
+        let group = RoutingGroup {
+            id: "g".into(),
+            slug: "daily".into(),
+            name: "日常".into(),
+            strategy: "order".into(),
+            members: vec![a],
+            created_ms: 0,
+        };
+        let mut state = std::collections::HashMap::new();
+        let no_usage = |_: &str| 0i64;
+        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 1_000, None);
+        assert_eq!(ordered.len(), 1, "全员暂停时不能给空列表");
+        assert!(note.clone().is_some_and(|n| n.contains("全部处于暂停")), "{note:?}");
+    }
+
+    #[test]
+    fn exhausted_members_sink_to_the_end_but_stay() {
+        let group = RoutingGroup {
+            id: "g".into(),
+            slug: "daily".into(),
+            name: "日常".into(),
+            strategy: "order".into(),
+            members: vec![member("a", "m1"), member("b", "m2")],
+            created_ms: 0,
+        };
+        let mut state = std::collections::HashMap::new();
+        let no_usage = |_: &str| 0i64;
+        // a 额度用满：降到末尾，但保留在候选里（全员用满时仍要给出候选）
+        let exhausted = |slug: &str| slug == "a";
+        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &exhausted, 0, None);
+        assert_eq!(ordered.len(), 2, "不剔除");
+        assert_eq!(ordered[0].slug, "b");
+        assert_eq!(ordered[1].slug, "a");
+        assert!(note.clone().is_some_and(|n| n.contains("额度已用满")), "{note:?}");
     }
 
     #[test]

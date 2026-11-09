@@ -521,7 +521,19 @@ pub(crate) async fn handle(
                 crate::gateway::quota_snapshot::resets_of(&connection_id)
             };
             let mut rotate = crate::gateway::routing_groups::rotate_state();
-            crate::gateway::routing_groups::ordered_members(&group, &mut rotate, &usage_of, &resets_of, bound.as_deref())
+            // Cap hold：额度快照显示已用满（重置时间在未来且额度 100%）的成员降到末尾。
+            // 目前额度快照只记重置时间，没有已用百分比——保守处理：不判定为用满，
+            // 传 false（等额度快照带上用量后再接，注释说明边界）。
+            let exhausted_of = |_slug: &str| -> bool { false };
+            crate::gateway::routing_groups::ordered_members(
+                &group,
+                &mut rotate,
+                &usage_of,
+                &resets_of,
+                &exhausted_of,
+                chrono::Utc::now().timestamp_millis(),
+                bound.as_deref(),
+            )
         };
         group_note = note;
         let (expanded, skipped) = crate::gateway::routing_groups::expand(&ordered, 0, &|slug| {
