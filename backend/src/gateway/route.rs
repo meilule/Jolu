@@ -325,7 +325,18 @@ pub(crate) fn decide<'a>(
                 );
             };
             let Some(entry) = entries.iter().find(|e| e.connection_id == id) else {
-                return RouteDecision::reject(RejectKind::ServiceUnavailable, "默认来源已不存在，请在模型入口设置中重新选择");
+                // 分两种情形给不同指引：默认来源被删了 vs 它只是被移出了模型池
+                let known: Vec<&str> = entries.iter().map(|e| e.slug.as_str()).collect();
+                let message = if known.is_empty() {
+                    "默认来源不在模型池中，且当前池里没有任何来源：请在「管理来源」里把至少一个来源设为对外服务"
+                        .to_string()
+                } else {
+                    format!(
+                        "默认来源不在模型池中：请在「管理来源」里把它重新加入；当前池中可用来源：{}",
+                        known.join("、")
+                    )
+                };
+                return RouteDecision::reject(RejectKind::ServiceUnavailable, &message);
             };
             if let Some(reject) = status_reject(entry, None) {
                 return reject;
@@ -593,7 +604,9 @@ mod tests {
         match decide(&pool, "GLM-5.3-Flash", Some("c-gone"), &no_history, &no_bare) {
             RouteDecision::Reject { kind, message, .. } => {
                 assert_eq!(kind, RejectKind::ServiceUnavailable);
-                assert!(message.contains("已不存在"), "{message}");
+                // 指引要说明去哪儿修，并列出当前池里可用的来源
+                assert!(message.contains("管理来源"), "{message}");
+                assert!(message.contains("kimi"), "要列出可用来源：{message}");
             }
             other => panic!("应报默认来源不存在，实际 {other:?}"),
         }

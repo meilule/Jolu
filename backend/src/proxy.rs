@@ -752,8 +752,10 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
     let lan_shared = mode == crate::gateway::Mode::Relay && settings.gateway_shared_lan;
     let bind_host: &'static str = if lan_shared { "0.0.0.0" } else { "127.0.0.1" };
 
-    // 长连接池：无总超时无读超时（流式响应间隙可能很长），只限制连接建立阶段
-    let client = reqwest::Client::builder()
+    // 长连接池：无总超时无读超时（流式响应间隙可能很长），只限制连接建立阶段。
+    // 构造器走 net::async_builder：必须尊重设置里的「联网方式」——裸 builder 会按
+    // reqwest 默认探测（环境变量 + 注册表），选直连也照样走系统代理。
+    let client = crate::net::async_builder()
         .connect_timeout(Duration::from_secs(15))
         .pool_idle_timeout(Duration::from_secs(90))
         .pool_max_idle_per_host(16)

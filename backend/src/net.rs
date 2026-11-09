@@ -75,6 +75,34 @@ pub fn blocking_builder() -> reqwest::blocking::ClientBuilder {
     builder_for(&current_mode())
 }
 
+/// 异步客户端构造器，代理语义与 [`blocking_builder`] 完全一致。
+///
+/// 网关的上游请求（`proxy.rs::start` 的 `deps.client`）必须用它：裸的
+/// `reqwest::Client::builder()` 会走 reqwest 自己的默认探测（环境变量 + Windows
+/// 注册表），无视应用里选定的「联网方式」——用户选了直连、注册表却残留着已退出的
+/// 代理客户端地址时，发往 api.z.ai 的请求会被送进死端口，表现为 502 上游不可达。
+pub fn async_builder() -> reqwest::ClientBuilder {
+    let builder = reqwest::Client::builder();
+    match current_mode() {
+        NetMode::System => match system_per_protocol_proxy() {
+            Some(proxy) => builder.proxy(proxy),
+            None => builder,
+        },
+        NetMode::Direct => builder.no_proxy(),
+        NetMode::Manual(url) => match reqwest::Proxy::all(url.as_str()) {
+            Ok(proxy) => builder.proxy(proxy.no_proxy(reqwest::NoProxy::from_string(LOOPBACK_NO_PROXY))),
+            Err(error) => {
+                // 与 blocking 版同一条纪律：地址异常时不能悄悄直连，指向必然失败的本机端口让请求如实报错
+                eprintln!("[网络] 手动代理地址无法使用：{error}");
+                match reqwest::Proxy::all("http://127.0.0.1:9") {
+                    Ok(proxy) => builder.proxy(proxy),
+                    Err(_) => builder,
+                }
+            }
+        },
+    }
+}
+
 fn builder_for(mode: &NetMode) -> reqwest::blocking::ClientBuilder {
     let builder = reqwest::blocking::Client::builder();
     match mode {
