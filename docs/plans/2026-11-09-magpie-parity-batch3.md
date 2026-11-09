@@ -23,8 +23,21 @@
 | `83d8972` | Start Plan 兜底扩展到网络级失败（502/504） |
 | `cbcd628` | 网关上游客户端尊重联网方式（`net::async_builder`）+ 默认来源失效报错给可操作指引 |
 | `9ef1cca` | models.dev 拉取与 MCP 桥客户端同样尊重联网方式 |
+| `3487fe7` | 批次 D-1 / E-1 / E-2 / F-1：ZCode 双家族登录（`bigmodel` vs `zai`）、Claude Code subagent 独立模型、云端开关扩到 6 项、局域网共享与命名 Key 的 UI |
+| `8d0b90c` | 批次 F-2：`system-prompt` / `word-guard` / `think-tags` 三个中间件 |
+| `fd38eac` | 批次 E-3：命名客户端 Key 的过期、模型白名单、只读三项约束 |
+| `e44baeb` | 批次 F-3：路由分组成员暂停 + Cap hold 降权（当时探针为空实现，数据源见下） |
+| `1b7ab65` | 记录 magpie 对齐剩余差距与第三批执行计划 |
+| `7644502` | 修 WorkBuddy / Grok / Qoder 三处「模型名必须带 `/`」的老 bug |
+| 本轮收尾 | Cap hold 数据源补全、共享弹窗 Markdown 字面修复、两处新 UI 实机验收 |
 
-**验证基线：** 后端 1047 测试全绿（42 ignored）、前端 417 全绿、`tsc` 通过、端到端流式 200（`workbuddy-16f911/glm-5.3` → "OK"）。
+**Cap hold 数据源（本轮补全）**：`gateway/quota_snapshot.rs` 原先只记重置时间，`wire.rs` 的 `exhausted_of` 是恒 `false` 的空实现——机制就位但永不触发。现在快照同时记录「是否有窗口用到 100%」，`is_exhausted()` 增加**重置时间过期即失效**语义，`record()` 由 `lib.rs::finish_quota_query` 传入 `exhausted_from_windows()` 的结果。判定原则：缺用量百分比或重置时间的来源一律算「不知道」，不降权；窗口到 100% 但重置时间已过算刷新，也不降权。新增 3 个单测覆盖「用满且未重置」「已过期」「缺百分比」「缺重置时间」「无快照」五种边界。
+
+**实机验收（2026-11-09）**：统一网关页「局域网共享」弹窗（共享开关、危险态提示、签发表单、Key 列表空态）与「接入设置 · Claude Code · Subagent 模型」下拉（首项「跟随主模型」+ 15 个 `workbuddy-16f911/*` 模型）均已渲染正常。验收中发现并修掉一处真实缺陷：弹窗副标题里的 `**下次开启接入**` 因写死在 JSX 字符串里而原样显示星号。
+
+**未纳入本轮（待鼠鼠拍板）**：批次 G（§3.11 服务函数抽层 + CLI 骨架、§3.12 agent 版本管理 / WSL / warm-up / OTLP / Keep awake）。§3.11 是把网关核心从 Tauri 命令里抽成独立服务函数的结构性重构，风险表已标「高」，一旦动起来 E/F 批次刚验证过的接线与共享 Key 都要跟着回归，建议单独立项。
+
+**验证基线：** 后端 1063 测试全绿（42 ignored）、前端 415 + 组件 20 全绿、`tsc` 通过、clippy 无 error、端到端流式 200（`workbuddy-16f911/glm-5.3` → "OK"；裸名 `glm-5.3` 走默认源 WorkBuddy 同样 200）。
 
 ### 关键环境事实（影响后续验收）
 

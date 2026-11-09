@@ -106,8 +106,9 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
       onClose={onClose}
       footer={<Button label="关闭" disabled={busy} onClick={onClose} />}
     >
+      {/* 待确认：Jolu.pen 未包含此弹窗，样式等鼠鼠确认后补画板。 */}
       <p className="text-[9.5px] text-jolu-muted">
-        共享（待确认）：开启后本机监听 0.0.0.0，局域网设备用下面的客户端 Key 接入；观测模式永不共享。
+        开启后本机监听 0.0.0.0，局域网设备用下面的客户端 Key 接入；观测模式永不共享。
       </p>
 
       {/* 共享开关 */}
@@ -118,7 +119,7 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
           <span className="min-w-0 flex-1">
             <span className="block text-[10.5px] font-medium text-jolu-text">启用局域网共享</span>
             <span className="block text-[8.5px] text-jolu-muted">
-              开启后鉴权切换为严格校验：只有下面的客户端 Key 能通过。绑定地址在**下次开启接入**时生效。
+              开启后鉴权切换为严格校验：只有下面的客户端 Key 能通过。绑定地址在下次开启接入时生效。
             </span>
           </span>
         </label>

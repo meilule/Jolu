@@ -1805,10 +1805,13 @@ async fn finish_quota_query(
     let outcome = (success || unauthorized).then_some(success);
     let changed = with_database(pool, move |conn| connections::record_query_result(conn, &update_id, &expected, outcome)).await?;
     if changed { let _ = app.emit("connections-changed", ()); }
-    // 额度快照（路由分组 smart / pace 的数据源）：成功查询把最早的重置时间记入注册表
+    // 额度快照（路由分组 smart / pace / cap hold 的数据源）：成功查询把最早的重置时间
+    // 与「是否已用满」记入注册表。重置时间缺省的来源两样都不写，路由层如实降权/不降权。
     if let quota::QuotaState::Ok { windows, .. } = &state {
         if let Some(resets) = crate::gateway::quota_snapshot::earliest_reset_from_windows(windows) {
-            crate::gateway::quota_snapshot::record(&id, resets);
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let exhausted = crate::gateway::quota_snapshot::exhausted_from_windows(windows, now_ms);
+            crate::gateway::quota_snapshot::record(&id, resets, exhausted);
         }
     }
     if app.state::<Cfg>().0.get().island_connection_id.as_deref() == Some(id.as_str()) {
