@@ -677,7 +677,13 @@ fn balance_state(body: &Value, email: Option<String>) -> QuotaState {
             }),
         },
         ZcodePlanBalanceOutcome::Parsed(balance) => {
-            let plan = balance.plan.or_else(|| balance.windows.is_empty().then(|| "账号未返回额度窗口".to_string()));
+            // 余额端点答了 code 0、data 是合法对象，但 balances 与 plans 都空：
+            // 这是账号自身状态（没订阅 / 套餐已用完），不是查询故障。文案要说清，
+            // 否则用户会以为是 Jolu 没适配好（实测 2026-11-10：两个 ZCode 账号的
+            // 响应都是 {"balances":[],"plans":[],"server_time":…}）。
+            let plan = balance.plan.or_else(|| {
+                balance.windows.is_empty().then(|| "账号当前没有套餐额度（未订阅或用尽）".to_string())
+            });
             QuotaState::Ok {
                 windows: balance.windows,
                 plan,

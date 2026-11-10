@@ -119,13 +119,16 @@ function ConnectGrid({ counts, loading, error, onConnect, onRetry }: {
           <JoluButton size="sm" variant="danger-soft" onClick={onRetry}>重新读取</JoluButton>
         </div>
       )}
-      <div className="grid grid-cols-4 gap-4">
-        {PROVIDERS.map((entry) => {
-          const count = loading || error ? null : counts.get(entry.id) ?? 0
-          return entry.id === "custom"
-            ? <CustomProviderCard key={entry.id} count={count} onConnect={() => onConnect(entry.id)} />
-            : <ProviderCard key={entry.id} entry={entry} count={count} onConnect={() => onConnect(entry.id)} />
-        })}
+      {/* @container + 断点：窗口窄时逐级减列，四列固定会把卡片压到读不下 */}
+      <div className="@container">
+        <div className="grid grid-cols-1 gap-4 @[620px]:grid-cols-2 @[920px]:grid-cols-3 @[1200px]:grid-cols-4">
+          {PROVIDERS.map((entry) => {
+            const count = loading || error ? null : counts.get(entry.id) ?? 0
+            return entry.id === "custom"
+              ? <CustomProviderCard key={entry.id} count={count} onConnect={() => onConnect(entry.id)} />
+              : <ProviderCard key={entry.id} entry={entry} count={count} onConnect={() => onConnect(entry.id)} />
+          })}
+        </div>
       </div>
       <p className="flex items-center gap-2.5 rounded-[10px] bg-jolu-side p-4 text-xs text-jolu-muted">
         <Info aria-hidden className="size-[17px] shrink-0" />

@@ -460,6 +460,14 @@
   .tnum {
     font-variant-numeric: tabular-nums;
   }
+  /* 按钮文字不折行：按钮高度是固定的（h-[34px] 这类），文字一旦折成两行就会被
+     挤出按钮边框。窗口变窄时 flex 会压缩按钮，表现是「会话详情底部三个按钮里
+     文字变成竖排两行」（实测 930px 宽内容区）。行内按钮该做的是不参与收缩
+     （各处按需加 shrink-0），而不是换行——换行只在对话框等宽度不受限的场合才合理，
+     那里可以用 whitespace-normal 显式覆盖。 */
+  button {
+    white-space: nowrap;
+  }
 }
 
 @layer utilities {

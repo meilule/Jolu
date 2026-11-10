@@ -89,10 +89,10 @@ export function SessionDetail({ session, connections, onDrillUsage, onContinue, 
       type="button"
       disabled={!canContinue(session.platform) || !session.has_source}
       onClick={onContinue}
-      className="inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-lg bg-jolu-accent px-3 text-xs font-medium text-[#071B10] outline-none hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-45"
+      className="inline-flex h-[34px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-jolu-accent px-3 text-xs font-medium text-[#071B10] outline-none hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-45"
     >
       在 {name} 中继续
-      <ArrowUpRight aria-hidden className="size-3.5" />
+      <ArrowUpRight aria-hidden className="size-3.5 shrink-0" />
     </button>
   )
 
@@ -170,18 +170,25 @@ export function SessionDetail({ session, connections, onDrillUsage, onContinue, 
         )}
       </div>
 
-      <div className="flex h-[34px] shrink-0 items-center gap-3">
-        <Eye aria-hidden className="size-[15px] text-jolu-muted" />
-        <span className="text-[11px] text-jolu-muted">本机会话 · 只读</span>
+      {/* 操作行：容器窄时整体折行，单行内按钮不参与收缩。
+          以前是 `flex h-[34px]` 且按钮没有 shrink-0 —— 窗口变窄时浏览器压缩按钮、
+          按钮内文字折成两行，而高度锁死 34px 就把文字挤出按钮（实测 930px 宽内容区）。
+          「在 <工具名> 中继续」的文案长度随工具名变化（ZCode 国际版 / Claude Code），
+          比其它按钮长，总是第一个被压坏。 */}
+      <div className="flex min-h-[34px] shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
+        <Eye aria-hidden className="size-[15px] shrink-0 text-jolu-muted" />
+        <span className="whitespace-nowrap text-[11px] text-jolu-muted">本机会话 · 只读</span>
         <span className="flex-1" />
-        <button type="button" onClick={onCreateAutomation} className="inline-flex h-[34px] items-center gap-1.5 rounded-lg bg-jolu-selected px-3 text-xs font-medium text-jolu-on outline-none hover:bg-jolu-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent">
-          <Bot aria-hidden className="size-4" />
-          创建自动化
-        </button>
-        <button type="button" onClick={onCompress} className="inline-flex h-[34px] items-center gap-1.5 rounded-lg bg-jolu-selected px-3 text-xs font-medium text-jolu-on outline-none hover:bg-jolu-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent"><FileDown aria-hidden className="size-4"/>压缩会话</button>
-        {canContinue(session.platform) && session.has_source
-          ? continueButton
-          : <Tip label={!canContinue(session.platform) ? `${name} 暂无可靠的继续入口` : "没有可读的源文件，无法定位会话"}><span className="flex">{continueButton}</span></Tip>}
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          <button type="button" onClick={onCreateAutomation} className="inline-flex h-[34px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-jolu-selected px-3 text-xs font-medium text-jolu-on outline-none hover:bg-jolu-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent">
+            <Bot aria-hidden className="size-4 shrink-0" />
+            创建自动化
+          </button>
+          <button type="button" onClick={onCompress} className="inline-flex h-[34px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-jolu-selected px-3 text-xs font-medium text-jolu-on outline-none hover:bg-jolu-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent"><FileDown aria-hidden className="size-4 shrink-0"/>压缩会话</button>
+          {canContinue(session.platform) && session.has_source
+            ? continueButton
+            : <Tip label={!canContinue(session.platform) ? `${name} 暂无可靠的继续入口` : "没有可读的源文件，无法定位会话"}><span className="flex shrink-0">{continueButton}</span></Tip>}
+        </div>
       </div>
     </section>
   )

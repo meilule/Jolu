@@ -3434,6 +3434,32 @@ fn persist_main_placement(app: &tauri::AppHandle, placement: main_window::Placem
     app.state::<Cfg>().0.update(|settings| settings.main_window = Some(placement));
 }
 
+/// 写盘节流：拖动与缩放会连发事件，每个都写 JSON 会让磁盘和设置锁跟着抖。
+/// 只记最近一次的时间戳，静默 800ms 后才写；退出时 `RunEvent::Exit` 会补最后一次。
+static PENDING_PLACEMENT_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// 位置/尺寸变化后延迟落盘。
+///
+/// 为什么不能只在 `CloseRequested` 写：主面板点关闭是**隐藏**（`api.prevent_close` + `hide`），
+/// 进程并不退出，那条分支之后不会再有 `CloseRequested`；用户拖过窗口就关掉再打开时，
+/// 记下的仍是上一次**应用退出**时的值——表现就是「窗口像被固定死，没有上次调整过的记忆」。
+/// 拖拽与缩放本身就要记住，所以改为「变化即安排落盘」。
+fn schedule_persist_placement(window: &tauri::Window, placement: main_window::Placement) {
+    let now = chrono::Utc::now().timestamp_millis();
+    PENDING_PLACEMENT_MS.store(now, Ordering::Release);
+    let handle = window.app_handle().clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        // 期间又有新事件：让最后一次的安排去写
+        if PENDING_PLACEMENT_MS.load(Ordering::Acquire) != now { return; }
+        // 用事件里累积的值，不在后台线程重新 capture：
+        // 后台线程与主线程的窗口状态不同步，实测会读到缩放动画中间尺寸
+        // （窗口已是 1100×700，后台读到 1357×865），把错误值写进设置。
+        // 拖动/缩放的最终值由事件序列累积保证——最后一个 Resized 即终值。
+        persist_main_placement(&handle, placement);
+    });
+}
+
 fn record_main_window_event(window: &tauri::Window, event: &WindowEvent) {
     if !MAIN_READY.load(Ordering::Acquire) { return; }
     let placement = {
@@ -3450,6 +3476,11 @@ fn record_main_window_event(window: &tauri::Window, event: &WindowEvent) {
         *placement = next.clone();
         next
     };
+    // 拖拽 / 缩放：安排一次延迟落盘（节流见 schedule_persist_placement）
+    if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_)) {
+        schedule_persist_placement(window, placement.clone());
+    }
+    // 关闭（隐藏）：立刻落盘，这是用户「用这个尺寸」的最后意图
     if matches!(event, WindowEvent::CloseRequested { .. }) {
         persist_main_placement(window.app_handle(), placement);
     }

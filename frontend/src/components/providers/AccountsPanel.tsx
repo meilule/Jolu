@@ -142,7 +142,13 @@ export function AccountsPanel({ conn, onConnect, target, onTargetHandled }: {
 
   return (
     <PrivacyContext.Provider value={hidden}>
-      <div className="flex min-h-0 flex-1 flex-col gap-3" data-account-panel>
+      {/* @container：账号卡列数据容器宽度逐级收敛，而不是按视口写死四列——
+          窗口变窄时四列会把卡片压到读不下（实测 1210px 宽窗口下第三张卡右侧被切）。
+          断点按「卡片至少要能读下名字+套餐+到期+按钮」反推：单卡约 300px 起，
+          加 12px 间距后 2 列需 620px、3 列需 920px、4 列需 1200px。
+          比签到页（560/780/1040）高：账号卡有邮箱、到期、额度、四个操作按钮，
+          内容比签到卡密。 */}
+      <div className="@container flex min-h-0 flex-1 flex-col gap-3" data-account-panel>
       <Header total={accounts.length} current={currentCount} onAdd={() => onConnect(platform ?? "claude")} hidden={hidden} onTogglePrivacy={togglePrivacy} addDisabled={selection.active || batchBusy} disabled={batchBusy} batchControl={!selection.active ? batchToolbar : undefined} />
       {selection.active && batchToolbar}
       <fieldset disabled={batchBusy} className="flex shrink-0 flex-wrap items-center gap-2">
@@ -172,7 +178,7 @@ export function AccountsPanel({ conn, onConnect, target, onTargetHandled }: {
 
       {visible.length ? (
         <div className="relative min-h-0 flex-1">
-        <div ref={gridRef} role="list" aria-label="账号列表" data-account-grid className="absolute inset-0 grid grid-cols-4 content-start gap-3 overflow-y-auto pr-1" style={{gridAutoRows:"calc((100% - 12px) / 2)",scrollbarGutter:"stable"}}>
+        <div ref={gridRef} role="list" aria-label="账号列表" data-account-grid className="absolute inset-0 grid content-start gap-3 overflow-y-auto pr-1 grid-cols-1 @[620px]:grid-cols-2 @[920px]:grid-cols-3 @[1200px]:grid-cols-4" style={{scrollbarGutter:"stable"}}>
           {visible.map((account, index) => (
             <AccountCard
               key={`${account.id}:${account.status}`}
