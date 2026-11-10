@@ -43,10 +43,13 @@ pub(crate) async fn handle(
     // Gemini CLI 的 API Key 请求不带会话标识（2026-11-06 用 0.65.0 实测），这里不猜会话。
     let started = std::time::Instant::now();
     let request_id = crate::gateway::activity::next_request_id();
-    let agent = crate::gateway::wire::agent_from_headers(headers);
+    let identity = crate::gateway::wire::agent_from_headers(headers);
+    let agent = identity.agent.clone();
     let meta = crate::gateway::activity::RouteMeta {
         session: crate::gateway::wire::session_identity(agent.as_deref(), headers, &body),
         agent,
+        identified_by: identity.identified_by,
+        unidentified_ua: identity.unidentified_ua,
         requested_model: model_id.to_string(),
         connection_id: None,
         client_key,

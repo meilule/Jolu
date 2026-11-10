@@ -123,9 +123,10 @@ export function CapsuleIsland({
   onHoverChange?: (over: boolean) => void
 }) {
   // ---------- 由 IslandData 推出展示内容 ----------
-  // 原型里只有订阅（Auth）才画额度环；API Key 不画环，显示今日 Token 与费用。
-  // API 连接也可能返回套餐窗口，但胶囊样式按原型不把它们画成环（否则会出现只有轨道的「白环」）。
-  const showQuotas = data.kind === "auth" && !data.unavailable && !data.remainingMetrics && !data.localMetrics
+  // 统一订阅条（批 6）：所有平台走同一条 quotas 渲染管道。
+  // localMetrics（本机 Token / 积分）不再排斥订阅条——ZCode 既有本机统计也有订阅额度，
+  // 两者可以同时显示（订阅条在上、本机统计在展开态的下方）。
+  const showQuotas = data.kind === "auth" && !data.unavailable
   const quotaRows = useMemo(() => quotaRowsFor(data.platform, data.quotas).slice(0, 2), [data.platform, data.quotas])
   /**
    * 参与额度环的窗口：可环化判断在 `lib/quotaRings.ts`，几何按窗口声明
@@ -459,13 +460,10 @@ export function CapsuleIsland({
     </>
   ) : data.queryFailed && showQuotas ? (
     <>{plat}<span className="cap-r text-xs font-semibold">查询失败 · 双击查看</span></>
-  ) : data.remainingMetrics ? (
-    // 有结构化额度窗口就只画芯片（窗口名 + 数值）；行式整句只留给展开卡片。
+  ) : showQuotas ? (
     <>{plat}{quotaChipList.length > 0 ? quotaChips : dashOnly}</>
   ) : data.localMetrics ? (
     <>{plat}<span className="cap-q"><i>本机今日</i><b className="cap-num">{data.localMetrics.token ?? "—"}</b></span></>
-  ) : showQuotas ? (
-    <>{plat}{quotaChipList.length > 0 ? quotaChips : dashOnly}</>
   ) : (
     <>
       {plat}
@@ -518,12 +516,6 @@ export function CapsuleIsland({
     // 按桶的日额度（ZCode 本机登录那类）：小卡与主窗口同一份组件、同一套口径，
     // 图例栏只有 ~186px，固定逐行（两列会把桶名压成省略号，见汇报里的确认点）。
     <ZcodeBucketQuota view={bucketView} plan={null} size="island" columns={1} />
-  ) : data.remainingMetrics ? (
-    data.remainingMetrics.rows.length > 0
-      ? data.remainingMetrics.rows.map((row, i) => (
-        <div key={`${row.label}:${i}`} className="cap-met"><span>{row.label}{row.reset ? ` · ${row.reset} 后重置` : ""}</span><b className="cap-num">{row.value}</b></div>
-      ))
-      : <div className="cap-met"><span>剩余额度</span><b>—</b></div>
   ) : data.localMetrics ? (
     <>
       <div className="cap-met"><span>本机今日 Token</span><b className="cap-num">{data.localMetrics.token ?? "—"}</b></div>
@@ -538,10 +530,9 @@ export function CapsuleIsland({
 
   const notes = [
     showQuotas && data.quotaMessage,
-    data.remainingMetrics?.message,
     data.localMetrics?.message,
-    !showQuotas && !data.remainingMetrics && !data.localMetrics && data.apiMessage,
-    !showQuotas && !data.remainingMetrics && !data.localMetrics && data.connectionLabel && `连接：${data.connectionLabel}`,
+    !showQuotas && !data.localMetrics && data.apiMessage,
+    !showQuotas && !data.localMetrics && data.connectionLabel && `连接：${data.connectionLabel}`,
     data.balanceText && `网关余额 ${data.balanceText}${data.balanceTimeText ? `（${data.balanceTimeText}）` : ""}`,
   ].filter(Boolean) as string[]
 
@@ -675,7 +666,7 @@ export function CapsuleIsland({
               {relayOn && <GatewaySection status={gateway!.status!} activity={gateway!.activity} agents={agents} now={now} />}
 
               <div className="cap-sec cap-foot">
-                {data.todayTokenText && showQuotas && !data.remainingMetrics && (
+                {data.todayTokenText && showQuotas && (
                   <div className="cap-row"><span className="cap-l">本地今日 Token</span><span className="cap-v cap-num">{data.todayTokenText}</span></div>
                 )}
                 {notes.map((text) => <p key={text} className="cap-note">{text}</p>)}

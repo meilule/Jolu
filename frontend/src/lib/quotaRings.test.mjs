@@ -16,17 +16,17 @@ const w = (key, used_percent, window_name = key) => ({
 const keys = (rings) => rings.map((ring) => ring.window.key)
 const shapes = (rings) => rings.map((ring) => `${ring.window.key}:${ring.geometry}`)
 
-test("几何按窗口声明：订阅窗口弧段环，日额度与积分桶刻度环", () => {
+test("几何按窗口声明：订阅窗口弧段环，日额度与积分桶弧段环", () => {
   assert.deepEqual(shapes(quotaRings("claude", [w("5h", 10), w("7d", 20)])), ["7d:arc", "5h:arc"])
   // 自建网关的日消费窗口 / 总配额是刻度环
-  assert.deepEqual(shapes(quotaRings("custom", [w("1d", 30)])), ["1d:ticks"])
-  assert.deepEqual(shapes(quotaRings("custom", [w("quota", 30)])), ["quota:ticks"])
-  assert.deepEqual(shapes(quotaRings("grok", [w("credits", 40)])), ["credits:ticks"])
+  assert.deepEqual(shapes(quotaRings("custom", [w("1d", 30)])), ["1d:arc"])
+  assert.deepEqual(shapes(quotaRings("custom", [w("quota", 30)])), ["quota:arc"])
+  assert.deepEqual(shapes(quotaRings("grok", [w("credits", 40)])), ["credits:arc"])
 })
 
-test("未声明的窗口 key 用平台缺省：ZCode 的 bucket_id 是刻度环", () => {
+test("未声明的窗口 key 用平台缺省：ZCode 的 bucket_id 也是弧段环", () => {
   // ZCode 本机登录返回的是按 bucket_id 的日额度桶，注册表里不可能逐个声明
-  assert.deepEqual(shapes(quotaRings("zcode", [w("bkt-1", 62, "GLM-5.3")])), ["bkt-1:ticks"])
+  assert.deepEqual(shapes(quotaRings("zcode", [w("bkt-1", 62, "GLM-5.3")])), ["bkt-1:arc"])
   // 平台没写进注册表时回到改动前的弧段环
   assert.deepEqual(shapes(quotaRings("custom-unknown", [w("whatever", 20)])), ["whatever:arc"])
   assert.deepEqual(shapes(quotaRings(undefined, [w("whatever", 20)])), ["whatever:arc"])
@@ -47,15 +47,15 @@ test("未知（没有已用百分比）不画环，也不画成 0%", () => {
   assert.deepEqual(shapes(quotaRings("claude", [w("5h", 0)])), ["5h:arc"])
 })
 
-test("两环共存的顺序：订阅窗口在外，日额度在后（内圈刻度环）", () => {
+test("两环共存的顺序：订阅窗口在外，日额度在后（内圈弧段环）", () => {
   assert.deepEqual(
     shapes(quotaRings("zcode", [w("bkt-1", 95, "GLM-5.3"), w("5h", 40), w("7d", 88)])),
-    ["7d:arc", "bkt-1:ticks"],
+    ["7d:arc", "bkt-1:arc"],
   )
   // 只有订阅窗口时保持改造前的内外圈：7 天在外、5 小时在内
   assert.deepEqual(shapes(quotaRings("claude", [w("5h", 40), w("7d", 88)])), ["7d:arc", "5h:arc"])
   // 5h 在、7d 不在：5h 独占外圈
-  assert.deepEqual(shapes(quotaRings("zcode", [w("5h", 40), w("bkt-1", 95)])), ["5h:arc", "bkt-1:ticks"])
+  assert.deepEqual(shapes(quotaRings("zcode", [w("5h", 40), w("bkt-1", 95)])), ["5h:arc", "bkt-1:arc"])
 })
 
 test("超过两个候选按最紧张优先取（未知排后），最多两个环", () => {

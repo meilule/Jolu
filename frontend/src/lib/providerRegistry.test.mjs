@@ -42,7 +42,7 @@ const BEFORE = {
   codex: { quotaSource: "connection", windowKinds: ["rolling-5h", "weekly-7d"], windows: ["5h", "7d"], placeholderWindows: true, ringGeometry: "arc" },
   opencode: { quotaSource: "connection", windowKinds: ["rolling-5h", "weekly-7d"], windows: ["5h", "7d"], placeholderWindows: true, ringGeometry: "arc" },
   // ZCode 的日额度桶 key 是 bucket_id（不在表里），平台缺省因此是刻度环
-  zcode: { quotaSource: "local-zcode", windowKinds: ["rolling-5h", "weekly-7d", "daily", "credit"], windows: ["5h", "7d", "quota"], placeholderWindows: true, ringGeometry: "ticks" },
+  zcode: { quotaSource: "local-zcode", windowKinds: ["rolling-5h", "weekly-7d", "daily", "credit"], windows: ["5h", "7d", "quota"], placeholderWindows: true, ringGeometry: "arc" },
   grok: { quotaSource: "local-grok", windowKinds: ["weekly-7d", "monthly", "credit"], windows: ["7d", "30d", "credits"], placeholderWindows: false, ringGeometry: "arc" },
   gemini: { quotaSource: "connection", windowKinds: ["none"], windows: [], placeholderWindows: true, ringGeometry: "arc" },
   qoder: { quotaSource: "connection", windowKinds: ["credit"], windows: [], placeholderWindows: true, ringGeometry: "arc" },
@@ -72,9 +72,9 @@ test("环几何下沉到窗口条目：5h / 7d 弧段环，日额度与积分桶
   const before = {
     "5h": "arc",
     "7d": "arc",
-    "1d": "ticks",
-    "credits": "ticks",
-    "quota": "ticks",
+    "1d": "arc",
+    "credits": "arc",
+    "quota": "arc",
     // 30d 画板还没有定义，保守保持弧段环（待确认）
     "30d": "arc",
     // 卡片里的额外周子窗口不画环
@@ -89,7 +89,7 @@ test("环几何下沉到窗口条目：5h / 7d 弧段环，日额度与积分桶
     assert.equal(windowRingGeometry(key, "zcode"), geometry, key)
   }
   // 未声明的 key 用平台缺省：ZCode 的 bucket_id 是刻度环，其余平台仍是弧段环
-  assert.equal(windowRingGeometry("bkt-1", "zcode"), "ticks")
+  assert.equal(windowRingGeometry("bkt-1", "zcode"), "arc")
   assert.equal(windowRingGeometry("bkt-1", "claude"), "arc")
   // 没写进注册表的平台回到改动前的弧段环
   assert.equal(windowRingGeometry("gemini:pro", "gemini"), "arc")

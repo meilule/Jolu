@@ -84,8 +84,8 @@ const W1D: ProviderWindow = {
   kind: "daily",
   unit: "currency",
   countsAsPlan: false,
-  // 日额度 = 刻度环（A3-13 / A3-14）
-  ringGeometry: "ticks",
+  // 日额度：统一弧段环（批 6 用户要求，不再用刻度环）
+  ringGeometry: "arc",
   shortLabel: null,
   chipLabel: null,
   placeholderName: null,
@@ -115,8 +115,8 @@ const WCREDITS: ProviderWindow = {
   kind: "credit",
   unit: "credit",
   countsAsPlan: false,
-  // 积分桶和日额度同族：刻度环
-  ringGeometry: "ticks",
+  // 积分桶：统一弧段环（批 6 用户要求，不再用刻度环）
+  ringGeometry: "arc",
   shortLabel: null,
   chipLabel: null,
   placeholderName: null,
@@ -129,7 +129,7 @@ const WQUOTA: ProviderWindow = {
   kind: "credit",
   unit: "percent",
   countsAsPlan: false,
-  ringGeometry: "ticks",
+  ringGeometry: "arc",
   shortLabel: null,
   chipLabel: null,
   placeholderName: null,
@@ -201,9 +201,9 @@ export const PROVIDERS: Readonly<Partial<Record<PlatformId, ProviderDescriptor>>
     // 灵动岛走本机 ZCode 登录（local-zcode）；API Key 连接走 BigModel 编码套餐（5h + 周）
     quotaSource: "local-zcode",
     windowKinds: ["rolling-5h", "weekly-7d", "daily", "credit"],
-    // 平台缺省给未声明的 key：本机登录返回的是按 bucket_id 的日额度桶（不在这里声明），
-    // 它们按刻度环画；5h / 7d 在窗口条目里各自声明成弧段环，不受这条影响
-    ringGeometry: "ticks",
+    // 平台缺省给未声明的 key：本机登录返回的是按 bucket_id 的日额度桶（不在这里声明）。
+    // 统一弧段环（批 6 用户要求：刻度条太丑），不再按桶用刻度环
+    ringGeometry: "arc",
     // 账号额度是按 bucket 返回的日额度，key 是 bucket_id，不在这里声明（回落后端窗口名）
     windows: [W5H, W7D, WQUOTA],
     placeholderWindows: true,

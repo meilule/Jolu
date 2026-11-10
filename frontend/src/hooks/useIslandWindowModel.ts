@@ -7,13 +7,12 @@ import { useConnectionKind, useLiveUsage } from "@/hooks/useLiveUsage"
 import { useConnections } from "@/hooks/useConnections"
 import { shouldRefreshConnection } from "@/lib/refreshScope"
 import { useApiUsage, useBalance, useCostEstimate, useQuota } from "@/hooks/useQuota"
-import { formatQuotaCountdown, toQuotaWindows } from "@/lib/quotaMap"
+import { toQuotaWindows } from "@/lib/quotaMap"
 import { api, isTauri, listenEvent } from "@/lib/api"
 import { islandIdFromSearch, islandProfile } from "@/lib/islandProfile"
 import { authQuotaRows } from "@/lib/authQuotaRows"
 import type { IslandMode, PlatformId } from "@/types"
-import { platformConfig, isFetchOnlyPlatform, platformSupports } from "@/lib/platforms"
-import { remainingDisplay } from "@/lib/remainingDisplay"
+import { platformConfig, isFetchOnlyPlatform } from "@/lib/platforms"
 import { useSourceMetrics } from "@/hooks/useSourceMetrics"
 import { useCollectionStatus } from "@/hooks/useCollectionStatus"
 import { balanceSnapshotTime, connectionQueries, islandActiveConnection, islandAttribution, islandConnectionStatus, islandCost } from "@/lib/islandPresentation"
@@ -94,12 +93,8 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
   const nativeMonitor = isFetchOnlyPlatform(islandPlatform as PlatformId) && islandPlatform !== "grok"
   // 本机积分只有原生来源平台在卡片里展示；其他平台不查
   const sourceMetrics = useSourceMetrics(islandPlatform, "today", null, null, quotaNow, nativeMonitor && cardsVisible)
-  const remainingPlatform = isFetchOnlyPlatform(islandPlatform as PlatformId)
   const remainingQuota = islandPlatform === "grok" && islandKind === "auth" ? grokLocalQuota
     : islandPlatform === "zcode" && islandKind === "auth" ? zcodeLocalQuota : null
-  const remaining = remainingPlatform
-    ? remainingDisplay(islandPlatform as PlatformId, islandKind, remainingQuota?.state ?? null)
-    : null
   const refreshing = useRef(false)
   const selectionRefreshKey = useRef<string | null>(null)
   const refreshGeneration = useRef(0)
@@ -242,18 +237,11 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
         platform: islandPlatform as PlatformId,
         platformName: platformConfig(islandPlatform as PlatformId).name,
         localMetrics: nativeMonitor ? { token: live.todayTokenText, credits: sourceMetrics.data?.credits?.toLocaleString("zh-CN", { maximumFractionDigits: 4 }) ?? null, message: "本机留存记录；上报积分不等于余额。" } : undefined,
-        remainingMetrics: remaining ? {
-          rows: remaining.rows.map((row) => ({ label: row.label, value: row.value, reset: formatQuotaCountdown(row.resetsAt, quotaNow) })),
-          message: remainingQuota?.stale ? "额度可能已过期，请刷新" : remaining.reason,
-          source: remaining.source,
-          updated: remainingQuota?.fetchedAt?.toLocaleTimeString("zh-CN", { hour12: false }) ?? null,
-          localToken: nativeMonitor ? live.todayTokenText : null,
-          localCredits: nativeMonitor && platformSupports(islandPlatform as PlatformId, "credits")
-            ? sourceMetrics.data?.credits?.toLocaleString("zh-CN", { maximumFractionDigits: 4 }) ?? null
-            : null,
-        } : undefined,
         kind: islandKind,
         // Auth 保持额度布局；未知值不回退成 API 用量。
+        // 统一订阅条（批 6）：所有平台走同一条 quotas 渲染管道——
+        // fetch-only 平台（Grok / ZCode / WorkBuddy 等）的后端同样返回 QuotaWindow[]，
+        // 此前用 remainingMetrics 文本行渲染导致同一个岛上有两套订阅样式。
         quotas: islandKind === "auth" && islandPlatform === "codex" && quotaWindows
           ? authQuotaRows(quotaWindows, "账号额度接口未返回该窗口")
           : quotaWindows ?? undefined,

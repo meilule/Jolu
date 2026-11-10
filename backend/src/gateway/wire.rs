@@ -231,7 +231,85 @@ pub(crate) fn session_identity(agent: Option<&str>, headers: &HeaderMap, body: &
 }
 
 /// 从调用方令牌 / 客户端头识别是哪个 agent（只用于路由流水，不做鉴权）。
-pub(crate) fn agent_from_headers(headers: &HeaderMap) -> Option<String> {
+/// Codex 伪装成 Claude Code 的纠正（magpie `codexForClaudeCode` 同款）。
+///
+/// 为什么需要：OpenAI 的 `/codex:review` 插件在 Claude Code 里跑 `codex app-server`，
+/// 它的 originator 和 UA 都写成 "Claude Code/0.162.1 ..."——按 originator 或 UA
+/// 判断会把 Codex 的请求记成 Claude Code，用量归错 agent（现场记录 wyztony on X：
+/// Codex 的调用量从来没记上）。
+///
+/// 判定信号：Codex 每轮都带 `x-codex-window-id` 或 `x-codex-turn-metadata`，
+/// 而 Claude Code 自己的请求（`claude-cli/…`）从不带这两个头。两者同时成立
+/// 才判定为 Codex——单靠 UA 写 "Claude Code" 不够，防止未来 Claude Code
+/// 也发类似头时误判。
+///
+/// 参照 magpie `internal/gateway/gateway.go::codexForClaudeCode`（commit `8016124`）。
+fn codex_masquerading_as_claude(headers: &HeaderMap) -> bool {
+    let has_codex_marker = headers.contains_key("x-codex-window-id")
+        || headers.contains_key("x-codex-turn-metadata");
+    if !has_codex_marker {
+        return false;
+    }
+    ["user-agent", "originator"].iter().any(|name| {
+        headers
+            .get(*name)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim().to_ascii_lowercase().starts_with("claude code"))
+            .unwrap_or(false)
+    })
+}
+
+/// VS Code 的 Agents 窗口用 `vscode_agent_host` 名字跑 Codex（Codex 自己的
+/// `codexAgent.ts` clientInfo），UA 和 originator 都写这个名字。
+/// 不认的话 Codex 自己的模型在那里被问 → 404 而不是走 Codex 的登录。
+///
+/// 参照 magpie `internal/gateway/gateway.go::hostedCodex`。
+fn hosted_codex(headers: &HeaderMap) -> bool {
+    ["user-agent", "originator"].iter().any(|name| {
+        headers
+            .get(*name)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim().to_ascii_lowercase().starts_with("vscode_agent_host"))
+            .unwrap_or(false)
+    })
+}
+
+/// agent 识别结果：agent id + 识别依据 + 识别不出时的 UA 首段。
+///
+/// 识别依据让「显示不对」可以定位是识别规则的问题还是工具本身的问题——
+/// `token`（接线 token 带 agent 名）/ `originator` / `ua` / `codex_marker`。
+/// `unidentified_ua` 对齐 magpie `AgentOf` 最后一行 `return name`：
+/// 识别不出时不返回 None 了事，而是把 UA 首段给出来（截 64 字符），
+/// 用户报问题时能直接看出是哪个工具漏了。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AgentIdentity {
+    pub agent: Option<String>,
+    pub identified_by: Option<&'static str>,
+    pub unidentified_ua: Option<String>,
+}
+
+impl AgentIdentity {
+    fn identified(agent: &str, by: &'static str) -> Self {
+        Self { agent: Some(agent.into()), identified_by: Some(by), unidentified_ua: None }
+    }
+    fn unknown(ua: &str) -> Self {
+        // UA 首段（到 / 或空格），截 64 字符——足够看出是哪个工具，不存完整 UA
+        let first = ua.split(['/', ' ']).next().unwrap_or(ua);
+        let truncated: String = first.chars().take(64).collect();
+        Self { agent: None, identified_by: None, unidentified_ua: (!truncated.is_empty()).then_some(truncated) }
+    }
+}
+
+/// 从调用方令牌 / 客户端头识别是哪个 agent（只用于路由流水与灵动岛，不做鉴权）。
+pub(crate) fn agent_from_headers(headers: &HeaderMap) -> AgentIdentity {
+    // 反伪装先于一切：token / originator / UA 都可能被 Codex 插件写成 "Claude Code"，
+    // 但 Codex 特有的头藏不住——先纠正再走正常分支
+    if codex_masquerading_as_claude(headers) {
+        return AgentIdentity::identified("codex", "codex_marker");
+    }
+    if hosted_codex(headers) {
+        return AgentIdentity::identified("codex", "vscode_agent_host");
+    }
     let token = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -242,39 +320,40 @@ pub(crate) fn agent_from_headers(headers: &HeaderMap) -> Option<String> {
         .and_then(|rest| rest.split('.').next())
         .filter(|agent| crate::gateway::wiring::AGENTS.contains(agent))
     {
-        return Some(agent.to_string());
+        return AgentIdentity::identified(agent, "token");
     }
     if let Some(originator) = headers.get("originator").and_then(|v| v.to_str().ok()) {
         let originator = originator.to_ascii_lowercase();
         if originator.contains("codex") {
-            return Some("codex".into());
+            return AgentIdentity::identified("codex", "originator");
         }
         if originator.contains("claude") {
-            return Some("claude-code".into());
+            return AgentIdentity::identified("claude-code", "originator");
         }
         if originator.contains("gemini") {
-            return Some("gemini".into());
+            return AgentIdentity::identified("gemini", "originator");
         }
     }
     let ua = headers.get("user-agent").and_then(|v| v.to_str().ok()).unwrap_or_default();
     // Gemini CLI 旧版 UA 以 GeminiCLI 开头；0.65 起改为 CloudCodeVSCode/…（…proxy_client=geminicli）
     if ua.starts_with("GeminiCLI") || ua.to_ascii_lowercase().contains("proxy_client=geminicli") {
-        return Some("gemini".into());
+        return AgentIdentity::identified("gemini", "ua");
     }
     if ua.starts_with("codex_cli_rs") {
-        return Some("codex".into());
+        return AgentIdentity::identified("codex", "ua");
     }
     if ua.starts_with("claude-cli/") {
-        return Some("claude-code".into());
+        return AgentIdentity::identified("claude-code", "ua");
     }
     // OpenCode 每个模型请求都带 x-opencode-client / x-opencode-session-id
     if ua.to_ascii_lowercase().starts_with("opencode/")
         || headers.contains_key("x-opencode-client")
         || headers.contains_key("x-opencode-session-id")
     {
-        return Some("opencode".into());
+        return AgentIdentity::identified("opencode", "ua");
     }
-    None
+    // 识别不出：给 UA 首段，让用户报问题时能直接看出是哪个工具漏了
+    AgentIdentity::unknown(ua)
 }
 
 /// 写一条路由流水并发结束事件。事件先于写库发出：数据库忙、这一条没写进库时界面仍能收到。
@@ -297,6 +376,9 @@ pub(crate) fn record_route(
             request_id,
             ts: chrono::Local::now().timestamp_millis(),
             agent: meta.agent.as_deref(),
+            identified_by: meta.identified_by,
+            unidentified_ua: meta.unidentified_ua.as_deref(),
+            client_key: meta.client_key.as_deref(),
             requested_model: &meta.requested_model,
             source,
             upstream_model: upstream,
@@ -341,6 +423,9 @@ pub(crate) fn begin_route(
             request_id,
             ts: chrono::Local::now().timestamp_millis(),
             agent: meta.agent.as_deref(),
+            identified_by: meta.identified_by,
+            unidentified_ua: meta.unidentified_ua.as_deref(),
+            client_key: meta.client_key.as_deref(),
             requested_model: &meta.requested_model,
             source: &entry.slug,
             connection_id: meta.connection_id.as_deref(),
@@ -374,7 +459,8 @@ pub(crate) async fn handle(
 ) -> Response {
     let started = std::time::Instant::now();
     let request_id = crate::gateway::activity::next_request_id();
-    let agent = agent_from_headers(&headers);
+    let identity = agent_from_headers(&headers);
+    let agent = identity.agent.clone();
     // 中间件链（P6.1）：model-map / param-override 在选路之前执行，失败隔离——
     // 单个中间件出错只跳过自己；映射后的 id 是路由、流水与用量记账的 id。
     let middleware_list = deps
@@ -443,6 +529,8 @@ pub(crate) async fn handle(
     let meta = RouteMeta {
         session: session_identity(agent.as_deref(), &headers, &body),
         agent: agent.clone(),
+        identified_by: identity.identified_by,
+        unidentified_ua: identity.unidentified_ua.clone(),
         requested_model: model.clone(),
         connection_id: None,
         client_key,
@@ -923,23 +1011,74 @@ mod tests {
     fn agent_from_headers_reads_token_originator_and_user_agent() {
         let mut headers = HeaderMap::new();
         headers.insert("x-api-key", "jolu-claude-code.abcd1234".parse().unwrap());
-        assert_eq!(agent_from_headers(&headers).as_deref(), Some("claude-code"));
+        assert_eq!(agent_from_headers(&headers).agent.as_deref(), Some("claude-code"));
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer jolu-codex.abcd1234".parse().unwrap());
-        assert_eq!(agent_from_headers(&headers).as_deref(), Some("codex"));
+        assert_eq!(agent_from_headers(&headers).agent.as_deref(), Some("codex"));
         let mut headers = HeaderMap::new();
         headers.insert("originator", "codex_cli_rs".parse().unwrap());
-        assert_eq!(agent_from_headers(&headers).as_deref(), Some("codex"));
+        assert_eq!(agent_from_headers(&headers).agent.as_deref(), Some("codex"));
         let mut headers = HeaderMap::new();
         headers.insert("user-agent", "GeminiCLI/0.34.0/... (win32; x64)".parse().unwrap());
-        assert_eq!(agent_from_headers(&headers).as_deref(), Some("gemini"));
+        assert_eq!(agent_from_headers(&headers).agent.as_deref(), Some("gemini"));
         let mut headers = HeaderMap::new();
         headers.insert("user-agent", "CloudCodeVSCode/0.65.0 (aidev_client; os_type=Windows; proxy_client=geminicli)".parse().unwrap());
-        assert_eq!(agent_from_headers(&headers).as_deref(), Some("gemini"));
+        assert_eq!(agent_from_headers(&headers).agent.as_deref(), Some("gemini"));
         let mut headers = HeaderMap::new();
         headers.insert("user-agent", "claude-cli/2.1.0 (external, cli)".parse().unwrap());
-        assert_eq!(agent_from_headers(&headers).as_deref(), Some("claude-code"));
-        assert_eq!(agent_from_headers(&HeaderMap::new()), None);
+        assert_eq!(agent_from_headers(&headers).agent.as_deref(), Some("claude-code"));
+        assert_eq!(agent_from_headers(&HeaderMap::new()).agent, None);
+    }
+
+    #[test]
+    fn codex_masquerading_as_claude_code_is_corrected() {
+        // OpenAI /codex:review 插件在 Claude Code 里跑 codex app-server：
+        // originator 和 UA 都写 "Claude Code/..."，但 Codex 每轮都带这两个头
+        // （现场记录 wyztony on X：Codex 的调用量从来没记上）
+        let mut headers = HeaderMap::new();
+        headers.insert("originator", "Claude Code/0.162.1".parse().unwrap());
+        headers.insert("user-agent", "Claude Code/0.162.1 (external, cli)".parse().unwrap());
+        headers.insert("x-codex-window-id", "win-1".parse().unwrap());
+        assert_eq!(agent_from_headers(&headers).agent.as_deref(), Some("codex"), "有 Codex 特有头 + UA 写 Claude Code → 是 Codex");
+        // turn-metadata 也能单独触发
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", "Claude Code/0.162.1".parse().unwrap());
+        headers.insert("x-codex-turn-metadata", "{}".parse().unwrap());
+        assert_eq!(agent_from_headers(&headers).agent.as_deref(), Some("codex"));
+        // 没有 Codex 特有头：还是 Claude Code（不误判）
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", "claude-cli/2.1.114 (external, cli)".parse().unwrap());
+        assert_eq!(agent_from_headers(&headers).agent.as_deref(), Some("claude-code"));
+    }
+
+    #[test]
+    fn vscode_agent_host_resolves_to_codex() {
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", "vscode_agent_host/1.2.3".parse().unwrap());
+        assert_eq!(agent_from_headers(&headers).agent.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn identified_by_carries_the_matching_rule() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key", "jolu-claude-code.abcd".parse().unwrap());
+        let identity = agent_from_headers(&headers);
+        assert_eq!(identity.identified_by, Some("token"), "token 识别的标注 token");
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", "codex_cli_rs/0.1".parse().unwrap());
+        assert_eq!(agent_from_headers(&headers).identified_by, Some("ua"));
+    }
+
+    #[test]
+    fn unidentified_ua_carries_first_segment_for_diagnostics() {
+        // 识别不出：给 UA 首段（到 / 或空格），让用户报问题时直接看出是哪个工具
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", "some-new-tool/1.0 (darwin; arm64)".parse().unwrap());
+        let identity = agent_from_headers(&headers);
+        assert_eq!(identity.agent, None);
+        assert_eq!(identity.unidentified_ua.as_deref(), Some("some-new-tool"), "取 UA 首段");
+        // 空 UA：不填
+        assert_eq!(agent_from_headers(&HeaderMap::new()).unidentified_ua, None);
     }
 
     #[test]
@@ -979,7 +1118,7 @@ mod tests {
         assert!(session_identity(Some("opencode"), &headers, b"{}").is_none());
         let mut headers = HeaderMap::new();
         headers.insert("x-opencode-client", "cli".parse().unwrap());
-        assert_eq!(agent_from_headers(&headers).as_deref(), Some("opencode"));
+        assert_eq!(agent_from_headers(&headers).agent.as_deref(), Some("opencode"));
 
         // 识别不出 Agent，或别的 Agent 只有通用头：不猜
         let mut headers = HeaderMap::new();

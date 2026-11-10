@@ -39,6 +39,10 @@ pub(crate) struct SessionRef {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RouteMeta {
     pub agent: Option<String>,
+    /// agent 识别依据（批 6）：token / originator / ua / codex_marker / vscode_agent_host
+    pub identified_by: Option<&'static str>,
+    /// 识别不出时的 UA 首段（截 64 字符），诊断用
+    pub unidentified_ua: Option<String>,
     pub requested_model: String,
     /// 选中的连接 id；被拒时为 None
     pub connection_id: Option<String>,
@@ -64,6 +68,14 @@ pub(crate) struct RouteStart<'a> {
     pub request_id: u64,
     pub ts: i64,
     pub agent: Option<&'a str>,
+    /// agent 识别依据：`token` / `ua` / `originator` / `codex_marker` / `client_key`。
+    /// None = 识别不出——让「显示不对」可以定位是识别规则的问题还是工具本身的问题。
+    pub identified_by: Option<&'a str>,
+    /// 识别不出时的 UA 首段（截 64 字符）。
+    /// 对齐 magpie `AgentOf` 最后一行 `return name`（不返回 "other"，返回 UA 第一段）。
+    pub unidentified_ua: Option<&'a str>,
+    /// 局域网共享的客户端 Key 名（agent 为 None 时界面显示「远程设备 · <Key名>」）
+    pub client_key: Option<&'a str>,
     pub requested_model: &'a str,
     pub source: &'a str,
     pub connection_id: Option<&'a str>,
@@ -76,6 +88,11 @@ pub(crate) struct RouteEnd<'a> {
     pub request_id: u64,
     pub ts: i64,
     pub agent: Option<&'a str>,
+    /// 同 [`RouteStart::identified_by`]
+    pub identified_by: Option<&'a str>,
+    pub unidentified_ua: Option<&'a str>,
+    /// 局域网共享的客户端 Key 名
+    pub client_key: Option<&'a str>,
     pub requested_model: &'a str,
     pub source: Option<&'a str>,
     pub upstream_model: Option<&'a str>,
@@ -94,6 +111,9 @@ pub struct LiveRequest {
     pub request_id: u64,
     pub ts: i64,
     pub agent: Option<String>,
+    pub identified_by: Option<String>,
+    pub unidentified_ua: Option<String>,
+    pub client_key: Option<String>,
     pub requested_model: String,
     pub source: String,
     pub connection_id: Option<String>,
@@ -135,6 +155,9 @@ pub(crate) fn emit_start(emit: &Emit, event: &RouteStart<'_>) {
                 request_id: event.request_id,
                 ts: event.ts,
                 agent: event.agent.map(str::to_string),
+                identified_by: event.identified_by.map(str::to_string),
+                unidentified_ua: event.unidentified_ua.map(str::to_string),
+                client_key: event.client_key.map(str::to_string),
                 requested_model: event.requested_model.to_string(),
                 source: event.source.to_string(),
                 connection_id: event.connection_id.map(str::to_string),
@@ -193,6 +216,9 @@ impl Drop for EndGuard {
                 request_id: self.request_id,
                 ts: chrono::Local::now().timestamp_millis(),
                 agent: self.meta.agent.as_deref(),
+                identified_by: self.meta.identified_by,
+                unidentified_ua: self.meta.unidentified_ua.as_deref(),
+                client_key: self.meta.client_key.as_deref(),
                 requested_model: &self.meta.requested_model,
                 source: Some(&self.source),
                 upstream_model: None,
@@ -228,6 +254,8 @@ mod tests {
     fn meta() -> RouteMeta {
         RouteMeta {
             agent: Some("codex".into()),
+            identified_by: Some("token"),
+            unidentified_ua: None,
             requested_model: "kimi/k2".into(),
             connection_id: Some("conn-1".into()),
             session: Some(SessionRef { platform: "codex".into(), session_id: "ses-1".into() }),
@@ -237,14 +265,16 @@ mod tests {
 
     fn start(emit: &Emit, id: u64) {
         emit_start(emit, &RouteStart {
-            request_id: id, ts: 1, agent: None, requested_model: "a/b", source: "a",
+            request_id: id, ts: 1, agent: None, identified_by: None, unidentified_ua: None,
+            client_key: None, requested_model: "a/b", source: "a",
             connection_id: Some("conn-1"), session_platform: Some("codex"), session_id: Some("ses-1"),
         });
     }
 
     fn end(emit: &Emit, id: u64) {
         emit_end(emit, &RouteEnd {
-            request_id: id, ts: 2, agent: None, requested_model: "a/b", source: Some("a"), upstream_model: None,
+            request_id: id, ts: 2, agent: None, identified_by: None, unidentified_ua: None,
+            client_key: None, requested_model: "a/b", source: Some("a"), upstream_model: None,
             status_code: Some(200), result: "ok", duration_ms: 1, connection_id: Some("conn-1"),
             session_platform: Some("codex"), session_id: Some("ses-1"),
         });
@@ -317,10 +347,11 @@ mod tests {
     #[test]
     fn payload_has_no_secret_fields() {
         let value = serde_json::to_value(RouteStart {
-            request_id: 1, ts: 0, agent: None, requested_model: "a/b", source: "a",
+            request_id: 1, ts: 0, agent: None, identified_by: None, unidentified_ua: None,
+            client_key: None, requested_model: "a/b", source: "a",
             connection_id: None, session_platform: None, session_id: None,
         }).unwrap();
         let keys: Vec<_> = value.as_object().unwrap().keys().cloned().collect();
-        assert_eq!(keys, ["agent", "connection_id", "request_id", "requested_model", "session_id", "session_platform", "source", "ts"]);
+        assert_eq!(keys, ["agent", "client_key", "connection_id", "identified_by", "request_id", "requested_model", "session_id", "session_platform", "source", "ts", "unidentified_ua"]);
     }
 }
