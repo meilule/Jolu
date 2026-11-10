@@ -146,7 +146,16 @@ pub fn set_update_interval(app: AppHandle, minutes: u32) -> Result<crate::settin
 pub async fn check_app_update_available(app: AppHandle) -> Result<UpdateCheck, String> {
     if !UPDATES_ENABLED { return Err(UPDATES_DISABLED.into()); }
     let updater = updater_with_proxy(&app)?;
-    Ok(match updater.check().await.map_err(|e| e.to_string())? {
+    // latest.json 常由 CDN 伺服，5xx/429 是瞬时的：失败退避重试两次（1s / 2s）。
+    // tauri-plugin-updater 的错误不含状态码，无法只挑 5xx（magpie a46190e 的做法），
+    // 但 check 是幂等 GET，放宽到「任何失败都重试」无害且省掉一次用户手动重查。
+    let mut outcome = updater.check().await.map_err(|e| e.to_string());
+    for wait in [1000u64, 2000] {
+        if outcome.is_ok() { break; }
+        tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+        outcome = updater.check().await.map_err(|e| e.to_string());
+    }
+    Ok(match outcome? {
         Some(update) => update_check(&update),
         None => UpdateCheck {
             available: false,

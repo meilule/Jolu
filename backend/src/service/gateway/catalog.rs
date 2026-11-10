@@ -18,7 +18,9 @@ pub type MetaLookup<'a> = dyn Fn(&str) -> Option<ModelMeta> + 'a;
 ///
 /// - 分组以 `group/<分组slug>` 进目录供接线与 Profile 选择；
 /// - 元数据按模型 id 并入（models.dev 的 id 带厂商前缀，`lookup_meta` 做末段忽略大小写匹配）；
-/// - 元数据里 0 或空串视为「没给」，不覆盖成 0 上下文窗口。
+/// - 元数据里 0 或空串视为「没给」，不覆盖成 0 上下文窗口；
+/// - **来源级上限覆盖最后应用**（`model_overrides`）：来源实测值优先于 models.dev——
+///   覆盖只对带 platform 的连接条目生效，路由分组（无平台归属）不参与。
 pub fn list(conn: &Connection, meta: &MetaLookup<'_>) -> Result<Vec<CatalogModel>, String> {
     let mut out = crate::gateway::catalog::list(conn).map_err(|error| error.to_string())?;
     // 路由分组也是可选的模型 id（`group/<分组slug>`），进目录供接线与 Profile 选择
@@ -30,6 +32,7 @@ pub fn list(conn: &Connection, meta: &MetaLookup<'_>) -> Result<Vec<CatalogModel
                 slug: "group".into(),
                 model: group.slug,
                 kind: "group".into(),
+                platform: None,
                 status: "connected".into(),
                 context_window: None,
                 max_output: None,
@@ -40,6 +43,12 @@ pub fn list(conn: &Connection, meta: &MetaLookup<'_>) -> Result<Vec<CatalogModel
     for entry in out.iter_mut() {
         if let Some(meta) = meta(&entry.model) {
             merge_meta(entry, &meta);
+        }
+        // models.dev 合并完再应用来源覆盖：覆盖优先（WorkBuddy deepseek-v4.1-flash 案例）
+        if let Some(platform) = entry.platform.as_deref() {
+            if let Some(over) = crate::gateway::model_overrides::lookup(platform, &entry.model) {
+                crate::gateway::model_overrides::apply(entry, over);
+            }
         }
     }
     Ok(out)
@@ -85,6 +94,7 @@ mod tests {
             slug: "src".into(),
             model: "glm-5.3".into(),
             kind: "api".into(),
+            platform: Some("workbuddy".into()),
             status: "connected".into(),
             context_window: None,
             max_output: None,
@@ -105,6 +115,7 @@ mod tests {
             slug: "src".into(),
             model: "glm-5.3".into(),
             kind: "api".into(),
+            platform: Some("workbuddy".into()),
             status: "connected".into(),
             context_window: None,
             max_output: None,

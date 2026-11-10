@@ -270,6 +270,17 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
             requests_per_day INTEGER,
             created_ms       INTEGER NOT NULL
         );
+        -- Library（批 5）：「哪些库项是 Jolu 写进各 agent 配置的」——卸载只删这张表
+        -- 里登记过的项，用户手写的同名条目永不触碰。payload 记安装时的完整形状，
+        -- 便于还原与诊断；重装同名 = 更新 payload 与时间。
+        CREATE TABLE IF NOT EXISTS library_applied (
+            agent        TEXT NOT NULL,
+            name         TEXT NOT NULL,
+            kind         TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            installed_ms INTEGER NOT NULL,
+            PRIMARY KEY (agent, name)
+        );
         "#,
     )?;
 

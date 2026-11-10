@@ -715,6 +715,9 @@ async fn forward_one(
                     ),
                 );
             }
+            // 发往真 Claude 的请求先剔除外来 thinking 块（thinking_guard 模块头说明因果）；
+            // 其余上游（zcode 的 GLM、DeepSeek 的兼容端点等）原样发。
+            let body = strip_foreign_thinking_if_claude(entry.base_url.as_deref(), upstream_model, body);
             let guard = begin(entry, &meta);
             let upstream_for_log = upstream_model.to_string();
             let response = crate::gateway::adapter::direct::forward(
@@ -761,6 +764,12 @@ async fn forward_one(
                 Some(response) => response,
                 None => {
                     let guard = begin(entry, &meta);
+                    // claude 订阅的上游就是 api.anthropic.com：外来的 thinking 块先剔（同上）
+                    let body = if platform == "claude" {
+                        strip_foreign_thinking_if_claude(Some("https://api.anthropic.com"), upstream_model, body)
+                    } else {
+                        body.clone()
+                    };
                     let response = match platform {
                         "codex" | "opencode" => crate::gateway::adapter::codex::forward(deps.clone(), entry, protocol, body.clone()).await,
                         "claude" => crate::gateway::adapter::claude::forward(deps.clone(), entry, session, body.clone()).await,
@@ -770,7 +779,7 @@ async fn forward_one(
                             // 只说 Chat 的来源（WorkBuddy / Qoder / Trae）：Anthropic 调用方（Claude Code）经协议转换后转发，回复再转回
                             let anthropic = protocol == CallerProtocol::Anthropic;
                             let converted = if anthropic {
-                                crate::gateway::translate::anthropic_request(body).map(|b| (CallerProtocol::Chat, b))
+                                crate::gateway::translate::anthropic_request(&body).map(|b| (CallerProtocol::Chat, b))
                             } else {
                                 Ok((protocol, body.clone()))
                             };
@@ -820,6 +829,29 @@ fn wire_label(protocol: CallerProtocol) -> &'static str {
         CallerProtocol::Anthropic => "Anthropic Messages",
         CallerProtocol::Chat => "OpenAI Chat",
         CallerProtocol::Responses => "OpenAI Responses",
+    }
+}
+
+/// 上游服务 Claude 时剔除外来 thinking 块；其余上游原样返回。
+///
+/// 为什么只在「真 Claude」上剔：DeepSeek 的 Anthropic 端点与 GLM 都要**拿回自己的
+/// thinking**且接受空签名，剔了反而丢上下文；magpie 同款判定见
+/// `thinking_bound.go::withoutForeignThinking`（commit `a6a9971`）。
+/// 剔除失败（body 不是合法 JSON）按原样发：这不是能靠 400 修复的事，交给上游报错。
+fn strip_foreign_thinking_if_claude(
+    base_url: Option<&str>, upstream_model: &str, body: &axum::body::Bytes,
+) -> axum::body::Bytes {
+    if !crate::gateway::thinking_guard::serves_claude(base_url, upstream_model) {
+        return body.clone();
+    }
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else { return body.clone() };
+    let removed = crate::gateway::thinking_guard::strip_foreign_thinking(&mut value);
+    if removed == 0 {
+        return body.clone();
+    }
+    match serde_json::to_vec(&value) {
+        Ok(bytes) => bytes.into(),
+        Err(_) => body.clone(),
     }
 }
 

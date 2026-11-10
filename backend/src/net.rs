@@ -75,6 +75,82 @@ pub fn blocking_builder() -> reqwest::blocking::ClientBuilder {
     builder_for(&current_mode())
 }
 
+/// 「远端忙」的状态码：重试有意义的全部范围。
+///
+/// 参照 magpie `a46190e`（更新下载对 502/503/504/500/429 重试）：这些是
+/// CDN / 网关的瞬时状态，稍后再来通常就通了；其余 4xx（401/404 等）是确定性
+/// 拒绝，重试只是浪费与刷日志。
+const BUSY_STATUS: [reqwest::StatusCode; 5] = [
+    reqwest::StatusCode::TOO_MANY_REQUESTS,
+    reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+    reqwest::StatusCode::BAD_GATEWAY,
+    reqwest::StatusCode::SERVICE_UNAVAILABLE,
+    reqwest::StatusCode::GATEWAY_TIMEOUT,
+];
+
+/// 幂等 GET 的重试拉取（blocking）：对「远端忙」与连接类错误退避重试。
+///
+/// 为什么只做 GET：调用方（latest.json 检查、models.dev 目录）都是幂等读；
+/// POST 的重试要调用方自己保证幂等后再用 [`retry_async_get`]。
+/// 退避 1s / 2s（±30% 抖动），`Retry-After` 优先于固定退避。
+///
+/// 参照 magpie `a46190e`。差异：magpie 只按状态码重试；这里把**连接类错误**
+/// （DNS 失败、连接重置）也纳入——它们在抖动的网络下与 5xx 一样是瞬时的，
+/// 而调用方都是低频后台任务，多等一次不构成负担。
+pub fn retry_blocking_get(url: &str, attempts: u32, timeout: std::time::Duration) -> Result<reqwest::blocking::Response, String> {
+    let attempts = attempts.clamp(1, 5);
+    let client = blocking_builder()
+        .timeout(timeout)
+        .build()
+        .map_err(|error| format!("无法创建请求客户端：{error}"))?;
+    let mut last_error = String::new();
+    for attempt in 0..attempts {
+        if attempt > 0 {
+            std::thread::sleep(backoff_after(attempt, &last_error));
+        }
+        match client.get(url).send() {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    return Ok(response);
+                }
+                if !BUSY_STATUS.contains(&status) {
+                    // 确定性拒绝（401/404 等）：原样交回，调用方按状态处理
+                    return Ok(response);
+                }
+                last_error = format!("HTTP {status}");
+            }
+            Err(error) => last_error = format!("{error}"),
+        }
+    }
+    Err(format!("重试 {attempts} 次后仍失败：{last_error}"))
+}
+
+/// 计算第 `attempt` 次失败后的等待：`Retry-After` 优先，否则指数退避加抖动。
+fn backoff_after(attempt: u32, last_error: &str) -> std::time::Duration {
+    // Retry-After 只在响应错误里出现过；连接类错误没有。从错误文本提取秒数
+    // 的可靠性一般，因此只认纯数字形式（reqwest 对 429 的 Display 不带它，
+    // 这条主要服务于将来有 Response 细节的调用方）。
+    if let Some(seconds) = last_error
+        .rsplit("Retry-After")
+        .next()
+        .and_then(|rest| rest.trim_start_matches(|c: char| !c.is_ascii_digit()).split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|digits| digits.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0 && *seconds <= 60)
+    {
+        return std::time::Duration::from_secs(seconds);
+    }
+    let base = 1000u64.saturating_mul(1 << attempt.min(3)); // 1s, 2s, 4s…
+    // ±300ms 抖动，避免多个客户端同一节奏重试；有符号计算，负抖动是有效的
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.subsec_nanos() as i64 % 601)
+        .unwrap_or(0)
+        - 300;
+    let millis = (base as i64 + nanos).max(0) as u64;
+    std::time::Duration::from_millis(millis)
+}
+
 /// 异步客户端构造器，代理语义与 [`blocking_builder`] 完全一致。
 ///
 /// 网关的上游请求（`proxy.rs::start` 的 `deps.client`）必须用它：裸的
@@ -484,6 +560,39 @@ fn probe_url(platform: &str, kind: &str, base_url: Option<&str>, protocol: Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn busy_status_set_matches_magpies_retry_list() {
+        // magpie a46190e 重试的正是这五个：429、500、502、503、504
+        for status in [429, 500, 502, 503, 504] {
+            let code = reqwest::StatusCode::from_u16(status).unwrap();
+            assert!(BUSY_STATUS.contains(&code), "{status} 应属于「远端忙」");
+        }
+        // 确定性拒绝不重试
+        for status in [400, 401, 403, 404, 410] {
+            let code = reqwest::StatusCode::from_u16(status).unwrap();
+            assert!(!BUSY_STATUS.contains(&code), "{status} 不应重试");
+        }
+    }
+
+    #[test]
+    fn backoff_grows_exponentially_and_honours_retry_after() {
+        // 指数：1s → 2s → 4s，±300ms 抖动
+        let first = backoff_after(0, "HTTP 502");
+        assert!(first >= std::time::Duration::from_millis(700) && first <= std::time::Duration::from_millis(1300), "{first:?}");
+        let second = backoff_after(1, "HTTP 503");
+        assert!(second >= std::time::Duration::from_millis(1700) && second <= std::time::Duration::from_millis(2300), "{second:?}");
+        let third = backoff_after(2, "HTTP 504");
+        assert!(third >= std::time::Duration::from_millis(3700) && third <= std::time::Duration::from_millis(4300), "{third:?}");
+        // 抖动不会越过下一档（4s 档与 8s 档之间有 3.7s 间隔，±0.3s 不重叠）
+        let fourth = backoff_after(3, "连接重置");
+        assert!(fourth >= std::time::Duration::from_millis(7700) && fourth <= std::time::Duration::from_millis(8300), "{fourth:?}");
+        // Retry-After 优先于指数（纯数字、0–60 秒才认）
+        assert_eq!(backoff_after(0, "HTTP 429 Retry-After: 30"), std::time::Duration::from_secs(30));
+        // 超出 60 秒的 Retry-After 不认（防止一次坏响应把重试拖到一分钟以上）
+        let fallback = backoff_after(0, "Retry-After: 3600");
+        assert!(fallback >= std::time::Duration::from_millis(700) && fallback <= std::time::Duration::from_millis(1300), "{fallback:?}");
+    }
 
     #[test]
     fn parse_proxy_server_handles_per_protocol() {

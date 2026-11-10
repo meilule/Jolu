@@ -35,4 +35,6 @@ pub mod gateway {
     pub mod middleware;
     pub mod quota;
     pub mod status;
+    /// 无 Tauri 上下文的接线还原（卸载钩子与 CLI 用）。
+    pub mod wiring_restore;
 }

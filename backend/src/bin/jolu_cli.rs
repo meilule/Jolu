@@ -11,9 +11,10 @@
 
 use jolu_lib::service::{gateway, paths};
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let code = match run(&args) {
+    let code = match run(&args).await {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("错误：{error}");
@@ -23,7 +24,7 @@ fn main() {
     std::process::exit(code);
 }
 
-fn run(args: &[String]) -> Result<(), String> {
+async fn run(args: &[String]) -> Result<(), String> {
     let Some(command) = args.first().map(String::as_str) else {
         print_usage();
         return Ok(());
@@ -39,6 +40,9 @@ fn run(args: &[String]) -> Result<(), String> {
         "group" => group(rest),
         "keys" => keys(rest),
         "quota" => quota(rest),
+        "restore" => restore(),
+        "search" => search(rest).await,
+        "library" => library(rest).await,
         other => Err(format!("未知子命令「{other}」，运行 `jolu help` 查看用法")),
     }
 }
@@ -54,12 +58,18 @@ jolu — Jolu 命令行（只读）
   jolu group list                 来源分组与 Agent 分组
   jolu keys                       命名客户端 Key（只有掩码，没有原文）
   jolu quota <连接 id>            查一个连接的额度
+  jolu restore                    把已接线 agent 的配置还原到接线前（卸载/排障用）
+  jolu search <关键词>            用设置里第一个启用的搜索后端搜一次
+  jolu library install <agent>    把「Jolu 搜索」MCP 装进指定 agent
+  jolu library remove <agent> <名> 卸载（只删 Jolu 装的）
+  jolu library list               各 agent 的安装状态
 
 环境变量：
   JOLU_DATA_DIR   指定数据目录（默认按平台从 %APPDATA% / Application Support 推断）
 
+搜索后端与 Key 在桌面端 settings.json 的 search_apis 里配置。
 说明：
-  所有子命令只读桌面端已有数据，不会启动网关监听，也不会写配置。"
+  除 restore 与 search 外，所有子命令只读桌面端已有数据，不会启动网关监听，也不会写配置。"
     );
 }
 
@@ -162,6 +172,108 @@ fn keys(args: &[String]) -> Result<(), String> {
         println!("{:<16} {}  上限 {}  今日 {}", row.name, row.masked, cap, row.today_requests);
     }
     Ok(())
+}
+
+/// 搜一次：用设置里第一个未暂停的后端。Key 轮转状态只活在本进程
+/// （CLI 一次性执行，轮转记忆留在桌面端才有意义——这里主要是验证配置与后端通路）。
+/// Library（批 5）：把「Jolu 搜索」装进 / 卸出各 agent，或查看状态。
+/// 支持的 agent：claude-code / codex / gemini / opencode（zcode 格式待实测）。
+async fn library(args: &[String]) -> Result<(), String> {
+    let Some(action) = args.first() else {
+        return Err("用 `jolu library install <agent>` / `remove <agent> <名>` / `list`".into());
+    };
+    let (directory, database) = paths::locate()?;
+    match action.as_str() {
+        "list" => {
+            let conn = open_database()?;
+            for agent in jolu_lib::gateway::wiring::AGENTS {
+                let names = jolu_lib::library::applied_names(&conn, agent);
+                if names.is_empty() { continue; }
+                println!("{agent}: {}", names.join("、"));
+            }
+            println!("（支持安装的 agent：claude-code / codex / gemini / opencode）");
+            Ok(())
+        }
+        "install" => {
+            let Some(agent) = args.get(1) else { return Err("指定 agent：claude-code / codex / gemini / opencode".into()) };
+            let (command, cmd_args) = jolu_lib::library::search_entry_command_from_cli().map_err(|e| e.to_string())?;
+            let item = jolu_lib::library::search_item_with(std::path::Path::new(&command));
+            let mut conn = jolu_lib::db::open(&database).map_err(|e| e.to_string())?;
+            let outcome = jolu_lib::library::install(&mut conn, agent, &item).map_err(|e| e.to_string())?;
+            if outcome.created {
+                println!("已装进 {agent}：{}（{} {}）", outcome.name, command, cmd_args.join(" "));
+            } else {
+                println!("{agent} 里已存在并更新：{}", outcome.name);
+            }
+            println!("重启该 agent 后在 /mcp 里可见 web_search 工具。");
+            Ok(())
+        }
+        "remove" => {
+            let (Some(agent), Some(name)) = (args.get(1), args.get(2)) else {
+                return Err("用 `jolu library remove <agent> <名称>`".into());
+            };
+            let mut conn = jolu_lib::db::open(&database).map_err(|e| e.to_string())?;
+            let removed = jolu_lib::library::remove(&mut conn, agent, name).map_err(|e| e.to_string())?;
+            println!("{}", if removed { format!("已从 {agent} 移除 {name}") } else { format!("{agent} 里没有 Jolu 装的「{name}」") });
+            Ok(())
+        }
+        other => Err(format!("未知 library 动作「{other}」")),
+    }
+}
+
+/// 可写连接（install / remove / restore 要写库）
+fn open_writable(database: &std::path::Path) -> Result<rusqlite::Connection, String> {
+    rusqlite::Connection::open_with_flags(
+        database,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(|error| format!("打开数据库失败：{error}"))
+}
+
+async fn search(args: &[String]) -> Result<(), String> {
+    let Some(query) = args.first() else {
+        return Err("用 `jolu search <关键词>` 指定搜索词".into());
+    };
+    let directory = paths::config_directory()?;
+    let settings = jolu_lib::service::settings::read_settings(&directory);
+    let Some(config) = settings.search_apis.iter().find(|api| !api.off) else {
+        return Err("还没有配置搜索后端：在桌面端 settings.json 的 search_apis 里加一份（vendor + keys）".into());
+    };
+    let mut refused_tail: Vec<(String, i64)> = Vec::new();
+    let hits = jolu_lib::gateway::search::run_search(config, query, 5, &mut refused_tail, now_ms()).await.map_err(|e| e.to_string())?;
+    if hits.is_empty() {
+        println!("没有结果。");
+        return Ok(());
+    }
+    for hit in &hits {
+        println!("■ {}", hit.title);
+        println!("  {}", hit.url);
+        if !hit.snippet.is_empty() { println!("  {}", hit.snippet); }
+    }
+    Ok(())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+/// 还原全部 agent 接线。**唯一的写命令**：卸载 Jolu 前手动执行，或网关故障时
+/// 把 CLI 拉回直连。走与桌面端同一把跨进程互斥量（cli_switch），运行中的桌面端
+/// 不会同时写同一批配置。
+fn restore() -> Result<(), String> {
+    let (directory, database) = paths::locate()?;
+    let settings = jolu_lib::service::settings::read_settings(&directory);
+    let port = if settings.proxy_port > 0 { settings.proxy_port } else { 12731 };
+    let mut conn = rusqlite::Connection::open_with_flags(
+        &database,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(|error| format!("打开数据库失败：{error}"))?;
+    let report = gateway::wiring_restore::restore_all(&mut conn, port);
+    for agent in &report.restored { println!("已还原 {agent}"); }
+    for agent in &report.skipped { println!("跳过 {agent}（配置已不在或不是 Jolu 写的）"); }
+    for line in &report.failed { println!("失败 {line}"); }
+    if report.failed.is_empty() { Ok(()) } else { Err("部分工具还原失败，详见上方输出".into()) }
 }
 
 fn quota(args: &[String]) -> Result<(), String> {

@@ -124,6 +124,10 @@ pub struct Settings {
     /// OTLP 用量导出端点（批次 G §3.12）：为空表示不导出。只导聚合值，不含会话与凭据。
     #[serde(default)]
     pub otlp_endpoint: Option<String>,
+    /// 搜索后端配置（能力汇聚）：每个后端一份 Key 列表与可选自建地址。
+    /// Key 只存这里与内存——日志 / 错误 / 导出一律不带（AGENTS.md 纪律）。
+    #[serde(default)]
+    pub search_apis: Vec<crate::gateway::search::SearchApiConfig>,
     /// 本实例标识：接线 token 带它的前 8 位，用来识别「这个配置是哪个 Jolu 写的」。
     /// 首次启动生成后固定，正式版、验收版、改名测试包各自不同。
     #[serde(default)]
@@ -244,6 +248,30 @@ pub fn validate_display_preferences(opacity: u8, scale: u16, shrink_scale: u16, 
     Ok(())
 }
 
+impl Settings {
+    /// 给前端的副本：搜索后端的 Key 只留掩码（AGENTS.md：API Key 只在后端处理，
+    /// 前端列表只返回掩码）。写操作仍然用原文——`search_apis` 的写入走
+    /// [`SearchApiConfig::with_keys`]，前端从不回传 Key 明文。
+    pub fn masked(&self) -> Self {
+        let mut copy = self.clone();
+        for api in &mut copy.search_apis {
+            api.keys = api.keys.iter().map(|key| mask_key(key)).collect();
+        }
+        copy
+    }
+}
+
+/// 掩码：保留前 4 后 4，中间省略；短 Key 全遮。
+fn mask_key(key: &str) -> String {
+    let trimmed = key.trim();
+    if trimmed.len() <= 8 {
+        return "••••••••".into();
+    }
+    let head: String = trimmed.chars().take(4).collect();
+    let tail: String = trimmed.chars().rev().take(4).collect::<String>().chars().rev().collect();
+    format!("{head}••••{tail}")
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -287,6 +315,7 @@ impl Default for Settings {
             warmup_hour: default_warmup_hour(),
             warmup_last_date: None,
             otlp_endpoint: None,
+            search_apis: Vec::new(),
             instance_id: String::new(),
             gateway_wiring: std::collections::BTreeMap::new(),
             default_page: default_default_page(),
@@ -391,6 +420,25 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn masked_keeps_search_keys_out_of_the_frontend_copy() {
+        let mut settings = Settings::default();
+        settings.search_apis = vec![crate::gateway::search::SearchApiConfig {
+            vendor: "tavily".into(),
+            keys: vec!["tvly-abcdefgh12345678".into(), "short".into()],
+            url: None,
+            off: false,
+        }];
+        let masked = settings.masked();
+        assert_eq!(masked.search_apis[0].keys[0], "tvly••••5678", "长 Key 保留前 4 后 4");
+        assert_eq!(masked.search_apis[0].keys[1], "••••••••", "短 Key 全遮");
+        // 原文不动（写路径仍在后端）
+        assert_eq!(settings.search_apis[0].keys[0], "tvly-abcdefgh12345678");
+        // 非敏感字段原样
+        assert_eq!(masked.search_apis[0].vendor, "tavily");
+    }
     use super::Settings;
 
     #[test]

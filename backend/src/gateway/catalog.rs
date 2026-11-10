@@ -10,6 +10,10 @@ pub struct CatalogModel {
     pub slug: String,
     pub model: String,
     pub kind: String,
+    /// 所属平台；来源级上限覆盖（model_overrides）按它 + model 匹配。
+    /// 目录页不展示，序列化省略；旧消费方不受影响。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
     pub status: String,
     /// models.dev 元数据（P4.2）：缓存缺失时为 None，前端不展示该列
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -66,6 +70,7 @@ pub fn list(conn: &Connection) -> rusqlite::Result<Vec<CatalogModel>> {
                 slug: slug.clone(),
                 model,
                 kind: kind.clone(),
+                platform: Some(platform.clone()),
                 status: status.clone(),
                 context_window: None,
                 max_output: None,

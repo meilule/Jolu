@@ -48,6 +48,43 @@ pub struct Applied {
     /// 只对 Claude Code：写进 `CLAUDE_CODE_SUBAGENT_MODEL` 的 subagent 独立模型；None = 跟随主模型。
     #[serde(default)]
     pub subagent_model: Option<String>,
+    /// 只对 Claude Code：四个档位与 Auto 判别的独立模型（批 4 档位深耕）。
+    /// 值是**最终写入值**（自选 = `model[:effort]`，可带 [1m] 后缀）；None = 跟随主模型。
+    /// 旧快照没有此字段 → 反序列化为 None = 全跟随，行为与升级前一致。
+    #[serde(default)]
+    pub tiers: Option<TierModels>,
+}
+
+/// Claude Code 的档位自选集合。字段与 `ANTHROPIC_DEFAULT_<TIER>_MODEL` 一一对应，
+/// `auto_mode` 对应 `CLAUDE_CODE_AUTO_MODE_MODEL`（Claude Code 每个动作先跑的分类器）。
+///
+/// 「自选保持」语义（magpie `tier_own` 同款）：这里存的是绝对值——用户给某档选过
+/// 模型后，更换主模型时该档的值不重算；只有仍为 None 的档位在重接线时跟随新主模型。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TierModels {
+    #[serde(default)]
+    pub opus: Option<String>,
+    #[serde(default)]
+    pub sonnet: Option<String>,
+    #[serde(default)]
+    pub haiku: Option<String>,
+    #[serde(default)]
+    pub fable: Option<String>,
+    #[serde(default)]
+    pub auto_mode: Option<String>,
+}
+
+impl TierModels {
+    /// 按 tier 名取值（"opus" / "sonnet" / "haiku" / "fable"；其他名字返回 None）。
+    pub fn tier(&self, tier: &str) -> Option<&str> {
+        match tier {
+            "opus" => self.opus.as_deref(),
+            "sonnet" => self.sonnet.as_deref(),
+            "haiku" => self.haiku.as_deref(),
+            "fable" => self.fable.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 pub fn load(conn: &Connection, agent: &str) -> Option<WiringRecord> {
@@ -177,7 +214,7 @@ mod tests {
     #[test]
     fn pending_then_wired_then_idle_round_trip() {
         let conn = db();
-        let applied = Applied { base: "http://127.0.0.1:12731".into(), token: Some("jolu-codex.abcd1234".into()), provider: None, mode: Some("provider".into()), model: None, label: None, subagent_model: None };
+        let applied = Applied { base: "http://127.0.0.1:12731".into(), token: Some("jolu-codex.abcd1234".into()), provider: None, mode: Some("provider".into()), model: None, label: None, subagent_model: None, tiers: None };
         mark_pending(&conn, "codex", "instance-1", "relay", Some(r#"{"model_provider":"openai"}"#), &applied, Some("jolu-codex.abcd1234")).unwrap();
         let record = load(&conn, "codex").unwrap();
         assert_eq!(record.state, "pending");

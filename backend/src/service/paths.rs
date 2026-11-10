@@ -23,6 +23,35 @@ pub fn locate() -> Result<(PathBuf, PathBuf), String> {
     locate_with(|name| std::env::var_os(name))
 }
 
+/// 只定位数据目录，不要求 `usage.db` 已存在。
+///
+/// 给 search 这类只依赖 settings.json 的子命令用——搜索不该要求「装过桌面端」，
+/// 一个只有搜索配置的数据目录就能用。
+pub fn config_directory() -> Result<PathBuf, String> {
+    Ok(config_directory_with(|name| std::env::var_os(name))?)
+}
+
+/// [`config_directory`] 的可注入版本（测试不碰进程环境）。
+pub fn config_directory_with(lookup: impl Fn(&str) -> Option<std::ffi::OsString>) -> Result<PathBuf, String> {
+    if let Some(value) = lookup("JOLU_DATA_DIR") {
+        let path = PathBuf::from(value);
+        if !path.is_absolute() {
+            return Err(format!("JOLU_DATA_DIR 必须是绝对路径：{}", path.display()));
+        }
+        return Ok(path);
+    }
+    #[cfg(debug_assertions)]
+    if let Some(value) = lookup("JOLU_TEST_DIR") {
+        let path = PathBuf::from(value);
+        if !path.is_absolute() {
+            return Err(format!("JOLU_TEST_DIR 必须是绝对路径：{}", path.display()));
+        }
+        return Ok(path);
+    }
+    let base = platform_base_with(&lookup)?;
+    Ok(base.join(IDENTIFIER))
+}
+
 /// 具体实现：环境变量通过参数注入，便于测试不碰进程级环境。
 ///
 /// 用注入而不是直接读 env 的原因：Rust 测试默认并行，多个测试同时 `set_var` 会互相

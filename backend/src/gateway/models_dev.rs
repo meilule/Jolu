@@ -152,15 +152,10 @@ fn read_cache(path: &PathBuf) -> Option<CachedCatalog> {
 
 /// 拉取并解析 models.dev。顶层是厂商 → { models: { id: { … } } }，摊平成 id → 元数据。
 fn fetch() -> Result<CachedCatalog, String> {
-    // 走 net::blocking_builder：尊重设置里的联网方式（裸 builder 会按 reqwest 默认
-    // 探测环境变量与注册表，用户选直连也照样走系统代理）
-    let client = crate::net::blocking_builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|error| format!("无法创建 models.dev 客户端：{error}"))?;
-    let response = client
-        .get(SOURCE_URL)
-        .send()
+    // retry_blocking_get 内部走 net::blocking_builder：尊重设置里的联网方式（裸
+    // builder 会按 reqwest 默认探测环境变量与注册表，用户选直连也照样走系统代理）。
+    // 目录是后台低频刷新，对 CDN 的 5xx/429 重试两次不构成负担（magpie a46190e 同思路）
+    let response = crate::net::retry_blocking_get(SOURCE_URL, 3, std::time::Duration::from_secs(20))
         .map_err(|error| format!("无法访问 models.dev：{error}"))?;
     if !response.status().is_success() {
         return Err(format!("models.dev 返回 HTTP {}", response.status()));

@@ -769,6 +769,17 @@ Section Uninstall
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
+  ; Jolu: 卸载前还原全部 agent 接线（Claude Code / Codex 等的配置文件还指着本机
+  ; 网关端口，不还原的话卸载后这些 CLI 的所有请求都会失败）。放在 CheckIfAppIsRunning
+  ; 之后：桌面端已退出，wiring 快照不会被再写；放在 Delete 主程序之前：还要用它执行。
+  ; 退出码 0 = 全成功或无事可做；1 = 有失败——NSIS 不因此中止卸载（配置文件留着
+  ; 用户数据目录里，重装后可再还原），只在日志里留痕。
+  DetailPrint "正在还原各工具的直连配置…"
+  ExecWait '"$INSTDIR\${MAINBINARYNAME}.exe" --restore-agents' $R0
+  ${If} $R0 != 0
+    DetailPrint "部分工具的配置未能自动还原，可在重新安装 Jolu 后再次还原。"
+  ${EndIf}
+
   ; Delete the app directory and its content from disk
   ; Copy main executable
   Delete "$INSTDIR\${MAINBINARYNAME}.exe"

@@ -29,6 +29,15 @@ pub mod identity;
 pub mod import_sources;
 /// 隐私脱敏（P5）：网关中转的请求出机前换占位符、响应回来再换回（参照 magpie masking）。
 pub mod mask;
+/// 无签名 thinking 块过滤：跨模型分组切回 Claude 时，外来 thinking 块会让 Claude 连续 400
+/// （参照 magpie `a6a9971`）。
+pub mod thinking_guard;
+/// 来源级模型上限覆盖：来源实测值优先于 models.dev（WorkBuddy deepseek-v4.1-flash 案例）。
+pub mod model_overrides;
+/// 地址安全校验：Jolu 没选过的 URL 解析出的地址能不能连（参照 magpie netguard）。
+pub mod net_guard;
+/// 网页搜索后端（能力汇聚第 1 层）：Tavily / SearXNG / 豆包 + 多 Key 轮转。
+pub mod search;
 pub mod route_log;
 pub mod route;
 pub(crate) mod sessions;

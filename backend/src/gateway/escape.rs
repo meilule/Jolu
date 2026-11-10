@@ -208,6 +208,7 @@ pub fn wire_agents(
     agents: &[String],
     model: Option<&str>,
     subagent_model: Option<&str>,
+    tiers: Option<&crate::gateway::wiring_store::TierModels>,
 ) -> Result<Vec<String>, String> {
     let settings = app.state::<crate::Cfg>().0.get();
     // 只有正在运行的模型入口才能接管工具：接到一个没在监听的端口会让工具全部失败。
@@ -247,7 +248,12 @@ pub fn wire_agents(
                 let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
                 match wiring_store::load(&conn, agent) {
                     Some(record) => {
+                        // 幂等：已接线、配置仍是我们的值、且档位自选没变——三者都成立才跳过。
+                        // 只改档位（主模型不动）时 status_with 仍 wired，必须靠 tiers 对比触发重写，
+                        // 否则用户改了 Haiku 档点应用会被当成「无需动作」静默吞掉。
+                        let tiers_unchanged = record.applied().as_ref().and_then(|a| a.tiers.as_ref()) == tiers;
                         if record.state == "wired"
+                            && tiers_unchanged
                             && crate::gateway::wiring::status_with(agent, port, Some(&record)).wired
                         {
                             wired.push(agent.clone());
@@ -266,6 +272,24 @@ pub fn wire_agents(
             // 显示名 / 描述：models.dev 只读缓存（缺失退回模型 id 本身；不联网不阻塞）
             let label = model.as_ref().map(|m| crate::gateway::models_dev::display_label(app, m));
             let description = model.as_ref().map(|m| crate::gateway::models_dev::description_of(app, m)).filter(|d| !d.is_empty());
+            // 档位「关于」：写入值剥掉 :effort 与 [1m] 后查 models.dev——
+            // /model 菜单里那行要显示档位实际用的模型（magpie claudeAbout 语义）
+            let tier_about = |value: &str| -> (Option<String>, Option<String>) {
+                let bare = value
+                    .split(':')
+                    .next()
+                    .unwrap_or(value)
+                    .trim()
+                    .trim_end_matches("[1m]")
+                    .trim_end_matches("[1M]");
+                (
+                    Some(crate::gateway::models_dev::display_label(app, bare)),
+                    {
+                        let description = crate::gateway::models_dev::description_of(app, bare);
+                        (!description.is_empty()).then_some(description)
+                    },
+                )
+            };
             let (snapshot, _applied) = crate::gateway::wiring::wire(
                 agent,
                 port,
@@ -279,6 +303,8 @@ pub fn wire_agents(
                 prior_label.as_deref(),
                 subagent_model,
                 prior_subagent.as_deref(),
+                tiers,
+                &tier_about,
                 |snapshot, applied| {
                     let state = app.state::<crate::Db>();
                     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;

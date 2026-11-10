@@ -28,7 +28,7 @@ mod cli_switch;
 mod attribution;
 // 连接目录自动回填：把 ZCode provider 规则的 baseUrl / 模型补进已存连接
 mod catalog_backfill;
-mod db;
+pub mod db;
 mod data_files;
 mod dock;
 mod island_clones;
@@ -82,6 +82,7 @@ mod current_connection;
 mod login_detect;
 mod usage_stats;
 mod session_threads;
+pub mod library;
 pub mod service;
 // 模块 E · 自动化
 mod automation;
@@ -2041,7 +2042,8 @@ async fn connection_balance(app: tauri::AppHandle, db: State<'_, Db>, id: String
 
 #[tauri::command]
 fn get_settings(cfg: State<Cfg>) -> settings::Settings {
-    cfg.0.get()
+    // 前端只拿掩码版：搜索 Key 明文不出后端（AGENTS.md 纪律）
+    cfg.0.get().masked()
 }
 
 /// 设置界面改灵动岛平台：与托盘子菜单是同一个值，改完要刷新托盘勾选态
@@ -2486,6 +2488,60 @@ fn gateway_source_capabilities(app: tauri::AppHandle) -> Result<Vec<crate::gatew
 /// `ANTHROPIC_SMALL_FAST_MODEL` 与全部档位 env（opus/sonnet/haiku/fable 默认跟随主模型），
 /// 并移除 `ANTHROPIC_MODEL`（它压过 /model 的选择）与各档旧的「关于」键；断开时按快照还原。
 /// 不传（或传空）时只接地址和令牌，用户的模型配置原样保留。
+/// Library（批 5）：把「Jolu 搜索」以 MCP server 装进指定 agent。
+#[tauri::command]
+fn library_install(app: tauri::AppHandle, agent: String) -> Result<library::InstallOutcome, String> {
+    // 桌面端场景：current_exe 就是主程序 jolu.exe（自带 --mcp-search 分支）
+    let item = library::search_item_with(&std::env::current_exe().map_err(|error| error.to_string())?);
+    let outcome = crate::cli_switch::with_switch(|| {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().map_err(|_| "数据库不可用".to_string())?;
+        library::install(&conn, &agent, &item).map_err(|error| error.to_string())
+    })
+    .map_err(|error| format!("另一实例正在修改工具配置：{error}"))?;
+    let _ = app.emit("library-changed", ());
+    Ok(outcome)
+}
+
+/// Library：卸载指定 agent 里的一个库项（只删 Jolu 自己装的）。
+#[tauri::command]
+fn library_remove(app: tauri::AppHandle, agent: String, name: String) -> Result<bool, String> {
+    let removed = crate::cli_switch::with_switch(|| {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().map_err(|_| "数据库不可用".to_string())?;
+        library::remove(&conn, &agent, &name).map_err(|error| error.to_string())
+    })
+    .map_err(|error| format!("另一实例正在修改工具配置：{error}"))?;
+    let _ = app.emit("library-changed", ());
+    Ok(removed)
+}
+
+/// Library：每个 agent 的安装状态（装了什么 + 配置里现状），供 UI 列表用。
+#[derive(serde::Serialize)]
+struct LibraryAgentStatus {
+    agent: String,
+    installed: Vec<String>,
+    /// 配置文件可定位且存在；false = 从未初始化（装了会新建文件）
+    config_present: bool,
+}
+
+#[tauri::command]
+fn library_list(app: tauri::AppHandle) -> Result<Vec<LibraryAgentStatus>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    let mut statuses = Vec::new();
+    for agent in crate::gateway::wiring::AGENTS {
+        let config_present = crate::gateway::wiring::config_path_for(agent)
+            .is_some_and(|path| crate::steady::exists(&path));
+        statuses.push(LibraryAgentStatus {
+            agent: agent.to_string(),
+            installed: library::applied_names(&conn, agent),
+            config_present,
+        });
+    }
+    Ok(statuses)
+}
+
 #[tauri::command]
 fn gateway_wiring_set(
     app: tauri::AppHandle,
@@ -2493,8 +2549,10 @@ fn gateway_wiring_set(
     wired: bool,
     model: Option<String>,
     subagent_model: Option<String>,
+    // 档位自选（批 4）：每档的最终写入值（可带 :effort）；None 的档位跟随主模型。
+    tiers: Option<crate::gateway::wiring_store::TierModels>,
 ) -> Result<String, String> {
-    let result = gateway_wiring_set_inner(&app, agent, wired, model.as_deref(), subagent_model.as_deref());
+    let result = gateway_wiring_set_inner(&app, agent, wired, model.as_deref(), subagent_model.as_deref(), tiers.as_ref());
     let _ = app.emit("gateway-wiring-changed", ());
     result
 }
@@ -2505,10 +2563,11 @@ fn gateway_wiring_set_inner(
     wired: bool,
     model: Option<&str>,
     subagent_model: Option<&str>,
+    tiers: Option<&crate::gateway::wiring_store::TierModels>,
 ) -> Result<String, String> {
     let app = app.clone();
     if wired {
-        let wired_agents = crate::gateway::escape::wire_agents(&app, std::slice::from_ref(&agent), model, subagent_model)?;
+        let wired_agents = crate::gateway::escape::wire_agents(&app, std::slice::from_ref(&agent), model, subagent_model, tiers)?;
         Ok(format!("已接入 {}", wired_agents.join("、")))
     } else {
         let settings = app.state::<Cfg>().0.get();
@@ -2668,7 +2727,14 @@ fn gateway_profiles_apply(app: tauri::AppHandle, name: String) -> Result<crate::
             skipped.push(agent.clone());
             continue;
         }
-        match crate::gateway::escape::wire_agents(&app, std::slice::from_ref(agent), Some(model), None) {
+        // tier_own：切主模型时保留该 agent 现有的档位自选，不重置为跟随
+        let keep_tiers = {
+            let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+            crate::gateway::wiring_store::load(&conn, agent)
+                .and_then(|record| record.applied())
+                .and_then(|applied| applied.tiers)
+        };
+        match crate::gateway::escape::wire_agents(&app, std::slice::from_ref(agent), Some(model), None, keep_tiers.as_ref()) {
             Ok(_) => switched.push(format!("{agent} → {model}")),
             Err(error) => skipped.push(format!("{agent}（{error}）")),
         }
@@ -4099,6 +4165,67 @@ fn handle_tray_menu(app: &tauri::AppHandle, id: &str, island: Option<&str>) -> R
     Ok(())
 }
 
+/// 卸载钩子入口（`jolu.exe --restore-agents`）：按 wiring 快照还原全部 agent 的
+/// 配置文件，返回 0（全成功或无事可做）或 1（有失败）。
+///
+/// 为什么不用 Tauri 上下文：NSIS 在删除主程序**之前**调用本入口，此时桌面端已被
+/// 关闭，没有窗口可挂；数据库直接按路径打开。设置读不出时端口按默认值处理
+/// ——`unwire` 只用它判断「配置当前是否指向网关」，判断错了至多多走一次无害还原。
+pub fn restore_agents_headless() -> i32 {
+    let (directory, database) = match crate::service::paths::locate() {
+        Ok(paths) => paths,
+        Err(reason) => {
+            eprintln!("[卸载] {reason}");
+            // 没有数据目录 = 从没接过线，无事可做不算失败
+            return 0;
+        }
+    };
+    let settings = crate::service::settings::read_settings(&directory);
+    let port = if settings.proxy_port > 0 { settings.proxy_port } else { 12731 };
+    let mut conn = match crate::db::open(&database) {
+        Ok(conn) => conn,
+        Err(error) => {
+            eprintln!("[卸载] 打开数据库失败：{error}");
+            return 1;
+        }
+    };
+    let report = crate::service::gateway::wiring_restore::restore_all(&mut conn, port);
+    for agent in &report.restored {
+        eprintln!("[卸载] 已还原 {agent}");
+    }
+    for line in &report.failed {
+        eprintln!("[卸载] 失败：{line}");
+    }
+    // Library（批 5）：Jolu 写进各 agent 的 MCP server 一并移除
+    let library_lines = crate::library::restore_all_library(&conn);
+    for line in &library_lines {
+        eprintln!("[卸载] {line}");
+    }
+    let failed = report.failed.len() + library_lines.iter().filter(|l| l.starts_with("失败")).count();
+    if failed == 0 { 0 } else { 1 }
+}
+
+/// 搜索 MCP server 的 stdio 循环（`jolu.exe --mcp-search`，批 5）。
+pub fn run_mcp_search() {
+    use std::io::{BufRead, Write};
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("搜索 MCP 需要一个小异步运行时");
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let Ok(line) = line else { break };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Some(response) = runtime.block_on(library::mcp_search::handle_line(&line)) else { continue };
+        let mut stdout = std::io::stdout();
+        if writeln!(stdout, "{response}").and_then(|_| stdout.flush()).is_err() {
+            break;
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -4122,6 +4249,9 @@ pub fn run() {
             autostart_status,
             set_autostart,
             set_silent_startup,
+            library_install,
+            library_remove,
+            library_list,
             set_keep_awake,
             set_warmup,
             set_otlp_endpoint,
