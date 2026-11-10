@@ -711,6 +711,59 @@ pub(crate) fn read_lines(path: &Path) -> Result<Vec<String>, String> {
         .map_err(|error| format!("读取会话文件失败：{error}"))
 }
 
+/// 逐行喂给解析器，不把整份会话文件读成 `Vec<String>`。
+///
+/// 本机会话单个文件可达数十 MB（本机最大 53 MB / 97 MB），整份读入再加一层 `Vec<String>`
+/// 等于把文件体积翻倍占住内存；会话页每次翻页都会重解析，峰值会跟着文件大小线性增长。
+/// 读取失败仍然整体报错：调用方拿到的是 `Err`，半截内容不会被当成完整会话（同 [`read_lines`]）。
+struct LineSource {
+    reader: BufReader<std::fs::File>,
+    buffer: String,
+    failed: Option<String>,
+}
+
+impl LineSource {
+    fn open(path: &Path) -> Result<Self, String> {
+        let file = std::fs::File::open(path).map_err(|error| format!("无法打开会话文件：{error}"))?;
+        Ok(Self { reader: BufReader::new(file), buffer: String::new(), failed: None })
+    }
+}
+
+impl Iterator for LineSource {
+    type Item = String;
+
+    fn next(&mut self) -> Option<String> {
+        if self.failed.is_some() { return None; }
+        self.buffer.clear();
+        match self.reader.read_line(&mut self.buffer) {
+            Ok(0) => None,
+            Ok(_) => {
+                while self.buffer.ends_with('\n') || self.buffer.ends_with('\r') { self.buffer.pop(); }
+                Some(std::mem::take(&mut self.buffer))
+            }
+            Err(error) => {
+                self.failed = Some(format!("读取会话文件失败：{error}"));
+                None
+            }
+        }
+    }
+}
+
+/// 只读解析一份会话日志：逐行流式解析，读失败时整体返回 `Err`（界面显示不可读，不伪造空会话）。
+fn parse_file(path: &Path, platform: &str) -> Result<Vec<Message>, String> {
+    if crate::validation::isolated() { return Err("隔离验收不读取用户会话文件".into()); }
+    let mut source = LineSource::open(path)?;
+    let messages = match platform {
+        "claude" => parse_claude(&mut source),
+        "codex" => parse_codex(&mut source),
+        _ => Vec::new(),
+    };
+    match source.failed.take() {
+        Some(error) => Err(error),
+        None => Ok(messages),
+    }
+}
+
 /// 会话主记录文件；源文件不存在时为 None
 pub(crate) fn source_path(conn: &Connection, platform: &str, session_id: &str) -> rusqlite::Result<Option<PathBuf>> {
     Ok(source_files(conn)?.remove(&(platform.to_string(), session_id.to_string())).filter(|p| p.exists()))
@@ -731,6 +784,10 @@ pub(crate) fn parse_detail(platform: &str, lines: &[String]) -> Vec<Message> {
 /// 单会话最多解析的 part 条数。本机 477 MB 的库里单个会话最多有 14,404 条 part，
 /// 一次读全会把整个会话 JSON 拉进内存；超出后只解析最近的部分，并在页面上标注截断。
 const ZCODE_PART_LIMIT: usize = 2_000;
+/// 单会话正文解析的字节上限：`part.data` 是原样的工具输出（本机单个 part 最大约 290 KB），
+/// 只按条数收口挡不住「几千条大 part」——2000 条 × 数百 KB 会一次占住数百 MB 甚至更多。
+/// 与条数上限一起生效，先到哪个算哪个，仍然只保留最近的记录。
+const ZCODE_PART_BYTES: usize = 32 * 1024 * 1024;
 /// 库型来源的等待上限：原工具可能正在写 WAL，宁可稍等也不认为会话正文不可读
 const ZCODE_BUSY_MS: u64 = 400;
 
@@ -919,6 +976,32 @@ struct ZcodeStream {
     skipped: usize,
 }
 
+/// 截取最近的 part：条数与字节双重上限；至少保留最新一条
+/// （单条 part 自己就超过字节预算时，也不能让最新一次对话整段消失）。
+fn keep_recent_parts(rows: &mut Vec<String>, part_budget: usize, byte_budget: usize) -> bool {
+    let mut truncated = false;
+    if rows.len() > part_budget {
+        rows.drain(..rows.len() - part_budget);
+        truncated = true;
+    }
+    if rows.iter().map(String::len).sum::<usize>() > byte_budget {
+        let mut keep_from = rows.len();
+        let mut kept = 0usize;
+        while keep_from > 0 {
+            let size = rows[keep_from - 1].len();
+            if kept + size > byte_budget { break; }
+            kept += size;
+            keep_from -= 1;
+        }
+        if keep_from == rows.len() && !rows.is_empty() {
+            keep_from = rows.len() - 1;
+        }
+        rows.drain(..keep_from);
+        truncated = true;
+    }
+    truncated
+}
+
 /// 按会话 id 走索引重建消息流。
 ///
 /// 索引：`message(session_id, sequence, ...)`（`message_session_sequence_idx`）与
@@ -926,6 +1009,17 @@ struct ZcodeStream {
 /// 方向：先按 `sequence` 倒序取消息、再倒序还原，保证被截断时留下的是最近的对话；
 /// `sequence` 可能为 NULL（旧记录），用最大值兜底让它排在末尾。
 fn zcode_load(conn: &Connection, session_id: &str, limits: Limits, part_budget: usize) -> Result<ZcodeStream, String> {
+    zcode_load_with(conn, session_id, limits, part_budget, ZCODE_PART_BYTES)
+}
+
+/// 同 [`zcode_load`]，但字节预算由调用方给定（测试用）。
+fn zcode_load_with(
+    conn: &Connection,
+    session_id: &str,
+    limits: Limits,
+    part_budget: usize,
+    byte_budget: usize,
+) -> Result<ZcodeStream, String> {
     let mut messages = conn.prepare(
         "SELECT id, data FROM message WHERE session_id = ?1
          ORDER BY COALESCE(sequence, 9223372036854775807) DESC, time_created DESC, id DESC",
@@ -938,29 +1032,35 @@ fn zcode_load(conn: &Connection, session_id: &str, limits: Limits, part_budget: 
         .map_err(|error| error.to_string())?;
     let mut out = ZcodeStream::default();
     let mut used = 0usize;
+    let mut bytes_used = 0usize;
     for row in rows {
         let (message_id, data) = row.map_err(|error| error.to_string())?;
-        if used >= part_budget {
+        if used >= part_budget || bytes_used >= byte_budget {
             out.truncated = true;
             break;
         }
-        let rows: Vec<String> = parts.query_map([&message_id], |r| r.get::<_, String>(0))
+        let mut rows: Vec<String> = parts.query_map([&message_id], |r| r.get::<_, String>(0))
             .map_err(|error| error.to_string())?
             .filter_map(Result::ok)
             .collect();
         // 单条消息自己就超过上限时也要留下内容（否则最新一次对话会整段消失）：
-        // 只保留它最近的 `part_budget` 条 part，并标记截断
-        let rows = if rows.len() > part_budget && out.messages.is_empty() {
+        // 只保留它最近的 `part_budget` 条 / 字节预算内的 part，并标记截断
+        if out.messages.is_empty()
+            && (rows.len() > part_budget || rows.iter().map(String::len).sum::<usize>() > byte_budget)
+        {
             out.truncated = true;
-            rows[rows.len() - part_budget..].to_vec()
-        } else {
-            rows
-        };
-        if used + rows.len() > part_budget {
+            keep_recent_parts(&mut rows, part_budget, byte_budget);
+        }
+        let message_bytes: usize = rows.iter().map(String::len).sum();
+        // 第一条消息按上面的裁剪结果照常解析：单条 part 就超预算时也要能打开对话。
+        let over_parts = used > 0 && used + rows.len() > part_budget;
+        let over_bytes = bytes_used > 0 && bytes_used + message_bytes > byte_budget;
+        if over_parts || over_bytes {
             out.truncated = true;
             break;
         }
         used += rows.len();
+        bytes_used += message_bytes;
         match zcode_message(&data, &rows, limits) {
             Ok(Some(message)) => out.messages.push(message),
             Ok(None) => {}
@@ -987,7 +1087,10 @@ fn zcode_page_with(conn: &Connection, zdb: Option<&Connection>, session_id: &str
     };
     let mut note = Vec::new();
     if stream.truncated {
-        note.push(format!("只解析了本会话最近 {ZCODE_PART_LIMIT} 条记录，更早的正文请在原工具查看"));
+        note.push(format!(
+            "只解析了本会话最近的部分记录（上限 {ZCODE_PART_LIMIT} 条 / {} MB），更早的正文请在原工具查看",
+            ZCODE_PART_BYTES / (1024 * 1024)
+        ));
     }
     if stream.skipped > 0 {
         note.push(format!("{} 条记录格式无法解析，已跳过", stream.skipped));
@@ -1018,8 +1121,8 @@ pub fn messages(conn: &Connection, platform: &str, session_id: &str, before: Opt
     let files = source_files(conn).map_err(|error| error.to_string())?;
     let file = files.get(&(platform.to_string(), session_id.to_string())).filter(|p| p.exists()).cloned();
     let all = match (&file, platform) {
-        (Some(p), "claude") => parse_claude(read_lines(p)?),
-        (Some(p), "codex") => parse_codex(read_lines(p)?),
+        (Some(p), "claude") => parse_file(p, "claude")?,
+        (Some(p), "codex") => parse_file(p, "codex")?,
         _ => Vec::new(),
     };
     let total = all.len();
@@ -1383,6 +1486,65 @@ mod tests {
         assert!(stream.truncated);
         assert_eq!(stream.messages.len(), 1);
         assert_eq!(stream.messages[0].text, "段 2\n\n段 3");
+    }
+
+    /// 条数上限挡不住「几千条大 part」：字节预算先到就先停，且从最旧的开始丢。
+    #[test]
+    fn zcode_part_budget_also_caps_bytes() {
+        let mut rows: Vec<String> = (0..10).map(|_| "x".repeat(1024 * 1024)).collect();
+        assert!(keep_recent_parts(&mut rows, ZCODE_PART_LIMIT, 4 * 1024 * 1024));
+        assert_eq!(rows.len(), 4, "字节预算先到：只留最近的 4 MB");
+
+        let mut rows: Vec<String> = (0..10).map(|i| format!("段{i}")).collect();
+        assert!(!keep_recent_parts(&mut rows, ZCODE_PART_LIMIT, 1024), "没超预算不动内容");
+        assert_eq!(rows.len(), 10);
+
+        let mut rows = vec!["超长".repeat(1024), "最新".to_string()];
+        assert!(keep_recent_parts(&mut rows, ZCODE_PART_LIMIT, 16));
+        assert_eq!(rows, vec!["最新".to_string()], "单条超预算时保留最新一条");
+    }
+
+    /// 2000 条以内但字节很大：解析到预算就停，不再把后面的消息也读进来。
+    #[test]
+    fn zcode_byte_budget_stops_before_the_next_message() {
+        let zdb = zcode_fixture();
+        let part = |index: i64, half: &str| {
+            format!(r#"{{"type":"text","text":"消息 {index} {half}，占位字节"}}"#)
+        };
+        for i in 0..3i64 {
+            let id = format!("m{i}");
+            zcode_message_row(&zdb, &id, i, 1_000 + i, r#"{"role":"user"}"#);
+            zcode_part_row(&zdb, &format!("{id}p0"), &id, 0, &part(i, "前半"));
+            zcode_part_row(&zdb, &format!("{id}p1"), &id, 1, &part(i, "后半"));
+        }
+        // 刚好放得下一条消息、放不下第二条
+        let budget = part(0, "前半").len() + part(0, "后半").len();
+        let stream = zcode_load_with(&zdb, ZSESSION, VIEW, ZCODE_PART_LIMIT, budget).unwrap();
+        assert!(stream.truncated, "超过字节预算要标记截断");
+        assert_eq!(stream.messages.len(), 1, "只解析最近一条消息，后面的不再读");
+        assert_eq!(stream.messages[0].text, "消息 2 前半，占位字节\n\n消息 2 后半，占位字节");
+    }
+
+    /// 会话页逐行流式解析：结果与整份读入一致；文件缺失仍然是错误，不是空会话。
+    #[test]
+    fn session_file_parsing_streams_and_reports_missing_files() {
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("jolu-session-stream-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("stream-session.jsonl");
+        let body = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"content\":\"第一句\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"第二句\"}]}}\n",
+        );
+        std::fs::write(&path, body).unwrap();
+        let streamed = parse_file(&path, "claude").unwrap();
+        let buffered = parse_claude(read_lines(&path).unwrap());
+        assert_eq!(streamed.len(), buffered.len());
+        assert_eq!(streamed[0].text, buffered[0].text);
+        assert_eq!(streamed[1].text, "第二句");
+        std::fs::remove_file(&path).unwrap();
+        assert!(parse_file(&path, "claude").is_err(), "文件缺失不能变成空会话");
+        std::fs::remove_dir(&root).unwrap();
     }
 
     #[test]
