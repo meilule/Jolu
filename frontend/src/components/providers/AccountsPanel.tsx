@@ -4,7 +4,7 @@ import * as Menu from "@radix-ui/react-dropdown-menu"
 import { AlertTriangle, Blocks, Check, ChevronDown, CircleAlert, EyeClosed, Globe, KeyRound, Mail, LoaderCircle, Pencil, Plus, RefreshCw, ScanEye, Search, Ticket, Trash2, X } from "lucide-react"
 import { api, isTauri, type QuotaWindowDto } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import { PROVIDERS, connectionProviderId, connectionProviderEntry, editSaveState, fallsBackToManualModel, modelFetchErrorText, protocolLabel, providerEntry, requestGate, canStartVerify, modelBusyAfter, validateConnectionName, type ProviderId, type ModelBusy } from "@/lib/providerCatalog"
+import { PROVIDERS, connectionLogoId, connectionProviderId, connectionProviderEntry, editSaveState, fallsBackToManualModel, modelFetchErrorText, protocolLabel, providerEntry, requestGate, canStartVerify, modelBusyAfter, validateConnectionName, type ProviderId, type ModelBusy } from "@/lib/providerCatalog"
 import { accountQueries, quotaValue, subscriptionDisplay, resetCreditsText, filterAccounts, formatMoney, formatResetAt, formatSyncedAt, quotaTitle, redactAccountMessage } from "@/lib/accountDisplay"
 import { accountCardPolicy } from "@/lib/accountCardPolicy"
 import { isPlanWindowKey } from "@/lib/providers/registry"
@@ -163,7 +163,7 @@ export function AccountsPanel({ conn, onConnect, target, onTargetHandled }: {
         </div>
         <FilterChip active={platform === null} onClick={() => setPlatform(null)}>全部供应商</FilterChip>
         {QUICK_FILTERS.map((id) => (
-          <FilterChip key={id} active={platform === id} onClick={() => setPlatform(id)}><span aria-hidden className="grid size-4 shrink-0 place-items-center"><PlatformLogo platform={providerEntry(id).platformId} size={16} /></span>{providerEntry(id).name}</FilterChip>
+          <FilterChip key={id} active={platform === id} onClick={() => setPlatform(id)}><span aria-hidden className="grid size-4 shrink-0 place-items-center"><PlatformLogo platform={id} size={16} /></span>{providerEntry(id).name}</FilterChip>
         ))}
         <MoreFilter accounts={accounts.filter(account=>!kind || account.kind===kind)} value={platform} onChange={setPlatform} />
       </fieldset>
@@ -327,7 +327,7 @@ function FilterChip({ active, onClick, children }: { active: boolean; onClick: (
 function MoreFilter({ accounts, value, onChange }: { accounts: readonly Connection[]; value: ProviderId | null; onChange: (platform: ProviderId | null) => void }) {
   const count = (id: ProviderId) => accounts.filter((a) => connectionProviderId(a) === id).length
   const inMore = value !== null && !QUICK_FILTERS.includes(value)
-  const item = (key: string, label: string, selected: boolean, onSelect: () => void, platform?: PlatformId) => (
+  const item = (key: string, label: string, selected: boolean, onSelect: () => void, platform?: ProviderId) => (
     <Menu.Item
       key={key}
       onSelect={onSelect}
@@ -349,13 +349,13 @@ function MoreFilter({ accounts, value, onChange }: { accounts: readonly Connecti
         )}
       >
         <ChevronDown aria-hidden className="size-4 text-jolu-muted" />
-        {inMore && <span aria-hidden className="grid size-4 shrink-0 place-items-center"><PlatformLogo platform={providerEntry(value).platformId} size={16} /></span>}
+        {inMore && <span aria-hidden className="grid size-4 shrink-0 place-items-center"><PlatformLogo platform={value} size={16} /></span>}
         {inMore ? providerEntry(value).name : "更多供应商"}
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Content align="start" sideOffset={6} collisionPadding={12} style={{ maxHeight: "var(--radix-dropdown-menu-content-available-height)" }} className="motion-popover z-[100] grid w-[528px] max-w-[calc(100vw-24px)] overflow-y-auto grid-cols-3 gap-2 rounded-xl border border-jolu-border bg-jolu-cc-surface p-3 shadow-popover">
           {item("all", `全部供应商 · ${accounts.length}`, value === null, () => onChange(null))}
-          {PROVIDERS.map((entry) => item(entry.id, `${entry.name} · ${count(entry.id)}`, value === entry.id, () => onChange(entry.id), entry.platformId))}
+          {PROVIDERS.map((entry) => item(entry.id, `${entry.name} · ${count(entry.id)}`, value === entry.id, () => onChange(entry.id), entry.id))}
         </Menu.Content>
       </Menu.Portal>
     </Menu.Root>
@@ -409,7 +409,7 @@ function AccountCard({ account, current, located, selecting = false, selected = 
     <article role="listitem" data-account-card data-account-id={account.id} data-account-located={located ? "true" : undefined} className={cn("jolu-card flex h-full min-h-0 min-w-0 flex-col gap-1.5 rounded-xl border bg-jolu-cc-surface p-3", current ? "border-jolu-accent" : "border-jolu-border", located && "ring-2 ring-jolu-accent ring-inset")}>
       <div className="flex h-8 shrink-0 items-center gap-2">
         {selecting && <input type="checkbox" aria-label={selectionLabel ?? "选择账号"} checked={selected} disabled={disabled} onChange={onToggle} className="size-4 shrink-0 cursor-pointer accent-jolu-accent disabled:cursor-default" />}
-        <span className="grid size-6 shrink-0 place-items-center"><PlatformLogo platform={account.platformId} size={22} /></span>
+        <span className="grid size-6 shrink-0 place-items-center"><PlatformLogo platform={connectionLogoId(account)} size={22} /></span>
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="truncate text-[13px] font-semibold text-jolu-text" title={hidden ? undefined : account.baseName}>{name !== account.baseName ? <PrivacyMosaic label="账号名称" length={account.baseName.length} /> : name}</span>
           <span className="truncate text-[10px] text-jolu-muted">{entry.name} · {isApi ? `ApiKey${account.protocol ? ` · ${protocolLabel(account.protocol)}` : ""}` : "Auth 官方订阅"}</span>
@@ -958,7 +958,7 @@ function PromoteDialog({ account, onClose, onConfirm }: { account: Connection; o
       </>}
     >
       <div className="flex items-center gap-2 rounded-lg bg-jolu-side px-3 py-2.5 text-xs text-jolu-text">
-        <PlatformLogo platform={account.platformId} />
+        <PlatformLogo platform={connectionLogoId(account)} />
         {account.baseName} · {account.kind === "api" ? "API Key" : "订阅授权"}
       </div>
       <p className="text-xs leading-relaxed text-jolu-text">

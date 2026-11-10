@@ -81,6 +81,7 @@ interface ProviderConnection {
   id?: string
   platformId: string
   edition?: string | null
+  baseUrl?: string | null
 }
 
 const NATIVE_EDITIONS: Readonly<Record<string, string>> = {
@@ -104,6 +105,19 @@ export function connectionProviderEntry(connection: ProviderConnection): Provide
   if (id) return providerEntry(id)
   const entry = providerEntry(connection.platformId as PlatformId)
   return { ...entry, name: `${entry.name} · 区域未知` }
+}
+
+/**
+ * 连接展示用的图标 id：custom 连接按 Base URL 反查厂商预设（deepseek / kimi / …），
+ * 让账号卡显示品牌图标而不是自定义六边形。反查不到（改过地址或为空）回落平台 id。
+ * 仅用于选图标与展示，不参与任何能力判断。
+ */
+export function connectionLogoId(connection: ProviderConnection): ProviderId {
+  if (connection.platformId === "custom" && connection.baseUrl) {
+    const hit = PROVIDERS.find((entry) => entry.baseUrl?.value === connection.baseUrl)
+    if (hit) return hit.id
+  }
+  return connection.platformId as PlatformId
 }
 
 /** 至少一种方式已实现，卡片上的「连接」按钮才可用 */

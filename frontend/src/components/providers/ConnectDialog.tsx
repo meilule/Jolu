@@ -280,7 +280,7 @@ export function ConnectDialog({ platform: initialPlatform, actions, onClose: onD
 
           <fieldset disabled={saving} className="-mx-1 flex min-h-0 min-w-0 flex-1 flex-col gap-3.5 overflow-y-auto border-0 px-1 py-0">
             <div className="flex h-10 items-center gap-2.5">
-              <span className="grid size-7 place-items-center"><PlatformLogo platform={platform} size={22} /></span>
+              <span className="grid size-7 place-items-center"><PlatformLogo platform={provider} size={22} /></span>
               <span className="text-sm font-semibold text-jolu-text">{entry.name}</span>
               <span className="flex-1" />
               {!tabs && !custom && <span className="rounded-[5px] bg-jolu-stage px-2 py-1 text-[11px] text-jolu-muted">{mode === "subscription" ? "当前仅订阅" : "当前仅 API Key"}</span>}
@@ -630,7 +630,7 @@ function PlatformSwitcher({ current, onPick }: { current: ProviderId; onPick: (p
                 onSelect={() => onPick(item.id)}
                 className="flex h-8 cursor-default select-none items-center gap-2 rounded-[5px] px-2 text-xs text-jolu-text outline-none data-[highlighted]:bg-jolu-side data-[disabled]:opacity-45"
               >
-                <PlatformLogo platform={item.platformId} />
+                <PlatformLogo platform={item.id} />
                 <span className="min-w-0 flex-1">{item.name}</span>
                 {pending ? <span className="text-[11px] text-jolu-muted">待接入</span> : item.id === current && <Check aria-hidden className="size-3.5 text-jolu-on" />}
               </Menu.Item>

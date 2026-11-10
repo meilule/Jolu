@@ -170,7 +170,7 @@ function ProviderCard({ entry, count, onConnect }: { entry: ProviderEntry; count
   )
   return (
     <Card
-      logo={<span className="grid size-7 place-items-center"><PlatformLogo platform={entry.platformId} size={22} /></span>}
+      logo={<span className="grid size-7 place-items-center"><PlatformLogo platform={entry.id} size={22} /></span>}
       // 待接入的平台不显示账号数量，改为说明状态（待确认：Jolu.pen 未画此状态）
       badge={!ready ? "待接入" : count === null ? "读取中" : connectionBadge(count)}
       badgeTone={ready && count ? "on" : "muted"}
