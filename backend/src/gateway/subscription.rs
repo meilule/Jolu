@@ -137,7 +137,9 @@ pub(crate) fn capability(conn: &Connection, id: &str) -> Capability {
         let bound = match platform.as_str() {
             "grok" => super::adapter::grok::bound(conn,id).map(|_|()),
             "workbuddy" => super::adapter::workbuddy::bound(conn,id).map(|_|()),
-            "zcode" => super::adapter::zcode::bound(conn,id).map(|_|()),
+            // zcode 的判定与转发走同一套凭据顺序：本机 Coding Plan 凭据优先，
+            // 只看浏览器授权会把本机来源镜像误报成「需要重新登录」（登录与额度都正常）
+            "zcode" => super::adapter::zcode::serve_capability(conn,id).map(|_|()),
             "qoder" => super::adapter::qoder::bound(conn,id).map(|_|()),
             "trae" => super::adapter::trae::bound(conn,id).map(|_|()),
             _ => super::adapter::gemini_subscription::bound(conn,id).map(|_|()),

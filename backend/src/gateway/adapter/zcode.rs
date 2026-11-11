@@ -40,6 +40,46 @@ pub(crate) fn bound(
     Ok((secret, session))
 }
 
+/// 网关来源能力判定的 ready 文案，保持与改造前一致，前端无需感知判定方式变化。
+const SERVE_READY: &str = "支持 API 调用 · 个人 Coding Plan / Messages，真实账号待验收";
+
+/// 来源能力判定：与实际转发走同一套凭据顺序（见 [`coding_plan_forward`]）——
+/// 先本机 Coding Plan 凭据，再浏览器授权 OAuth 链。只看浏览器授权会把本机来源
+/// 镜像（`monitor:native:zcode:*`，secret 为空）误报成「需要重新登录」：它们的
+/// 登录与额度都正常（额度查询走本机令牌），缺的只是转发凭据，文案要说清这一点。
+pub(crate) fn serve_capability(conn: &rusqlite::Connection, id: &str) -> Result<String, String> {
+    serve_capability_with(conn, id, &forward_credential)
+}
+
+fn serve_capability_with(
+    conn: &rusqlite::Connection,
+    id: &str,
+    local: &dyn Fn(&str) -> Result<(String, &'static str, Option<String>), String>,
+) -> Result<String, String> {
+    if local(id).is_ok() {
+        return Ok(SERVE_READY.to_string());
+    }
+    match bound(conn, id) {
+        Ok(_) => Ok(SERVE_READY.to_string()),
+        Err(browser_reason) => {
+            let has_browser_secret = conn
+                .query_row("SELECT secret FROM connections WHERE id=?1", [id], |r| {
+                    r.get::<_, Option<String>>(0)
+                })
+                .ok()
+                .flatten()
+                .filter(|secret| provider_browser_auth::is_browser(Some(secret)))
+                .is_some();
+            if has_browser_secret {
+                return Err(browser_reason);
+            }
+            // 本机来源镜像：缺的是转发凭据，不是登录。两条链各断一处要如实说清，
+            // 不再沿用「需要重新登录」——那会指向一个并不存在的登录问题。
+            Err("ZCode 转发凭据不可用：本机 Coding Plan 凭据读不出来，且该来源没有浏览器授权；请在原工具重新登录后重试，或改用浏览器授权保存的账号".to_string())
+        }
+    }
+}
+
 /// 家族 → Anthropic 上游。借用 [`crate::zcode_browser_auth::Session::anthropic_base`]
 /// 的既有映射，不在本文件重复定义域名；这里没有真实会话，其余字段填空即可。
 fn anthropic_base_of(family: &str) -> &'static str {
@@ -661,9 +701,43 @@ mod tests {
         server.abort();
     }
 
-    #[tokio::test]
-    async fn personal_project_token_uses_only_selected_account() {
+    #[test]
+    fn serve_capability_follows_the_forwarding_credential_order() {
         let deps = crate::proxy::test_support::bare_deps();
+        let conn = deps.db.lock().unwrap();
+        let local_ok = |_id: &str| -> Result<(String, &'static str, Option<String>), String> {
+            Ok(("key.id-secret".into(), "https://api.z.ai/api/anthropic", None))
+        };
+        let local_broken = |_id: &str| -> Result<(String, &'static str, Option<String>), String> {
+            Err("连接 x 未能读取本机 ZCode Coding Plan 凭据：测试断链".to_string())
+        };
+        let session = crate::zcode_browser_auth::Session {
+            access_token: "fixture-login".into(),
+            refresh_token: None,
+            user_id: "fixture-user".into(),
+            account: None,
+            zcode_token: "fixture-session".into(),
+            family: None,
+        };
+        // 本机凭据可用时，即便连接没有任何浏览器授权也判定 ready——转发走的就是本机凭据
+        conn.execute("INSERT INTO connections(id,platform,kind,name,created_ms,slug) VALUES('monitor:native:zcode:main','zcode','auth','镜像',1,'zcode')", []).unwrap();
+        assert_eq!(serve_capability_with(&conn, "monitor:native:zcode:main", &local_ok).unwrap(), SERVE_READY);
+        // 本机凭据断链 + 无浏览器授权：needs_auth 的文案要说清缺的是转发凭据，不是登录
+        let reason = serve_capability_with(&conn, "monitor:native:zcode:main", &local_broken).unwrap_err();
+        assert!(reason.contains("没有浏览器授权"), "{reason}");
+        assert!(!reason.contains("需要重新登录"), "{reason}");
+        // 本机凭据断链 + 浏览器授权有效：走授权链判定 ready
+        let sealed = provider_browser_auth::seal("browser-x", &Credential::Zcode { session: session.clone() }).unwrap();
+        conn.execute("INSERT INTO connections(id,platform,kind,name,secret,created_ms,slug) VALUES('browser-x','zcode','auth','浏览器',?1,1,'zcode-b')", [sealed]).unwrap();
+        assert_eq!(serve_capability_with(&conn, "browser-x", &local_broken).unwrap(), SERVE_READY);
+        // 浏览器授权损坏（secret 无法解封）：如实报授权原因，不冒充登录问题
+        conn.execute("UPDATE connections SET secret='jolu-browser:v1:broken' WHERE id='browser-x'", []).unwrap();
+        let reason = serve_capability_with(&conn, "browser-x", &local_broken).unwrap_err();
+        assert!(reason.contains("浏览器授权"), "{reason}");
+    }
+
+    #[tokio::test]
+    async fn personal_project_token_uses_only_selected_account() {        let deps = crate::proxy::test_support::bare_deps();
         for id in ["a", "b"] {
             let session = crate::zcode_browser_auth::Session {
                 access_token: format!("{id}-login"),
