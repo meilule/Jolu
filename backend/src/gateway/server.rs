@@ -387,6 +387,20 @@ async fn models(State(deps): State<Arc<ProxyDeps>>) -> Response {
             }));
         }
     }
+    // 路由分组也是可调用的 id（`group/<slug>`）：放在来源模型之后，agent 的模型菜单里能直接选到
+    if let Ok(conn) = deps.db.try_lock() {
+        if let Ok(groups) = crate::gateway::routing_groups::list(&conn) {
+            for group in groups {
+                data.push(serde_json::json!({
+                    "id": format!("group/{}", group.slug),
+                    "object": "model",
+                    "owned_by": "group",
+                    "status": "connected",
+                    "display_name": format!("分组 · {}（{} 个成员）", if group.name.trim().is_empty() { &group.slug } else { &group.name }, group.members.len()),
+                }));
+            }
+        }
+    }
     if data.is_empty() {
         if let Some(reason) = unavailable_reasons.values().next() {
             return error_json(StatusCode::BAD_GATEWAY, reason);

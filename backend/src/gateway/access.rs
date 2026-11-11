@@ -1036,8 +1036,7 @@ mod tests {
         super::super::route_log::record(&conn, super::super::route_log::NewEntry {
             agent: None, requested_model: "a/b", source: None, upstream_model: None, status_code: Some(200),
             result: "ok", duration_ms: None, connection_id: None, session_platform: None, session_id: None,
-            client_key: Some("quota"),
-        });
+            client_key: Some("quota"), request_id: None });
         let now = chrono::Local::now();
         let limited = check_client_key_limit_for(&conn, "quota", now, None, true).unwrap().unwrap();
         assert_eq!(limited.status, 429);
@@ -1088,8 +1087,7 @@ mod tests {
             connection_id: None,
             session_platform: None,
             session_id: None,
-            client_key: Some(client),
-        };
+            client_key: Some(client), request_id: None };
         // failed / rejected 与别的 Key 的请求都不计入当日额度
         super::super::route_log::record(&conn, row("ok", "quota"));
         super::super::route_log::record(&conn, row("failed", "quota"));
@@ -1169,8 +1167,7 @@ mod tests {
                     connection_id: None,
                     session_platform: None,
                     session_id: None,
-                    client_key: Some("lan-agent"),
-                },
+                    client_key: Some("lan-agent"), request_id: None },
             );
         }
         let refused = client

@@ -80,3 +80,19 @@ test("工具展示名回退到原始 id 而不是空", () => {
   assert.equal(agentLabel("zcode"), "ZCode")
   assert.equal(agentLabel("unknown-agent"), "unknown-agent")
 })
+
+test("同一请求的多次尝试按 id 顺序标第 k/n 次，单次与跨重启的不标", async () => {
+  const { attemptLabels } = await import("./gatewayPage.ts")
+  const labels = attemptLabels([
+    { id: 12, ts: 2_000, request_id: 7 },
+    { id: 11, ts: 1_000, request_id: 7 },
+    { id: 10, ts: 900, request_id: 6 },
+    { id: 9, ts: 0, request_id: 5 },
+    { id: 3, ts: 0 - 60 * 60_000, request_id: 5 },
+    { id: 2, ts: 0, request_id: null },
+  ])
+  assert.equal(labels.get(11), "第 1/2 次")
+  assert.equal(labels.get(12), "第 2/2 次")
+  assert.equal(labels.has(10), false, "只有一次尝试不标")
+  assert.equal(labels.has(9), false, "相隔超过 10 分钟视为重启后的编号复用")
+})

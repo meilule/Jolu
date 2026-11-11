@@ -77,3 +77,25 @@ export function circuitText(status: GatewayStatusDto | null): string {
 export function canToggleSource(_serving: boolean, busy: boolean, _capability?: { can_serve: boolean }): boolean {
   return !busy
 }
+
+/**
+ * 同一次请求的多次尝试（分组成员失败转移）：给每行标「第 k/n 次」。只有一次尝试的不标。
+ * request_id 进程内递增、重启后从头计，所以还要求同组的行时间相距不超过 10 分钟。
+ */
+export function attemptLabels(rows: readonly { id?: number; ts: number; request_id?: number | null }[]): Map<number, string> {
+  const groups = new Map<number, { id: number; ts: number }[]>()
+  for (const row of rows) {
+    if (typeof row.request_id !== "number" || typeof row.id !== "number") continue
+    const list = groups.get(row.request_id) ?? []
+    list.push({ id: row.id, ts: row.ts })
+    groups.set(row.request_id, list)
+  }
+  const labels = new Map<number, string>()
+  for (const list of groups.values()) {
+    if (list.length < 2) continue
+    list.sort((a, b) => a.id - b.id)
+    if (list[list.length - 1].ts - list[0].ts > 10 * 60_000) continue
+    list.forEach((row, index) => labels.set(row.id, `第 ${index + 1}/${list.length} 次`))
+  }
+  return labels
+}

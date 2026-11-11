@@ -405,6 +405,7 @@ pub(crate) fn record_route(
             session_platform: meta.session_platform(),
             session_id: meta.session_id(),
             client_key: meta.client_key.as_deref(),
+            request_id: Some(request_id as i64),
         },
     );
 }
@@ -702,6 +703,23 @@ pub(crate) async fn handle(
     // ── 候选循环 ──
     // 主选失败且属可转移错误（401/402/403/408/429/5xx）时换下一个成员；
     // 请求本身的 4xx（400/404/413/422…）是确定性的，转移只会重复，直接回给调用方。
+    // 同一账号（account_fp 相同的不同来源，如同一把 Key 建了两个连接）一次请求只试一次：
+    // 第一次失败的原因在第二次一样会出现，再试只是白等（magpie R3）
+    let mut tried_accounts: Vec<String> = Vec::new();
+    let candidates: Vec<(route::PoolEntry, String)> = candidates
+        .into_iter()
+        .filter(|(entry, _)| match entry.account_fp.as_deref() {
+            Some(fp) if tried_accounts.iter().any(|seen| seen == fp) => {
+                eprintln!("[路由] 成员「{}」与前面的候选是同一账号，本次不再重复尝试", entry.slug);
+                false
+            }
+            Some(fp) => {
+                tried_accounts.push(fp.to_string());
+                true
+            }
+            None => true,
+        })
+        .collect();
     let total = candidates.len();
     for (index, (entry, upstream_model)) in candidates.into_iter().enumerate() {
         let last = index + 1 == total;

@@ -22,6 +22,8 @@ pub(crate) fn rotate_state() -> std::sync::MutexGuard<'static, std::collections:
 
 /// 嵌套展开上限：环（A 包含 B、B 包含 A）到此为止，不再深入。
 const MAX_EXPAND_DEPTH: usize = 4;
+/// 保存时允许的嵌套深度（magpie R2 同值）；超过或成环的分组直接拒存。
+const MAX_SAVE_DEPTH: usize = 8;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct RoutingGroup {
@@ -125,12 +127,64 @@ fn validate_members(members: &[GroupMember]) -> Result<(), String> {
     Ok(())
 }
 
+/// 成员去重（同一「来源/模型」只留第一次出现的那个，保留它的暂停设置）。
+/// 为什么：重复成员在顺序 / 轮转里会被算两次，「轮转」也就不再均匀（magpie R1）。
+pub(crate) fn dedupe_members(members: &[GroupMember]) -> Vec<GroupMember> {
+    let mut seen = std::collections::HashSet::new();
+    members
+        .iter()
+        .filter(|m| seen.insert((m.slug.trim().to_string(), m.model.trim().to_string())))
+        .cloned()
+        .collect()
+}
+
+/// 保存前检查嵌套：引用的分组要存在，展开不能回到自己（成环），深度不超过 [`MAX_SAVE_DEPTH`]。
+/// `lookup` 按 slug 取别的分组的成员（保存中的这个分组用新成员）。
+pub(crate) fn check_nesting(
+    slug: &str,
+    members: &[GroupMember],
+    lookup: &dyn Fn(&str) -> Option<Vec<GroupMember>>,
+) -> Result<(), String> {
+    fn visit(
+        current: &str,
+        members: &[GroupMember],
+        path: &mut Vec<String>,
+        lookup: &dyn Fn(&str) -> Option<Vec<GroupMember>>,
+    ) -> Result<(), String> {
+        if path.len() > MAX_SAVE_DEPTH {
+            return Err(format!("分组嵌套超过 {MAX_SAVE_DEPTH} 层：{}", path.join(" → ")));
+        }
+        for member in members {
+            let Some(child) = member.slug.strip_prefix("group/").or_else(|| (member.slug == "group").then_some(member.model.as_str())) else { continue };
+            if path.iter().any(|seen| seen == child) {
+                return Err(format!("分组嵌套成环：{} → {child}", path.join(" → ")));
+            }
+            let Some(grandchildren) = lookup(child) else {
+                return Err(format!("成员引用的分组「{child}」不存在"));
+            };
+            path.push(child.to_string());
+            visit(child, &grandchildren, path, lookup)?;
+            path.pop();
+        }
+        let _ = current;
+        Ok(())
+    }
+    visit(slug, members, &mut vec![slug.to_string()], lookup)
+}
+
+/// 从数据库读别的分组的成员（`check_nesting` 用）。
+fn lookup_in(conn: &Connection) -> impl Fn(&str) -> Option<Vec<GroupMember>> + '_ {
+    move |slug: &str| get(conn, slug).ok().flatten().map(|group| group.members)
+}
+
 pub(crate) fn create(conn: &Connection, slug: &str, name: &str, strategy: &str, members: &[GroupMember]) -> Result<RoutingGroup, String> {
     validate_members(members)?;
+    let members = &dedupe_members(members)[..];
     let slug = slug.trim();
     if slug.is_empty() || !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
         return Err("分组 id 只能用小写字母、数字和连字符".into());
     }
+    check_nesting(slug, members, &lookup_in(conn))?;
     let strategy = normalize_strategy(strategy);
     let id = format!("rg-{}", chrono::Utc::now().timestamp_millis());
     let members_json = serde_json::to_string(members).map_err(|error| format!("成员序列化失败：{error}"))?;
@@ -143,8 +197,11 @@ pub(crate) fn create(conn: &Connection, slug: &str, name: &str, strategy: &str, 
 }
 
 pub(crate) fn update(conn: &Connection, slug: &str, name: Option<&str>, strategy: Option<&str>, members: Option<&[GroupMember]>) -> Result<(), String> {
+    let deduped = members.map(dedupe_members);
+    let members = deduped.as_deref();
     if let Some(members) = members {
         validate_members(members)?;
+        check_nesting(slug, members, &lookup_in(conn))?;
     }
     let strategy = strategy.map(normalize_strategy);
     let members_json = match members {
@@ -284,6 +341,8 @@ pub(crate) fn expand(
         }
     }
     walk(members, depth, MAX_EXPAND_DEPTH, &mut out, &mut skipped, expand_group);
+    // 嵌套展开后同一「来源/模型」只试一次
+    let out = dedupe_members(&out);
     (out, skipped)
 }
 
@@ -360,6 +419,29 @@ mod tests {
         assert_eq!(third[0].slug, "c");
         let (fourth, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None);
         assert_eq!(fourth[0].slug, "a", "转满一圈回到开头");
+    }
+
+    #[test]
+    fn duplicate_members_are_kept_once_and_nesting_is_checked_on_save() {
+        let members = vec![member("a", "m1"), member("b", "m2"), member("a", "m1")];
+        assert_eq!(dedupe_members(&members).len(), 2);
+        let groups: std::collections::HashMap<&str, Vec<GroupMember>> = [
+            ("inner", vec![member("a", "m1")]),
+            ("loop-b", vec![member("group/loop-a", "x")]),
+        ]
+        .into_iter()
+        .collect();
+        let lookup = |slug: &str| groups.get(slug).cloned();
+        assert!(check_nesting("outer", &[member("group/inner", "x")], &lookup).is_ok());
+        let error = check_nesting("loop-a", &[member("group/loop-b", "x")], &lookup).unwrap_err();
+        assert!(error.contains("成环") && error.contains("loop-a → loop-b"), "{error}");
+        assert!(check_nesting("outer", &[member("group/ghost", "x")], &lookup).unwrap_err().contains("ghost"));
+        assert!(check_nesting("self", &[member("group/self", "x")], &lookup).unwrap_err().contains("成环"));
+        // 9 层链：超过深度上限
+        let chain: std::collections::HashMap<String, Vec<GroupMember>> =
+            (1..=9).map(|i| (format!("g{i}"), vec![member(&format!("group/g{}", i + 1), "x")])).chain([("g10".to_string(), vec![member("a", "m")])]).collect();
+        let deep = |slug: &str| chain.get(slug).cloned();
+        assert!(check_nesting("g0", &[member("group/g1", "x")], &deep).unwrap_err().contains("超过"));
     }
 
     #[test]

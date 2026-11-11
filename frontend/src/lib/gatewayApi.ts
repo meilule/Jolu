@@ -111,6 +111,8 @@ export interface RouteLogDto {
   connection_id?: string | null
   session_platform?: string | null
   session_id?: string | null
+  /** 同一次网关请求的编号：分组成员转移时各次尝试共享它（进程内递增，重启后从头计；旧行为 null） */
+  request_id?: number | null
 }
 
 /** 路由流水的一页（与后端 `RouteLogPage` 一致）。 */

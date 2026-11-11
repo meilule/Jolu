@@ -344,6 +344,8 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
     // 局域网共享（P8.3）：流水记录命中了哪个命名客户端 Key。可空新列、旧行保持 NULL：
     // 限额按 Key 名统计当日成功请求数就是读这一列，历史行与未带 Key 的请求天然不计入。
     let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN client_key TEXT", []);
+    // 同一次请求的多次尝试（分组成员转移）共享 request_id，界面据此标「第 N 次尝试」
+    let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN request_id INTEGER", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN activity_state TEXT NOT NULL DEFAULT 'done'", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN activity_updated_ms INTEGER", []);
     let _ = conn.execute(

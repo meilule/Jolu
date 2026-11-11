@@ -3,7 +3,7 @@ import { Link2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { listenEvent } from "@/lib/api"
 import { gatewayApi, type RouteLogDto, type RouteLogPageDto } from "@/lib/gatewayApi"
-import { agentLabel } from "@/lib/gatewayPage"
+import { agentLabel, attemptLabels } from "@/lib/gatewayPage"
 import { modelPart, routeTypeTag } from "@/lib/gatewaySessions"
 import { useToast } from "@/components/ui/Toast"
 import { Pagination } from "@/components/ui/Pagination"
@@ -68,6 +68,7 @@ export function RouteLogPanel({ desktop, connections, tick }: { desktop: boolean
   }, [desktop, load])
 
   const rows = data?.rows ?? []
+  const attempts = attemptLabels(rows)
   const from = data && data.total > 0 ? (data.page - 1) * data.page_size + 1 : 0
   const to = data ? from + rows.length - 1 : 0
   const byId = new Map(connections.map((c) => [c.id, c]))
@@ -97,7 +98,8 @@ export function RouteLogPanel({ desktop, connections, tick }: { desktop: boolean
             <span>时间</span><span>Agent</span><span>请求模型</span><span>路由到</span><span title="等待上游响应头的耗时；流式请求不是首字耗时">耗时</span><span>结果</span>
           </div>
           {rows.map((row, index) => (
-            <RouteRow key={row.id ?? `${row.ts}-${index}`} row={row} connection={(row.connection_id && byId.get(row.connection_id)) || (row.source ? bySlug.get(row.source) : undefined)} />
+            <RouteRow key={row.id ?? `${row.ts}-${index}`} row={row} attempt={typeof row.id === "number" ? attempts.get(row.id) : undefined}
+              connection={(row.connection_id && byId.get(row.connection_id)) || (row.source ? bySlug.get(row.source) : undefined)} />
           ))}
         </div>
       )}
@@ -117,7 +119,7 @@ function duration(ms: number | null): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
 }
 
-function RouteRow({ row, connection }: { row: RouteLogDto; connection: Connection | undefined }) {
+function RouteRow({ row, connection, attempt }: { row: RouteLogDto; connection: Connection | undefined; attempt?: string }) {
   const model = row.upstream_model ?? (row.source ? modelPart(row.requested_model, row.source) : null)
   const name = connection?.baseName ?? row.source
   return (
@@ -130,8 +132,10 @@ function RouteRow({ row, connection }: { row: RouteLogDto; connection: Connectio
         {connection && <span className="shrink-0 rounded bg-jolu-track px-[5px] text-[8.5px] leading-3 text-jolu-muted">{routeTypeTag(connection.kind, connection.platformId)}</span>}
       </span>
       <span className="tabular-nums text-[10px] text-jolu-muted">{duration(row.duration_ms)}</span>
-      <span className={cn("text-[9.5px]", row.result === "ok" ? "text-jolu-on" : row.result === "rejected" ? "text-jolu-muted" : "text-jolu-danger")}>
-        {row.result === "ok" ? "成功" : row.result === "rejected" ? "拒绝" : "失败"}
+      <span className={cn("flex min-w-0 flex-col text-[9.5px] leading-tight", row.result === "ok" ? "text-jolu-on" : row.result === "rejected" ? "text-jolu-muted" : "text-jolu-danger")}
+        title={attempt ? "同一次请求在分组成员间转移的第几次尝试" : undefined}>
+        <span>{row.result === "ok" ? "成功" : row.result === "rejected" ? "拒绝" : "失败"}</span>
+        {attempt && <span className="text-[8px] text-jolu-muted">{attempt}</span>}
       </span>
     </div>
   )
