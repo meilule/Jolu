@@ -674,8 +674,26 @@ pub(crate) async fn handle(
             .collect()
     } else {
         match decision {
-            RouteDecision::Direct(entry, upstream_model) => vec![(entry.clone(), upstream_model)],
-            RouteDecision::Subscription(entry) => vec![(entry.clone(), String::new())],
+            RouteDecision::Direct(entry, upstream_model) => {
+                let bare = upstream_model.clone();
+                let mut list = vec![(entry.clone(), upstream_model)];
+                list.extend(alternates_for(&deps, &pool, entry, &bare).into_iter().map(|alt| (alt, bare.clone())));
+                list
+            }
+            RouteDecision::Subscription(entry) => {
+                // 订阅适配器从请求体读模型：替补来源要把 body 的 model 改成裸名（与分组成员同一做法）
+                let bare = route::split_model_id(&model).map(|(_, name)| name.to_string()).unwrap_or_else(|| model.clone());
+                let mut list = vec![(entry.clone(), String::new())];
+                list.extend(alternates_for(&deps, &pool, entry, &bare).into_iter().map(|alt| (alt, bare.clone())));
+                list
+            }
+            // 指定来源已标为额度用尽 / 登录失效：同平台还有可用的其他账号时直接用它们，
+            // 不必等这个来源恢复（route::same_model_alternates）
+            RouteDecision::Reject { kind: route::RejectKind::PaymentRequired | route::RejectKind::Unauthorized, .. }
+                if fallback_for_rejected(&deps, &pool, &model).is_some() =>
+            {
+                fallback_for_rejected(&deps, &pool, &model).unwrap_or_default()
+            }
             RouteDecision::Reject { kind, message, retry_after } => {
                 let status = match kind {
                     route::RejectKind::BadRequest => StatusCode::BAD_REQUEST,
@@ -965,6 +983,21 @@ fn wire_label(protocol: CallerProtocol) -> &'static str {
         CallerProtocol::Chat => "OpenAI Chat",
         CallerProtocol::Responses => "OpenAI Responses",
     }
+}
+
+/// 带来源前缀的请求被「额度用尽 / 登录失效」拒绝时的替补：找到那个来源，取它的同平台替补。
+fn fallback_for_rejected(deps: &Arc<ProxyDeps>, pool: &[route::PoolEntry], model: &str) -> Option<Vec<(route::PoolEntry, String)>> {
+    let (slug, name) = route::split_model_id(model)?;
+    let primary = pool.iter().find(|entry| entry.slug == slug)?;
+    let alternates = alternates_for(deps, pool, primary, name);
+    (!alternates.is_empty()).then(|| alternates.into_iter().map(|alt| (alt, name.to_string())).collect())
+}
+
+/// 普通来源失败时的替补候选（最多 2 个，加主选共 3 个；见 `route::same_model_alternates`）。
+fn alternates_for(deps: &Arc<ProxyDeps>, pool: &[route::PoolEntry], primary: &route::PoolEntry, model_name: &str) -> Vec<route::PoolEntry> {
+    let catalog = deps.db.try_lock().ok().and_then(|conn| crate::gateway::catalog::list(&conn).ok()).unwrap_or_default();
+    let serves = |slug: &str| catalog.iter().any(|entry| entry.slug == slug && entry.model == model_name);
+    route::same_model_alternates(pool, primary, &serves, 2)
 }
 
 /// 一轮回复最多读这么多（非流式的完整消息，含长文本与工具调用）。

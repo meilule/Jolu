@@ -386,6 +386,9 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
     // 回滚 = 调 `catalog_backfill::rollback`（按 `autoModels` 移除模型并清掉自动补的地址），
     // 也可直接丢掉这一列——没有任何代码在缺列时读它。
     let _ = conn.execute("ALTER TABLE connections ADD COLUMN catalog_auto TEXT", []);
+    // 402 标为额度用尽的本地日期（YYYY-MM-DD）：次日起自动恢复（route::recover_exhausted）；
+    // 旧行为 NULL，不自动恢复（以前可能是手动设的）
+    let _ = conn.execute("ALTER TABLE connections ADD COLUMN exhausted_day TEXT", []);
     // 身份迁移：开发期直接暴露问题；发布期只记诊断，不阻止应用启动。
     let migration = crate::gateway::identity::migrate(conn);
     #[cfg(debug_assertions)]

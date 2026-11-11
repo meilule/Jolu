@@ -488,6 +488,54 @@ pub(crate) fn decide_with_affinity<'a>(
 }
 
 /// 模型池快照（带 TTL 缓存）。锁被采集占用时沿用旧快照，与观测模式 KeyIndex 一致。
+/// 因 402 标为额度用尽、且不是今天标的来源，恢复为可用。返回恢复的数量。
+///
+/// 为什么：额度多按天重置，标上「用尽」后不自动恢复，来源就永远停在不可用，只能手动点恢复
+/// （magpie 的 402 `exhausted` 同样在次日零点回来）。手动暂停的不动，旧数据没有日期的不动。
+pub(crate) fn recover_exhausted(conn: &rusqlite::Connection, today: &str) -> usize {
+    conn.execute(
+        "UPDATE connections SET status = 'connected', exhausted_day = NULL
+          WHERE status = 'exhausted' AND exhausted_day IS NOT NULL AND exhausted_day < ?1",
+        [today],
+    )
+    .unwrap_or(0)
+}
+
+/// 普通来源（非分组）失败时的替补：同平台、同种类、同协议、可用、不同账号、且目录里也有这个模型的
+/// 其他连接，最多 `limit` 个。为什么只找同平台：同一个服务的另一个账号行为一致，换去别家模型
+/// 会让用户拿到不是自己选的东西。`serves` 判断某来源 slug 的目录里有没有这个模型。
+pub(crate) fn same_model_alternates(
+    pool: &[PoolEntry],
+    primary: &PoolEntry,
+    serves: &dyn Fn(&str) -> bool,
+    limit: usize,
+) -> Vec<PoolEntry> {
+    let mut accounts: Vec<&str> = primary.account_fp.as_deref().into_iter().collect();
+    let mut out = Vec::new();
+    for entry in pool {
+        if out.len() >= limit {
+            break;
+        }
+        if entry.connection_id == primary.connection_id
+            || entry.platform != primary.platform
+            || entry.kind != primary.kind
+            || entry.protocol != primary.protocol
+            || entry.status != "connected"
+            || !serves(&entry.slug)
+        {
+            continue;
+        }
+        if let Some(fp) = entry.account_fp.as_deref() {
+            if accounts.contains(&fp) {
+                continue;
+            }
+            accounts.push(fp);
+        }
+        out.push(entry.clone());
+    }
+    out
+}
+
 pub(crate) fn pool_snapshot(
     db: &Arc<Mutex<rusqlite::Connection>>,
     index: &Mutex<PoolIndex>,
@@ -499,6 +547,10 @@ pub(crate) fn pool_snapshot(
         }
     }
     if let Ok(conn) = db.try_lock() {
+        let recovered = recover_exhausted(&conn, &chrono::Local::now().format("%Y-%m-%d").to_string());
+        if recovered > 0 {
+            eprintln!("[路由] {recovered} 个额度用尽的来源已到新的一天，恢复可用");
+        }
         if let Ok(entries) = load_pool(&conn) {
             if let Ok(mut guard) = index.lock() {
                 guard.refreshed_ms = now;
@@ -551,6 +603,49 @@ mod tests {
         // 同平台的 API Key 来源不算「自己的订阅」
         let keys = [("relay", Some("custom"), "api", "m"), ("codex-key", Some("codex"), "api", "m")];
         assert_eq!(pick_bare(keys, "m", Some("codex")).as_deref(), Some("relay"));
+    }
+
+    #[test]
+    fn exhausted_sources_come_back_the_next_day_but_not_the_same_day() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE connections (id TEXT, status TEXT, exhausted_day TEXT);
+             INSERT INTO connections VALUES ('yesterday','exhausted','2026-11-10');
+             INSERT INTO connections VALUES ('today','exhausted','2026-11-11');
+             INSERT INTO connections VALUES ('legacy','exhausted',NULL);
+             INSERT INTO connections VALUES ('paused','paused','2026-11-01');",
+        )
+        .unwrap();
+        assert_eq!(recover_exhausted(&conn, "2026-11-11"), 1);
+        let status = |id: &str| conn.query_row("SELECT status FROM connections WHERE id = ?1", [id], |r| r.get::<_, String>(0)).unwrap();
+        assert_eq!(status("yesterday"), "connected");
+        assert_eq!(status("today"), "exhausted", "当天标的不恢复");
+        assert_eq!(status("legacy"), "exhausted", "没有日期的旧数据不动");
+        assert_eq!(status("paused"), "paused");
+    }
+
+    #[test]
+    fn alternates_are_other_accounts_of_the_same_platform_serving_the_model() {
+        let mut primary = entry("kimi-a", "api", "anthropic", "connected");
+        primary.account_fp = Some("fp-a".into());
+        let mut same_account = entry("kimi-a2", "api", "anthropic", "connected");
+        same_account.account_fp = Some("fp-a".into());
+        let mut other = entry("kimi-b", "api", "anthropic", "connected");
+        other.account_fp = Some("fp-b".into());
+        let mut lacks_model = entry("kimi-c", "api", "anthropic", "connected");
+        lacks_model.account_fp = Some("fp-c".into());
+        let mut paused = entry("kimi-d", "api", "anthropic", "paused");
+        paused.account_fp = Some("fp-d".into());
+        let mut other_platform = entry("glm", "api", "anthropic", "connected");
+        other_platform.platform = "zcode".into();
+        let mut third = entry("kimi-e", "api", "anthropic", "connected");
+        third.account_fp = Some("fp-e".into());
+        let mut fourth = entry("kimi-f", "api", "anthropic", "connected");
+        fourth.account_fp = Some("fp-f".into());
+        let pool = vec![primary.clone(), same_account, other, lacks_model, paused, other_platform, third, fourth];
+        let serves = |slug: &str| slug != "kimi-c";
+        let picked: Vec<String> = same_model_alternates(&pool, &primary, &serves, 2).into_iter().map(|e| e.slug).collect();
+        assert_eq!(picked, vec!["kimi-b".to_string(), "kimi-e".to_string()], "跳过同账号、缺模型、暂停、别家平台，最多 2 个");
     }
 
     fn no_bare(_: &str) -> Option<String> {

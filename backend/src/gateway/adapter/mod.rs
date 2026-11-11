@@ -63,9 +63,11 @@ pub(crate) fn record_upstream_signal(deps: &Arc<ProxyDeps>, entry: &PoolEntry, u
     };
     if let Some(next) = next_status {
         if let Ok(conn) = deps.db.try_lock() {
+            // 402 记下当天日期：额度多按天重置，次日零点起自动恢复（route::recover_exhausted）
+            let day = (next == "exhausted").then(|| chrono::Local::now().format("%Y-%m-%d").to_string());
             let _ = conn.execute(
-                "UPDATE connections SET status = ?2 WHERE id = ?1 AND status != 'paused'",
-                rusqlite::params![entry.connection_id, next],
+                "UPDATE connections SET status = ?2, exhausted_day = ?3 WHERE id = ?1 AND status != 'paused'",
+                rusqlite::params![entry.connection_id, next, day],
             );
         }
     }
