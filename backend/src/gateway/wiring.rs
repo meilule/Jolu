@@ -705,40 +705,203 @@ fn gemini_settings_text() -> Option<String> {
 }
 
 /// ZCode：`provider` JSON 的 `options.baseURL` + `apiKey`（结构对齐 magpie zcode.go 的字段名）。
-fn zcode_wire(text: &str, base: &str, token: &str) -> Result<String, String> {
-    let mut root: serde_json::Value = if text.trim().is_empty() {
-        serde_json::json!({})
-    } else {
-        serde_json::from_str(text).map_err(|error| format!("ZCode 配置不是有效 JSON：{error}"))?
-    };
-    let object = root.as_object_mut().ok_or("ZCode 配置顶层不是对象")?;
-    object.insert(
-        "jolu".into(),
-        serde_json::json!({
-            "type": "openai",
-            "options": {"baseURL": base, "apiKey": token},
-        }),
-    );
-    serde_json::to_string_pretty(&root).map_err(|error| format!("ZCode 配置序列化失败：{error}"))
+/// 接给 ZCode 的一个网关模型（2.9）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ZcodeModel {
+    /// 网关模型 id（`来源/模型` 或 `group/分组`）
+    pub id: String,
+    pub name: String,
+    /// 上下文窗口；0 = 不知道
+    pub context: i64,
+    /// 最大输出；0 = 不知道（不写，ZCode 按自己的 32000 截断）
+    pub output: i64,
+    pub image: bool,
 }
 
-fn zcode_restore(text: &str, _saved: Option<&serde_json::Value>) -> Result<String, String> {
-    let mut root: serde_json::Value =
-        serde_json::from_str(text).map_err(|error| format!("ZCode 配置不是有效 JSON：{error}"))?;
-    if let Some(object) = root.as_object_mut() {
-        object.remove("jolu");
+/// ZCode 规则与 config.json 里 Jolu 的 provider id。
+const ZCODE_PROVIDER: &str = "jolu";
+/// 上下文不知道时写的值：ZCode 要一个数，magpie 同样退回 200000。
+const ZCODE_DEFAULT_CONTEXT: i64 = 200_000;
+
+/// ZCode 的数据目录：`ZCODE_HOME` 指定的，否则 `~/.zcode`。
+fn zcode_dir(home: &Path) -> PathBuf {
+    std::env::var_os("ZCODE_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".zcode"))
+}
+
+fn parse_object(text: &str, what: &str) -> Result<serde_json::Value, String> {
+    if text.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|error| format!("{what}不是有效 JSON：{error}"))?;
+    if !value.is_object() {
+        return Err(format!("{what}顶层不是对象"));
+    }
+    Ok(value)
+}
+
+/// 在对象里按路径取子对象，沿途缺的补空对象；路径上有非对象值时报错（不覆盖用户数据）。
+fn object_path<'a>(value: &'a mut serde_json::Value, path: &[&str], what: &str) -> Result<&'a mut serde_json::Map<String, serde_json::Value>, String> {
+    let mut current = value;
+    for key in path {
+        let object = current.as_object_mut().ok_or_else(|| format!("{what}里「{key}」的上级不是对象"))?;
+        current = object.entry(key.to_string()).or_insert_with(|| serde_json::json!({}));
+    }
+    current.as_object_mut().ok_or_else(|| format!("{what}里「{}」不是对象", path.join(".")))
+}
+
+fn array_at<'a>(object: &'a mut serde_json::Map<String, serde_json::Value>, key: &str, what: &str) -> Result<&'a mut Vec<serde_json::Value>, String> {
+    object
+        .entry(key.to_string())
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .ok_or_else(|| format!("{what}里「{key}」不是数组"))
+}
+
+fn is_ours(rule: &serde_json::Value) -> bool {
+    rule.get("providerId").and_then(|v| v.as_str()) == Some(ZCODE_PROVIDER)
+}
+
+/// 新版 ZCode（3.14 起）的 `v2/provider_config.json`：provider 规则 + 每个模型的规则。
+///
+/// 为什么每个模型都要规则：ZCode 不知道模型的输出上限时把每次回复截到 32000 token，
+/// 长输出会在中途断掉；上下文窗口与是否收图片也靠模型规则告诉它。用户在 ZCode 里手动设过
+/// 的模型（`manualProviderModelRules`）不动。参照 magpie `internal/agent/zcode.go`。
+fn zcode_rules_wire(text: &str, base: &str, token: &str, models: &[ZcodeModel]) -> Result<String, String> {
+    let what = "ZCode 的 provider_config.json ";
+    let mut root = parse_object(text, what)?;
+    if root.get("schemaVersion").is_none() {
+        root["schemaVersion"] = serde_json::json!(1);
+    }
+    let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+    {
+        let config = object_path(&mut root, &["config"], what)?;
+        let order = array_at(config, "providerOrder", what)?;
+        if !order.iter().any(|v| v.as_str() == Some(ZCODE_PROVIDER)) {
+            order.push(serde_json::json!(ZCODE_PROVIDER));
+        }
+    }
+    {
+        let rules = object_path(&mut root, &["config", "providerConfigRules"], what)?;
+        let list = array_at(rules, "providerRules", what)?;
+        list.retain(|rule| !is_ours(rule));
+        list.push(serde_json::json!({
+            "providerId": ZCODE_PROVIDER,
+            "providerName": "Jolu",
+            "enabled": true,
+            "config": {
+                "group": "standard-personal",
+                "access": {"type": "api-key", "apiKey": token},
+                "api": {"type": "anthropic-messages", "baseUrl": base},
+                "personalModelIds": ids,
+                "modelOrder": ids,
+            },
+        }));
+    }
+    {
+        let rules = object_path(&mut root, &["config", "modelConfigRules"], what)?;
+        array_at(rules, "manualProviderModelRules", what)?;
+        let list = array_at(rules, "providerModelRules", what)?;
+        list.retain(|rule| !is_ours(rule));
+        for model in models {
+            let mut config = serde_json::json!({
+                "properties": {
+                    "contextWindow": if model.context > 0 { model.context } else { ZCODE_DEFAULT_CONTEXT },
+                    "inputFormat": {"supportsImage": model.image},
+                },
+            });
+            if model.output > 0 {
+                config["optionSpecs"] = serde_json::json!({"maxOutputTokens": {"max": model.output}});
+            }
+            list.push(serde_json::json!({"providerId": ZCODE_PROVIDER, "modelId": model.id, "config": config}));
+        }
+    }
+    serde_json::to_string_pretty(&root).map_err(|error| format!("{what}序列化失败：{error}"))
+}
+
+/// 旧版 ZCode 读的 `v2/config.json`：OpenCode 形状的 provider。
+fn zcode_config_wire(text: &str, base: &str, token: &str, models: &[ZcodeModel]) -> Result<String, String> {
+    let what = "ZCode 的 config.json ";
+    let mut root = parse_object(text, what)?;
+    let mut entries = serde_json::Map::new();
+    for model in models {
+        let mut limit = serde_json::json!({"context": if model.context > 0 { model.context } else { ZCODE_DEFAULT_CONTEXT }});
+        if model.output > 0 {
+            limit["output"] = serde_json::json!(model.output);
+        }
+        let input = if model.image { serde_json::json!(["text", "image"]) } else { serde_json::json!(["text"]) };
+        entries.insert(model.id.clone(), serde_json::json!({
+            "name": model.name,
+            "limit": limit,
+            "modalities": {"input": input, "output": ["text"]},
+        }));
+    }
+    let providers = object_path(&mut root, &["provider"], what)?;
+    // 用户在 ZCode 里关掉过的保持关闭
+    let enabled = providers.get(ZCODE_PROVIDER).and_then(|p| p.get("enabled")).and_then(|v| v.as_bool()).unwrap_or(true);
+    providers.insert(ZCODE_PROVIDER.into(), serde_json::json!({
+        "name": "Jolu",
+        "kind": "anthropic",
+        "enabled": enabled,
+        "source": "custom",
+        "options": {"apiKey": token, "baseURL": base},
+        "models": entries,
+    }));
+    serde_json::to_string_pretty(&root).map_err(|error| format!("{what}序列化失败：{error}"))
+}
+
+fn zcode_rules_restore(text: &str) -> Result<String, String> {
+    let mut root = parse_object(text, "ZCode 的 provider_config.json ")?;
+    if let Some(order) = root.pointer_mut("/config/providerOrder").and_then(|o| o.as_array_mut()) {
+        order.retain(|v| v.as_str() != Some(ZCODE_PROVIDER));
+    }
+    if let Some(list) = root.pointer_mut("/config/providerConfigRules/providerRules").and_then(|l| l.as_array_mut()) {
+        list.retain(|rule| !is_ours(rule));
+    }
+    if let Some(list) = root.pointer_mut("/config/modelConfigRules/providerModelRules").and_then(|l| l.as_array_mut()) {
+        list.retain(|rule| !is_ours(rule));
     }
     serde_json::to_string_pretty(&root).map_err(|error| format!("ZCode 配置序列化失败：{error}"))
 }
 
-fn zcode_current_base(text: &str) -> Option<String> {
+fn zcode_config_restore(text: &str) -> Result<String, String> {
+    let mut root = parse_object(text, "ZCode 的 config.json ")?;
+    if let Some(providers) = root.get_mut("provider").and_then(|p| p.as_object_mut()) {
+        providers.remove(ZCODE_PROVIDER);
+    }
+    serde_json::to_string_pretty(&root).map_err(|error| format!("ZCode 配置序列化失败：{error}"))
+}
+
+/// 旧版 Jolu 在 `~/.zcode/provider.json` 顶层写过 `jolu` 键（ZCode 从不读这个文件）：断开时顺带删掉。
+fn zcode_clean_legacy(home: &Path) {
+    let legacy = zcode_dir(home).join("provider.json");
+    let Ok(Some(text)) = crate::steady::read_optional(&legacy) else { return };
+    let Ok(mut root) = serde_json::from_str::<serde_json::Value>(&text) else { return };
+    let Some(object) = root.as_object_mut() else { return };
+    if object.remove(ZCODE_PROVIDER).is_none() {
+        return;
+    }
+    if object.is_empty() {
+        let _ = std::fs::remove_file(&legacy);
+    } else if let Ok(next) = serde_json::to_string_pretty(&root) {
+        let _ = write_atomic(&legacy, next.into_bytes());
+    }
+}
+
+fn zcode_rule(text: &str) -> Option<serde_json::Value> {
     let root: serde_json::Value = serde_json::from_str(text).ok()?;
-    root.get("jolu")?.get("options")?.get("baseURL")?.as_str().map(str::to_string)
+    root.pointer("/config/providerConfigRules/providerRules")?
+        .as_array()?
+        .iter()
+        .find(|rule| is_ours(rule))
+        .cloned()
+}
+
+fn zcode_current_base(text: &str) -> Option<String> {
+    zcode_rule(text)?.pointer("/config/api/baseUrl")?.as_str().map(str::to_string)
 }
 
 fn zcode_current_token(text: &str) -> Option<String> {
-    let root: serde_json::Value = serde_json::from_str(text).ok()?;
-    root.get("jolu")?.get("options")?.get("apiKey")?.as_str().map(str::to_string)
+    zcode_rule(text)?.pointer("/config/access/apiKey")?.as_str().map(str::to_string)
 }
 
 /// dotenv 键值写入：保留其它行与注释，只替换目标键（不存在则追加）。
@@ -807,7 +970,8 @@ fn config_path(agent: &str) -> Option<PathBuf> {
     Some(match agent {
         "claude-code" => crate::creds::claude_dir()?.join("settings.json"),
         "codex" => crate::creds::codex_dir()?.join("config.toml"),
-        "zcode" => std::env::var_os("ZCODE_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".zcode")).join("provider.json"),
+        // ZCode 3.14 起从 v2/provider_config.json 的规则读 provider（2.9；此前写的 ~/.zcode/provider.json ZCode 不读）
+        "zcode" => zcode_dir(&home).join("v2").join("provider_config.json"),
         "gemini" => home.join(".gemini").join(".env"),
         "opencode" => std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
@@ -1039,6 +1203,7 @@ pub(crate) fn wire(
     tiers: Option<&TierModels>,
     tier_about: &dyn Fn(&str) -> (Option<String>, Option<String>),
     holds: &dyn Fn(&str) -> bool,
+    zcode_models: &[ZcodeModel],
     before_write: impl FnOnce(Option<&str>, &Applied) -> Result<(), String>,
 ) -> Result<(Option<String>, Applied), String> {
     let path = config_path(agent).ok_or("未找到用户目录")?;
@@ -1083,7 +1248,14 @@ pub(crate) fn wire(
             (plan.env, Some(plan.snapshot))
         }
         "opencode" => (opencode_wire(&original, &base, &token)?, None),
-        "zcode" => (zcode_wire(&original, &base, &token)?, None),
+        "zcode" => {
+            // 两份都写：新版 ZCode 读规则文件，旧版读 config.json（magpie 同款）
+            let home = crate::creds::home().ok_or("未找到用户目录")?;
+            let config_path = zcode_dir(&home).join("v2").join("config.json");
+            let config_text = crate::steady::read_optional(&config_path).map_err(|error| format!("读取 {} 失败：{error}", config_path.display()))?.unwrap_or_default();
+            extra_files.push((config_path, zcode_config_wire(&config_text, &base, &token, zcode_models)?.into_bytes()));
+            (zcode_rules_wire(&original, &base, &token, zcode_models)?, None)
+        }
         _ => return Err("该工具不在接线范围".into()),
     };
     let mut files = extra_files;
@@ -1185,6 +1357,23 @@ pub(crate) fn unwire(
     let saved: Option<serde_json::Value> = record
         .and_then(|r| r.original_json.as_deref())
         .and_then(|s| serde_json::from_str(s).ok());
+    // ZCode 要同时还原规则文件与 config.json，并清掉旧版 Jolu 写在 provider.json 里的键
+    if agent == "zcode" {
+        let base_ours = zcode_current_base(&original).is_some_and(|base| is_gateway_value(&base));
+        let token_ours = zcode_current_token(&original).is_some_and(|token| token.starts_with("jolu-"));
+        if !base_ours && !token_ours {
+            return Ok(false);
+        }
+        let home = crate::creds::home().ok_or("未找到用户目录")?;
+        let config_path = zcode_dir(&home).join("v2").join("config.json");
+        let mut files = vec![(path.clone(), zcode_rules_restore(&original)?.into_bytes())];
+        if let Ok(Some(config_text)) = crate::steady::read_optional(&config_path) {
+            files.push((config_path, zcode_config_restore(&config_text)?.into_bytes()));
+        }
+        write_all_with_rollback(&files)?;
+        zcode_clean_legacy(&home);
+        return Ok(true);
+    }
     // Gemini 要同时还原 `.env` 与 settings.json，单独走多文件路径。
     if agent == "gemini" {
         let base_ours = gemini_current_base(&original).is_some_and(|base| is_gateway_value(&base));
@@ -1243,14 +1432,6 @@ pub(crate) fn unwire(
                 return Ok(false);
             }
             opencode_restore(&original, saved.as_ref())?
-        }
-        "zcode" => {
-            let base_ours = zcode_current_base(&original).is_some_and(|base| is_gateway_value(&base));
-            let token_ours = zcode_current_token(&original).is_some_and(|token| token.starts_with("jolu-"));
-            if !base_ours && !token_ours {
-                return Ok(false);
-            }
-            zcode_restore(&original, saved.as_ref())?
         }
         _ => return Err("该工具不在接线范围".into()),
     };
@@ -1682,11 +1863,60 @@ mod tests {
         assert!(value["provider"].get("jolu").is_none());
         assert!(value["provider"].get("existing").is_some(), "别人的 provider 不能动");
 
-        let wired = zcode_wire("{}", "http://127.0.0.1:12731", "jolu-zcode").unwrap();
+        let wired = zcode_rules_wire("{}", "http://127.0.0.1:12731", "jolu-zcode", &[]).unwrap();
         assert!(wired.contains("127.0.0.1:12731"));
         assert_eq!(zcode_current_base(&wired).as_deref(), Some("http://127.0.0.1:12731"));
-        let restored = zcode_restore(&wired, None).unwrap();
+        let restored = zcode_rules_restore(&wired).unwrap();
         assert!(!restored.contains("jolu"));
+    }
+
+    #[test]
+    fn zcode_rules_add_our_provider_and_model_limits_and_restore_leaves_the_rest() {
+        let existing = r#"{"schemaVersion":1,"config":{"providerOrder":["builtin:bigmodel"],
+            "providerConfigRules":{"providerRules":[{"providerId":"builtin:bigmodel","providerName":"BigModel","config":{"group":"g"}}]},
+            "modelConfigRules":{"providerModelRules":[{"providerId":"builtin:bigmodel","modelId":"GLM-5.3"}],
+              "manualProviderModelRules":[{"providerId":"jolu","modelId":"kimi/k2","config":{"mine":true}}]}}}"#;
+        let models = vec![
+            ZcodeModel { id: "kimi/k2".into(), name: "Kimi K2".into(), context: 256_000, output: 32_768, image: false },
+            ZcodeModel { id: "group/main".into(), name: "group/main".into(), context: 0, output: 0, image: true },
+        ];
+        let wired = zcode_rules_wire(existing, "http://127.0.0.1:12731", "jolu-zcode.abcd1234", &models).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&wired).unwrap();
+        assert_eq!(value["config"]["providerOrder"], serde_json::json!(["builtin:bigmodel", "jolu"]));
+        let rules = value["config"]["providerConfigRules"]["providerRules"].as_array().unwrap();
+        assert_eq!(rules.len(), 2, "别人的 provider 规则保留");
+        assert_eq!(rules[1]["config"]["api"]["baseUrl"], "http://127.0.0.1:12731");
+        assert_eq!(rules[1]["config"]["personalModelIds"], serde_json::json!(["kimi/k2", "group/main"]));
+        let model_rules = value["config"]["modelConfigRules"]["providerModelRules"].as_array().unwrap();
+        assert_eq!(model_rules.len(), 3);
+        assert_eq!(model_rules[1]["config"]["optionSpecs"]["maxOutputTokens"]["max"], 32_768, "知道输出上限才写，防 32000 截断");
+        assert!(model_rules[2]["config"].get("optionSpecs").is_none(), "不知道就不编");
+        assert_eq!(model_rules[2]["config"]["properties"]["contextWindow"], 200_000);
+        assert_eq!(model_rules[2]["config"]["properties"]["inputFormat"]["supportsImage"], true);
+        assert_eq!(value["config"]["modelConfigRules"]["manualProviderModelRules"][0]["config"]["mine"], true, "用户手动设的不动");
+        assert_eq!(zcode_current_token(&wired).as_deref(), Some("jolu-zcode.abcd1234"));
+        // 重复接线不重复添加
+        let again: serde_json::Value = serde_json::from_str(&zcode_rules_wire(&wired, "http://127.0.0.1:12731", "t", &models).unwrap()).unwrap();
+        assert_eq!(again["config"]["providerConfigRules"]["providerRules"].as_array().unwrap().len(), 2);
+        assert_eq!(again["config"]["providerOrder"].as_array().unwrap().len(), 2);
+        // 断开：只去掉自己的
+        let restored: serde_json::Value = serde_json::from_str(&zcode_rules_restore(&wired).unwrap()).unwrap();
+        assert_eq!(restored["config"]["providerOrder"], serde_json::json!(["builtin:bigmodel"]));
+        assert_eq!(restored["config"]["providerConfigRules"]["providerRules"].as_array().unwrap().len(), 1);
+        assert_eq!(restored["config"]["modelConfigRules"]["providerModelRules"].as_array().unwrap().len(), 1);
+        assert_eq!(restored["config"]["modelConfigRules"]["manualProviderModelRules"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn zcode_config_json_keeps_a_provider_the_user_turned_off() {
+        let existing = r#"{"provider":{"builtin:zai":{"name":"Z.ai"},"jolu":{"enabled":false}}}"#;
+        let models = vec![ZcodeModel { id: "kimi/k2".into(), name: "Kimi K2".into(), context: 0, output: 8_192, image: false }];
+        let wired: serde_json::Value = serde_json::from_str(&zcode_config_wire(existing, "http://127.0.0.1:12731", "t", &models).unwrap()).unwrap();
+        assert_eq!(wired["provider"]["jolu"]["enabled"], false);
+        assert_eq!(wired["provider"]["jolu"]["models"]["kimi/k2"]["limit"]["output"], 8_192);
+        assert!(wired["provider"].get("builtin:zai").is_some());
+        let restored: serde_json::Value = serde_json::from_str(&zcode_config_restore(&wired.to_string()).unwrap()).unwrap();
+        assert!(restored["provider"].get("jolu").is_none() && restored["provider"].get("builtin:zai").is_some());
     }
 
     #[test]

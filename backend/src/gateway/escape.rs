@@ -310,6 +310,7 @@ pub fn wire_agents(
                     let Ok(conn) = state.0.lock() else { return false };
                     crate::gateway::access::is_client_key(&conn, token)
                 },
+                &if agent == "zcode" { zcode_models(app) } else { Vec::new() },
                 |snapshot, applied| {
                     let state = app.state::<crate::Db>();
                     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
@@ -378,3 +379,27 @@ mod tests {
         assert!(dir.ends_with("gateway-backups"));
     }
 }
+
+/// 接 ZCode 时放进它模型选择器的模型：模型目录里的全部条目（含路由分组），上下文与输出上限取
+/// models.dev 元数据（2.9）。输出上限不知道就不写——ZCode 会按自己的 32000 截断，但不编一个数。
+fn zcode_models(app: &tauri::AppHandle) -> Vec<crate::gateway::wiring::ZcodeModel> {
+    let catalog = crate::gateway::models_dev::cached(app);
+    let lookup = |model: &str| catalog.as_ref().and_then(|c| crate::gateway::models_dev::lookup_meta(c, model));
+    let state = app.state::<crate::Db>();
+    let Ok(conn) = state.0.lock() else { return Vec::new() };
+    let Ok(entries) = crate::service::gateway::catalog::list(&conn, &|model: &str| lookup(model)) else { return Vec::new() };
+    entries
+        .into_iter()
+        .map(|entry| {
+            let meta = lookup(&entry.model);
+            crate::gateway::wiring::ZcodeModel {
+                name: entry.label.clone().filter(|l| !l.trim().is_empty()).unwrap_or_else(|| entry.id.clone()),
+                id: entry.id,
+                context: entry.context_window.unwrap_or(0),
+                output: entry.max_output.unwrap_or(0),
+                image: meta.is_some_and(|m| m.input_modalities.iter().any(|kind| kind == "image")),
+            }
+        })
+        .collect()
+}
+

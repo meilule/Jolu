@@ -2613,6 +2613,28 @@ fn gateway_models_dev_status(app: tauri::AppHandle) -> (i64, usize) {
     crate::gateway::models_dev::cached(&app).map(|c| (c.fetched_ms, c.models.len())).unwrap_or((0, 0))
 }
 
+/// 局域网共享的来源地址白名单（P2-9）：IP 或 CIDR，空数组 = 不限；写错的一项会整体拒存。
+/// 立即生效（不用重启网关）；`JOLU_ALLOW_IPS` 环境变量设了时以它为准，这里只保存。
+#[tauri::command]
+fn gateway_allow_ips_set(app: tauri::AppHandle, list: Vec<String>) -> Result<settings::Settings, String> {
+    let list: Vec<String> = list.iter().map(|item| item.trim().to_string()).filter(|item| !item.is_empty()).collect();
+    crate::gateway::allow::parse(&list.join(","))?;
+    let next = app
+        .state::<Cfg>()
+        .0
+        .try_update(|settings| settings.gateway_allow_ips = list.clone())
+        .map_err(|error| format!("保存白名单失败：{error}"))?;
+    crate::gateway::allow::load(&next.gateway_allow_ips)?;
+    let _ = app.emit("settings-changed", next.clone());
+    Ok(next)
+}
+
+/// 白名单是否被 `JOLU_ALLOW_IPS` 环境变量接管（界面提示用）。
+#[tauri::command]
+fn gateway_allow_ips_from_env() -> bool {
+    crate::gateway::allow::from_env()
+}
+
 /// 接线前的提醒（只读）：比如 Claude Code 同时设了顶层 model 与 env.ANTHROPIC_MODEL。
 #[tauri::command]
 fn gateway_wiring_preflight(agent: String) -> Vec<String> {
@@ -4428,6 +4450,8 @@ pub fn run() {
             gateway_client_key_limits_set,
             gateway_models_dev_refresh,
             gateway_models_dev_status,
+            gateway_allow_ips_set,
+            gateway_allow_ips_from_env,
             gateway_client_key_concurrency_set,
             search_vendors,
             search_apis_set,

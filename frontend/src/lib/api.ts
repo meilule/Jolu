@@ -385,6 +385,8 @@ export interface AppSettings {
   privacy_masking?: boolean
   /** ZCode 通道顺序：true = 先试免费 Start Plan，再落 Coding Plan；旧版设置缺省为关 */
   zcode_free_first?: boolean
+  /** 局域网共享允许连入的来源地址（IP / CIDR）；空 = 不限 */
+  gateway_allow_ips?: string[]
   /** 联网搜索后端；Key 一律是掩码（后端序列化默认掩码） */
   search_apis?: import("./searchSettings").SearchApiDto[]
   /** 保持系统唤醒（批次 G）：运行期间不进入睡眠；只在 Windows 生效 */

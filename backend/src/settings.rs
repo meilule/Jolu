@@ -108,6 +108,9 @@ pub struct Settings {
     /// 且无鉴权，监听地址必须保持回环。改动在下一次网关启动时生效。
     #[serde(default)]
     pub gateway_shared_lan: bool,
+    /// 局域网共享时允许连入的来源地址（IP / CIDR）；空 = 不限。`JOLU_ALLOW_IPS` 环境变量优先（gateway/allow.rs）
+    #[serde(default)]
+    pub gateway_allow_ips: Vec<String>,
     /// 保持系统唤醒（批次 G §3.12）：开启后运行期间不进入睡眠，避免自动化任务被挂起。
     /// 只在 Windows 生效；其他平台打开会如实报错。默认关闭。
     #[serde(default)]
@@ -292,6 +295,7 @@ impl Default for Settings {
             gateway_circuit_threshold: default_gateway_circuit(),
             gateway_auto_escape: true,
             gateway_shared_lan: false,
+            gateway_allow_ips: Vec::new(),
             keep_awake: false,
             warmup_enabled: false,
             warmup_hour: default_warmup_hour(),

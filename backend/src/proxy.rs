@@ -855,6 +855,15 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
     });
 
     let router = build_router(mode, deps.clone());
+    // 来源地址白名单（P2-9）：列表写错时如实报错并只放行本机，不当成「不限」
+    match crate::gateway::allow::load(&settings.gateway_allow_ips) {
+        Ok((count, source)) if count > 0 => eprintln!("[网关] 来源地址白名单生效：{count} 条（来自{source}）"),
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!("[网关] 来源地址白名单无效，只放行本机：{error}");
+            let _ = crate::gateway::allow::load(&["127.0.0.1/32".to_string()]);
+        }
+    }
 
     if lan_shared {
         eprintln!("[网关] 局域网共享已开启：监听 0.0.0.0:{port}，凭据走严格校验（命名客户端 Key / 手动 Key）");
@@ -899,7 +908,8 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
         }
     };
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = axum::serve(listener, router).with_graceful_shutdown(signal).await {
+        // 带上对端地址：来源地址白名单按 TCP 对端判，不信转发头
+        if let Err(error) = axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(signal).await {
             eprintln!("[代理] 服务异常退出：{error}");
         }
     });

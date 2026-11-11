@@ -52,6 +52,14 @@ async fn local_only(State(deps): State<Arc<ProxyDeps>>, request: axum::extract::
             "模型入口不接受浏览器跨站请求；请让本机 CLI 工具直接访问地址",
         );
     }
+    // 来源地址白名单（P2-9）：局域网共享时先看对端地址，不在列表里就在看 Key 之前拒绝
+    if deps.gateway_lan_shared {
+        if let Some(axum::extract::ConnectInfo(peer)) = request.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>() {
+            if !crate::gateway::allow::allowed(peer.ip()) {
+                return error_json(StatusCode::FORBIDDEN, &format!("来源地址 {} 不在网关的白名单里", peer.ip()));
+            }
+        }
+    }
     let host_ok = request
         .headers()
         .get(axum::http::header::HOST)

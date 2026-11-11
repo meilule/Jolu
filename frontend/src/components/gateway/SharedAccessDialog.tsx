@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react"
+import { Fragment, useEffect, useState } from "react"
 import { Network, TriangleAlert } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { gatewayApi, type ClientKeySummaryDto, type IssuedClientKeyDto } from "@/lib/gatewayApi"
@@ -6,6 +6,8 @@ import { useToast } from "@/components/ui/Toast"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { Button, Modal } from "./GatewayDialogs"
 import { useConnections } from "@/hooks/useConnections"
+import { useSettings } from "@/hooks/useSettings"
+import { isTauri } from "@/lib/api"
 import {
   EXPIRY_CHOICES,
   KEY_ONCE_NOTICE,
@@ -116,6 +118,15 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
   }
 
   const danger = sharingWithoutKeys(shared, rows?.length ?? 0)
+  const settings = useSettings().settings
+  const savedAllow = (settings.gateway_allow_ips ?? []).join("\n")
+  const [allowDraft, setAllowDraft] = useState<string | null>(null)
+  const [allowError, setAllowError] = useState<string | null>(null)
+  const [allowFromEnv, setAllowFromEnv] = useState(false)
+  useEffect(() => {
+    if (isTauri) void gatewayApi.allowIpsFromEnv().then(setAllowFromEnv).catch(() => {})
+  }, [])
+  const allowText = allowDraft ?? savedAllow
 
   return (
     <Modal
@@ -130,6 +141,31 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
       <p className="text-[9.5px] text-jolu-muted">
         开启后本机监听 0.0.0.0，局域网设备用下面的客户端 Key 接入；观测模式永不共享。
       </p>
+
+      {/* 来源地址白名单（P2-9，待确认：无画板） */}
+      <div className="flex flex-col gap-1.5 rounded-lg border border-jolu-border bg-jolu-side px-3 py-2.5">
+        <span className="text-[10.5px] font-medium text-jolu-text">允许连入的来源地址</span>
+        <span className="text-[8.5px] text-jolu-muted">每行一个 IP 或网段（如 192.168.1.20、192.168.1.0/24）；留空 = 局域网内都可连。不在列表里的地址在看 Key 之前就被拒绝，本机始终可连。</span>
+        {allowFromEnv && <span className="text-[8.5px] text-jolu-warn">已由环境变量 JOLU_ALLOW_IPS 指定，这里保存的不会生效。</span>}
+        <textarea aria-label="允许连入的来源地址" rows={3} value={allowText} disabled={busy} spellCheck={false}
+          onChange={(event) => { setAllowDraft(event.target.value); setAllowError(null) }}
+          className="rounded-md border border-jolu-border bg-jolu-bg px-2 py-1.5 font-mono text-[10px] text-jolu-text outline-none focus:border-jolu-accent" />
+        {allowError && <span className="text-[8.5px] text-jolu-danger">{allowError}</span>}
+        {allowDraft !== null && allowDraft !== savedAllow && (
+          <div className="flex items-center gap-2">
+            <Button label="保存白名单" primary disabled={busy} onClick={async () => {
+              try {
+                await gatewayApi.allowIpsSet(allowDraft.split(/[\s,;]+/).filter(Boolean))
+                setAllowDraft(null)
+                toast.success("白名单已保存", "立即生效")
+              } catch (reason) {
+                setAllowError(String(reason))
+              }
+            }} />
+            <Button label="撤销" disabled={busy} onClick={() => { setAllowDraft(null); setAllowError(null) }} />
+          </div>
+        )}
+      </div>
 
       {/* 共享开关 */}
       <div className="flex flex-col gap-1.5 rounded-lg border border-jolu-border bg-jolu-side px-3 py-2.5">
