@@ -22,7 +22,7 @@ pub(crate) enum Credential {
 }
 impl Credential {
     fn platform(&self) -> &str { match self { Self::Workbuddy { .. } => "workbuddy", Self::Qoder { .. } => "qoder",Self::Trae{..}=>"trae",Self::Grok{..}=>"grok",Self::Zcode{..}=>"zcode",Self::Cli{session}=>&session.platform } }
-    fn edition(&self)->Option<&str> {match self {Self::Workbuddy{edition,..}|Self::Qoder{edition,..}|Self::Trae{edition,..}=>Some(edition),_=>None}}
+    fn edition(&self)->Option<&str> {match self {Self::Workbuddy{edition,..}|Self::Qoder{edition,..}|Self::Trae{edition,..}=>Some(edition),Self::Zcode{session}=>Some(session.family()),_=>None}}
     fn identity(&self) -> Option<(&str, Option<&str>)> {
         match self {
             Self::Workbuddy { session, .. } => Some((session.user_id.as_str(), session.enterprise_id.as_deref())),
@@ -180,7 +180,9 @@ fn save(conn: &Connection, id: &str, _name: &str, credential: &Credential, detec
 }
 
 fn supported(platform: &str, edition: &str) -> bool {
-    matches!((platform, edition), ("workbuddy", "cn" | "ai") | ("qoder"|"trae", "cn" | "global") | ("claude"|"codex"|"gemini"|"grok"|"opencode"|"zcode","default"))
+    // zcode 的 "default" 兼容不带版本的前端调用（按 BigModel 处理）；"bigmodel" / "zai"
+    // 是双账号家族（providerCatalog 的 ZCode 国内版 / 国际版），begin_family 已归一化。
+    matches!((platform, edition), ("workbuddy", "cn" | "ai") | ("qoder"|"trae", "cn" | "global") | ("claude"|"codex"|"gemini"|"grok"|"opencode", "default") | ("zcode", "default" | "bigmodel" | "zai"))
 }
 /// 所有供应商的浏览器授权统一交给操作系统默认处理器，不指定浏览器或创建内嵌窗口。
 fn open_default_browser(app:&tauri::AppHandle,url:String)->Result<(),String> {
@@ -546,6 +548,23 @@ mod tests {
         }
     }
     #[test]
+    fn zcode_families_stay_separate_and_expose_edition() {
+        let db = crate::db::open(std::path::Path::new(":memory:")).unwrap();
+        let session = |family: &str, user: &str| crate::zcode_browser_auth::Session {
+            access_token: "synthetic-token".into(), refresh_token: None, user_id: user.into(),
+            account: None, zcode_token: "synthetic-session".into(), family: Some(family.into()) };
+        let bigmodel = Credential::Zcode { session: session("bigmodel", "synthetic-user") };
+        assert_eq!(bigmodel.edition().as_deref(), Some("bigmodel"));
+        save(&db, "browser-a", "国内", &bigmodel, &LoginDetection::default()).unwrap();
+        assert_eq!(save(&db, "browser-retry", "国内重授权", &bigmodel, &LoginDetection::default()).unwrap(), "browser-a");
+        let zai = Credential::Zcode { session: session("zai", "synthetic-user") };
+        assert_eq!(zai.edition().as_deref(), Some("zai"));
+        assert_eq!(save(&db, "browser-zai", "国际", &zai, &LoginDetection::default()).unwrap(), "browser-zai");
+        let other = Credential::Zcode { session: session("bigmodel", "synthetic-other") };
+        assert_eq!(save(&db, "browser-b", "账号B", &other, &LoginDetection::default()).unwrap(), "browser-b");
+        assert_eq!(crate::connections::list(&db).unwrap().len(), 3);
+    }
+    #[test]
     fn late_verified_response_cannot_revive_cancelled_or_expired_attempts() {
         for expired in [false, true] {
             let attempt = synthetic_attempt();
@@ -647,7 +666,9 @@ mod tests {
         assert!(supported("workbuddy", "cn"));
         assert!(supported("qoder", "global"));
         assert!(!supported("workbuddy", "unknown"));
-        for platform in ["claude","codex","gemini","grok","opencode","zcode"] {assert!(supported(platform,"default"));assert!(!supported(platform,"cn"));}
+        for platform in ["claude","codex","gemini","grok","opencode"] {assert!(supported(platform,"default"));assert!(!supported(platform,"cn"));}
+        // ZCode 的 default 兼容旧调用（按 BigModel），bigmodel / zai 是双账号家族
+        assert!(supported("zcode","default"));assert!(supported("zcode","bigmodel"));assert!(supported("zcode","zai"));assert!(!supported("zcode","cn"));
         for platform in ["qoder","trae"] {assert!(supported(platform,"cn"));assert!(supported(platform,"global"));assert!(!supported(platform,"ai"));}
         assert!(!supported("custom","default"));
     }
