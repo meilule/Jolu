@@ -961,6 +961,66 @@ mod tests {
 
     /// 端到端主路径：serve_enabled 的 API 连接 → slug 命中 → 模型改写 + 凭证替换 → 上游响应回传。
     #[tokio::test]
+    async fn codex_responses_reach_a_chat_only_source_through_translation() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let upstream_addr = listener.local_addr().unwrap();
+        let upstream = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut raw = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = socket.read(&mut chunk).await.unwrap();
+                if n == 0 { break; }
+                raw.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&raw);
+                let Some(split) = text.find("\r\n\r\n") else { continue };
+                let length = text[..split]
+                    .lines()
+                    .find_map(|l| l.split_once(':'))
+                    .filter(|(k, _)| k.trim().eq_ignore_ascii_case("content-length"))
+                    .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if raw.len() >= split + 4 + length { break; }
+            }
+            let request = String::from_utf8_lossy(&raw).to_string();
+            let body = r#"{"id":"x","model":"deepseek-chat","choices":[{"message":{"content":"你好"}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#;
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            socket.write_all(head.as_bytes()).await.unwrap();
+            socket.write_all(body.as_bytes()).await.unwrap();
+            socket.flush().await.unwrap();
+            request
+        });
+        let deps = crate::proxy::test_support::bare_deps();
+        {
+            let conn = deps.db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO connections(id,platform,kind,name,secret,masked,base_url,protocol,serve_enabled,created_ms,slug)
+                 VALUES('c-ds','custom','api','DeepSeek','sk-ds','****',?1,'openai',1,1,'ds')",
+                [format!("http://{upstream_addr}")],
+            )
+            .unwrap();
+        }
+        let base = spawn_router(deps.clone()).await;
+        let res = reqwest::Client::builder().no_proxy().build().unwrap()
+            .post(format!("{base}/v1/responses"))
+            .header("content-type", "application/json")
+            .header("authorization", "Bearer jolu-codex")
+            .body(r#"{"model":"ds/deepseek-chat","instructions":"简短回答","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), reqwest::StatusCode::OK);
+        let value: serde_json::Value = res.json().await.unwrap();
+        assert_eq!(value["object"], "response");
+        assert_eq!(value["output"][0]["content"][0]["text"], "你好");
+        assert_eq!(value["usage"]["total_tokens"], 5);
+        let request = upstream.await.unwrap();
+        assert!(request.starts_with("POST /v1/chat/completions"), "上游收到的是 Chat 路径：{request}");
+        assert!(request.contains(r#""role":"system""#) && request.contains("简短回答"), "{request}");
+    }
+
+    #[tokio::test]
     async fn full_relay_path_serves_enabled_connection_end_to_end() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();

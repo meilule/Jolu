@@ -44,6 +44,7 @@ pub mod net_guard;
 /// 网页搜索后端（能力汇聚第 1 层）：Tavily / SearXNG / 豆包 + 多 Key 轮转。
 pub mod search;
 pub mod route_log;
+pub mod responses_chat;
 pub mod route;
 pub(crate) mod sessions;
 pub mod server;

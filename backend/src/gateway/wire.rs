@@ -897,34 +897,67 @@ async fn forward_one(
     };
     match entry.kind.as_str() {
         "api" => {
-            if entry.protocol != protocol.wire_name() {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    &format!(
-                        "连接「{}」只提供 {} 协议端点，不能服务 {} 请求；请为该连接选择 {} 兼容地址",
-                        entry.slug,
-                        entry.protocol,
-                        wire_label(protocol),
-                        wire_label(protocol),
-                    ),
-                );
-            }
+            // 协议转换（3.3）：调用方说的协议来源不提供时，能翻译的就翻译——
+            // Codex（Responses）→ 只有 Chat 的第三方；Claude Code（Anthropic）→ 只有 Chat 的第三方。
+            let conversion = match (protocol, entry.protocol.as_str()) {
+                (CallerProtocol::Anthropic, "anthropic") | (CallerProtocol::Chat, "openai") => Conversion::None,
+                (CallerProtocol::Responses, "openai") if crate::gateway::responses_chat::serves_responses(entry.base_url.as_deref()) => Conversion::None,
+                (CallerProtocol::Responses, "openai") => Conversion::ResponsesToChat,
+                (CallerProtocol::Anthropic, "openai") => Conversion::AnthropicToChat,
+                _ => {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        &format!(
+                            "连接「{}」只提供 {} 协议端点，不能服务 {} 请求；请为该连接选择 {} 兼容地址",
+                            entry.slug,
+                            entry.protocol,
+                            wire_label(protocol),
+                            wire_label(protocol),
+                        ),
+                    );
+                }
+            };
+            let body_before_conversion = body.clone();
+            let (body, path) = match conversion {
+                Conversion::None => (body.clone(), path_and_query.to_string()),
+                Conversion::ResponsesToChat => {
+                    let converted = serde_json::from_slice::<Value>(body)
+                        .map_err(|error| error.to_string())
+                        .and_then(|value| crate::gateway::responses_chat::request(&value));
+                    match converted {
+                        Ok(chat) => (chat.to_string().into(), crate::gateway::responses_chat::chat_path(path_and_query)),
+                        Err(reason) => return error_response(StatusCode::BAD_REQUEST, &format!("Responses 请求转 Chat 失败：{reason}")),
+                    }
+                }
+                Conversion::AnthropicToChat => match crate::gateway::translate::anthropic_request(body) {
+                    Ok(chat) => (chat, crate::gateway::responses_chat::chat_path(path_and_query)),
+                    Err(reason) => return error_response(StatusCode::BAD_REQUEST, &format!("Anthropic 请求转 Chat 失败：{reason}")),
+                },
+            };
+            // 自由格式工具名要从原始 Responses 请求里取（转换后的 Chat 请求里它们已经是普通函数）
+            let original_body = body_before_conversion;
             // 发往真 Claude 的请求先剔除外来 thinking 块（thinking_guard 模块头说明因果）；
             // 其余上游（zcode 的 GLM、DeepSeek 的兼容端点等）原样发。
             let guard = begin(entry, &meta);
             let upstream_for_log = upstream_model.to_string();
-            let response = with_thinking_repair(&entry.connection_id, entry.base_url.as_deref(), upstream_model, body, |body| {
+            let path = path.as_str();
+            let response = with_thinking_repair(&entry.connection_id, entry.base_url.as_deref(), upstream_model, &body, |body| {
                 crate::gateway::adapter::direct::forward(
                     deps.clone(),
                     entry,
                     upstream_model.to_string(),
                     axum::http::Method::POST,
-                    path_and_query,
+                    path,
                     headers,
                     body,
                 )
             })
             .await;
+            let response = match conversion {
+                Conversion::None => response,
+                Conversion::ResponsesToChat => crate::gateway::responses_chat::response_body(response, original_custom_tools(&original_body)).await,
+                Conversion::AnthropicToChat => crate::gateway::translate::anthropic_response(response, requested_model).await,
+            };
             guard.finish();
             record_route(
                 deps,
@@ -1018,6 +1051,19 @@ async fn forward_one(
         }
     }
 }
+/// 直连来源的协议转换方式（3.3）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Conversion {
+    None,
+    ResponsesToChat,
+    AnthropicToChat,
+}
+
+/// 原始 Responses 请求里的自由格式工具名。
+fn original_custom_tools(body: &axum::body::Bytes) -> Vec<String> {
+    serde_json::from_slice::<Value>(body).map(|value| crate::gateway::responses_chat::custom_tool_names(&value)).unwrap_or_default()
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
