@@ -2599,6 +2599,20 @@ fn gateway_client_key_limits_set(
     crate::gateway::access::client_key_set_limits(&conn, &name, &budget, accounts)
 }
 
+/// 立即刷新 models.dev 模型元数据（上下文窗口、显示名、推理档位等），返回（模型数，拉取时间）。
+#[tauri::command]
+async fn gateway_models_dev_refresh(app: tauri::AppHandle) -> Result<(usize, i64), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::gateway::models_dev::refresh_now(&app))
+        .await
+        .map_err(|error| format!("刷新任务失败：{error}"))?
+}
+
+/// 模型元数据现状：缓存的拉取时间（0 = 还在用内置快照）与模型数。
+#[tauri::command]
+fn gateway_models_dev_status(app: tauri::AppHandle) -> (i64, usize) {
+    crate::gateway::models_dev::cached(&app).map(|c| (c.fetched_ms, c.models.len())).unwrap_or((0, 0))
+}
+
 /// 接线前的提醒（只读）：比如 Claude Code 同时设了顶层 model 与 env.ANTHROPIC_MODEL。
 #[tauri::command]
 fn gateway_wiring_preflight(agent: String) -> Vec<String> {
@@ -2634,7 +2648,12 @@ fn gateway_wiring_set(
     tiers: Option<crate::gateway::wiring_store::TierModels>,
 ) -> Result<String, String> {
     if let Some(tiers) = tiers.as_ref() {
-        tiers.validate()?;
+        // 档位 effort 先看 models.dev 记录的档位（2.8），没有再按内置表
+        let catalog = crate::gateway::models_dev::cached(&app);
+        tiers.validate_with(&|model: &str| {
+            let bare = model.rsplit('/').next().unwrap_or(model).trim_end_matches("[1m]");
+            catalog.as_ref().and_then(|c| crate::gateway::models_dev::lookup_meta(c, bare)).map(|meta| meta.efforts)
+        })?;
     }
     // 手动改接线：之后的请求不再算「来自 Profile」
     if let Ok(conn) = app.state::<Db>().0.lock() {
@@ -4407,6 +4426,8 @@ pub fn run() {
             gateway_wiring_applied,
             gateway_wiring_preflight,
             gateway_client_key_limits_set,
+            gateway_models_dev_refresh,
+            gateway_models_dev_status,
             gateway_client_key_concurrency_set,
             search_vendors,
             search_apis_set,

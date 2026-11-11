@@ -119,13 +119,22 @@ pub(crate) fn tier_efforts(model: &str) -> Option<&'static [&'static str]> {
 impl TierModels {
     /// 写入前校验每档的 effort：拼错的词、模型不收的档位都拒绝，并说出可选值。
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_with(&|_| None)
+    }
+
+    /// 同 [`validate`]，`efforts_of` 给出 models.dev 记录的该模型档位（有就以它为准，
+    /// 只保留 Claude Code 认得的档；没有或为空时按内置表 [`tier_efforts`]）。
+    pub fn validate_with(&self, efforts_of: &dyn Fn(&str) -> Option<Vec<String>>) -> Result<(), String> {
         for (tier, value) in [
             ("opus", &self.opus), ("sonnet", &self.sonnet), ("haiku", &self.haiku), ("fable", &self.fable), ("auto", &self.auto_mode),
         ] {
             let Some(value) = value.as_deref().map(str::trim).filter(|v| !v.is_empty()) else { continue };
             let (model, effort) = split_tier_value(value);
             let Some(effort) = effort else { continue };
-            let allowed = tier_efforts(model).unwrap_or(CLAUDE_EFFORTS);
+            let known: Option<Vec<&'static str>> = efforts_of(model)
+                .map(|list| CLAUDE_EFFORTS.iter().copied().filter(|level| list.iter().any(|l| l == level)).collect::<Vec<_>>())
+                .filter(|list| !list.is_empty());
+            let allowed: Vec<&'static str> = known.unwrap_or_else(|| tier_efforts(model).unwrap_or(CLAUDE_EFFORTS).to_vec());
             if allowed.is_empty() {
                 return Err(format!("{tier} 档的 {model} 不支持 effort，请去掉「:{effort}」"));
             }
@@ -359,6 +368,11 @@ mod tests {
         assert!(haiku_effort.validate().unwrap_err().contains("不支持 effort"));
         let none_on_claude = TierModels { sonnet: Some("claude/claude-sonnet-5:minimal".into()), ..ok.clone() };
         assert!(none_on_claude.validate().unwrap_err().contains("minimal"), "minimal 不是 Claude Code 的档位");
+        // models.dev 有档位数据时以它为准
+        let glm = TierModels { sonnet: Some("zcode/glm-5.3:max".into()), ..ok.clone() };
+        let only_high = |model: &str| model.ends_with("glm-5.3").then(|| vec!["low".to_string(), "high".to_string()]);
+        assert!(glm.validate_with(&only_high).unwrap_err().contains("low / high"));
+        assert!(glm.validate().is_ok(), "没有 models.dev 数据时别家模型按全集");
         // 冒号后不是 effort 词的（Ollama 标签、参数量）属于模型名，不当 effort 看
         for model in ["local/qwen3:32b", "ollama/llama3:latest"] {
             let tag = TierModels { sonnet: Some(model.into()), ..ok.clone() };

@@ -336,6 +336,10 @@ export const gatewayApi = {
   /** 接线记录里实际写入的主模型 / 子代理 / 档位（只对已接线的工具有值），给接线弹窗回填 */
   wiringApplied: (agent: string) =>
     invoke<{ model: string | null; subagent_model: string | null; tiers: TierModels | null } | null>("gateway_wiring_applied", { agent }),
+  /** 立即刷新 models.dev 模型元数据；返回 [模型数, 拉取时间] */
+  modelsDevRefresh: () => invoke<[number, number]>("gateway_models_dev_refresh"),
+  /** 模型元数据现状：[拉取时间（0 = 内置快照）, 模型数] */
+  modelsDevStatus: () => invoke<[number, number]>("gateway_models_dev_status"),
   /** 接线前的提醒（只读），如 Claude Code 同时设了顶层 model 与 env.ANTHROPIC_MODEL */
   wiringPreflight: (agent: string) => invoke<string[]>("gateway_wiring_preflight", { agent }),
   /** 接受漂移：只清接线记录，不改用户的配置文件 */

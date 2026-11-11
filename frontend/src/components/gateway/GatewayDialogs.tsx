@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { TierPanel } from "./TierPanel"
 import type { TierDraft } from "@/lib/tierModels"
 import * as RadixDialog from "@radix-ui/react-dialog"
@@ -6,6 +6,8 @@ import { TriangleAlert, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { CatalogModelDto, GatewayGroupDto, GroupKind, WiringStatusDto } from "@/lib/gatewayApi"
 import { agentLabel } from "@/lib/gatewayPage"
+import { gatewayApi } from "@/lib/gatewayApi"
+import { isTauri } from "@/lib/api"
 import { useToast } from "@/components/ui/Toast"
 import { ConfirmDialog as ActionConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { JoluButton } from "@/components/ui/JoluButton"
@@ -83,6 +85,43 @@ export function RenameDialog({ connection, busy, onClose, onSave }: { connection
  * `ANTHROPIC_MODEL`——它压过 /model 的选择，写了切换只在本会话生效。
  * 断开时按快照还原用户原来的全部模型配置。不选模型也能接（只写地址和令牌）。
  */
+/**
+ * 模型元数据（models.dev：上下文窗口、显示名、推理档位）的现状与手动刷新（2.8，待确认：无画板）。
+ * 平时 7 天自动刷新一次；从没拉到过时用内置快照。
+ */
+function ModelsMetaRefresh() {
+  const [status, setStatus] = useState<[number, number] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!isTauri) return
+    gatewayApi.modelsDevStatus().then(setStatus).catch(() => setStatus(null))
+  }, [])
+  if (!isTauri) return null
+  const [fetched, count] = status ?? [0, 0]
+  const text = !status ? "读取中…" : fetched === 0 ? `内置快照（${count} 个模型）` : `${new Date(fetched).toLocaleString("zh-CN", { hour12: false })} 拉取（${count} 个模型）`
+  return (
+    <span className="flex items-center gap-1.5 text-[8.5px] text-jolu-muted">
+      <span className="min-w-0 truncate">模型元数据：{error ?? text}</span>
+      <button type="button" disabled={busy} className="shrink-0 text-jolu-on outline-none hover:underline disabled:opacity-50"
+        onClick={async () => {
+          setBusy(true)
+          setError(null)
+          try {
+            const [total, at] = await gatewayApi.modelsDevRefresh()
+            setStatus([at, total])
+          } catch (reason) {
+            setError(`刷新失败：${String(reason)}`)
+          } finally {
+            setBusy(false)
+          }
+        }}>
+        {busy ? "刷新中…" : "立即刷新"}
+      </button>
+    </span>
+  )
+}
+
 export function WiringDialog({ agents, models, modelChoice, onModelChoice, subagentChoice, onSubagentChoice, tierDraft, onTierDraft, onApplyTiers, profiles, onProfileApply, onProfileSave, onProfileDelete, busy, onClose, onWire, onUnwire, onAccept }: {
   agents: WiringStatusDto[]
   /** 可选的 `<来源>/<模型>` 列表（来自模型目录，只含已接入来源；context 为 models.dev 上下文窗口） */
@@ -151,6 +190,7 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, subag
           <span className="text-[8.5px] text-jolu-muted">
             Claude Code 的子代理任务（Task 工具）用它；留空即跟随主模型，也是 Claude Code 的缺省行为。
           </span>
+          <ModelsMetaRefresh />
           {models.length > 0 && (
             <TierPanel models={models} mainModel={modelChoice} subagent={subagentChoice} draft={tierDraft} onDraft={onTierDraft}
               busy={busy} wired={claude.wired} onApply={onApplyTiers} />

@@ -100,7 +100,7 @@ mod tests {
             max_output: None,
             label: None,
         };
-        let meta = ModelMeta { context_window: 0, max_output: 0, label: String::new(), description: String::new() };
+        let meta = ModelMeta { context_window: 0, max_output: 0, label: String::new(), description: String::new(), ..Default::default() };
         merge_meta(&mut entry, &meta);
         assert_eq!(entry.context_window, None, "0 当作没给");
         assert_eq!(entry.max_output, None);
@@ -126,6 +126,7 @@ mod tests {
             max_output: 8_192,
             label: "GLM-5.3".into(),
             description: String::new(),
+            ..Default::default()
         };
         merge_meta(&mut entry, &meta);
         assert_eq!(entry.context_window, Some(128_000));
