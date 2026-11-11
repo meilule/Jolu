@@ -722,21 +722,36 @@ pub(crate) async fn handle(
                 Err(_) => body.clone(),
             }
         };
-        let response = forward_one(
-            &deps,
-            &entry,
-            protocol,
-            &upstream_model,
-            &try_body,
-            path_and_query,
-            &headers,
-            &session,
-            request_id,
-            meta,
-            started,
-            &model,
-        )
-        .await;
+        // Claude Code 的联网服务端工具：上游不是真 Claude 时由网关代为执行（tool_loop.rs）
+        let target_model = if upstream_model.is_empty() { model.as_str() } else { upstream_model.as_str() };
+        let native_tools = entry.platform == "claude" || crate::gateway::thinking_guard::serves_claude(entry.base_url.as_deref(), target_model);
+        let response = if protocol == CallerProtocol::Anthropic && !native_tools {
+            let (deps_ref, entry_ref, upstream_ref, headers_ref, session_ref, model_ref, meta_ref) =
+                (&deps, &entry, &upstream_model, &headers, &session, &model, &meta);
+            with_tool_loop(&try_body, |round_body| {
+                let meta = meta_ref.clone();
+                async move {
+                    forward_one(deps_ref, entry_ref, protocol, upstream_ref, &round_body, path_and_query, headers_ref, session_ref, request_id, meta, started, model_ref).await
+                }
+            })
+            .await
+        } else {
+            forward_one(
+                &deps,
+                &entry,
+                protocol,
+                &upstream_model,
+                &try_body,
+                path_and_query,
+                &headers,
+                &session,
+                request_id,
+                meta,
+                started,
+                &model,
+            )
+            .await
+        };
         if !is_retryable_status(response.status()) || last {
             return response;
         }
@@ -934,6 +949,78 @@ fn wire_label(protocol: CallerProtocol) -> &'static str {
     }
 }
 
+/// 一轮回复最多读这么多（非流式的完整消息，含长文本与工具调用）。
+const ROUND_BODY_LIMIT: usize = 32 * 1024 * 1024;
+
+/// 替身工具循环：请求声明了联网服务端工具时，网关执行模型的调用并续问，直到模型不再调用
+/// 或到达轮次上限（见 `tool_loop` 模块头）。没有声明这类工具时等同于直接发一次。
+async fn with_tool_loop<F, Fut>(body: &axum::body::Bytes, send: F) -> Response
+where
+    F: Fn(axum::body::Bytes) -> Fut,
+    Fut: std::future::Future<Output = Response>,
+{
+    use crate::gateway::tool_loop;
+    let Ok(mut value) = serde_json::from_slice::<Value>(body) else { return send(body.clone()).await };
+    let managed = tool_loop::managed_tools(&value);
+    if managed.is_empty() {
+        return send(body.clone()).await;
+    }
+    let streaming = tool_loop::rewrite_request(&mut value, &managed);
+    let mut usage = (0i64, 0i64);
+    let mut notes: Vec<String> = Vec::new();
+    for round in 0..tool_loop::MAX_ROUNDS {
+        let request = serde_json::to_vec(&value).map(axum::body::Bytes::from).unwrap_or_else(|_| body.clone());
+        let response = send(request).await;
+        if !response.status().is_success() {
+            return response;
+        }
+        let (parts, response_body) = response.into_parts();
+        let Ok(bytes) = axum::body::to_bytes(response_body, ROUND_BODY_LIMIT).await else {
+            return error_response(StatusCode::BAD_GATEWAY, "上游回复读取失败");
+        };
+        // 读不懂（比如上游仍回了流）就原样交回，不猜
+        let Ok(mut message) = serde_json::from_slice::<Value>(&bytes) else {
+            return Response::from_parts(parts, axum::body::Body::from(bytes));
+        };
+        tool_loop::add_usage(&mut usage, &message);
+        let (calls, foreign) = tool_loop::calls_in(&message, &managed);
+        if calls.is_empty() {
+            return deliver_message(tool_loop::finish(message, &notes, usage, &managed, false), streaming);
+        }
+        if foreign {
+            tool_loop::strip_managed(&mut message, &managed);
+            notes.push("模型同时调用了工具自己的功能，联网调用本轮未执行".into());
+            return deliver_message(tool_loop::finish(message, &notes, usage, &managed, false), streaming);
+        }
+        if round + 1 == tool_loop::MAX_ROUNDS {
+            return deliver_message(tool_loop::finish(message, &notes, usage, &managed, true), streaming);
+        }
+        let mut results = Vec::new();
+        for call in &calls {
+            let (text, is_error, note) = tool_loop::execute(call).await;
+            eprintln!("[替身工具] {note}");
+            notes.push(note);
+            results.push((call.id.clone(), text, is_error));
+        }
+        tool_loop::append_round(&mut value, &message, &results);
+    }
+    error_response(StatusCode::BAD_GATEWAY, "联网工具循环异常结束")
+}
+
+/// 把最终消息按客户端要的形式交回：流式写成 SSE，否则 JSON。
+fn deliver_message(message: Value, streaming: bool) -> Response {
+    let (content_type, body) = if streaming {
+        ("text/event-stream", crate::gateway::tool_loop::message_to_sse(&message))
+    } else {
+        ("application/json", message.to_string())
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", content_type)
+        .body(axum::body::Body::from(body))
+        .unwrap_or_else(|_| error_response(StatusCode::BAD_GATEWAY, "构造回复失败"))
+}
+
 /// 400 错误体最多读这么多来判断是否 thinking 签名拒绝；错误体通常几百字节。
 const REFUSAL_BODY_LIMIT: usize = 64 * 1024;
 
@@ -998,6 +1085,99 @@ mod tests {
         }
     }
     use std::sync::atomic::{AtomicU32, Ordering};
+    fn json_response(value: serde_json::Value) -> Response {
+        Response::builder().status(StatusCode::OK).header("content-type", "application/json").body(axum::body::Body::from(value.to_string())).unwrap()
+    }
+
+    #[tokio::test]
+    async fn without_server_tools_the_request_goes_once_unchanged() {
+        let body = axum::body::Bytes::from(r#"{"model":"m","stream":true,"messages":[],"tools":[{"name":"Read"}]}"#);
+        let seen = std::sync::Mutex::new(Vec::<axum::body::Bytes>::new());
+        let response = with_tool_loop(&body, |round| {
+            seen.lock().unwrap().push(round);
+            async { json_response(serde_json::json!({"content": []})) }
+        })
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(seen.lock().unwrap().as_slice(), &[body], "原样只发一次");
+    }
+
+    #[tokio::test]
+    async fn a_round_ending_in_foreign_tools_drops_managed_calls_and_streams_back() {
+        let body = axum::body::Bytes::from(serde_json::json!({
+            "model": "m", "stream": true, "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"name": "Read", "input_schema": {}}, {"type": "web_search_20250305", "name": "web_search"}]
+        }).to_string());
+        let sent = std::sync::Mutex::new(Vec::<serde_json::Value>::new());
+        let response = with_tool_loop(&body, |round| {
+            sent.lock().unwrap().push(serde_json::from_slice(&round).unwrap());
+            async {
+                json_response(serde_json::json!({"id": "msg", "type": "message", "role": "assistant", "model": "m", "stop_reason": "tool_use",
+                    "content": [{"type": "tool_use", "id": "a", "name": "Read", "input": {}}, {"type": "tool_use", "id": "b", "name": "web_search", "input": {"query": "q"}}],
+                    "usage": {"input_tokens": 3, "output_tokens": 4}}))
+            }
+        })
+        .await;
+        let sent = sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0]["stream"], false, "每轮按非流式问上游");
+        assert!(sent[0]["tools"][1].get("type").is_none(), "服务端工具换成了普通工具");
+        assert_eq!(response.headers().get("content-type").unwrap(), "text/event-stream", "客户端要流式就回 SSE");
+        let text = String::from_utf8(axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap().to_vec()).unwrap();
+        assert!(text.contains(r#""name":"Read""#) && !text.contains(r#""name":"web_search""#), "接管的调用已去掉");
+    }
+
+    #[tokio::test]
+    async fn managed_calls_are_executed_and_the_next_round_answers() {
+        // 空数据目录：没有搜索后端，执行结果是「未配置」的错误，照样续问下一轮
+        let dir = std::env::temp_dir().join(format!("jolu-tool-loop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let previous = std::env::var_os("JOLU_DATA_DIR");
+        std::env::set_var("JOLU_DATA_DIR", &dir);
+        let body = axum::body::Bytes::from(serde_json::json!({
+            "model": "m", "messages": [{"role": "user", "content": "搜一下"}],
+            "tools": [{"type": "web_search_20250305", "name": "web_search"}]
+        }).to_string());
+        let sent = std::sync::Mutex::new(Vec::<serde_json::Value>::new());
+        let response = with_tool_loop(&body, |round| {
+            let value: serde_json::Value = serde_json::from_slice(&round).unwrap();
+            let first = value["messages"].as_array().unwrap().len() == 1;
+            sent.lock().unwrap().push(value);
+            async move {
+                if first {
+                    json_response(serde_json::json!({"content": [{"type": "tool_use", "id": "s1", "name": "web_search", "input": {"query": "rust"}}],
+                        "stop_reason": "tool_use", "usage": {"input_tokens": 10, "output_tokens": 2}}))
+                } else {
+                    json_response(serde_json::json!({"content": [{"type": "text", "text": "没法搜，但我知道"}], "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 20, "output_tokens": 5}}))
+                }
+            }
+        })
+        .await;
+        let sent = sent.lock().unwrap();
+        assert_eq!(sent.len(), 2, "执行后续问一轮");
+        let second = sent[1]["messages"].as_array().unwrap();
+        assert_eq!(second[2]["content"][0]["tool_use_id"], "s1");
+        assert_eq!(second[2]["content"][0]["is_error"], true, "没配置搜索后端如实告诉模型");
+        assert_eq!(response.headers().get("content-type").unwrap(), "application/json", "客户端没要流式就回 JSON");
+        let message: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap()).unwrap();
+        assert!(message["content"][0]["text"].as_str().unwrap().contains("搜索「rust」失败"));
+        assert_eq!(message["content"][1]["text"], "没法搜，但我知道");
+        assert_eq!((message["usage"]["input_tokens"].as_i64(), message["usage"]["output_tokens"].as_i64()), (Some(30), Some(7)), "用量取两轮之和");
+        match previous {
+            Some(value) => std::env::set_var("JOLU_DATA_DIR", value),
+            None => std::env::remove_var("JOLU_DATA_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn upstream_errors_inside_the_loop_are_returned_as_is() {
+        let body = axum::body::Bytes::from(serde_json::json!({"model": "m", "messages": [], "tools": [{"type": "web_fetch_20250910", "name": "web_fetch"}]}).to_string());
+        let response = with_tool_loop(&body, |_| async { refusal_400() }).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
     fn refusal_400() -> Response {
         Response::builder()
             .status(StatusCode::BAD_REQUEST)

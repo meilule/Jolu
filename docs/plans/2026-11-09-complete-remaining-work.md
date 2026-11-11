@@ -68,7 +68,7 @@
 - [x] B6 搜索后端补 Brave / Exa / Firecrawl / You.com / DeepSeek / 元宝 6 个；豆包改按火山文档的 `Query` / `Result.WebResults` 形状（首版字段不符）；跨主机重定向不跟随（Key 在自定义头里）；MCP 依次尝试所有启用的后端
 - [x] B7 档位 effort 可用值校验（按 Claude Code 对各模型实际发送的范围，别家模型为全集；models.dev 没有 efforts 数据，未用）；顺带修 `autoMode` 字段名不一致导致 Auto 判别档被丢弃
 - [x] B8 `web_fetch`（每跳过 netguard 并把连接钉在检查过的地址上；MCP 工具 + `jolu_cli fetch`，真实网页已试读）
-- [ ] B9 网关替身工具拦截 + 内部多轮（原计划 C-2，批 4 实际做成了档位，交接文档未列）
+- [x] B9 网关替身工具 + 内部多轮（`gateway/tool_loop.rs`、`wire::with_tool_loop`）：Claude Code 声明的 web_search / web_fetch 服务端工具在上游不是真 Claude 时由网关执行，最多 5 轮，客户端要流式时整条回放成 SSE；首字延迟未优化（多轮期间不发进度事件），实机未验证
 - [x] B10 搜索插件安装扩到 ZCode（`~/.zcode/cli/config.json` 的 `mcp.servers`）、Qoder CLI 两版、WorkBuddy（`mcp.json`，需在 WorkBuddy 里批准）；Trae 无可靠来源，列为不支持。顺带修首版路径错误：Claude Code 应写 `~/.claude.json`（原写 `settings.json` 不生效）、Gemini 应写 `settings.json`（原写进 `.env`），卸载时清理旧位置
 - [x] B11 界面（无画板，标「待确认」）：接线弹窗内的档位面板（四档 + effort + Auto 判别，接线与「应用档位」都带上档位，回填实际写入值）；设置 ·「网络与代理」页尾的联网搜索（掩码即「保留原 Key」，试搜）与搜索插件安装列表；预览验收 `scripts/acceptance/gateway-tiers-search.e2e.mjs`
 - [x] B12 magpie 行动清单：裸模型名优先走 agent 自己的订阅（`route::pick_bare`）；命名 Key 同时请求数上限（`key_slots.rs`，超出排队，局域网共享弹窗可设）；Smart 等按额度排的策略在界面上说明列表顺序只决定平局、无额度数据的成员排最后；ZCode 草稿目录归为一组（Jolu 不把 ZCode 请求关联到会话，不存在重复计数）；URL 安全 / 无填充 base64 统一成标准（`base64_input.rs`，两个入口）；顺序策略恢复后回切（默认行为，同 magpie）。Codex 大 `config.toml`：实测 10,933 个 `[projects]` 表、0.9MB 时 `toml_edit` / `toml` 解析各约 20–25ms（release），没有 magpie 的 go-toml 平方级问题，不改
