@@ -23,10 +23,6 @@ name = "jolu_cli"
 path = "src/bin/jolu_cli.rs"
 
 [[bin]]
-name = "gateway_mcp_bridge"
-path = "src/bin/gateway_mcp_bridge.rs"
-
-[[bin]]
 name = "handoff_eval"
 path = "src/bin/handoff_eval.rs"
 required-features = ["handoff-eval"]

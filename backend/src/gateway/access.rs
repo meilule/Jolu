@@ -116,7 +116,7 @@ pub fn copy(conn: &Connection) -> Result<(), String> {
         .map_err(|_| "复制失败，请重试".into())
 }
 
-fn equal(a: &str, b: &str) -> bool {
+pub(crate) fn equal(a: &str, b: &str) -> bool {
     let a = Sha256::digest(a.as_bytes());
     let b = Sha256::digest(b.as_bytes());
     a.iter()
@@ -671,9 +671,6 @@ fn authorize_with_detail(
     if token.is_some_and(|t| equal(&key, t)) {
         return Ok(AuthOutcome::allow());
     }
-    if path == "/__jolu/bridge/callback" {
-        return Ok(AuthOutcome::allow());
-    }
     let wired = super::wiring_store::all(conn).iter().any(|record| {
         record.owner == "relay"
             && matches!(record.state.as_str(), "wired" | "pending")
@@ -713,11 +710,7 @@ mod tests {
         assert!(!masked(&conn, false).unwrap().contains(&first));
         let second = rotate(&conn).unwrap();
         assert_ne!(first, second);
-        for path in [
-            "/v1/models",
-            "/backend-api/codex/models",
-            "/__jolu/bridge/callback",
-        ] {
+        for path in ["/v1/models", "/backend-api/codex/models"] {
             assert!(!authorize(&conn, Some(&first), path, false).unwrap());
             assert!(authorize(&conn, Some(&second), path, false).unwrap());
         }
@@ -1278,11 +1271,11 @@ mod tests {
         assert!(body.contains("lan-agent"), "说明 Key 名：{body}");
         assert!(body.contains("1 条"), "说明限额：{body}");
         assert!(body.contains("重置"), "说明重置时间：{body}");
-        // 读取类请求不计费、不受限额影响；工具回调路径同样豁免
+        // 读取类请求不计费、不受限额影响；Claude 工具桥端点不走 Key（令牌在路径里），也不进限额
         assert_eq!(client.get(format!("{base}/v1/models")).bearer_auth(&issued.key).send().await.unwrap().status(), 200);
         assert_eq!(
-            client.post(format!("{base}/__jolu/bridge/callback")).bearer_auth(&issued.key).body("{}").send().await.unwrap().status(),
-            400, "工具回调不进限额分支（400 是回调体校验）"
+            client.post(format!("{base}/__jolu/claude-mcp/unknown")).body("{}").send().await.unwrap().status(),
+            404, "工具桥端点只认活着的令牌"
         );
         task.abort();
     }

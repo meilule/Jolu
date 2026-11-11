@@ -156,6 +156,11 @@ pub(crate) fn running_deps() -> Option<Arc<ProxyDeps>> {
     PROXY.lock().ok()?.as_ref().map(|runtime| runtime.deps.clone())
 }
 
+/// 运行中网关的监听端口（Claude 订阅工具桥要把自己的地址告诉客户端）。
+pub(crate) fn running_port() -> Option<u16> {
+    PROXY.lock().ok()?.as_ref().map(|runtime| runtime.port)
+}
+
 pub(crate) struct ProxyRuntime {
     pub port: u16,
     mode: crate::gateway::Mode,
@@ -183,8 +188,6 @@ pub(crate) struct ProxyDeps {
     /// 网关模式：会话亲和表与连接冷却表（内存态，进程重启清空）。
     pub(crate) affinity: Option<Mutex<crate::gateway::route::Affinity>>,
     pub(crate) cooldowns: Option<Mutex<crate::gateway::route::Cooldowns>>,
-    /// 网关模式：MCP 桥的工具调用挂起表（Claude 订阅适配器专用）。
-    pub(crate) tool_hub: Option<Arc<crate::gateway::bridge::ToolCallHub>>,
     /// 网关模式：Claude 订阅的会话表（网关会话键 → claude session_id，用于 --resume 延续）。
     pub(crate) claude_sessions: Option<Mutex<crate::gateway::adapter::claude::ClaudeSessions>>,
     /// 网关模式：连续失败阈值与熔断动作（与观测模式的回退计数相互独立）。
@@ -843,11 +846,6 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
         } else {
             None
         },
-        tool_hub: if mode == crate::gateway::Mode::Relay {
-            Some(Arc::new(crate::gateway::bridge::ToolCallHub::new()))
-        } else {
-            None
-        },
         claude_sessions: if mode == crate::gateway::Mode::Relay {
             Some(Mutex::new(crate::gateway::adapter::claude::ClaudeSessions::new()))
         } else {
@@ -1226,7 +1224,6 @@ pub(crate) mod test_support {
             gateway_default_connection: None,
             affinity: Some(Mutex::new(crate::gateway::route::Affinity::new())),
             cooldowns: Some(Mutex::new(crate::gateway::route::Cooldowns::new())),
-            tool_hub: Some(Arc::new(crate::gateway::bridge::ToolCallHub::new())),
             claude_sessions: Some(Mutex::new(crate::gateway::adapter::claude::ClaudeSessions::new())),
             circuit_threshold: 5,
             on_circuit: Arc::new(|_| {}),
@@ -1388,7 +1385,6 @@ mod tests {
             gateway_default_connection: None,
             affinity: None,
             cooldowns: None,
-            tool_hub: None,
             claude_sessions: Some(Mutex::new(crate::gateway::adapter::claude::ClaudeSessions::new())),
             circuit_threshold: 5,
             on_circuit: Arc::new(|_| {}),

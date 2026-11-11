@@ -985,7 +985,7 @@ async fn forward_one(
                 "claude" if protocol != CallerProtocol::Anthropic => {
                     Some(error_response(StatusCode::BAD_REQUEST, "Claude 订阅当前只服务 Anthropic Messages 协议请求"))
                 }
-                "codex" | "opencode" | "claude" | "grok" | "workbuddy" | "qoder" | "trae" | "zcode" => None,
+                "codex" | "opencode" | "claude" | "grok" | "workbuddy" | "qoder" | "trae" | "zcode" | "gemini" => None,
                 _ => Some(error_response(StatusCode::NOT_IMPLEMENTED, "该平台的订阅适配器尚未接入")),
             };
             let response = match unsupported {
@@ -1003,6 +1003,33 @@ async fn forward_one(
                         }
                         "grok" => crate::gateway::adapter::grok::forward(deps.clone(), entry, protocol, body.clone()).await,
                         "zcode" => crate::gateway::adapter::zcode::forward(deps.clone(), entry, protocol, body.clone(), session).await,
+                        // 3.2：Gemini 订阅（Code Assist）——Chat 直接翻译；Responses / Anthropic 调用方先转成 Chat
+                        "gemini" => {
+                            let model = if upstream_model.is_empty() {
+                                crate::gateway::route::split_model_id(requested_model).map(|(_, m)| m.to_string()).unwrap_or_else(|| requested_model.to_string())
+                            } else {
+                                upstream_model.to_string()
+                            };
+                            let converted = match protocol {
+                                CallerProtocol::Chat => Ok(body.clone()),
+                                CallerProtocol::Anthropic => crate::gateway::translate::anthropic_request(&body),
+                                CallerProtocol::Responses => serde_json::from_slice::<Value>(&body)
+                                    .map_err(|e| e.to_string())
+                                    .and_then(|v| crate::gateway::responses_chat::request(&v))
+                                    .map(|chat| axum::body::Bytes::from(chat.to_string())),
+                            };
+                            match converted {
+                                Err(reason) => error_response(StatusCode::BAD_REQUEST, &format!("请求转换失败：{reason}")),
+                                Ok(chat) => {
+                                    let response = crate::gateway::adapter::gemini_subscription::forward_chat(deps.clone(), entry, &model, chat).await;
+                                    match protocol {
+                                        CallerProtocol::Anthropic => crate::gateway::translate::anthropic_response(response, requested_model).await,
+                                        CallerProtocol::Responses => crate::gateway::responses_chat::response_body(response, original_custom_tools(&body)).await,
+                                        CallerProtocol::Chat => response,
+                                    }
+                                }
+                            }
+                        }
                         _ => {
                             // 只说 Chat 的来源（WorkBuddy / Qoder / Trae）：Anthropic 调用方（Claude Code）经协议转换后转发，回复再转回
                             let anthropic = protocol == CallerProtocol::Anthropic;

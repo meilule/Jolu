@@ -5,11 +5,14 @@
 //! - `claude`：Claude 官方订阅，真实二进制 + MCP 工具桥（第 7 步实现）
 
 pub mod claude;
+mod claude_bridge;
+pub(crate) use claude_bridge::mcp as claude_mcp;
 pub mod codex;
 mod codex_stream;
 pub mod direct;
 pub mod gemini;
 pub mod grok;
+mod gemini_chat;
 pub mod gemini_subscription;
 pub mod workbuddy;
 mod workbuddy_request;

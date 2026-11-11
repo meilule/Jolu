@@ -1,7 +1,8 @@
 //! Claude 订阅适配器：驱动真实本机 `claude` 二进制（执行文档 §6）。
 //!
 //! 使用选中连接的完整授权创建一次性配置，认证与 endpoint 覆盖环境不继承。
-//! 当前提供 Anthropic Messages 非流式文本桥接；流式、图片和工具调用明确拒绝。
+//! 纯文本非流式请求走本文件的一次性进程；流式、图片、文档与调用方工具走 `claude_bridge`
+//! （stream-json 输入输出 + 网关自己的 MCP 端点挂起工具调用，3.1）。
 //! 每次提供完整对话；生产请求不恢复原工具会话、不改原工具登录。
 //! 测试可注入假程序，验证隔离身份、环境与兼容行为。
 
@@ -222,6 +223,12 @@ pub(crate) async fn forward_at(
 ) -> Response {
     // 生产请求绝不读取当前 CLI 登录，测试只有显式注入假程序才能跳过授权。
     let isolated = !(cfg!(test) && skip_auth_check && command.is_some());
+    // 流式 / 图片 / 工具：走富请求桥（它自己管账号锁与隔离授权）
+    if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&body) {
+        if super::claude_bridge::wanted(&parsed) {
+            return super::claude_bridge::forward(deps, entry, &parsed, command, isolated, None).await;
+        }
+    }
     let _account_guard = if isolated { Some(crate::gateway::subscription::lock(&entry.connection_id).await) } else { None };
     let bound = if isolated {
         let loaded = deps.db.lock().map_err(|_| "网关状态暂不可用".to_string())
@@ -328,7 +335,7 @@ pub(crate) async fn forward_at(
 }
 
 /// 为所选账号准备一次性配置，生命周期结束后清理。
-fn prepare_profile(bound: &crate::gateway::subscription::BoundAuth) -> Result<crate::cli_browser_auth::Profile, String> {
+pub(super) fn prepare_profile(bound: &crate::gateway::subscription::BoundAuth) -> Result<crate::cli_browser_auth::Profile, String> {
     let profile = crate::cli_browser_auth::Profile::new()?;
     let credentials = serde_json::json!({"claudeAiOauth": bound.bundle["claudeAiOauth"]});
     let settings = serde_json::json!({"oauthAccount": bound.bundle["oauthAccount"], "hasCompletedOnboarding": true});
@@ -337,7 +344,7 @@ fn prepare_profile(bound: &crate::gateway::subscription::BoundAuth) -> Result<cr
     Ok(profile)
 }
 
-fn save_profile_refresh(deps: &Arc<ProxyDeps>, entry: &PoolEntry, bound: &crate::gateway::subscription::BoundAuth, profile: &crate::cli_browser_auth::Profile) -> Result<(), String> {
+pub(super) fn save_profile_refresh(deps: &Arc<ProxyDeps>, entry: &PoolEntry, bound: &crate::gateway::subscription::BoundAuth, profile: &crate::cli_browser_auth::Profile) -> Result<(), String> {
     let credentials: serde_json::Value = serde_json::from_slice(&std::fs::read(profile.path.join(".credentials.json")).map_err(|_| "无法读取隔离授权结果")?).map_err(|_| "隔离授权结果无效")?;
     let account: serde_json::Value = serde_json::from_slice(&std::fs::read(profile.path.join(".claude.json")).map_err(|_| "无法读取隔离账号结果")?).map_err(|_| "隔离账号结果无效")?;
     let mut next = bound.bundle.clone();
@@ -348,14 +355,20 @@ fn save_profile_refresh(deps: &Arc<ProxyDeps>, entry: &PoolEntry, bound: &crate:
     crate::gateway::subscription::save_refresh(&conn, &entry.connection_id, "claude", bound, &next)
 }
 
+/// 本机官方客户端的可执行文件（Windows 只认 .exe，npm 安装的取包里的原生程序）。
+pub(super) fn executable() -> String {
+    crate::session_threads::find_executable("claude")
+        .filter(|p| !cfg!(windows) || p.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")))
+        .or_else(|| crate::cli_browser_auth::npm_prefix("claude").map(|p| p.join("node_modules/@anthropic-ai/claude-code/bin/claude.exe")).filter(|p| p.is_file()))
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "claude".into())
+}
+
 fn program_args(command: Option<Vec<String>>, model: &str) -> Vec<String> {
     match command {
         Some(injected) if !injected.is_empty() => injected,
         _ => vec![
-            crate::session_threads::find_executable("claude")
-                .filter(|p| !cfg!(windows) || p.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")))
-                .or_else(|| crate::cli_browser_auth::npm_prefix("claude").map(|p| p.join("node_modules/@anthropic-ai/claude-code/bin/claude.exe")).filter(|p| p.is_file()))
-                .map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "claude".into()),
+            executable(),
             "-p".into(),
             "--verbose".into(),
             "--tools".into(), "".into(),

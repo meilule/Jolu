@@ -32,7 +32,7 @@ pub(crate) fn router(deps: Arc<ProxyDeps>) -> Router {
         // Gemini CLI 原生端点：模型 id 里带斜杠，用 catch-all 接
         .route("/v1beta/models", get(gemini_models))
         .route("/v1beta/models/{*call}", post(gemini_generate))
-        .route("/__jolu/bridge/callback", post(bridge_callback))
+        .route("/__jolu/claude-mcp/{token}", post(claude_mcp))
         .layer(axum::middleware::from_fn_with_state(deps.clone(), local_only))
         .layer(axum::extract::DefaultBodyLimit::max(BODY_LIMIT))
         .with_state(deps)
@@ -67,6 +67,11 @@ async fn local_only(State(deps): State<Arc<ProxyDeps>>, request: axum::extract::
         .is_some_and(|value| host_allowed(value, deps.gateway_lan_shared));
     if !host_ok {
         return error_json(StatusCode::FORBIDDEN, "Host 不是本机回环地址，已拒绝");
+    }
+    // Claude 订阅的工具桥（3.1）：调用者是网关自己起的 claude 进程，凭路径里的一次性令牌进来，
+    // 不带也不该带网关 Key；令牌由处理函数按活着的进程核对，对不上一律 404。
+    if request.uri().path().starts_with(CLAUDE_MCP) {
+        return next.run(request).await;
     }
     let token = request.headers().get("authorization").and_then(|h| h.to_str().ok())
         .and_then(|h| h.split_once(' ')).filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, token)| token)
@@ -104,13 +109,13 @@ enum GateFailure {
     Limit(super::access::RequestLimitRefusal),
 }
 
+/// Claude 订阅工具桥的路径前缀（见 `adapter::claude_bridge`）。
+const CLAUDE_MCP: &str = "/__jolu/claude-mcp/";
+
 /// 计费口径（对齐 magpie keyLimited 的豁免规则）：POST 请求计入命名 Key 的
-/// 当日请求数；读取类（GET 模型清单）、工具回调（`/__jolu/bridge/callback`）
-/// 与 Gemini countTokens 不计。
+/// 当日请求数；读取类（GET 模型清单）与 Gemini countTokens 不计。
 fn is_billable(method: &axum::http::Method, path: &str) -> bool {
-    method == axum::http::Method::POST
-        && path != "/__jolu/bridge/callback"
-        && !path.ends_with(":countTokens")
+    method == axum::http::Method::POST && !path.ends_with(":countTokens")
 }
 
 /// 鉴权 + 命名 Key 限额，共用一把 DB 锁；返回放行请求携带的命名 Key 名。
@@ -186,29 +191,9 @@ fn host_allowed(value: &str, allow_lan_ip: bool) -> bool {
     })
 }
 
-/// MCP 桥的工具调用回调（§6.3）：挂起等待 agent 的 tool_result 释放。
-/// 仅回环监听 + 双下划线私有路径，不进入任何公共文档。
-async fn bridge_callback(
-    State(deps): State<Arc<ProxyDeps>>,
-    body: axum::body::Bytes,
-) -> Response {
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body) else {
-        return error_json(StatusCode::BAD_REQUEST, "回调体不是有效 JSON");
-    };
-    let Some(call_id) = value.get("tool_call_id").and_then(|v| v.as_str()).map(str::to_string) else {
-        return error_json(StatusCode::BAD_REQUEST, "回调缺少 tool_call_id");
-    };
-    let Some(hub) = deps.tool_hub.as_ref() else {
-        return error_json(StatusCode::SERVICE_UNAVAILABLE, "网关状态暂不可用");
-    };
-    let receiver = hub.register(&call_id);
-    match tokio::time::timeout(crate::gateway::bridge::TOOL_CALL_TIMEOUT, receiver).await {
-        Ok(Ok(result)) => json_response(StatusCode::OK, result),
-        Ok(Err(_)) => json_response(StatusCode::GONE, "调用已被放弃"),
-        Err(_) => {
-            json_response(StatusCode::GATEWAY_TIMEOUT, "等待工具结果超时（120 秒）")
-        }
-    }
+/// Claude 订阅工具桥的 MCP 端点（3.1，Streamable HTTP 的 POST）。
+async fn claude_mcp(axum::extract::Path(token): axum::extract::Path<String>, body: axum::body::Bytes) -> Response {
+    crate::gateway::adapter::claude_mcp(&token, &body).await
 }
 
 /// JSON 响应。不启用 axum 的 json feature，手工拼装保持依赖面不变。

@@ -89,8 +89,8 @@
 
 ## 阶段 3 · 协议能力
 
-- [ ] 3.1 Claude 订阅：工具调用闭环、流式、图片（真实账号验收归鼠鼠）
-- [ ] 3.2 Gemini 订阅：流式与 Chat / Responses 转换
+- [x] 3.1 Claude 订阅：工具调用闭环、流式、图片（`adapter/claude_bridge.rs`）。仍驱动官方客户端：stream-json 输入带图片 / 文档块，`--include-partial-messages` 的流事件原样转给调用方（非流式由同一串事件拼成）；调用方工具由网关自己的 MCP 端点 `/__jolu/claude-mcp/<令牌>`（HTTP 传输，令牌写在临时配置文件里）提供，工具调用挂在网关里、本段以 `tool_use` 结束，下一次请求带结果回来交给同一个进程接着生成；工具名按客户端规则截短加哈希、联合 schema 折成 object 根。旧的 stdio 桥与 `/__jolu/bridge/callback`（无鉴权放行、从未接通）删除。假客户端端到端测试覆盖挂起与续跑；真实账号验收归鼠鼠
+- [x] 3.2 Gemini 订阅：原生流式（`streamGenerateContent?alt=sse`，拆掉 Code Assist 外壳）；Chat 调用方经 `adapter/gemini_chat.rs` 翻译（历史工具调用 / 结果、内嵌图片、`parametersJsonSchema`、tool_choice、流式片段与用量），Responses / Anthropic 调用方在 wire 里先转 Chat；Gemini 3 的 thoughtSignature 按工具调用 id 记在内存里回填，查不到用占位签名。模拟上游测试覆盖；真实账号未验收
 - [x] 3.3 Codex 的 Responses → Chat 翻译（`gateway/responses_chat.rs`：请求含历史调用、图片、自由格式工具包装与拆回；回复含非流式与流式事件、推理摘要与用量）；OpenAI 官方 / Azure 以外的 OpenAI 协议来源自动走翻译；顺带让 Claude Code 也能用只有 Chat 的第三方来源（复用 Anthropic ↔ Chat 翻译）。真实 Codex 客户端未走过
 - [x] 3.4 ZCode 协议转换（非 Anthropic 入口）：Chat / Responses 调用方走 Coding Plan 的 OpenAI 兼容端点（`/api/coding/paas/v4`，同一把 Key），Responses 经 `responses_chat` 翻译；Start Plan 仍只服务 Anthropic。真实账号未验收（当前无额度）
 - [x] 3.5 Trae：Max 派生模型（`<id>-max`，配置名用基础模型、一定带输出上限并把窗口余量给提示词）；文本工具补 GLM 模板与 DeepSeek DSML（DSML 归一成 `<invoke>` 后复用已有解析，跨块拆开的标签会扣住）；选路评分加「错名」与名称多数票（参照 magpie trae 插件 `worth`）。真实账号未验收
