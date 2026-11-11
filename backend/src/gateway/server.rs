@@ -446,82 +446,68 @@ async fn split(request: Request) -> Result<(String, HeaderMap, axum::body::Bytes
 }
 
 /// `POST /v1/messages`（Anthropic Messages 协议入口）。
-/// 隐私脱敏（P5）：鉴权后、选路前脱敏请求体；响应回来后把占位符换回真值。
 async fn messages(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Response {
-    let client_key = request.extensions().get::<ClientKeyName>().map(|k| k.0.clone());
-    match split(request).await {
-        Ok((path, headers, body)) => {
-            let body = match crate::gateway::mask::prepare_request(body, "messages") {
-                Ok(body) => body,
-                Err(response) => return response,
-            };
-            let response =
-                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Anthropic, deps.clone(), headers, body, &path, client_key)
-                    .await;
-            let response = crate::gateway::mask::restore_response(response).await;
-            // 响应侧中间件（think-tags）：非流式 JSON 才处理
-            let middlewares = deps
-                .db
-                .lock()
-                .ok()
-                .and_then(|conn| crate::gateway::middleware::list(&conn).ok())
-                .unwrap_or_default();
-            crate::gateway::mask::restore_middleware(response, &middlewares).await
-        }
-        Err(response) => response,
-    }
+    serve(deps, crate::gateway::wire::CallerProtocol::Anthropic, request).await
 }
 
 /// `POST /v1/chat/completions`（OpenAI Chat 协议入口）。
 async fn chat(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Response {
-    let client_key = request.extensions().get::<ClientKeyName>().map(|k| k.0.clone());
-    match split(request).await {
-        Ok((path, headers, body)) => {
-            let body = match crate::gateway::mask::prepare_request(body, "chat") {
-                Ok(body) => body,
-                Err(response) => return response,
-            };
-            let response =
-                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Chat, deps.clone(), headers, body, &path, client_key)
-                    .await;
-            let response = crate::gateway::mask::restore_response(response).await;
-            // 响应侧中间件（think-tags）：非流式 JSON 才处理
-            let middlewares = deps
-                .db
-                .lock()
-                .ok()
-                .and_then(|conn| crate::gateway::middleware::list(&conn).ok())
-                .unwrap_or_default();
-            crate::gateway::mask::restore_middleware(response, &middlewares).await
-        }
-        Err(response) => response,
-    }
+    serve(deps, crate::gateway::wire::CallerProtocol::Chat, request).await
 }
 
-/// `POST /v1/responses`（OpenAI Responses 协议入口；当前无直通连接，仅保留路由）。
+/// `POST /v1/responses`（OpenAI Responses 协议入口）。
 async fn responses(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Response {
+    serve(deps, crate::gateway::wire::CallerProtocol::Responses, request).await
+}
+
+/// 三类协议入口的共同流程：JS 钩子 onRequest（3.8）→ 隐私脱敏（P5）→ 选路转发 →
+/// 回填占位符 → 响应侧中间件（think-tags，流式走 onEvent）→ JS 钩子 onResponse（留副本，发完即走）。
+async fn serve(deps: Arc<ProxyDeps>, protocol: crate::gateway::wire::CallerProtocol, request: Request) -> Response {
+    use crate::gateway::wire::CallerProtocol;
     let client_key = request.extensions().get::<ClientKeyName>().map(|k| k.0.clone());
-    match split(request).await {
-        Ok((path, headers, body)) => {
-            let body = match crate::gateway::mask::prepare_request(body, "responses") {
-                Ok(body) => body,
-                Err(response) => return response,
-            };
-            let response =
-                crate::gateway::wire::handle(crate::gateway::wire::CallerProtocol::Responses, deps.clone(), headers, body, &path, client_key)
-                    .await;
-            let response = crate::gateway::mask::restore_response(response).await;
-            // 响应侧中间件（think-tags）：非流式 JSON 才处理
-            let middlewares = deps
-                .db
-                .lock()
-                .ok()
-                .and_then(|conn| crate::gateway::middleware::list(&conn).ok())
-                .unwrap_or_default();
-            crate::gateway::mask::restore_middleware(response, &middlewares).await
-        }
-        Err(response) => response,
-    }
+    let loopback = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .is_none_or(|peer| peer.0.ip().is_loopback());
+    let (path, headers, body) = match split(request).await {
+        Ok(parts) => parts,
+        Err(response) => return response,
+    };
+    let middlewares = deps
+        .db
+        .lock()
+        .ok()
+        .and_then(|conn| crate::gateway::middleware::list(&conn).ok())
+        .unwrap_or_default();
+    let (label, hook_protocol) = match protocol {
+        CallerProtocol::Anthropic => ("messages", "anthropic"),
+        CallerProtocol::Chat => ("chat", "chat"),
+        CallerProtocol::Responses => ("responses", "responses"),
+    };
+    let hooks = crate::gateway::js_hooks::hooks_of(&middlewares);
+    let (body, accepted) = if hooks.is_empty() {
+        (body, None)
+    } else {
+        let agent = crate::gateway::wire::agent_from_headers(&headers).agent;
+        let ctx = crate::gateway::js_hooks::RequestCtx {
+            protocol: hook_protocol,
+            path: path.clone(),
+            session: crate::gateway::wire::session_identity(agent.as_deref(), &headers, &body).map(|s| s.session_id),
+            agent,
+            subagent: headers.contains_key("x-claude-code-agent-id")
+                || headers.get("x-openai-subagent").and_then(|v| v.to_str().ok()) == Some("collab_spawn"),
+            origin: if client_key.is_some() { "gateway-key" } else if loopback { "local" } else { "remote" },
+        };
+        crate::gateway::js_hooks::on_request(&hooks, body, ctx).await
+    };
+    let body = match crate::gateway::mask::prepare_request(body, label) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    let response = crate::gateway::wire::handle(protocol, deps.clone(), headers, body, &path, client_key).await;
+    let response = crate::gateway::mask::restore_response(response).await;
+    let response = crate::gateway::mask::restore_middleware(response, &middlewares).await;
+    crate::gateway::js_hooks::on_response(accepted, response)
 }
 
 /// `POST /v1beta/models/{model}:generateContent`（Gemini CLI 原生入口）。

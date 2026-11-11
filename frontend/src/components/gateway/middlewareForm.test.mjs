@@ -3,8 +3,8 @@ import test from "node:test"
 
 const { MIDDLEWARE_KINDS, emptyFields, toConfig, fromConfig, summary, reorder } = await import("./middlewareForm.ts")
 
-test("五个内置类型都有中文名与说明", () => {
-  assert.deepEqual(MIDDLEWARE_KINDS.map((kind) => kind.id), ["model-map", "param-override", "system-prompt", "word-guard", "think-tags"])
+test("六个内置类型都有中文名与说明", () => {
+  assert.deepEqual(MIDDLEWARE_KINDS.map((kind) => kind.id), ["model-map", "param-override", "system-prompt", "word-guard", "think-tags", "js-hook"])
   assert.ok(MIDDLEWARE_KINDS.every((kind) => kind.label && kind.hint))
 })
 
@@ -53,4 +53,13 @@ test("reorder 上移下移并重排 sort，越界不动", () => {
   const rows = [{ name: "a", sort: 0 }, { name: "b", sort: 1 }, { name: "c", sort: 2 }]
   assert.deepEqual(reorder(rows, "c", -1).map((row) => [row.name, row.sort]), [["a", 0], ["c", 1], ["b", 2]])
   assert.deepEqual(reorder(rows, "a", -1).map((row) => row.name), ["a", "b", "c"])
+})
+
+test("JS 钩子：路径必填、超时是正整数，回填与概要只显示文件名", () => {
+  const fields = { ...emptyFields(), path: "  D:/hooks/ctx.hooks.mjs ", timeout: "1500" }
+  assert.deepEqual(toConfig("js-hook", fields), { ok: true, config: { path: "D:/hooks/ctx.hooks.mjs", timeoutMs: 1500 } })
+  assert.equal(toConfig("js-hook", emptyFields()).ok, false)
+  assert.equal(toConfig("js-hook", { ...fields, timeout: "1.5" }).ok, false)
+  assert.equal(fromConfig("js-hook", { path: "/a/b.mjs", timeoutMs: 800 }).timeout, "800")
+  assert.equal(summary("js-hook", { path: ["D:", "hooks", "ctx.hooks.mjs"].join(String.fromCharCode(92)) }), "ctx.hooks.mjs")
 })

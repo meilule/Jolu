@@ -5,14 +5,15 @@
  * 单个失败只跳过自己；保存时后端会在样例请求上试跑，跑不通的配置拒绝保存。
  */
 
-export type MiddlewareKind = "model-map" | "param-override" | "system-prompt" | "word-guard" | "think-tags"
+export type MiddlewareKind = "model-map" | "param-override" | "system-prompt" | "word-guard" | "think-tags" | "js-hook"
 
 export const MIDDLEWARE_KINDS: readonly { id: MiddlewareKind; label: string; hint: string }[] = [
   { id: "model-map", label: "模型改名", hint: "把 agent 发来的模型名映射成「来源/模型」，映射后的名字参与选路与记账" },
   { id: "param-override", label: "参数覆盖", hint: "强制设置或删除请求体顶层参数，例如 max_tokens、temperature" },
   { id: "system-prompt", label: "追加系统提示", hint: "在 agent 自己的系统提示之后追加一段，不替换原有内容" },
   { id: "word-guard", label: "敏感词", hint: "拦截：命中整条请求拒发；遮盖：命中的词替换成 ***。只作用于请求" },
-  { id: "think-tags", label: "思考段处理", hint: "非流式回复：剥掉 <think>…</think>，或把单独返回的思考内容包进 <think> 放到正文前；流式回复不处理" },
+  { id: "think-tags", label: "思考段处理", hint: "剥掉 <think>…</think> 与单独返回的思考内容，或把思考内容包进 <think> 放到正文前；流式回复逐事件处理" },
+  { id: "js-hook", label: "JS 钩子", hint: "本机 .mjs / .js 脚本的 onRequest（选路前改请求，改模型 / 流式 / 工具会回滚）与 onResponse（拿到完整回复副本）；需要本机装有 Node 或 Bun。待确认：无画板" },
 ]
 
 /** 表单字段：各类型只用到其中几项。 */
@@ -24,9 +25,11 @@ export interface MiddlewareFields {
   block: string
   mask: string
   mode: "strip" | "wrap"
+  path: string
+  timeout: string
 }
 
-export const emptyFields = (): MiddlewareFields => ({ mapping: "", set: "", remove: "", prompt: "", block: "", mask: "", mode: "strip" })
+export const emptyFields = (): MiddlewareFields => ({ mapping: "", set: "", remove: "", prompt: "", block: "", mask: "", mode: "strip", path: "", timeout: "" })
 
 export type ConfigResult = { ok: true; config: Record<string, unknown> } | { ok: false; error: string }
 
@@ -90,6 +93,17 @@ export function toConfig(kind: MiddlewareKind, fields: MiddlewareFields): Config
     }
     case "think-tags":
       return { ok: true, config: { mode: fields.mode } }
+    case "js-hook": {
+      const path = fields.path.trim()
+      if (!path) return { ok: false, error: "请填写钩子脚本的完整路径" }
+      const config: Record<string, unknown> = { path }
+      if (fields.timeout.trim()) {
+        const ms = Number(fields.timeout.trim())
+        if (!Number.isInteger(ms) || ms <= 0) return { ok: false, error: "超时请填正整数毫秒" }
+        config.timeoutMs = ms
+      }
+      return { ok: true, config }
+    }
   }
 }
 
@@ -112,6 +126,10 @@ export function fromConfig(kind: MiddlewareKind, config: unknown): MiddlewareFie
     fields.mask = strings(source.mask).join(", ")
   }
   if (kind === "think-tags") fields.mode = source.mode === "wrap" ? "wrap" : "strip"
+  if (kind === "js-hook") {
+    fields.path = typeof source.path === "string" ? source.path : ""
+    fields.timeout = typeof source.timeoutMs === "number" ? String(source.timeoutMs) : ""
+  }
   return fields
 }
 
@@ -133,6 +151,8 @@ export function summary(kind: string, config: unknown): string {
       return [`拦截 ${strings(source.block).length} 个词`, `遮盖 ${strings(source.mask).length} 个词`].join(" · ")
     case "think-tags":
       return source.mode === "wrap" ? "包进思考标签" : "剥掉思考段"
+    case "js-hook":
+      return typeof source.path === "string" ? source.path.split(/[\\/]/).pop() ?? "" : "未设置脚本"
     default:
       return "未知类型"
   }

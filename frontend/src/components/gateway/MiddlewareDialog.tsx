@@ -199,5 +199,14 @@ function KindFields({ kind, fields, onChange }: { kind: MiddlewareKind; fields: 
           <option value="wrap">包进思考标签</option>
         </select>
       )
+    case "js-hook":
+      return (
+        <>
+          <input value={fields.path} onChange={(event) => onChange({ ...fields, path: event.target.value })} placeholder="钩子脚本完整路径，例如 D:\hooks\context.hooks.mjs"
+            className={cn(fieldClass, "h-8 w-full")} />
+          <input value={fields.timeout} onChange={(event) => onChange({ ...fields, timeout: event.target.value })} placeholder="超时毫秒（可空，默认 1000，范围 100–30000）"
+            className={cn(fieldClass, "h-8 w-[260px]")} />
+        </>
+      )
   }
 }

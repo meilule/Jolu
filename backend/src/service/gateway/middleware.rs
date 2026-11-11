@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::gateway::middleware::{self as chain, Middleware};
 
 /// 内置中间件类型（与 `gateway::middleware::apply_chain` 的分支一一对应）。
-pub const KINDS: [&str; 5] = ["model-map", "param-override", "system-prompt", "word-guard", "think-tags"];
+pub const KINDS: [&str; 6] = ["model-map", "param-override", "system-prompt", "word-guard", "think-tags", "js-hook"];
 
 /// 用来试跑请求侧中间件的样例请求（Anthropic 形态，含 system 与一条用户消息）。
 fn sample_request() -> Value {
@@ -33,6 +33,9 @@ pub fn validate(name: &str, kind: &str, config: &Value) -> Result<(), String> {
     }
     if !config.is_object() {
         return Err("中间件配置必须是 JSON 对象".into());
+    }
+    if kind == crate::gateway::js_hooks::KIND {
+        return crate::gateway::js_hooks::validate(config);
     }
     if kind == "think-tags" {
         return match config.get("mode").and_then(Value::as_str).unwrap_or("strip") {

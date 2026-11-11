@@ -591,7 +591,7 @@ async fn pump(run: &Run, model: &str, tx: &mpsc::Sender<Result<Value, String>>, 
 }
 
 /// 一串流事件 → 完整的 Anthropic 消息（非流式调用方）。
-fn assemble(events: &[Value]) -> Value {
+pub(crate) fn assemble(events: &[Value]) -> Value {
     let mut message = json!({"type": "message", "role": "assistant", "content": [], "stop_reason": null, "stop_sequence": null});
     let mut blocks: Vec<(Value, String)> = Vec::new();
     for event in events {

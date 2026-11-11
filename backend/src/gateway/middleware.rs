@@ -96,6 +96,7 @@ pub(crate) fn apply_chain(middlewares: &[Middleware], body: &mut Value) -> Outco
             "system-prompt" => apply_system_prompt(&middleware.config, body),
             "word-guard" => apply_word_guard(&middleware.config, body, &mut outcome),
             "think-tags" => Ok(()), // 响应侧中间件：请求阶段无事可做（见 restore_chain）
+            "js-hook" => Ok(()),    // JS 钩子在 server.rs 里另走异步宿主（js_hooks.rs）
             _ => Err(format!("未知中间件类型「{}」", middleware.kind)),
         };
         match result {

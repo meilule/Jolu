@@ -7,6 +7,7 @@
 pub mod claude;
 mod claude_bridge;
 pub(crate) use claude_bridge::mcp as claude_mcp;
+pub(crate) use claude_bridge::assemble as assemble_anthropic_events;
 pub mod codex;
 mod codex_stream;
 pub mod direct;

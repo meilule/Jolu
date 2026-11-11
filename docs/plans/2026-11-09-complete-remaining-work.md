@@ -18,9 +18,21 @@
 
 ---
 
-## 交接说明（2026-11-09 收尾，给接手的同事）
+## 交接说明（2026-11-11 更新，给接手的同事）
 
-**进度：** 阶段 0 完成（`fe29dc1`）；阶段 1 完成（1.1–1.8 `0a8c042`，1.9–1.10 于 2026-11-11）；阶段 1B（同事批次遗留）进行中；阶段 2–5 未开始。以下勾选框为准。
+**进度：** 阶段 0、1、2 完成；阶段 1B 只剩 B5（桌面端验证）与 B13（依赖 5.2）；阶段 3 剩 3.9（意图路由）；阶段 4、5 未开始。以下勾选框为准。
+
+**接手从这里开始：** 3.9 → 阶段 4（4.1 字号放大要同步 `Jolu.pen`）→ 阶段 5。每项做完勾选并写明验证结果。
+
+**2026-11-11 新增的公共件：**
+- `gateway/adapter/claude_bridge.rs`：Claude 订阅的流式 / 图片 / 工具桥。网关自己是 MCP 服务器（`/__jolu/claude-mcp/<令牌>`，在 `server.rs::local_only` 里跳过 Key 校验、令牌由处理函数核对）；工具调用挂在 `RUNS` 里等调用方下一次请求带结果来。旧的 stdio 桥（`bridge.rs`、`bin/gateway_mcp_bridge.rs`、`/__jolu/bridge/callback`）已删除。
+- `gateway/adapter/gemini_chat.rs`：Chat ↔ Code Assist 翻译与 SSE 解码（`SseDecoder`），Gemini 订阅的 Chat / Responses / Anthropic 调用方都经它。
+- `gateway/mask.rs`：`Policy`（每类遮住 / 只记录 / 拦下 + 豁免清单）、`records()`（内存里的命中记录，不含原值）、`sensitive_spans()`（交接摘要共用的识别规则）、`on_first_mask()`（首次遮住的钩子）。
+- `gateway/middleware.rs`：`EventChain` + `transform_sse`，响应侧中间件的流式逐事件钩子（onEvent）；新增流式能力的中间件在这里加分支。
+- `gateway/js_hooks.rs` + `js_hooks_host.mjs`：JS 钩子宿主（常驻 Node / Bun，一行一个 JSON），`server.rs::serve` 是三个协议入口共用的流程：钩子 onRequest → 脱敏 → 转发 → 回填 → 响应中间件 → 钩子 onResponse。
+- 测试里起子进程宿主时注意：Windows 上 tokio 读子进程输出走阻塞线程池，测试结束前要关掉宿主（见 `js_hooks::shutdown`），否则测试运行时收尾会卡住两分钟。
+
+**2026-11-11 新增的未验证项：** Claude 订阅桥（真实 `claude` 客户端的 stream-json 输入、HTTP MCP 与工具挂起续跑）、Gemini 订阅的 Chat / 流式、JS 钩子在桌面端的接入、隐私设置新界面与脱敏记录弹窗——都只有单元 / 端到端模拟测试，没有真实账号或桌面端走过。
 
 **本次新增的公共件（后续条目可复用）：**
 - `backend/src/steady.rs`：读外部或状态文件一律用 `crate::steady::read / read_to_string / exists / read_optional`，不要直接 `std::fs::read`——否则 agent 用 rename 写配置时可能把「有配置」读成「没有」，进而覆盖用户配置。
@@ -96,7 +108,7 @@
 - [x] 3.5 Trae：Max 派生模型（`<id>-max`，配置名用基础模型、一定带输出上限并把窗口余量给提示词）；文本工具补 GLM 模板与 DeepSeek DSML（DSML 归一成 `<invoke>` 后复用已有解析，跨块拆开的标签会扣住）；选路评分加「错名」与名称多数票（参照 magpie trae 插件 `worth`）。真实账号未验收
 - [x] 3.6 WorkBuddy：被拒「未授权渠道」时先给开场白加逗号、再把系统提示挪进用户消息，各重发一次并按系统提示记住；非流式请求收到事件流时拼成完整回复。真实账号未验收
 - [x] 3.7 中间件 `onEvent` 流式钩子（`middleware::EventChain` + `transform_sse`：think-tags 在流式回复里按结构化的思考字段 / 块逐事件剥除或包成 `<think>` 文本，Anthropic 块 index 往前补齐）；隐私脱敏每类三档（遮住 / 只记录 / 拦下，拦下时整条请求 400 不发）、「从不脱敏」清单（整段、不分大小写）、内存里的脱敏记录与发出前后对照弹窗（只存种类、长度、开头几个字与前后文，不存原值）、第一次真的遮住时发一次系统通知 + 主窗口提示；交接摘要的脱敏改用网关引擎识别卡号 / 身份证号并遵守同一份豁免清单（邮箱按交接的约定不遮）。新界面无画板，标「待确认」
-- [ ] 3.8 E1 JS 异步钩子（`onRequest` / `onResponse`，失败回滚）
+- [x] 3.8 E1 JS 异步钩子（`gateway/js_hooks.rs`）：中间件类型 `js-hook`（`{path, timeoutMs, options}`），常驻 Node / Bun 宿主执行；onRequest 在脱敏之前改请求，抛错 / 超时 / 返回非对象 / 改了 model、stream、工具声明时回滚且不再收到 onResponse；onResponse 拿到整理好的完整回复副本（流式边转发边留，最多 8 MiB），发完即走；ctx 有协议、模型、agent、会话、子代理、origin（local / gateway-key / remote）、options 与每钩子 state，不给请求头与凭据。中间件弹窗可添加（无画板，标「待确认」）。真实 Node 宿主测试覆盖改写、三种回滚与 onResponse；桌面端未走
 - [ ] 3.9 E3 意图路由（小模型判意图选强 / 便宜模型）
 
 ## 阶段 4 · 其他模块与工程质量
