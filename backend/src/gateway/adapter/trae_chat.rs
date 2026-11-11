@@ -95,6 +95,8 @@ pub(super) fn request(
         }
         native.push(json!({"type":"function","function":{"name":name,"description":f["description"].as_str().unwrap_or(""),"parameters":parameters.to_string()}}));
     }
+    // Max 派生模型（3.5）：配置名用基础模型，model_name 是 __max 那个
+    let model = route.max_base.as_deref().unwrap_or(model);
     let mut out = json!({"function":route.function,"config_name":model,"model":model,"stream":true,"request_id":nonce()?,"session_id":session});
     if let Some(name) = &route.model_name {
         out["model_name"] = json!(name);
@@ -125,6 +127,16 @@ pub(super) fn request(
             .filter(|n| *n > 0)
             .ok_or("Trae 输出预算必须是正整数")?;
         out["max_tokens"] = json!(route.max_tokens.map_or(tokens, |max| tokens.min(max)));
+    }
+    // Max 模式：一定带 max_tokens，并把窗口里剩下的空间给提示词（与 IDE 的 Max 模式一致）
+    if let Some(window) = route.max_window {
+        if out.get("max_tokens").is_none() {
+            if let Some(most) = route.max_tokens {
+                out["max_tokens"] = json!(most);
+            }
+        }
+        let output = out["max_tokens"].as_u64().unwrap_or(0);
+        out["user_message_context"] = json!({"model_info": {"prompt_max_tokens": window.saturating_sub(output)}});
     }
     if let Some(t) = value.get("temperature") {
         let t = t
@@ -978,7 +990,19 @@ mod tests {
             max_tokens: Some(8192),
             images: Some(false),
             reasoning: vec!["light".into(), "extra_high".into()],
+            max_base: None,
+            max_window: None,
         }
+    }
+
+    #[test]
+    fn a_max_route_asks_the_base_config_with_the_window_left_for_the_prompt() {
+        let max = ModelRoute { model_name: Some("model__max".into()), max_tokens: Some(32_000), max_base: Some("model".into()), max_window: Some(1_000_000), ..route() };
+        let body = json!({"model":"source/model-max","messages":[{"role":"user","content":"hi"}]}).to_string();
+        let output = request(body.as_bytes(), "source", &max, "s1").unwrap();
+        assert_eq!((output["config_name"].as_str(), output["model_name"].as_str()), (Some("model"), Some("model__max")));
+        assert_eq!(output["max_tokens"], 32_000, "Max 模式一定带输出上限");
+        assert_eq!(output["user_message_context"]["model_info"]["prompt_max_tokens"], 968_000);
     }
     #[test]
     fn request_routes_tools_history_and_budget_without_accepting_internal_fields() {

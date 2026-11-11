@@ -430,16 +430,49 @@ async fn forward_at(
         }
         .unwrap_or_else(|| format!("{}/v2", site.endpoint)),
     );
-    super::direct::forward(
-        deps,
-        &target,
-        model.into(),
-        Method::POST,
-        "/chat/completions",
-        &headers,
-        Bytes::from(value.to_string()),
-    )
-    .await
+    // 3.6：同一系统提示以前被拒过并改写成功的，首发就用那种改法
+    let system_key = super::workbuddy_retry::system_key(&value);
+    super::workbuddy_retry::prepare(&mut value);
+    let wants_stream = value["stream"].as_bool() == Some(true);
+    let send = |body: &serde_json::Value| {
+        super::direct::forward(deps.clone(), &target, model.clone(), Method::POST, "/chat/completions", &headers, Bytes::from(body.to_string()))
+    };
+    let mut response = send(&value).await;
+    // 被拒「未授权渠道」：先加逗号，再把系统提示挪进用户消息，各试一次（workbuddy_retry 模块头）
+    let mut tried_comma = false;
+    for _ in 0..2 {
+        if response.status() != StatusCode::BAD_REQUEST {
+            break;
+        }
+        let (parts, body) = response.into_parts();
+        let text = axum::body::to_bytes(body, 256 * 1024).await.unwrap_or_default();
+        let next = super::workbuddy_retry::refused(&String::from_utf8_lossy(&text))
+            .then(|| super::workbuddy_retry::next_attempt(system_key, &value, tried_comma))
+            .flatten();
+        let Some((next, how)) = next else {
+            response = Response::from_parts(parts, axum::body::Body::from(text));
+            break;
+        };
+        tried_comma = true;
+        let system_changed = next["messages"][0]["content"] != value["messages"][0]["content"];
+        response = send(&next).await;
+        if response.status() != StatusCode::BAD_REQUEST {
+            super::workbuddy_retry::succeeded(system_key, how, system_changed);
+        }
+        value = next;
+    }
+    // 非流式请求却收到事件流：拼成一条完整回复（3.6）
+    let streamed = response.headers().get("content-type").and_then(|v| v.to_str().ok()).is_some_and(|ct| ct.contains("event-stream"));
+    if !wants_stream && streamed && response.status().is_success() {
+        let bytes = axum::body::to_bytes(response.into_body(), 32 * 1024 * 1024).await.unwrap_or_default();
+        let assembled = super::workbuddy_retry::assemble_chat_stream(&String::from_utf8_lossy(&bytes));
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(assembled.to_string()))
+            .unwrap_or_else(|_| error_response(StatusCode::BAD_GATEWAY, "构造回复失败"));
+    }
+    response
 }
 
 #[cfg(all(test, windows))]

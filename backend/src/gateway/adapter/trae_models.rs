@@ -21,6 +21,115 @@ pub(super) struct ModelRoute {
     pub max_tokens: Option<u64>,
     pub images: Option<bool>,
     pub reasoning: Vec<String>,
+    /// Max 模式派生模型（`<id>-max`）才有：配置名用的基础模型与 Max 的上下文窗口（3.5）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_base: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_window: Option<u64>,
+}
+
+/// Max 派生模型的 id 后缀：`deepseek-v4.1-flash-max` = `deepseek-v4.1-flash` 的 Max 模式。
+pub(super) const MAX_SUFFIX: &str = "-max";
+
+/// 条目的显示名（Trae 用量页按它记账）。
+fn name_of(value: &Value) -> String {
+    ["/display_config/display_name", "/display_name", "/display_model_name", "/config_name"]
+        .iter()
+        .find_map(|p| value.pointer(p).and_then(Value::as_str).filter(|s| !s.is_empty()))
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// 一组条目里第一个声明了 `__max` 模型、且 Max 窗口比 dev 窗口大的：（函数，__max 名，输出上限，窗口）。
+/// 参照 magpie trae 插件 `maxModel`：各列表不必一致，窗口取第一个给出正数的。
+fn max_route(entries: &[(&str, &Value)]) -> Option<(String, String, Option<u64>, u64)> {
+    let details = |v: &Value| v["model_detail_list"].as_array().cloned().unwrap_or_default();
+    let (function, at) = entries.iter().find(|(_, v)| details(v).iter().any(|d| d["model_name"].as_str().is_some_and(|n| n.ends_with("__max"))))?;
+    let detail = details(at).into_iter().find(|d| d["model_name"].as_str().is_some_and(|n| n.ends_with("__max")))?;
+    let first = |key: &str| {
+        std::iter::once(*at).chain(entries.iter().map(|(_, v)| *v)).find_map(|v| v.pointer(&format!("/context_window_tokens/{key}")).and_then(Value::as_u64).filter(|n| *n > 0)).unwrap_or(0)
+    };
+    let window = first("max");
+    (window > first("dev")).then(|| (function.to_string(), detail["model_name"].as_str().unwrap_or_default().to_string(), detail["max_tokens"].as_u64().filter(|n| *n > 0), window))
+}
+
+/// 从各函数的列表里挑每个模型的路由并派生 Max 模型（3.5）。
+///
+/// 选哪个函数的条目（参照 magpie trae 插件 `liveModels` 的 `worth`）：有 `__dev` 路由的优先，
+/// 其次不是「错名」的（一个函数把 A 模型叫成同列表里 B 模型的名字——Trae 用量页会把请求记到 B 名下，
+/// yetone/magpie#681），再其次显示名与多数列表一致的；以上三项权重翻倍，最后才看是否声明思考档位。
+pub(super) fn pick_routes(lists: &[(&str, Vec<Value>)], edition: &str) -> (Vec<String>, std::collections::BTreeMap<String, ModelRoute>) {
+    use std::collections::{BTreeMap, HashMap};
+    let mut names: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    for (_, list) in lists {
+        for value in list {
+            if let Some(id) = chat_model(value, edition) {
+                *names.entry(id).or_default().entry(name_of(value)).or_default() += 1;
+            }
+        }
+    }
+    let agreed: HashMap<&String, Option<&String>> = names
+        .iter()
+        .map(|(id, by)| {
+            let top = by.values().copied().max().unwrap_or(0);
+            let most: Vec<&String> = by.iter().filter(|(_, n)| **n == top).map(|(name, _)| name).collect();
+            (id, (most.len() == 1).then(|| most[0]))
+        })
+        .collect();
+    let misnamed = |list: &[Value], id: &str, value: &Value| {
+        let name = name_of(value);
+        names.get(id).is_some_and(|by| by.len() > 1)
+            && list.iter().any(|other| chat_model(other, edition).is_some_and(|other_id| other_id != id) && name_of(other) == name)
+    };
+    let worth = |list: &[Value], id: &str, value: &Value, route: &ModelRoute| -> u32 {
+        let dev = route.model_name.is_some() as u32 * 2;
+        let named = (!misnamed(list, id, value)) as u32;
+        let agrees = agreed.get(&id.to_string()).copied().flatten().is_some_and(|name| *name == name_of(value)) as u32;
+        (dev + named + agrees) * 2 + (!route.reasoning.is_empty()) as u32
+    };
+    let mut models = Vec::new();
+    let mut routes: BTreeMap<String, ModelRoute> = BTreeMap::new();
+    let mut best: HashMap<String, u32> = HashMap::new();
+    let mut entries: HashMap<String, Vec<(&str, &Value)>> = HashMap::new();
+    for (function, list) in lists {
+        for value in list {
+            let Some(id) = chat_model(value, edition) else { continue };
+            if !models.contains(&id) {
+                models.push(id.clone());
+            }
+            entries.entry(id.clone()).or_default().push((function, value));
+            let route = model_route(function, value);
+            let score = worth(list, &id, value, &route);
+            if best.get(&id).is_none_or(|old| score > *old) {
+                best.insert(id.clone(), score);
+                routes.insert(id, route);
+            }
+        }
+    }
+    // Max 派生：显示名与多数一致的条目排前（Trae 也按那个名字记 Max 的账）
+    for id in models.clone() {
+        let derived = format!("{id}{MAX_SUFFIX}");
+        if routes.contains_key(&derived) {
+            continue;
+        }
+        let mut list = entries.get(&id).cloned().unwrap_or_default();
+        let agreed_name = agreed.get(&id).copied().flatten().cloned();
+        list.sort_by_key(|(_, v)| (Some(name_of(v)) != agreed_name) as u8);
+        if let Some((function, name, most, window)) = max_route(&list) {
+            let base = routes.get(&id).cloned();
+            routes.insert(derived.clone(), ModelRoute {
+                function,
+                model_name: Some(name),
+                max_tokens: most,
+                images: base.as_ref().and_then(|r| r.images),
+                reasoning: base.map(|r| r.reasoning).unwrap_or_default(),
+                max_base: Some(id.clone()),
+                max_window: Some(window),
+            });
+            models.push(derived);
+        }
+    }
+    (models, routes)
 }
 
 fn identifier(id: &str) -> bool {
@@ -58,6 +167,8 @@ fn model_route(function: &str, value: &Value) -> ModelRoute {
             .filter(|s| ["light", "medium", "high", "extra_high", "max"].contains(s))
             .map(str::to_owned)
             .collect(),
+        max_base: None,
+        max_window: None,
     }
 }
 
@@ -374,28 +485,11 @@ async fn load_models(
                 return Err(last_error);
             }
         }
-        let mut models = Vec::new();
-        let mut routes = std::collections::BTreeMap::<String, ModelRoute>::new();
-        for function in FUNCTIONS {
-            for value in lists.get(*function).into_iter().flatten() {
-                if let Some(id) = chat_model(value, &edition) {
-                    if !models.contains(&id) {
-                        models.push(id.clone());
-                    }
-                    let candidate = model_route(function, value);
-                    // 优先使用 __dev 路由，其次保留声明思考档位的条目；同分保持函数顺序。
-                    let score = |r: &ModelRoute| {
-                        (r.model_name.is_some() as u8) * 4 + (!r.reasoning.is_empty() as u8)
-                    };
-                    if routes
-                        .get(&id)
-                        .is_none_or(|old| score(&candidate) > score(old))
-                    {
-                        routes.insert(id, candidate);
-                    }
-                }
-            }
-        }
+        let ordered: Vec<(&str, Vec<Value>)> = FUNCTIONS
+            .iter()
+            .map(|function| (*function, lists.get(*function).cloned().unwrap_or_default()))
+            .collect();
+        let (models, routes) = pick_routes(&ordered, &edition);
         if models.is_empty() {
             return Err("Trae 所选账号未返回可选择的对话模型，未更新缓存".into());
         }
@@ -418,6 +512,37 @@ async fn load_models(
         return Err("Trae 授权或来源已变化，已丢弃旧账号目录".into());
     }
     Ok(models)
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn misnamed_entries_lose_and_max_models_are_derived() {
+        // chat_v3 把 flash 叫成 official 的名字（错名）；solo 叫对了，且两边都有 __dev
+        let solo = vec![
+            json!({"config_name": "flash", "display_name": "DeepSeek-V4.1-Flash", "model_detail_list": [{"model_name": "flash__dev"}, {"model_name": "flash__max", "max_tokens": 64000}], "context_window_tokens": {"dev": 128000, "max": 1000000}}),
+        ];
+        let chat = vec![
+            json!({"config_name": "flash", "display_name": "DeepSeek-V4-Flash 正式版", "model_detail_list": [{"model_name": "flash__dev"}]}),
+            json!({"config_name": "official", "display_name": "DeepSeek-V4-Flash 正式版", "model_detail_list": [{"model_name": "official__dev"}]}),
+        ];
+        let (models, routes) = pick_routes(&[("chat_v3", chat), ("solo_agent", solo)], "global");
+        assert_eq!(routes["flash"].function, "solo_agent", "错名的 chat_v3 条目输给叫对的 solo 条目");
+        assert!(models.contains(&"flash-max".to_string()));
+        let max = &routes["flash-max"];
+        assert_eq!((max.model_name.as_deref(), max.max_tokens, max.max_window, max.max_base.as_deref()), (Some("flash__max"), Some(64000), Some(1_000_000), Some("flash")));
+        assert!(!models.contains(&"official-max".to_string()), "没有 __max 的不派生");
+    }
+
+    #[test]
+    fn a_max_window_no_bigger_than_dev_is_not_a_max_mode() {
+        let list = vec![json!({"config_name": "m", "model_detail_list": [{"model_name": "m__dev"}, {"model_name": "m__max"}], "context_window_tokens": {"dev": 200000, "max": 200000}})];
+        let (models, _) = pick_routes(&[("solo_agent", list)], "global");
+        assert_eq!(models, vec!["m".to_string()]);
+    }
 }
 
 #[cfg(all(test, windows))]

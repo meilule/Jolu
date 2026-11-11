@@ -13,6 +13,7 @@ pub mod grok;
 pub mod gemini_subscription;
 pub mod workbuddy;
 mod workbuddy_request;
+mod workbuddy_retry;
 pub mod zcode;
 pub mod zcode_start;
 pub mod qoder;

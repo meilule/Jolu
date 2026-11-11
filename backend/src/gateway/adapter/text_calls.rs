@@ -1,5 +1,7 @@
 //! 模型以文本写出的工具调用：`<tool_call>{json}</tool_call>`、Qwen 的
-//! `<function=…><parameter=…>` 与 Anthropic 的 `<invoke name="…">`。
+//! `<function=…><parameter=…>`、Anthropic 的 `<invoke name="…">`、GLM 自己的模板
+//! （`<tool_call>名<arg_key>k</arg_key><arg_value>v</arg_value>`）与 DeepSeek 的 DSML
+//! （`<｜DSML｜invoke name="…">`，先归一成 `<invoke>` 再按同一套规则读，3.5）。
 //! 移植自 magpie-community/plugins `packages/qoder` 的 Splitter（MIT）：
 //! 完整调用块到齐前先扣住文本；写了一半或读不懂的调用是错误，不当作回答。
 use serde_json::Value;
@@ -67,7 +69,102 @@ fn quoted(text: &str) -> bool {
 }
 
 fn callish(v: &str) -> bool {
-    v.trim_start().starts_with('{') || v.contains("<function=")
+    v.trim_start().starts_with('{') || v.contains("<function=") || v.contains("<arg_key>")
+}
+
+/// GLM 的调用模板：工具名，然后每个参数 `<arg_key>k</arg_key><arg_value>v</arg_value>`。
+/// 值按工具声明：字符串类型原样，否则当 JSON 读（读不懂仍按原文）。只有名字、没有参数的，
+/// 只在名字确实是请求里的工具时才算调用（参照 magpie trae 插件 `glmCall`）。
+fn glm_call(v: &str, tools: &[Value]) -> Option<(String, String)> {
+    let v = v.trim();
+    let at = v.find("<arg_key>");
+    let name = at.map_or(v, |i| &v[..i]).trim();
+    if name.is_empty() || name.len() > 128 || !name.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | ':' | '-')) {
+        return None;
+    }
+    if at.is_none() && !declared(tools, name) {
+        return None;
+    }
+    let props = props(tools, name);
+    let mut args = serde_json::Map::new();
+    let mut rest = at.map_or("", |i| &v[i..]);
+    while let Some(k) = rest.find("<arg_key>") {
+        let after = &rest[k + "<arg_key>".len()..];
+        let Some(key_end) = after.find("</arg_key>") else { break };
+        let key = after[..key_end].trim();
+        let after = &after[key_end + "</arg_key>".len()..];
+        let Some(value_start) = after.find("<arg_value>") else { break };
+        let after = &after[value_start + "<arg_value>".len()..];
+        let Some(value_end) = after.find("</arg_value>") else { break };
+        if !key.is_empty() {
+            args.insert(key.into(), value_of(&after[..value_end], props.and_then(|p| p.get(key))));
+        }
+        rest = &after[value_end + "</arg_value>".len()..];
+    }
+    if at.is_some() && args.is_empty() {
+        return None;
+    }
+    Some((name.into(), Value::Object(args).to_string()))
+}
+
+/// DeepSeek 的 DSML 标签（`<｜DSML｜…>`，竖线也可能是半角、带空格）归一成普通 XML，
+/// 交给已有的 `<invoke>` / `<parameter>` 读法。返回（归一后的可交出部分，末尾可能是半个标签的待续部分）。
+pub(super) fn normalize_dsml(input: &str) -> (String, String) {
+    // 末尾若有一个还没闭合的 `<`，而且它后面可能是 DSML 标签开头，先扣住等下一块
+    let hold_from = input.rfind('<').filter(|&i| {
+        let tail = &input[i..];
+        !tail.contains('>') && tail.chars().count() <= 48 && {
+            let compact: String = tail.chars().filter(|c| !c.is_whitespace() && *c != '/').collect();
+            let marker = compact.trim_start_matches('<');
+            marker.is_empty() || "｜DSML｜".starts_with(marker) || "|DSML|".starts_with(marker) || marker.starts_with('｜') || marker.starts_with('|')
+        }
+    });
+    let (ready, pending) = match hold_from {
+        Some(i) => (&input[..i], &input[i..]),
+        None => (input, ""),
+    };
+    let mut out = String::with_capacity(ready.len());
+    let mut rest = ready;
+    while let Some(i) = rest.find('<') {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        let Some(end) = tail.find('>') else {
+            out.push_str(tail);
+            rest = "";
+            break;
+        };
+        let tag = &tail[..=end];
+        out.push_str(&dsml_tag(tag).unwrap_or_else(|| tag.to_string()));
+        rest = &tail[end + 1..];
+    }
+    out.push_str(rest);
+    (out, pending.to_string())
+}
+
+/// 一个 DSML 标签 → 等价的普通标签；不是 DSML 返回 None。
+fn dsml_tag(tag: &str) -> Option<String> {
+    let inner = tag.trim_start_matches('<').trim_end_matches('>').trim();
+    let (closing, inner) = match inner.strip_prefix('/') {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, inner),
+    };
+    let after_bar = inner.strip_prefix('｜').or_else(|| inner.strip_prefix('|'))?;
+    let after_bar = after_bar.trim_start_matches(|c: char| c == '｜' || c == '|' || c.is_whitespace());
+    let rest = after_bar.strip_prefix("DSML")?;
+    let rest = rest.trim_start_matches(|c: char| c == '｜' || c == '|' || c.is_whitespace());
+    let slash = if closing { "/" } else { "" };
+    if rest.starts_with("function_calls") || rest.starts_with("tool_calls") {
+        return Some(format!("<{slash}function_calls>"));
+    }
+    if let Some(attrs) = rest.strip_prefix("invoke") {
+        return Some(if closing { "</invoke>".into() } else { format!("<invoke{attrs}>") });
+    }
+    if let Some(attrs) = rest.strip_prefix("parameter") {
+        // string="true" 这类附加属性去掉：值按工具声明的类型读
+        let name = attrs.split_whitespace().find(|a| a.starts_with("name=")).unwrap_or("");
+        return Some(if closing { "</parameter>".into() } else { format!("<parameter {name}>") });
+    }
+    None
 }
 
 fn props<'a>(tools: &'a [Value], name: &str) -> Option<&'a Value> {
@@ -89,13 +186,16 @@ fn value_of(v: &str, prop: Option<&Value>) -> Value {
     serde_json::from_str(v.trim()).unwrap_or_else(|_| Value::String(v.into()))
 }
 
-/// `<tool_call>` 块内的一个调用：JSON `{name, arguments}` 或 `<function=…>` 形式。
+/// `<tool_call>` 块内的一个调用：JSON `{name, arguments}`、`<function=…>` 或 GLM 模板。
 fn parse_call(v: &str, tools: &[Value]) -> Option<(String, String)> {
     if let Ok(f) = serde_json::from_str::<Value>(v.trim()) {
         let name = f["name"].as_str().map(str::trim).unwrap_or_default();
         if !name.is_empty() && f["arguments"].is_object() {
             return Some((name.into(), f["arguments"].to_string()));
         }
+    }
+    if !v.contains("<function=") {
+        return glm_call(v, tools);
     }
     let start = v.find("<function=")?;
     let rest = &v[start + "<function=".len()..];
@@ -271,6 +371,8 @@ fn xml_call(s: &str, end: bool, tools: &[Value]) -> Xml {
 /// 一段流式文本的切分状态。
 pub(super) struct Splitter {
     tools: Vec<Value>,
+    /// DSML 归一时扣住的半个标签（等下一块拼上再归一）
+    dsml_pending: String,
     text_buf: String,
     call_buf: String,
     in_call: bool,
@@ -288,7 +390,7 @@ enum Bare {
 impl Splitter {
     pub(super) fn new(tools: &[Value]) -> Self {
         let tools = tools.iter().filter(|t| t.pointer("/function/name").and_then(Value::as_str).is_some()).cloned().collect();
-        Self { tools, text_buf: String::new(), call_buf: String::new(), in_call: false, after: false, sent: String::new(), saw_tool: false }
+        Self { tools, dsml_pending: String::new(), text_buf: String::new(), call_buf: String::new(), in_call: false, after: false, sent: String::new(), saw_tool: false }
     }
 
     fn text(&mut self, out: &mut Vec<Piece>, t: &str) {
@@ -358,6 +460,13 @@ impl Splitter {
     }
 
     pub(super) fn feed(&mut self, input: &str) -> Vec<Piece> {
+        let combined = std::mem::take(&mut self.dsml_pending) + input;
+        let (ready, pending) = normalize_dsml(&combined);
+        self.dsml_pending = pending;
+        self.feed_normalized(&ready)
+    }
+
+    fn feed_normalized(&mut self, input: &str) -> Vec<Piece> {
         let mut out = Vec::new();
         let mut input = input.to_string();
         while !input.is_empty() {
@@ -424,7 +533,7 @@ impl Splitter {
                     self.saw_tool = true;
                     out.push(Piece::Call { name, args });
                 }
-                None if callish(body) && !quoted(&self.sent) => {
+                None if (callish(body) || declared(&self.tools, body.trim())) && !quoted(&self.sent) => {
                     self.in_call = false;
                     out.push(Piece::Error(UNREADABLE));
                     return out;
@@ -441,11 +550,13 @@ impl Splitter {
     }
 
     pub(super) fn flush(&mut self) -> Vec<Piece> {
-        let mut out = Vec::new();
+        // 扣住的半个标签到了结尾也没等到下半截：原样当文本交出
+        let pending = std::mem::take(&mut self.dsml_pending);
+        let mut out = if pending.is_empty() { Vec::new() } else { self.feed_normalized(&pending) };
         if self.in_call {
             let body = std::mem::take(&mut self.call_buf);
             self.in_call = false;
-            if callish(&body) && !quoted(&self.sent) {
+            if (callish(&body) || declared(&self.tools, body.trim())) && !quoted(&self.sent) {
                 return match parse_call(&body, &self.tools) {
                     Some((name, args)) => {
                         self.saw_tool = true;
@@ -506,6 +617,26 @@ mod tests {
 
     fn tool(name: &str) -> Value {
         json!({"type":"function","function":{"name":name,"parameters":{"properties":{"path":{"type":"string"},"n":{"type":"integer"}}}}})
+    }
+
+    #[test]
+    fn glm_template_calls_are_read_with_schema_types() {
+        let out = run(&[tool("read")], &["<tool_call>read\n<arg_key>path</arg_key>\n<arg_value>a.rs</arg_value>\n<arg_key>n</arg_key><arg_value>3</arg_value></tool_call>"]);
+        assert_eq!(out, [Piece::Call { name: "read".into(), args: r#"{"n":3,"path":"a.rs"}"#.into() }]);
+        let bare = run(&[tool("read")], &["<tool_call>read</tool_call>"]);
+        assert_eq!(bare, [Piece::Call { name: "read".into(), args: "{}".into() }], "只有名字也算，前提是请求里有这个工具");
+        assert_eq!(run(&[tool("read")], &["<tool_call>hello</tool_call>"]).len(), 1);
+    }
+
+    #[test]
+    fn deepseek_dsml_calls_split_across_chunks_are_read() {
+        let out = run(&[tool("read")], &[
+            "先看看 <｜DSML｜function_calls>\n<｜DSML｜invoke name=\"read\">\n<｜DSML｜parameter name=\"path\" string=\"true\">a.rs</｜DSML",
+            "｜parameter>\n<｜DSML｜parameter name=\"n\" string=\"false\">3</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜function_calls>",
+        ]);
+        assert_eq!(out, [Piece::Text("先看看 ".into()), Piece::Call { name: "read".into(), args: r#"{"n":3,"path":"a.rs"}"#.into() }]);
+        assert_eq!(normalize_dsml("纯文本 a < b").0, "纯文本 a < b", "不是 DSML 的尖括号原样");
+        assert_eq!(normalize_dsml("<|DSML|invoke name=\"x\">").0, "<invoke name=\"x\">", "半角竖线也认");
     }
 
     #[test]
