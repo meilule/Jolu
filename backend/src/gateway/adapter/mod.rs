@@ -56,6 +56,11 @@ pub(crate) fn record_upstream_signal(deps: &Arc<ProxyDeps>, entry: &PoolEntry, u
         }
         return;
     }
+    // ZCode Start Plan 的额度按模型分桶（每个 -Trial 模型一桶）：一个模型用完不代表账号用完，
+    // 不能把整条连接（连同它的 Coding Plan 通道）标成用尽——按模型休息由 zcode_start 管（P2-8）
+    if entry.base_url.as_deref() == Some(super::adapter::zcode_start::START_BASE) {
+        return;
+    }
     let next_status = match status {
         401 | 403 => Some("invalid"),
         402 => Some("exhausted"),

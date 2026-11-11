@@ -139,6 +139,26 @@ fn zcode_http(origin: &str) -> Result<reqwest::Client, String> {
 ///
 /// 不代建 Key：ZCode 客户端切到团队套餐时会自己生成；Jolu 缺 Key 时报错让用户
 /// 在客户端里切一次，不做额外的远端副作用。
+/// 团队套餐的席位状态（magpie 插件 `teamSignIn` 同款）：套餐生效且给了这个账号席位才用团队 Key。
+///
+/// 为什么：账号在团队里但管理员还没分配席位（UNASSIGNED），或团队套餐已过期时，团队 Key
+/// 打上游只会回含糊的余额 / 权限错误；先查一次就能直接说清原因。查不到（网络错误）时不拦——
+/// 不知道不等于没有席位。
+pub(crate) fn seat_verdict(detail: &serde_json::Value) -> Result<(), String> {
+    let text = |key: &str| detail.get(key).and_then(serde_json::Value::as_str).unwrap_or_default().to_ascii_uppercase();
+    let (status, grant) = (text("status"), text("memberGrantStatus"));
+    let subscribed = detail.get("hasSubscription").and_then(serde_json::Value::as_bool) != Some(false);
+    if subscribed && status == "EFFECTIVE" && grant == "VALID" {
+        return Ok(());
+    }
+    Err(match (status.as_str(), grant.as_str()) {
+        ("EFFECTIVE", "UNASSIGNED") => "这个账号在团队里，但团队的 GLM Coding Plan 还没给它分配席位：请团队管理员分配后再试".into(),
+        ("EXPIRED", _) => "这个账号所在团队的 GLM Coding Plan 已过期".into(),
+        _ if !subscribed => "这个账号所在的团队没有订阅 GLM Coding Plan".into(),
+        _ => format!("团队 GLM Coding Plan 当前不可用（状态 {}，席位 {}）", if status.is_empty() { "未知" } else { &status }, if grant.is_empty() { "未知" } else { &grant }),
+    })
+}
+
 async fn team_credential(deps: &Arc<ProxyDeps>, id: &str) -> Result<(String, &'static str), String> {
     let _guard = crate::gateway::subscription::lock(id).await;
     let home = crate::creds::home().ok_or("无法定位用户目录")?;
@@ -159,6 +179,23 @@ async fn team_credential(deps: &Arc<ProxyDeps>, id: &str) -> Result<(String, &'s
         ),
     };
     let client = zcode_http(biz.as_str())?;
+    // C3：先查席位状态；查询本身失败时不拦（不知道不等于没有席位）
+    let detail = client
+        .request(Method::GET, format!("{biz}/api/biz/team/subscribe/product/querySubscribeDetail"))
+        .header("authorization", &auth_header)
+        .header("Bigmodel-Organization", &selection.org)
+        .header("Bigmodel-Project", &selection.project)
+        .header("Set-Language", if selection.family == "bigmodel" { "zh" } else { "en" })
+        .header("Accept-Language", "en-US,en")
+        .send()
+        .await;
+    match detail {
+        Ok(response) => match data(response).await {
+            Ok(detail) => seat_verdict(&detail)?,
+            Err(reason) => eprintln!("[ZCode] 团队席位状态查询失败，按未知处理继续：{reason}"),
+        },
+        Err(_) => eprintln!("[ZCode] 团队席位状态查询失败，按未知处理继续"),
+    }
     let url = format!(
         "{biz}/api/biz/v1/organization/{}/projects/{}/api_keys",
         selection.org, selection.project
@@ -645,6 +682,17 @@ mod tests {
 #[cfg(test)]
 mod channel_tests {
     use super::*;
+
+    #[test]
+    fn team_seat_status_explains_why_the_team_key_cannot_be_used() {
+        use serde_json::json;
+        assert!(seat_verdict(&json!({"status": "EFFECTIVE", "memberGrantStatus": "VALID"})).is_ok());
+        assert!(seat_verdict(&json!({"status": "effective", "memberGrantStatus": "valid", "hasSubscription": true})).is_ok(), "大小写不敏感");
+        assert!(seat_verdict(&json!({"status": "EFFECTIVE", "memberGrantStatus": "UNASSIGNED"})).unwrap_err().contains("分配席位"));
+        assert!(seat_verdict(&json!({"status": "EXPIRED", "memberGrantStatus": "VALID"})).unwrap_err().contains("过期"));
+        assert!(seat_verdict(&json!({"hasSubscription": false})).unwrap_err().contains("没有订阅"));
+        assert!(seat_verdict(&json!({})).unwrap_err().contains("未知"));
+    }
     use std::sync::Mutex;
     use Channel::{CodingPlan, StartPlan};
 

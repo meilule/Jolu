@@ -79,7 +79,7 @@
 - [x] 2.1 路由分组进 `/v1/models`；R1 成员去重（保存与嵌套展开时）；R2 保存时查环、查引用存在、深度 ≤ 8；R3 一次请求同一 account_fp 只试一次；R6 流水行带 `request_id`，界面标「第 k/n 次」
 - [x] 2.2 普通来源失败换同模型其他连接重试（同平台、同协议、不同账号、目录里有该模型，连主选最多 3 个；指定来源已标用尽 / 失效时直接用替补）；402 `exhausted` 记录当天日期，次日零点后刷新模型池时自动恢复（旧数据无日期不动）
 - [x] 2.3 Grok / WorkBuddy / ZCode 订阅转发的用量入库（`subscription::record_usage_on_end`：响应流结束或客户端断开时用 `UsageMeter` 读上游给的用量写 `requests`，读不到不记）
-- [ ] 2.4 C3 团队席位状态校验；C4 每账号并发队列；P2-8 `-trial` 模型按模型粒度休息
+- [x] 2.4 C3 团队席位状态校验（未分配席位 / 已过期 / 未订阅直接说明，查询失败不拦）；C4 Start Plan 每账号 3 个在途、其余排队、等 2 分钟本地回 429；P2-8 `-trial` 模型被拒只让该账号的该模型休息 60 秒，Start Plan 的 402 不再把整条 ZCode 连接标成用尽（真实账号未验收：当前无额度）
 - [ ] 2.5 Claude Code：D2 effort 联动、D4 `_SUPPORTED_CAPABILITIES`、单档覆盖、keyHolds（保留调用方已有 Key）、顶层 model 冲突提示；流水记 `resolved_from=bare`
 - [ ] 2.6 命名 Key：`accounts` 账号范围、`cost` 每日金额上限；周 / 月 Token 与费用限额；按账号 / Key 出账
 - [ ] 2.7 接线漂移增加「网关不可达」；改来源 id 联动已写接线；分组成员档位 `provider/model:effort`、权重与轮位、rest 休置；Profile 存档位 / 默认来源 / 常用模型，流水记「来自 Profile」；Profile 切换遇漂移先确认

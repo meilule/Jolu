@@ -219,6 +219,45 @@ where
 }
 
 /// Start Plan 的 messages 转发。`session` 是调用方会话键（cache 与 x-session-id 用）。
+/* ───────────────────────── C4 每账号同时请求数（magpie 插件 `startGate` 同款） ───────────────────────── */
+
+/// 一个账号的 Start Plan 同时在途请求数（插件实测：12 个并发里服务了 3–4 个）。
+const START_INFLIGHT: u32 = 3;
+/// 排队最多等这么久，到时本地回 429，不发出去被拒。
+const START_QUEUE_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/* ───────────────────────── P2-8 -Trial 模型按模型休息（插件 `blocked` 同款） ───────────────────────── */
+
+/// 一个模型的礼包被拒（额度用完）后，这个账号的这个模型休息多久。
+const MODEL_REST_MS: i64 = 60_000;
+
+static RESTED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, i64>>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn rest_key(device: &str, model: &str) -> String {
+    format!("{device}\0{}", model.to_ascii_lowercase())
+}
+
+fn rested_until(device: &str, model: &str, now: i64) -> Option<i64> {
+    let mut map = RESTED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    map.retain(|_, until| *until > now);
+    map.get(&rest_key(device, model)).copied()
+}
+
+fn rest_model(device: &str, model: &str, now: i64) {
+    RESTED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(rest_key(device, model), now + MODEL_REST_MS);
+}
+
+/// 上游的拒绝是不是「这个模型的礼包额度用完」：402，或 429 带余额不足类的业务码（1113 / 1005）。
+/// 忙碌（3008–3010）不算——那是排队问题，由 [`ask_busy`] 重问。
+fn quota_refusal(status: StatusCode, body: &str) -> bool {
+    if status == StatusCode::PAYMENT_REQUIRED {
+        return true;
+    }
+    status == StatusCode::TOO_MANY_REQUESTS
+        && ["\"1113\"", ":1113", "\"1005\"", ":1005", "余额不足", "insufficient balance"].iter().any(|code| body.contains(code))
+}
+
 pub(crate) async fn forward(
     deps: std::sync::Arc<crate::proxy::ProxyDeps>,
     entry: &PoolEntry,
@@ -267,6 +306,28 @@ pub(crate) async fn forward(
     // 发出走忙碌重试（③3）：着装只做一次，闭包每次重用同一份着装后的请求体与同一头——
     // 重复着装会重排 cache_control 并让 prompt cache 失效。
     let model = value["model"].as_str().unwrap_or_default().to_string();
+    let now = chrono::Utc::now().timestamp_millis();
+    if let Some(until) = rested_until(&device, &model, now) {
+        let seconds = ((until - now) / 1000).max(1) as u64;
+        return crate::gateway::wire::error_response_with_retry(
+            StatusCode::TOO_MANY_REQUESTS,
+            &format!("ZCode Start Plan 的「{model}」礼包额度刚被拒（用完或暂不可用），这个模型休息 {seconds} 秒；其他模型不受影响"),
+            seconds,
+        );
+    }
+    // C4：同一账号最多 3 个在途，其余按到达顺序排队；客户端断开即离队
+    let slot = match tokio::time::timeout(START_QUEUE_WAIT, crate::gateway::key_slots::acquire(&format!("zcode-start\0{device}"), Some(START_INFLIGHT))).await {
+        Ok(slot) => slot,
+        Err(_) => {
+            return crate::gateway::wire::error_response_with_retry(
+                StatusCode::TOO_MANY_REQUESTS,
+                "ZCode Start Plan 同一账号同时只服务几个请求，排队超过 2 分钟仍没轮到：请减少同时运行的 agent 或子代理",
+                30,
+            );
+        }
+    };
+    let rest_model_name = model.clone();
+    let rest_device = device.clone();
     let response = ask_busy(move || {
         let deps = deps.clone();
         let target = target.clone();
@@ -287,7 +348,8 @@ pub(crate) async fn forward(
         }
     })
     .await;
-    settle(response).await
+    let response = settle(response, &rest_device, &rest_model_name).await;
+    crate::gateway::key_slots::hold(response, slot)
 }
 
 /* ───────────────────────── C1 礼包按余额过滤（magpie `startPlan` 同款） ───────────────────────── */
@@ -506,7 +568,7 @@ fn refused_answer(kind: Refusal, until_ms: i64) -> Response {
 
 /// 把 Start Plan 的上游回应按边缘保持规则收尾：成功清除保持；拒绝改写成可读的
 /// 可转移错误（拦截页同时开始保持）；其他失败原样交回。
-async fn settle(response: Response) -> Response {
+async fn settle(response: Response, device: &str, model: &str) -> Response {
     if response.status().is_success() {
         EDGE.clear();
         return response;
@@ -516,6 +578,10 @@ async fn settle(response: Response) -> Response {
     }
     let (parts, body) = response.into_parts();
     let bytes = axum::body::to_bytes(body, 256 * 1024).await.unwrap_or_default();
+    if quota_refusal(parts.status, &String::from_utf8_lossy(&bytes)) {
+        // 只让这个账号的这个模型休息，不动整条连接（P2-8）
+        rest_model(device, model, chrono::Utc::now().timestamp_millis());
+    }
     match refusal_of(parts.status, &String::from_utf8_lossy(&bytes)) {
         Some(Refusal::Edge) => {
             let now = chrono::Utc::now().timestamp_millis();
@@ -553,6 +619,20 @@ mod tests {
             }
             std::future::ready(builder.body(axum::body::Body::empty()).unwrap())
         }
+    }
+
+    #[test]
+    fn a_trial_models_quota_refusal_rests_only_that_model() {
+        assert!(quota_refusal(StatusCode::PAYMENT_REQUIRED, ""));
+        assert!(quota_refusal(StatusCode::TOO_MANY_REQUESTS, r#"{"error":{"code":"1113","message":"余额不足"}}"#));
+        assert!(!quota_refusal(StatusCode::TOO_MANY_REQUESTS, r#"{"error":{"code":"3008","message":"user concurrency limit exceeded"}}"#), "忙碌不是用完");
+        assert!(!quota_refusal(StatusCode::BAD_REQUEST, "1113"));
+        let now = 1_000_000;
+        rest_model("dev-rest", "GLM-5.3-Trial", now);
+        assert!(rested_until("dev-rest", "glm-5.3-trial", now + 1).is_some(), "大小写不敏感");
+        assert!(rested_until("dev-rest", "GLM-4.6-Trial", now + 1).is_none(), "别的模型不受影响");
+        assert!(rested_until("dev-other", "GLM-5.3-Trial", now + 1).is_none(), "别的账号不受影响");
+        assert!(rested_until("dev-rest", "GLM-5.3-Trial", now + MODEL_REST_MS + 1).is_none(), "到时恢复");
     }
 
     #[test]
