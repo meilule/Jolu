@@ -22,7 +22,7 @@ pub(crate) const START_BASE: &str = "https://zcode.z.ai/api/v1/zcode-plan/anthro
 const ZCODE_SITE: &str = "https://zcode.z.ai";
 // 着装请求与余额查询共用同一个 ZCode 版本（升级时只改 zcode_quota 那一处；
 // 下面的 UA 字面量由测试保证与它一致）。
-use crate::zcode_quota::{balance_url, ZCODE_APP_VERSION as APP_VERSION};
+use crate::zcode_quota::ZCODE_APP_VERSION as APP_VERSION;
 const UA: &str = "ZCode/3.17.2 ai-sdk/anthropic/3.0.81";
 
 /// ZCode 客户端注册表里的模型 id 写法（magpie 插件 `MODELS`）。余额桶把模型写成小写
@@ -67,7 +67,7 @@ use chrono::Datelike;
 
 /// 第三块的动态段（magpie `environment` 同款；place 为空 = 桌面端无目录分支）。
 fn environment() -> String {
-    let mut lines = vec![
+    let lines = vec![
         prompt::ENV_HEADING.to_string(),
         prompt::ENV_INVOKED_LINE.to_string(),
         // 本机 OS 版本：取不到精确构建号时不影响（该行在第三块，风控重点在前两块）
@@ -530,6 +530,7 @@ async fn settle(response: Response) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::zcode_quota::balance_url;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 

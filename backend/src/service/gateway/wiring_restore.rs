@@ -29,7 +29,6 @@ pub struct RestoreReport {
 ///
 /// `port` 来自设置文件（调用方读），只是 `unwire` 判断「配置当前是否指向网关」用的。
 pub fn restore_all(conn: &mut Connection, port: u16) -> RestoreReport {
-    let mut report = RestoreReport::default();
     // 互斥量在还原全程持有：这段里要读 wiring 记录、写各 agent 的配置文件、
     // 改 wiring 表，任何一步与桌面端并发都会互相踩。
     let outcome = crate::cli_switch::with_switch(|| -> Result<RestoreReport, String> {

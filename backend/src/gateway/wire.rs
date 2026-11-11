@@ -805,18 +805,19 @@ async fn forward_one(
             }
             // 发往真 Claude 的请求先剔除外来 thinking 块（thinking_guard 模块头说明因果）；
             // 其余上游（zcode 的 GLM、DeepSeek 的兼容端点等）原样发。
-            let body = strip_foreign_thinking_if_claude(entry.base_url.as_deref(), upstream_model, body);
             let guard = begin(entry, &meta);
             let upstream_for_log = upstream_model.to_string();
-            let response = crate::gateway::adapter::direct::forward(
-                deps.clone(),
-                entry,
-                upstream_model.to_string(),
-                axum::http::Method::POST,
-                path_and_query,
-                headers,
-                body.clone(),
-            )
+            let response = with_thinking_repair(&entry.connection_id, entry.base_url.as_deref(), upstream_model, body, |body| {
+                crate::gateway::adapter::direct::forward(
+                    deps.clone(),
+                    entry,
+                    upstream_model.to_string(),
+                    axum::http::Method::POST,
+                    path_and_query,
+                    headers,
+                    body,
+                )
+            })
             .await;
             guard.finish();
             record_route(
@@ -852,15 +853,15 @@ async fn forward_one(
                 Some(response) => response,
                 None => {
                     let guard = begin(entry, &meta);
-                    // claude 订阅的上游就是 api.anthropic.com：外来的 thinking 块先剔（同上）
-                    let body = if platform == "claude" {
-                        strip_foreign_thinking_if_claude(Some("https://api.anthropic.com"), upstream_model, body)
-                    } else {
-                        body.clone()
-                    };
                     let response = match platform {
                         "codex" | "opencode" => crate::gateway::adapter::codex::forward(deps.clone(), entry, protocol, body.clone()).await,
-                        "claude" => crate::gateway::adapter::claude::forward(deps.clone(), entry, session, body.clone()).await,
+                        // claude 订阅的上游就是 api.anthropic.com：外来的 thinking 块先剔，被拒再修一次（同上）
+                        "claude" => {
+                            with_thinking_repair(&entry.connection_id, Some("https://api.anthropic.com"), upstream_model, body, |body| {
+                                crate::gateway::adapter::claude::forward(deps.clone(), entry, session, body)
+                            })
+                            .await
+                        }
                         "grok" => crate::gateway::adapter::grok::forward(deps.clone(), entry, protocol, body.clone()).await,
                         "zcode" => crate::gateway::adapter::zcode::forward(deps.clone(), entry, protocol, body.clone(), session).await,
                         _ => {
@@ -920,26 +921,46 @@ fn wire_label(protocol: CallerProtocol) -> &'static str {
     }
 }
 
-/// 上游服务 Claude 时剔除外来 thinking 块；其余上游原样返回。
+/// 400 错误体最多读这么多来判断是否 thinking 签名拒绝；错误体通常几百字节。
+const REFUSAL_BODY_LIMIT: usize = 64 * 1024;
+
+/// 发往 Claude 的一次转发，带 thinking 签名的预防剔除与「被拒后修一次」。
 ///
-/// 为什么只在「真 Claude」上剔：DeepSeek 的 Anthropic 端点与 GLM 都要**拿回自己的
-/// thinking**且接受空签名，剔了反而丢上下文；magpie 同款判定见
-/// `thinking_bound.go::withoutForeignThinking`（commit `a6a9971`）。
-/// 剔除失败（body 不是合法 JSON）按原样发：这不是能靠 400 修复的事，交给上游报错。
-fn strip_foreign_thinking_if_claude(
-    base_url: Option<&str>, upstream_model: &str, body: &axum::body::Bytes,
-) -> axum::body::Bytes {
-    if !crate::gateway::thinking_guard::serves_claude(base_url, upstream_model) {
-        return body.clone();
+/// 为什么：预防剔除只认得空签名与 UUID；另一个 Claude 账号签的块、过期签名格式上
+/// 看不出来，只能等 Claude 回 400 再按点名位置剔掉重发（`thinking_guard` 400 节）。
+/// 只重发一次：剔过仍拒、或没有新块可剔，就把原 400 交给调用方，绝不循环。
+/// 非 Claude 上游原样发、原样回，不读响应体。
+async fn with_thinking_repair<F, Fut>(
+    owner: &str, base_url: Option<&str>, upstream_model: &str, body: &axum::body::Bytes, send: F,
+) -> Response
+where
+    F: Fn(axum::body::Bytes) -> Fut,
+    Fut: std::future::Future<Output = Response>,
+{
+    use crate::gateway::thinking_guard;
+    if !thinking_guard::serves_claude(base_url, upstream_model) {
+        return send(body.clone()).await;
     }
-    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else { return body.clone() };
-    let removed = crate::gateway::thinking_guard::strip_foreign_thinking(&mut value);
-    if removed == 0 {
-        return body.clone();
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return send(body.clone()).await;
+    };
+    let stripped = thinking_guard::strip_foreign_thinking(&mut value) + thinking_guard::strip_refused(owner, &mut value);
+    let first = if stripped == 0 { body.clone() } else { serde_json::to_vec(&value).map(Into::into).unwrap_or_else(|_| body.clone()) };
+    let response = send(first).await;
+    if response.status() != StatusCode::BAD_REQUEST {
+        return response;
     }
+    let (parts, error_body) = response.into_parts();
+    let Ok(error_bytes) = axum::body::to_bytes(error_body, REFUSAL_BODY_LIMIT).await else {
+        return error_response(StatusCode::BAD_GATEWAY, "上游 400 的错误体读取失败");
+    };
+    if !thinking_guard::remember_refusal(owner, &error_bytes, &value) {
+        return Response::from_parts(parts, axum::body::Body::from(error_bytes));
+    }
+    thinking_guard::strip_refused(owner, &mut value);
     match serde_json::to_vec(&value) {
-        Ok(bytes) => bytes.into(),
-        Err(_) => body.clone(),
+        Ok(retry) => send(retry.into()).await,
+        Err(_) => Response::from_parts(parts, axum::body::Body::from(error_bytes)),
     }
 }
 
@@ -964,6 +985,75 @@ mod tests {
         }
     }
     use std::sync::atomic::{AtomicU32, Ordering};
+    fn refusal_400() -> Response {
+        Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(axum::body::Body::from(r#"{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0: Invalid `signature` in `thinking` block"}}"#))
+            .unwrap()
+    }
+
+    fn signed_by_another_account() -> axum::body::Bytes {
+        axum::body::Bytes::from(serde_json::json!({
+            "model": "claude-opus-5-5",
+            "messages": [
+                {"role": "user", "content": "你好"},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": "另一个账号签的", "signature": "c2lnbmVkLWJ5LWFub3RoZXItYWNjb3VudA"},
+                    {"type": "text", "text": "回答"}
+                ]},
+                {"role": "user", "content": "继续"}
+            ]
+        }).to_string())
+    }
+
+    #[tokio::test]
+    async fn claude_refusing_a_thinking_signature_is_mended_once_and_remembered() {
+        let sent = std::sync::Mutex::new(Vec::<serde_json::Value>::new());
+        let send = |body: axum::body::Bytes| {
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let thinking = value.to_string().contains("\"thinking\"");
+            sent.lock().unwrap().push(value);
+            async move { if thinking { refusal_400() } else { Response::new(axum::body::Body::from("ok")) } }
+        };
+        let body = signed_by_another_account();
+        let response = with_thinking_repair("repair-owner", Some("https://api.anthropic.com"), "claude-opus-5-5", &body, send).await;
+        assert_eq!(response.status(), StatusCode::OK, "剔掉被拒的块后重发成功");
+        {
+            let sent = sent.lock().unwrap();
+            assert_eq!(sent.len(), 2, "只重发一次");
+            assert_eq!(sent[1]["messages"][1]["content"].as_array().unwrap().len(), 1);
+            assert_eq!(sent[1]["messages"][1]["content"][0]["type"], "text", "text 保留");
+        }
+        // 同一来源的下一轮：首发就不带被拒过的块
+        let response = with_thinking_repair("repair-owner", Some("https://api.anthropic.com"), "claude-opus-5-5", &body, send).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(sent.lock().unwrap().len(), 3, "记住之后不再先挨一次 400");
+    }
+
+    #[tokio::test]
+    async fn repeated_refusal_and_other_errors_are_returned_as_is() {
+        let calls = AtomicU32::new(0);
+        let always_refuse = |_body: axum::body::Bytes| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            async { refusal_400() }
+        };
+        let body = signed_by_another_account();
+        let response = with_thinking_repair("repair-owner-loop", Some("https://api.anthropic.com"), "claude-opus-5-5", &body, always_refuse).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "剔过仍拒：原样交回 400");
+        assert_eq!(calls.load(Ordering::Relaxed), 2, "最多两次，不循环");
+        let text = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        assert!(String::from_utf8_lossy(&text).contains("Invalid `signature`"), "错误体原样保留");
+        // 非 Claude 上游：不剔、不重试
+        let calls = AtomicU32::new(0);
+        let refuse = |_body: axum::body::Bytes| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            async { refusal_400() }
+        };
+        let response = with_thinking_repair("repair-owner-glm", Some("https://open.bigmodel.cn/api/anthropic"), "glm-5.3", &body, refuse).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
 
     fn deps_with_circuit(threshold: u32, hits: Arc<AtomicU32>, enabled: bool) -> Arc<ProxyDeps> {
         let mut deps = Arc::try_unwrap(crate::proxy::test_support::bare_deps()).unwrap_or_else(|_| {

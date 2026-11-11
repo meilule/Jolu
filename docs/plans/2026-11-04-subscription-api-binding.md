@@ -2,6 +2,10 @@
 
 鼠鼠已确认：继续推进全部官方订阅转 API，先做隔离验证，真实账号请求另做，不构建安装包。随后明确要求所有官方订阅开关可开启。
 
+> 2026-11-11 核对：
+> - Qoder：下文「续轮实际实现：Qoder 使用官方 OAuth 换 jobToken 后驱动隔离 CLI」「均明确限定非流式」已过期。当前 `backend/src/gateway/adapter/qoder.rs` / `qoder_chat.rs` / `qoder_cosy.rs` 已按 magpie 改为直连官方模型接口（COSY 签名模型列表、`agent_chat_generation` SSE，支持流式与非流式、工具调用），不再调用官方 CLI；仍按 `connection_id` 解封授权、jobToken 只在内存。Trae 同样已改为账号目录选路 + `llm_utils_chat` 流式。详见 `docs/verification/2026-11-04-qoder-subscription-adapter.md`、`docs/verification/2026-11-04-trae-subscription-adapter.md` 末节；真实账号均未验收。
+> - ZCode 是第 1 条「按连接 ID 读取完整加密授权；禁止退回当前登录账号」的**有意例外**：按 `docs/plans/2026-11-08-magpie-parity-roadmap.md` §3.1（P2.1），`gateway/adapter/zcode.rs` 的 `forward_credential` 转发时先直读本机 `~/.zcode/v2/credentials.json` 的 Coding Plan Key（整机唯一的 ZCode 登录，与所选连接无关；连接 id 只用于错误文案），ZCode 切到团队套餐时用团队项目 Key 覆盖，两者都拿不到才退回按连接 ID 的 OAuth 换取链（`material_at`）。取舍：对齐 magpie、避免 z.ai 账号多步链 401，代价是同机多个 ZCode 连接在转发期共用本机原工具的登录 Key，不能按连接隔离。
+
 ## 设计与实施顺序
 
 1. 新增 `gateway/subscription.rs`：按连接 ID 读取完整加密授权；禁止退回当前登录账号。轮换授权以旧凭据作比较条件，账号身份不变，事务更新快照、连接凭据和指纹。

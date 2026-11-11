@@ -18,6 +18,12 @@
 
 ### 1.1 现存可归因字段
 
+> 2026-11-11 核对：链路 B（§3.2–3.3）已以「按连接归因」落地，本表第一行与 `requests.connection_id` 行的「缺口」已过期：
+> - 采集：`backend/src/native_sources.rs` 的 ZCode SELECT 已取 `u.provider_id`（旧库无该列时取 NULL），写入独立列 `requests.provider_key`（`db.rs` 迁移加列，非 §3.3 建议的 `requests.provider` 列名）。
+> - 归因：`backend/src/attribution.rs` 分 exact / mapped / platform 三档——exact 为网关 / 代理已写的 `connection_id`；mapped 由 `provider_config.json` 的 baseUrl 唯一命中连接、`account:*` 类 provider 对应该平台唯一 auth 连接、或模型唯一落在某连接模型清单推出；多命中或无匹配一律落回 platform。匹配方式与 §3.3 第 3 条设想的 `account_fp` 指纹比对不同，key 明文不解析。
+> - 展示：`live_usage` 返回 `attribution`，胶囊灵动岛（`CapsuleIsland.tsx`）显示归到的连接名，mapped 档弱化显示，platform 档只显示平台名。
+> - 仍未做：§4 的 P0–P2 联动交互保持原状态；`turn_usage`、`logical_request_id` 等其余未接字段本次未复核。
+
 | 字段 | 位置 | 归因粒度 | 目前是否已用 | 缺口 |
 |---|---|---|---|---|
 | `model_usage.provider_id` | ZCode 库（`~/.zcode/cli/db/db.sqlite`） | **每条请求** | **否**，`native_sources.rs:617-624` 的 SELECT 没有取这一列 | 采集侧漏列，是本文最大的单点缺口 |

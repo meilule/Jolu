@@ -7,6 +7,7 @@ import { projectName } from "@/lib/sessionThreads"
 import type { StatsModelRowDto, StatsOverviewDto, StatsTrendBucketDto } from "@/lib/api"
 import { Card, CardTitle, MetricCard, providerName } from "./usageControls"
 import { TrendChart, TrendLegend, type TrendMode } from "./TrendChart"
+import { MetricGrid } from "../ui/MetricGrid"
 
 const MODES: { value: TrendMode; label: string }[] = [
   { value: "tokens", label: "Token" },
@@ -44,7 +45,7 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
 
   return (
     <>
-      <div className="grid grid-cols-4 gap-3">
+      <MetricGrid>
         <MetricCard
           icon={<Layers />}
           label={partial ? "已知 Token" : "总 Token"}
@@ -60,7 +61,7 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
           noteTitle={costNoteTitle(data.cost)}
         />
         <MetricCard icon={<Target />} label="输入缓存命中率" value={formatPercent(cacheRate)} note={partialCache ? `${data.token_coverage.cache_requests} / ${data.requests} 次可计算 · 基于已知输入` : "缓存读取 / 全部输入 Token"} />
-      </div>
+      </MetricGrid>
 
       <div className="grid h-[250px] grid-cols-[minmax(0,644fr)_minmax(0,348fr)] gap-4">
         <Card className="flex flex-col gap-2.5 p-4">

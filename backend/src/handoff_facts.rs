@@ -1593,23 +1593,30 @@ mod tests {
 
     #[test]
     fn redact_is_linear_on_pathological_input() {
-        let cases = [
-            "-".repeat(200_000),
-            "a".repeat(200_000),
-            "sk-".repeat(70_000),
-            "password=".repeat(22_000),
-            "eyJ".repeat(70_000),
-            "://".repeat(70_000),
-            "x-api-key ".repeat(20_000),
-            "\"a\":".repeat(50_000),
-            "mysql -p ".repeat(22_000),
-            "AbC1".repeat(50_000),
+        // 比「放大 4 倍输入后耗时放大多少」而不是比绝对秒数：调试构建在全量并行测试下
+        // 机器负载高，固定 1 秒上限会偶发超时；线性约 4 倍，平方级约 16 倍，取 10 倍为界。
+        // 每档取 3 次最快值，压掉调度抖动；再加 20ms 余量吸收极短耗时的计时噪声。
+        let units: [(&str, usize); 10] = [
+            ("-", 50_000), ("a", 50_000), ("sk-", 17_500), ("password=", 5_500), ("eyJ", 17_500),
+            ("://", 17_500), ("x-api-key ", 5_000), ("\"a\":", 12_500), ("mysql -p ", 5_500), ("AbC1", 12_500),
         ];
-        for text in cases {
-            let started = std::time::Instant::now();
-            let _ = redact(&text);
-            let spent = started.elapsed();
-            assert!(spent < std::time::Duration::from_secs(1), "{} 字符的病态输入用了 {spent:?}（开头：{}）", text.len(), &text[..12]);
+        let fastest = |text: &str| {
+            (0..3)
+                .map(|_| {
+                    let started = std::time::Instant::now();
+                    let _ = redact(text);
+                    started.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        for (unit, count) in units {
+            let small = fastest(&unit.repeat(count));
+            let large = fastest(&unit.repeat(count * 4));
+            assert!(
+                large <= small * 10 + std::time::Duration::from_millis(20),
+                "「{unit}」输入放大 4 倍，耗时从 {small:?} 变成 {large:?}，不是线性"
+            );
         }
     }
 

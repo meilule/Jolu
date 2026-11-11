@@ -234,7 +234,7 @@ migration_log(id INTEGER PRIMARY KEY, at_ms INTEGER NOT NULL, kind TEXT NOT NULL
 | 1. 身份 | slug、account_fp、slug_history、保留字、唯一索引、触发器、迁移回填与重复清理 | 已完成 |
 | 2. 接线 | 统一锁（进程内 + `Global\jolu-wiring`）、`agent_wiring`、pending / 启动修复、快照过滤、状态解析、instance token、端口回退与 Host / Origin | 已完成 |
 | 3. 菜单 | 分组读取与排序、状态标注、来源 / Agent 分组命令与界面 | 已实现（三栏总览、分组命令、拖拽排序 + Alt+↑/↓、保存视图、E1–E10 状态弹窗、OX4b7 动效） |
-| 4. 路由组 | `route/<slug>`、故障转移、`gateway_attempts` | 未开始 |
+| 4. 路由组 | `route/<slug>`、故障转移、`gateway_attempts` | 2026-11-11 核对：部分实现，命名与方案不同。已实现 `group/<slug>`（不是 `route/<slug>`），见 `gateway/routing_groups.rs`：五策略（order / rotate / usage / smart / pace）、嵌套展开（深度上限防环）、成员暂停与跳过说明；`wire.rs` 候选循环在 401/402/403/408/429/5xx 时转下一个成员。未实现：`gateway_attempts` 表（代码中无此名；每次候选转发各写一行 `route_log`，不关联成尝试链）、非分组模型的跨来源转移。原状态「未开始」已过期 |
 | 5. Agent 登录方式 | Codex `openai_base_url` / 静态 token 两条路；Gemini 原生端点 + 事务式接管；会话头 | 已实现，真机验证待做 |
 
 阶段 1、2 对应的主要文件：
@@ -261,6 +261,6 @@ migration_log(id INTEGER PRIMARY KEY, at_ms INTEGER NOT NULL, kind TEXT NOT NULL
 
 ## 2026-11-04 现状补记
 
-- 路由流水已有 `gateway/route_log.rs` 记录与查询、`wire.rs` 写入及 `GatewayView.tsx` 展示；不是只有空态。它不同于阶段 4 尚未实现的多次故障转移尝试记录 `gateway_attempts`。
+- 路由流水已有 `gateway/route_log.rs` 记录与查询、`wire.rs` 写入及 `GatewayView.tsx` 展示；不是只有空态。它不同于阶段 4 尚未实现的多次故障转移尝试记录 `gateway_attempts`。（2026-11-11 核对：阶段 4 的路由分组与分组内故障转移已落地，`gateway_attempts` 仍未实现，见 §10 表。）
 - 网关真机预检仅确认 Claude、Codex、Gemini 命令及相关配置路径存在，未验证授权是否有效；没有修改真实工具配置或发送模型请求。§11 的真机缺口仍保留。
 - 暂停来源菜单测试与模型枚举测试复用连接 ID 导致进程缓存串扰；本轮给暂停测试独立 ID，保留原断言和产品行为。

@@ -121,10 +121,186 @@ pub(crate) fn strip_foreign_thinking(body: &mut Value) -> usize {
     removed
 }
 
+/* ---------------------- 400 之后的修复重试（兜底） ---------------------- */
+//
+// 预防式剔除（上面的 `strip_foreign_thinking`）只认得空签名与 UUID。另一个 Claude
+// 账号签的块（同一会话换了账号）、过期签名等格式上看不出来，只能等 Claude 自己拒：
+// 读 400 的错误文案与 `messages.<m>.content.<b>` 位置，把该块及其后的所有 thinking
+// 块记成「这个来源拒过」，剔掉重发一次；记忆按来源保留，同一会话后面的轮次首发就
+// 不带这些块，不必每轮先挨一次 400。
+//
+// 参照 magpie `internal/gateway/thinking_bound.go::refuseBoundThinking` 与
+// `withoutRefusedThinking`（克隆 `0ee424e`）。差异：magpie 用正则，Jolu 没有 regex
+// 依赖，改为去反引号后小写子串匹配，四种文案一一对应。
+
+/// 记忆上限：超过就清空重来——仍在进行的会话最多再挨一次 400 就修好。
+const REFUSED_MOST: usize = 1 << 14;
+
+static REFUSED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// 400 错误体是不是 Claude 拒绝 thinking 签名。四种文案：签名无效、绑定到别的会话、
+/// 不是本会话产生的、redacted_thinking 数据无效。其他 400（参数错误等）不修。
+pub(crate) fn is_bound_refusal(error_body: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(error_body).replace('`', "").to_ascii_lowercase();
+    [
+        "invalid signature in thinking block",
+        "bound to a different conversation",
+        "not created in this conversation",
+        "invalid data in redacted_thinking block",
+    ]
+    .iter()
+    .any(|wording| text.contains(wording))
+}
+
+/// 错误文案点名的位置 `messages.<m>.content.<b>`。
+pub(crate) fn bound_at(error: &str) -> Option<(usize, usize)> {
+    let rest = &error[error.find("messages.")? + "messages.".len()..];
+    let digits = |text: &str| -> Option<(usize, usize)> {
+        let end = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
+        Some((text[..end].parse().ok()?, end))
+    };
+    let (message, end) = digits(rest)?;
+    let rest = rest[end..].strip_prefix(".content.")?;
+    let (block, _) = digits(rest)?;
+    Some((message, block))
+}
+
+fn is_thinking_block(block: &Value) -> bool {
+    matches!(block.get("type").and_then(Value::as_str), Some("thinking" | "redacted_thinking"))
+}
+
+/// 块的身份：签名（redacted 用 data，都没有用正文）的摘要。只存摘要，不在内存里囤签名原文。
+fn block_key(block: &Value) -> String {
+    use sha2::Digest;
+    let field = |name: &str| block.get(name).and_then(Value::as_str).unwrap_or_default();
+    let material = [field("signature"), field("data"), field("thinking")]
+        .into_iter()
+        .find(|value| !value.is_empty())
+        .unwrap_or_default();
+    let digest = sha2::Sha256::digest(format!("{} {material}", field("type")).as_bytes());
+    digest[..16].iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn refused(owner: &str, key: &str) -> bool {
+    REFUSED.lock().map(|set| set.contains(&format!("{owner} {key}"))).unwrap_or(false)
+}
+
+/// 读一次 400：是 thinking 签名拒绝就把点名的块（点名位置不是 thinking 块或没点名时从头）
+/// 及其后所有 thinking 块记为 `owner` 拒过。返回是否记下了新块——没有新块说明剔过还拒，
+/// 调用方不该再重试。
+pub(crate) fn remember_refusal(owner: &str, error_body: &[u8], sent: &Value) -> bool {
+    if !is_bound_refusal(error_body) {
+        return false;
+    }
+    let Some(messages) = sent.get("messages").and_then(Value::as_array) else { return false };
+    let blocks_of = |index: usize| messages.get(index).and_then(|m| m.get("content")).and_then(Value::as_array);
+    let (from_message, from_block) = bound_at(&String::from_utf8_lossy(error_body))
+        .filter(|&(m, b)| blocks_of(m).and_then(|blocks| blocks.get(b)).is_some_and(is_thinking_block))
+        .unwrap_or((0, 0));
+    let mut fresh = Vec::new();
+    for (m, message) in messages.iter().enumerate().skip(from_message) {
+        let Some(blocks) = message.get("content").and_then(Value::as_array) else { continue };
+        for (b, block) in blocks.iter().enumerate() {
+            if (m == from_message && b < from_block) || !is_thinking_block(block) {
+                continue;
+            }
+            let key = block_key(block);
+            if !refused(owner, &key) {
+                fresh.push(format!("{owner} {key}"));
+            }
+        }
+    }
+    if fresh.is_empty() {
+        return false;
+    }
+    if let Ok(mut set) = REFUSED.lock() {
+        if set.len() + fresh.len() > REFUSED_MOST {
+            set.clear();
+        }
+        set.extend(fresh);
+    }
+    true
+}
+
+/// 剔除 `owner` 拒过的 thinking 块，剔空的消息整条移除。返回剔除数量。
+pub(crate) fn strip_refused(owner: &str, body: &mut Value) -> usize {
+    if REFUSED.lock().map(|set| set.is_empty()).unwrap_or(true) {
+        return 0;
+    }
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else { return 0 };
+    let mut removed = 0;
+    for index in (0..messages.len()).rev() {
+        let Some(content) = messages[index].get_mut("content").and_then(Value::as_array_mut) else { continue };
+        let before = content.len();
+        content.retain(|block| !(is_thinking_block(block) && refused(owner, &block_key(block))));
+        removed += before - content.len();
+        if content.is_empty() && before > 0 {
+            messages.remove(index);
+        }
+    }
+    removed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn refused_body() -> Value {
+        body_with(json!([
+            json!({"role": "user", "content": "你好"}),
+            assistant_message(json!([
+                {"type": "thinking", "thinking": "别家签的", "signature": "sig-from-another-account-xxxxxxxx"},
+                {"type": "text", "text": "回答一"}
+            ])),
+            json!({"role": "user", "content": "继续"}),
+            assistant_message(json!([
+                {"type": "redacted_thinking", "data": "opaque"},
+                {"type": "text", "text": "回答二"}
+            ])),
+            json!({"role": "user", "content": "再来"}),
+        ]))
+    }
+
+    #[test]
+    fn bound_refusal_matches_claude_wording_with_or_without_backticks() {
+        assert!(is_bound_refusal(br#"{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0: Invalid `signature` in `thinking` block"}}"#));
+        assert!(is_bound_refusal(b"invalid signature in thinking block"));
+        assert!(is_bound_refusal(b"This thinking block is bound to a different conversation"));
+        assert!(is_bound_refusal(b"block was not created in this conversation"));
+        assert!(is_bound_refusal(b"Invalid data in `redacted_thinking` block"));
+        assert!(!is_bound_refusal(br#"{"error":{"message":"max_tokens: must be positive"}}"#), "别的 400 不修");
+        assert_eq!(bound_at("messages.3.content.0: Invalid `signature`"), Some((3, 0)));
+        assert_eq!(bound_at("no position"), None);
+    }
+
+    #[test]
+    fn refusal_removes_the_named_block_and_every_later_thinking_block_then_sticks() {
+        let owner = "test-owner-refusal-sticks";
+        let sent = refused_body();
+        let error = br#"{"error":{"message":"messages.1.content.0: Invalid `signature` in `thinking` block"}}"#;
+        assert!(remember_refusal(owner, error, &sent), "第一次拒绝记下新块");
+        assert!(!remember_refusal(owner, error, &sent), "同样的块再拒：没有新块，不再重试（防死循环）");
+        let mut retry = sent.clone();
+        assert_eq!(strip_refused(owner, &mut retry), 2, "被点名的块与其后的 redacted_thinking 一起剔除");
+        let messages = retry["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 5, "两条 assistant 都还有 text，不整条移除");
+        assert_eq!(messages[1]["content"][0]["type"], "text");
+        assert_eq!(messages[3]["content"][0]["type"], "text");
+        // 记住之后，同一来源后续轮次首发就不带这些块；别的来源原样
+        let mut other = sent.clone();
+        assert_eq!(strip_refused("another-owner", &mut other), 0);
+    }
+
+    #[test]
+    fn refusal_naming_a_non_thinking_block_falls_back_to_the_start() {
+        let owner = "test-owner-refusal-start";
+        let sent = refused_body();
+        assert!(remember_refusal(owner, b"messages.0.content.0: invalid signature in thinking block", &sent));
+        let mut retry = sent.clone();
+        assert_eq!(strip_refused(owner, &mut retry), 2, "点名位置不是 thinking 块时从头算");
+    }
 
     fn assistant_message(blocks: Value) -> Value {
         json!({"role": "assistant", "content": blocks})

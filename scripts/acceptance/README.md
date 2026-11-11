@@ -47,6 +47,14 @@ Remove-Item Env:JOLU_DEV_URL                                 # 验收结束后�
   3. 在 `output/acceptance/node` 里设置 `JOLU_DEV_URL` 后运行脚本。
   脚本经应用命令创建两个指向合成上游的自定义来源、开启转发，临时读取剪贴板里的手动接入 Key 后恢复原文本；每个 CLI 用 `output/acceptance/cli-home/<工具>` 作为独立主目录，并去掉本机 shell 里的 `ANTHROPIC_*` / `OPENAI_*` / `GEMINI_*` 等变量，不读写真实配置。核对：运行中显示、结束后无残留在途请求、各工具会话 ID 与其本地会话文件一致、来源关联、Gemini 只记流水不猜会话。报告与截图在 `output/acceptance/gateway-unified-desktop/`。OpenCode 首次在空主目录运行会下载 provider，可能需要几分钟。
 
+## 观测模式标记头
+
+观测模式（`proxy_mode = observe`）经本机代理转发的每个响应都带 `x-jolu-proxy: 1`，统一网关的响应带 `x-jolu-gateway: <来源 slug>`。验收时用它区分「请求确实经过了 Jolu」和「客户端绕过代理直连」：
+
+查看方法：让 Claude Code / Codex 经代理发一次请求，抓响应头（或用 `curl -si` 按该工具的接口路径直接请求代理端口）。
+
+没有这个头说明请求没走代理（或走的是统一网关，看 `x-jolu-gateway`）。单测见 `backend/src/proxy.rs` 中断言 `x-jolu-proxy` 的用例。
+
 ## 灵动岛分身（画布 22）
 
 `island-clones.e2e.mjs` 直接用 Playwright 的 `connectOverCDP` 连接 9337，不经过 playwright-cli。在隔离应用启动后运行 `main` 阶段；结束应用、用同一隔离目录重启后再运行 `after-restart` 阶段。脚本会核对菜单顺序、右上角总数、销毁禁用、分身窗口与 `settings.json` 的 `island_clones` 一致，以及销毁本体时的接任。开发端口被系统排除时，用 `--config` 覆盖 `build.devUrl` 后再 `tauri dev`。

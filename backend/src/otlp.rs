@@ -3,7 +3,8 @@
 //! 把本机用量**按平台 + 模型聚合**成 OTLP 指标，POST 到用户配置的 OTLP HTTP 端点
 //! （`<endpoint>/v1/metrics`）。设计取舍：
 //!
-//! - **只导聚合值**：没有会话 ID、没有请求正文、没有 Key、没有连接标识。
+//! - **只导聚合值**：没有会话 ID、没有请求正文、没有 Key 原文、没有连接标识。
+//!   唯一例外是命名客户端 Key 的**名字**（用户起的设备标签），见 [`KeyPoint`]。
 //!   逐请求导出会把「谁在什么时候用什么模型聊了什么」的时序轮廓暴露出去，
 //!   而运维真正需要的是「某模型某天用了多少 token」。脱敏靠**不采集**完成，
 //!   比事后过滤可靠（见 AGENTS.md：认证信息不得写入统计导出）。
@@ -42,6 +43,22 @@ pub struct OtlpExportResult {
 /// OTLP 的 metric 名。用 OTel 语义约定里的 token 用量命名，便于对接现成看板。
 const METRIC_TOKENS: &str = "gen_ai.client.token.usage";
 const METRIC_REQUESTS: &str = "gen_ai.client.request.count";
+/// 经统一网关、带命名客户端 Key 的请求数（局域网共享的远端设备）。
+const METRIC_KEY_REQUESTS: &str = "jolu.gateway.key.request.count";
+
+/// 一把命名客户端 Key 在窗口内某模型、某结果的请求数。
+///
+/// 为什么带 Key 名：局域网共享时多台设备各用一把 Key，排查「哪台设备一直失败」
+/// 只能靠它（参照 magpie `4314f4b`，OTLP 属性 `magpie.gateway_key.name`）。Key 名是
+/// 用户起的标签（如 `laptop`），不是 Key 本身；Key 原文从不进导出。
+#[derive(Debug, Clone, Serialize)]
+pub struct KeyPoint {
+    pub name: String,
+    pub model: Option<String>,
+    /// `ok` / `failed`
+    pub result: String,
+    pub requests: i64,
+}
 
 /// 端点规范化：允许用户只填到根（`http://host:4318`），自动补 `/v1/metrics`；
 /// 已经写了 `/v1/metrics` 的原样使用。只接受 http/https。
@@ -59,7 +76,7 @@ pub(crate) fn metrics_url(endpoint: &str) -> Result<String, String> {
 ///
 /// 时间单位为纳秒。每个平台+模型组合一条 Gauge 数据点，属性里只放
 /// `gen_ai.system`（平台）与 `gen_ai.request.model`（模型）——没有账号、会话、Key。
-pub(crate) fn build_payload(points: &[UsagePoint], now_ms: i64) -> serde_json::Value {
+pub(crate) fn build_payload(points: &[UsagePoint], keys: &[KeyPoint], now_ms: i64) -> serde_json::Value {
     let time_nano = (now_ms as i128 * 1_000_000).to_string();
     let attributes = |point: &UsagePoint| -> Vec<serde_json::Value> {
         vec![
@@ -99,6 +116,23 @@ pub(crate) fn build_payload(points: &[UsagePoint], now_ms: i64) -> serde_json::V
             }));
         }
     }
+    let string_attr = |key: &str, value: &str| serde_json::json!({ "key": key, "value": { "stringValue": value } });
+    let key_points: Vec<serde_json::Value> = keys
+        .iter()
+        .filter(|key| key.requests > 0)
+        .map(|key| {
+            serde_json::json!({
+                "attributes": [
+                    string_attr("jolu.gateway_key.name", &key.name),
+                    string_attr("gen_ai.request.model", key.model.as_deref().unwrap_or("unknown")),
+                    string_attr("jolu.result", &key.result),
+                ],
+                "startTimeUnixNano": time_nano,
+                "timeUnixNano": time_nano,
+                "asInt": key.requests.to_string(),
+            })
+        })
+        .collect();
     let gauge = |name: &str, unit: &str, data: Vec<serde_json::Value>| -> serde_json::Value {
         if data.is_empty() { return serde_json::Value::Null; }
         serde_json::json!({
@@ -110,6 +144,7 @@ pub(crate) fn build_payload(points: &[UsagePoint], now_ms: i64) -> serde_json::V
     let metrics: Vec<serde_json::Value> = vec![
         gauge(METRIC_TOKENS, "{token}", token_points),
         gauge(METRIC_REQUESTS, "{request}", request_points),
+        gauge(METRIC_KEY_REQUESTS, "{request}", key_points),
     ]
     .into_iter()
     .filter(|value| !value.is_null())
@@ -166,13 +201,35 @@ pub(crate) fn aggregate(
     rows.collect::<Result<Vec<_>, _>>().map_err(|error| format!("读取用量失败：{error}"))
 }
 
+/// 从统一网关流水读按命名 Key 的请求数：只选 Key 名、请求模型、结果三列，
+/// 没有 Key 名的（本机自己的请求）不进这项指标。
+pub(crate) fn aggregate_keys(
+    conn: &rusqlite::Connection, since_ms: i64, until_ms: i64,
+) -> Result<Vec<KeyPoint>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT client_key, requested_model, result, COUNT(*)
+               FROM gateway_route_log
+              WHERE ts >= ?1 AND ts < ?2 AND client_key IS NOT NULL AND client_key <> ''
+              GROUP BY client_key, requested_model, result
+              ORDER BY client_key, requested_model, result",
+        )
+        .map_err(|error| format!("准备按 Key 的用量查询失败：{error}"))?;
+    let rows = stmt
+        .query_map([since_ms, until_ms], |row| {
+            Ok(KeyPoint { name: row.get(0)?, model: row.get(1)?, result: row.get(2)?, requests: row.get(3)? })
+        })
+        .map_err(|error| format!("查询按 Key 的用量失败：{error}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|error| format!("读取按 Key 的用量失败：{error}"))
+}
+
 /// POST 到 OTLP 端点。`headers` 用于认证（如 `Authorization`），只在本函数内使用，不回显。
 pub async fn export(
-    endpoint: &str, headers: &[(String, String)], points: &[UsagePoint], now_ms: i64,
+    endpoint: &str, headers: &[(String, String)], points: &[UsagePoint], keys: &[KeyPoint], now_ms: i64,
 ) -> Result<OtlpExportResult, String> {
     let url = metrics_url(endpoint)?;
-    if points.is_empty() { return Err("这段时间没有可导出的用量".into()); }
-    let payload = build_payload(points, now_ms);
+    if points.is_empty() && keys.is_empty() { return Err("这段时间没有可导出的用量".into()); }
+    let payload = build_payload(points, keys, now_ms);
     let body = serde_json::to_vec(&payload).map_err(|error| format!("序列化 OTLP 载荷失败：{error}"))?;
     let client = crate::net::async_builder()
         .timeout(Duration::from_secs(20))
@@ -198,7 +255,7 @@ pub async fn export(
     }
     Ok(OtlpExportResult {
         endpoint: url,
-        points: points.len(),
+        points: points.len() + keys.len(),
         status: Some(status.as_u16()),
         response: snippet,
     })
@@ -237,7 +294,7 @@ mod tests {
 
     #[test]
     fn payload_has_no_identifying_fields() {
-        let payload = build_payload(&[point()], 1_700_000_000_000);
+        let payload = build_payload(&[point()], &[], 1_700_000_000_000);
         let text = payload.to_string();
         for forbidden in ["session", "dedup", "api_key", "apikey", "authorization", "token="] {
             assert!(
@@ -249,7 +306,7 @@ mod tests {
 
     #[test]
     fn payload_carries_platform_model_and_token_kinds() {
-        let payload = build_payload(&[point()], 1_700_000_000_000);
+        let payload = build_payload(&[point()], &[], 1_700_000_000_000);
         let metrics = payload["resourceMetrics"][0]["scopeMetrics"][0]["metrics"].as_array().unwrap();
         let names: Vec<&str> = metrics.iter().map(|m| m["name"].as_str().unwrap()).collect();
         assert!(names.contains(&METRIC_TOKENS));
@@ -269,13 +326,13 @@ mod tests {
     fn missing_model_is_marked_unknown_not_omitted() {
         let mut point = point();
         point.model = None;
-        let payload = build_payload(&[point], 1_700_000_000_000);
+        let payload = build_payload(&[point], &[], 1_700_000_000_000);
         assert!(payload.to_string().contains("unknown"));
     }
 
     #[test]
     fn timestamps_are_nanoseconds() {
-        let payload = build_payload(&[point()], 1_700_000_000_000);
+        let payload = build_payload(&[point()], &[], 1_700_000_000_000);
         let metric = &payload["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0];
         let stamp = metric["gauge"]["dataPoints"][0]["timeUnixNano"].as_str().unwrap();
         assert_eq!(stamp, "1700000000000000000", "毫秒要换成纳秒");
@@ -303,5 +360,40 @@ mod tests {
         assert_eq!(claude.total_tokens, 40, "total 取和而不是重算");
         let codex = points.iter().find(|p| p.platform == "codex").unwrap();
         assert_eq!(codex.model, None, "来源没给模型时保留 NULL，导出才写 unknown");
+    }
+
+    #[test]
+    fn named_key_requests_carry_the_key_name_attribute() {
+        // 局域网共享多台设备各用一把 Key：排查「哪台设备在失败」要看到 Key 名（magpie `4314f4b`）
+        let keys = [KeyPoint { name: "laptop".into(), model: Some("claude-opus-5-5".into()), result: "ok".into(), requests: 4 }];
+        let payload = build_payload(&[], &keys, 1_700_000_000_000);
+        let metrics = payload["resourceMetrics"][0]["scopeMetrics"][0]["metrics"].as_array().unwrap();
+        let metric = metrics.iter().find(|m| m["name"] == METRIC_KEY_REQUESTS).expect("按 Key 的请求数指标");
+        let point = &metric["gauge"]["dataPoints"][0];
+        let attrs = point["attributes"].as_array().unwrap();
+        let get = |key: &str| attrs.iter().find(|a| a["key"] == key).map(|a| a["value"]["stringValue"].clone());
+        assert_eq!(get("jolu.gateway_key.name").unwrap(), "laptop");
+        assert_eq!(get("gen_ai.request.model").unwrap(), "claude-opus-5-5");
+        assert_eq!(get("jolu.result").unwrap(), "ok");
+        assert_eq!(point["asInt"], "4");
+    }
+
+    #[test]
+    fn key_aggregation_reads_only_named_key_rows_in_the_window() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE gateway_route_log (ts INTEGER, requested_model TEXT, result TEXT, client_key TEXT, session_id TEXT);
+             INSERT INTO gateway_route_log VALUES (100,'m1','ok','laptop','s1');
+             INSERT INTO gateway_route_log VALUES (200,'m1','ok','laptop','s2');
+             INSERT INTO gateway_route_log VALUES (300,'m1','failed','laptop','s3');
+             INSERT INTO gateway_route_log VALUES (300,'m1','ok',NULL,'s4');
+             INSERT INTO gateway_route_log VALUES (5000,'m1','ok','laptop','s5');",
+        )
+        .unwrap();
+        let keys = aggregate_keys(&conn, 0, 1000).unwrap();
+        assert_eq!(keys.len(), 2, "本机自己的请求（没有 Key 名）不进按 Key 指标");
+        let ok = keys.iter().find(|k| k.result == "ok").unwrap();
+        assert_eq!((ok.name.as_str(), ok.requests), ("laptop", 2));
+        assert!(!serde_json::to_string(&keys).unwrap().contains("s1"), "不带会话");
     }
 }

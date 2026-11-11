@@ -7,6 +7,7 @@ import { Card, MenuFilter, MetricCard } from "@/components/usage/usageControls"
 import { JoluButton } from "@/components/ui/JoluButton"
 import { Notice, TONE } from "./automationParts"
 import type { AccountRef } from "./TaskList"
+import { MetricGrid } from "../ui/MetricGrid"
 
 const ALL = "__all__"
 
@@ -28,12 +29,12 @@ export function RunList({ data, filter, page, now, loading, accounts, onFilter, 
   const accountIds = [...new Set(data.rows.map((r) => r.connection_id).concat(filter.connection ? [filter.connection] : []))]
   return (
     <>
-      <div className="grid grid-cols-4 gap-3">
+      <MetricGrid>
         <MetricCard label={today ? "今日完成" : "完成"} value={String(data.completed)} note={`其中 ${data.completed_waited} 次经历额度等待`} />
         <MetricCard label="执行中" value={String(data.running)} note={data.running ? "可查看步骤并停止" : "当前没有执行中的运行"} />
         <MetricCard label="失败" value={String(data.failed)} note={data.failed_note ?? "没有失败的运行"} />
         <MetricCard label={today ? "今日消耗 Token" : "消耗 Token"} value={formatTokens(data.tokens).replace(" ", "")} note="不含等待期间；以执行器返回为准" />
-      </div>
+      </MetricGrid>
 
       <div className="flex h-[34px] items-center gap-1.5">
         <MenuFilter label="时间范围" value={filter.range} onChange={(v) => onFilter({ ...filter, range: v as RunRange })} options={RUN_RANGES.map((r) => ({ value: r.value, label: r.label }))} />

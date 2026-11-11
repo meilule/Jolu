@@ -6,6 +6,7 @@ import { PlatformLogo } from "@/components/brand/PlatformLogo"
 import type { PlatformId } from "@/types"
 import { ActivityCalendar } from "./ActivityCalendar"
 import { Card, CardTitle, MetricCard, providerName } from "./usageControls"
+import { MetricGrid } from "../ui/MetricGrid"
 
 /** 用量分析（画板 32）：Token 四分项、全年活跃日历、模型消耗与费用、供应商费用 */
 export function AnalysisPanel({ data, activity, activityError, fx, onDrillModel, onDrillProvider }: {
@@ -37,12 +38,12 @@ export function AnalysisPanel({ data, activity, activityError, fx, onDrillModel,
 
   return (
     <>
-      <div className="grid grid-cols-4 gap-3">
+      <MetricGrid>
         <MetricCard icon={<ArrowDownLeft />} label="未缓存输入" value={formatTokens(t.fresh_input ?? t.fresh_input_known ?? null)} note={coverage(t.fresh_input, t.fresh_input_known, t.fresh_input_unknown, "普通输入")} />
         <MetricCard icon={<ArrowUpRight />} label="输出 Token" value={formatTokens(t.output ?? t.output_known ?? null)} note={coverage(t.output, t.output_known, t.output_unknown, "模型生成")} />
         <MetricCard icon={<HardDriveDownload />} label="缓存读取" value={formatTokens(t.cache_read ?? t.cache_read_known ?? null)} note={coverage(t.cache_read, t.cache_read_known, t.cache_read_unknown, "已复用输入")} />
         <MetricCard icon={<HardDriveUpload />} label="缓存写入" value={formatTokens(t.cache_write ?? t.cache_write_known ?? null)} note={coverage(t.cache_write, t.cache_write_known, t.cache_write_unknown, "新建缓存")} />
-      </div>
+      </MetricGrid>
       {(t.total == null && data.requests > 0) && (
         <p className="text-[11px] text-jolu-muted">
           {`当前范围内 ${data.requests} 次调用中，部分来源（如 ZCode）未提供完整分项，卡片显示的是已知部分小计；模型消耗表按各来源已知值汇总。`}

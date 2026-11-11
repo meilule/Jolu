@@ -20,7 +20,7 @@
 
 ## 交接说明（2026-11-09 收尾，给接手的同事）
 
-**进度：** 阶段 0 完成（`fe29dc1`）；阶段 1 的 1.1–1.8 完成（本次提交），**1.9、1.10 与阶段 2–5 全部未开始**。按下面的勾选框从 1.9 接着做即可。
+**进度：** 阶段 0 完成（`fe29dc1`）；阶段 1 完成（1.1–1.8 `0a8c042`，1.9–1.10 于 2026-11-11）；阶段 1B（同事批次遗留）进行中；阶段 2–5 未开始。以下勾选框为准。
 
 **本次新增的公共件（后续条目可复用）：**
 - `backend/src/steady.rs`：读外部或状态文件一律用 `crate::steady::read / read_to_string / exists / read_optional`，不要直接 `std::fs::read`——否则 agent 用 rename 写配置时可能把「有配置」读成「没有」，进而覆盖用户配置。
@@ -33,7 +33,7 @@
 - Token 预算：只有单测与流包装测试，没有真实客户端走一遍。
 - C1 / C2 / C5：ZCode 当前没有额度（余额 `plans=0`），端到端要等额度恢复。
 
-**已知的不稳定测试（与本轮改动无关）：** `handoff_facts::tests::redact_is_linear_on_pathological_input` 有 1 秒耗时上限，调试构建下全量并行跑偶尔超时，单独跑约 1.2 秒内通过。
+**已修的不稳定测试：** `handoff_facts::tests::redact_is_linear_on_pathological_input` 原为 1 秒绝对上限，全量并行时常超时；2026-11-11 改为「输入放大 4 倍、耗时放大不超过 10 倍」的线性判定。
 
 **提交节奏：** 每个阶段全量测试通过后提交推送 main，信息带 `[skip ci]`（不触发发版）；远端领先时把本地未推送提交 rebase 到 origin/main 之后再推。
 
@@ -53,8 +53,26 @@
 - [x] 1.6 P0-3 `steady.rs`：接线、配置接管、凭据检测、CLI 切换、设置加载的读取跨过 rename 窗口（不存在 / 被占用时 10 × 3ms 重试）
 - [x] 1.7 P0-1 / F3 `gateway/budget.rs`：命名 Key 的 `tokens_per_day` 预扣 + 回冲强制（响应流里读 usage；读不到按预扣额记，上游失败按 0 记）
 - [x] 1.8 P0-4 / C6 `zcode_version.rs`：读卸载注册表的 ZCode 版本，比适配版本新时启动日志 + 「管理来源」弹窗警告（`zcode_version_check` 命令）
-- [ ] 1.9 零碎：删除孤立的 `providerLinks.ts`；验收 README 补 `x-jolu-proxy` 说明；D-34「`--resume` 原通道压缩」记入待办
-- [ ] 1.10 更新状态已过期的文档（观测响应头、未验证清单 Qoder / Trae 行、八平台现状表、连接归因命令名、10-29 网关计划、去重说明阶段 4、订阅绑定 Qoder、11-08 路线图附录 A、联动调研 §1.1、额度描述符抬头、平台补全 V-2）
+- [x] 1.9 零碎：删除孤立的 `providerLinks.ts`；验收 README 补 `x-jolu-proxy` 说明；D-34 记入 `docs/todo/2026-11-11-resume-channel-compaction.md`
+- [x] 1.10 更新状态已过期的文档（2026-11-11 逐份核对，改为「2026-11-11 核对」说明；观测响应头、未验证清单 Qoder / Trae 行、八平台现状表、连接归因命令名、10-29 网关计划、去重说明阶段 4、订阅绑定 Qoder、11-08 路线图附录 A、联动调研 §1.1、额度描述符抬头、平台补全 V-2）
+
+## 阶段 1B · 同事 11-10 批次的遗留（2026-11-11 并入）
+
+来源：`docs/specs/2026-11-10-capability-batches-handoff.md`、`docs/specs/2026-11-10-narrow-window-layout-handoff.md`、`docs/plans/2026-11-09-magpie-remote-sync-149.md` §6，以及 11-11 核对时发现交接文档漏写的项。
+
+- [x] B1 搜索 Key 明文经 `set_*` 命令与 `settings-changed` 事件到达前端：改为序列化默认掩码、只有设置落盘时放行原文（`gateway::search::secret_keys`）
+- [x] B2 Claude 拒绝 thinking 签名（400）后按点名位置剔块重发一次，并按来源记住（`thinking_guard` 400 节、`wire::with_thinking_repair`）
+- [x] B3 OTLP 导出带命名 Key 名（`jolu.gateway.key.request.count`，属性 `jolu.gateway_key.name`）
+- [x] B4 统计卡 5 处与骨架屏按容器宽度减列（`components/ui/MetricGrid.tsx`）
+- [ ] B5 会话详情按钮行与全局 `button { white-space: nowrap }` 的桌面端验证；账号管理窄屏无画板依据（待鼠鼠确认）
+- [ ] B6 搜索后端补 Brave / Exa / Firecrawl / You.com / DeepSeek / 元宝 6 个
+- [ ] B7 档位 effort 可用值校验（models.dev efforts，未知模型不拦）
+- [ ] B8 `web_fetch`（经 netguard）
+- [ ] B9 网关替身工具拦截 + 内部多轮（原计划 C-2，批 4 实际做成了档位，交接文档未列）
+- [ ] B10 搜索插件安装扩到 Qoder / Trae / ZCode / WorkBuddy（格式先取真实样本，取不到的如实标不支持）
+- [ ] B11 界面：档位（四档 + effort + Auto 判别）、搜索插件安装面板（含 TS 桥接）、搜索 Key 配置（`setSearchApis`，只回传新 Key 或「保留」）
+- [ ] B12 magpie 行动清单：裸模型名优先走 agent 自己的订阅、命名 Key 同时请求数上限、Smart /「首选」文案核对、ZCode 会话去重核对、URL 安全 base64 转标准、Codex 大 `config.toml` 不全量解析、顺序路由恢复后回切选项
+- [ ] B13 远程 MCP（http / sse）——依赖 5.2 OAuth
 
 ## 阶段 2 · 网关正确性
 

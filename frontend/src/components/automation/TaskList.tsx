@@ -9,6 +9,7 @@ import { JoluButton } from "@/components/ui/JoluButton"
 import { Card, MenuFilter, MetricCard, ToolButton } from "@/components/usage/usageControls"
 import { TONE, TaskMenu } from "./automationParts"
 import type { PlatformId } from "@/types"
+import { MetricGrid } from "../ui/MetricGrid"
 
 const FILTERS: { value: TaskFilter; label: string }[] = [
   { value: "running", label: "执行中" },
@@ -52,12 +53,12 @@ export function TaskList({ data, now, accounts, onOpen, onCreate, onEdit, onActi
 
   return (
     <>
-      <div className="grid grid-cols-4 gap-3">
+      <MetricGrid>
         <MetricCard label="已启用任务" value={String(data.enabled)} note="包含定时与额度恢复任务" />
         <MetricCard label="执行中" value={String(data.running)} note={data.running_note ?? "当前没有执行中的任务"} />
         <MetricCard label="等待额度" value={String(data.waiting)} note={data.next_reset ? `最近预计恢复 ${dayTime(data.next_reset, now).replace("今天 ", "")}` : data.waiting ? "恢复时间未知" : "没有等待中的任务"} />
         <MetricCard label="今日完成" value={String(data.done_today)} note={data.failed_today ? `另有 ${data.failed_today} 次运行失败` : "今天没有失败的运行"} />
-      </div>
+      </MetricGrid>
 
       {data.tasks.length === 0 ? (
         <Card className="flex flex-col items-start gap-3 p-5">

@@ -37,8 +37,14 @@ pub struct SearchHit {
 pub struct SearchApiConfig {
     /// 后端 id：`tavily` / `searxng` / `doubao`
     pub vendor: String,
-    /// 一个或多个 Key，逗号分隔的写法在这里拆开存
-    #[serde(default)]
+    /// 一个或多个 Key，逗号分隔的写法在这里拆开存。
+    ///
+    /// 序列化默认输出掩码，只有 [`crate::settings::Store`] 落盘时放行原文：命令返回值、
+    /// `settings-changed` 事件都是普通序列化，Key 明文因此到不了前端（AGENTS.md：
+    /// API Key 只在后端处理）。为什么不在每个命令出口调掩码：出口有二十多个命令加
+    /// 五十多处事件，新加一个忘了就漏——默认安全、落盘显式放行，漏写只会让落盘出错
+    /// （有测试兜住），不会泄露。
+    #[serde(default, serialize_with = "secret_keys::serialize")]
     pub keys: Vec<String>,
     /// 自建地址（SearXNG 实例、私有 Firecrawl 等）；空 = 厂商默认
     #[serde(default)]
@@ -46,6 +52,47 @@ pub struct SearchApiConfig {
     /// 暂停：Key 与配置都保留，但不参与搜索（magpie `Off` 同语义，#2286）
     #[serde(default)]
     pub off: bool,
+}
+
+/// 搜索 Key 的序列化：默认掩码，[`secret_keys::reveal`] 作用域内输出原文。
+pub(crate) mod secret_keys {
+    use serde::{Serialize, Serializer};
+    use std::cell::Cell;
+
+    thread_local! {
+        static REVEAL: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// 在当前线程、`f` 执行期间放行原文。只给落盘用；guard 保证 `f` panic 也会复位。
+    pub(crate) fn reveal<T>(f: impl FnOnce() -> T) -> T {
+        struct Reset(bool);
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                REVEAL.with(|flag| flag.set(self.0));
+            }
+        }
+        let _reset = Reset(REVEAL.with(|flag| flag.replace(true)));
+        f()
+    }
+
+    pub(super) fn serialize<S: Serializer>(keys: &[String], serializer: S) -> Result<S::Ok, S::Error> {
+        if REVEAL.with(Cell::get) {
+            keys.serialize(serializer)
+        } else {
+            keys.iter().map(|key| mask(key)).collect::<Vec<_>>().serialize(serializer)
+        }
+    }
+
+    /// 保留前 4 后 4，中间省略；短 Key（≤ 8 字符）全遮。
+    pub(crate) fn mask(key: &str) -> String {
+        let chars: Vec<char> = key.trim().chars().collect();
+        if chars.len() <= 8 {
+            return "••••••••".into();
+        }
+        let head: String = chars[..4].iter().collect();
+        let tail: String = chars[chars.len() - 4..].iter().collect();
+        format!("{head}••••{tail}")
+    }
 }
 
 /// 搜索错误。`refused` 的 Key 由轮转层记冷却，其余直接报给用户。

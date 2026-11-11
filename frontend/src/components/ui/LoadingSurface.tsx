@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import { cn } from "@/lib/utils"
 import { useContentMotion } from "@/lib/motion"
+import { METRIC_GRID } from "./MetricGrid"
 
 export type SkeletonLayout = "stats" | "providers" | "accounts" | "calendar" | "island" | "tasks" | "table" | "cards" | "settings" | "sessions" | "messages"
 
@@ -17,12 +18,12 @@ export function LoadingSurface({ layout = "table", label = "正在加载", class
   return <div role="status" aria-label={label} aria-busy="true" className={cn("loading-surface min-w-0 w-full",layout==="accounts"&&"flex min-h-0 flex-col", className)}>
     <span className="sr-only">{label}</span>
     <div aria-hidden className={cn("skeleton-content flex flex-col gap-3",layout==="accounts"&&"min-h-0 flex-1")}>
-      {layout === "providers" ? <><Bar className="h-7 w-44" /><div className="grid grid-cols-4 gap-4">{Array.from({ length: 10 }, (_, i) => <div key={i} className="flex h-[160px] flex-col gap-4 rounded-xl border border-jolu-border p-4"><Bar className="size-6" /><Bar className="w-2/3" /><Bar className="h-8 w-full" /></div>)}</div></>
-      : layout === "accounts" ? <><Bar className="h-9 w-44 shrink-0" /><Bar className="h-9 w-2/3 shrink-0" /><div className="grid min-h-0 flex-1 grid-cols-4 grid-rows-2 gap-3">{Array.from({length:8},(_,i)=><div key={i} className="flex min-h-0 flex-col gap-3 rounded-xl border border-jolu-border p-3"><Bar className="h-6 w-3/4" /><Bar className="h-2 w-2/3" /><Bar className="h-7" /><Bar className="h-7" /><Bar className="mt-auto h-7" /></div>)}</div></>
+      {layout === "providers" ? <><Bar className="h-7 w-44" /><div className="@container min-w-0"><div className="grid grid-cols-1 gap-4 @[620px]:grid-cols-2 @[920px]:grid-cols-3 @[1200px]:grid-cols-4">{Array.from({ length: 10 }, (_, i) => <div key={i} className="flex h-[160px] flex-col gap-4 rounded-xl border border-jolu-border p-4"><Bar className="size-6" /><Bar className="w-2/3" /><Bar className="h-8 w-full" /></div>)}</div></div></>
+      : layout === "accounts" ? <><Bar className="h-9 w-44 shrink-0" /><Bar className="h-9 w-2/3 shrink-0" /><div className="@container min-h-0 flex-1"><div className="grid content-start gap-3 grid-cols-1 @[620px]:grid-cols-2 @[920px]:grid-cols-3 @[1200px]:grid-cols-4">{Array.from({length:8},(_,i)=><div key={i} className="flex min-h-0 flex-col gap-3 rounded-xl border border-jolu-border p-3"><Bar className="h-6 w-3/4" /><Bar className="h-2 w-2/3" /><Bar className="h-7" /><Bar className="h-7" /><Bar className="mt-auto h-7" /></div>)}</div></div></>
       : layout === "calendar" ? <div className="flex h-[175px] flex-col gap-2"><Bar className="h-4 w-3/4" /><div className="skeleton-calendar grid flex-1 grid-cols-[repeat(53,minmax(0,1fr))] gap-[3px]">{Array.from({ length: 53 }, (_, i) => <div key={i} className="flex flex-col gap-[3px]">{Array.from({ length: 7 }, (_, j) => <Bar key={j} className="h-[19px] rounded-[3px]" />)}</div>)}</div></div>
       : layout === "island" ? <><Bar className="h-[60px]" /><div className="grid grid-cols-2 gap-5"><Bar className="h-[210px]" /><Bar className="h-[210px]" /></div><Bar className="h-[150px]" /><Bar className="h-[60px]" /><Bar className="h-[60px]" /></>
-      : layout === "tasks" ? <><div className="grid grid-cols-4 gap-3">{[0,1,2,3].map(i => <div key={i}>{card}</div>)}</div><div className="rounded-xl border border-jolu-border p-4">{rows}</div></>
-      : layout === "stats" ? <><div className="grid grid-cols-4 gap-3">{[0, 1, 2, 3].map(i => <div key={i}>{card}</div>)}</div><div className="grid grid-cols-[2fr_1fr] gap-4"><Bar className="h-[250px]" /><Bar className="h-[250px]" /></div><div className="rounded-xl border border-jolu-border p-4">{rows}</div></>
+      : layout === "tasks" ? <><div className="@container min-w-0"><div className={METRIC_GRID}>{[0,1,2,3].map(i => <div key={i}>{card}</div>)}</div></div><div className="rounded-xl border border-jolu-border p-4">{rows}</div></>
+      : layout === "stats" ? <><div className="@container min-w-0"><div className={METRIC_GRID}>{[0, 1, 2, 3].map(i => <div key={i}>{card}</div>)}</div></div><div className="grid grid-cols-[2fr_1fr] gap-4"><Bar className="h-[250px]" /><Bar className="h-[250px]" /></div><div className="rounded-xl border border-jolu-border p-4">{rows}</div></>
       : layout === "cards" ? <div className="grid grid-cols-2 gap-4">{[0, 1, 2, 3].map(i => <div key={i}>{card}</div>)}</div>
       : layout === "sessions" ? <div className="grid min-h-[600px] grid-cols-[1fr_2fr] gap-4"><div className="rounded-xl border border-jolu-border p-4">{rows}</div><div className="flex flex-col gap-6 rounded-xl border border-jolu-border p-5"><Bar className="w-1/3" /><Bar className="h-20 w-full" /><Bar className="h-32 w-4/5" /></div></div>
       : layout === "messages" ? <div className="flex min-h-52 flex-col gap-5"><Bar className="h-16 w-4/5 self-end" /><Bar className="h-24 w-full" /><Bar className="h-12 w-3/4" /></div>

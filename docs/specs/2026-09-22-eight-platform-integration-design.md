@@ -10,6 +10,8 @@
 
 ## 已核实的现状
 
+> 2026-11-11 核对：下表是 2026-09-22 设计时的现状，已过期，保留作历史。当前状态见文末「2026-11-11 现状核对」。
+
 | 平台 | 仓库实现与本机证据 | 缺口 |
 | --- | --- | --- |
 | Claude | 已有连接、会话采集、额度与余额、统计、灵动岛；缓存读取 `message.usage` | 复核连接切换、状态一致性、未知字段与零值，保留现有工作链路 |
@@ -134,3 +136,18 @@
 - Zcode：本机 SQLite `model_usage` 已接入，含输入口径判定、`native_outcome` 与会话标题；会话状态按请求 `status` 标注完成 / 失败 / 运行中（运行中含 10 分钟宽限）；BigModel Coding Plan Key 套餐可查，账号 OAuth 额度未接入。
 - Workbuddy：JSONL `providerData` 与 `workbuddy.db` 标题 / 上下文占用已接入；在线个人剩余积分需开放平台授权，未接入。
 - 各原生平台的请求状态码、耗时、首字仍只有代理链路提供；缓存创建等字段按来源是否提供保留未知。
+
+## 2026-11-11 现状核对
+
+依据 `frontend/src/lib/platformCatalog.json`（前后端共用平台目录，`backend/src/platforms.rs` 读取）与 `backend/src/native_sources.rs`：
+
+| 平台 | 当前实现 | 仍缺 |
+| --- | --- | --- |
+| 目录整体 | 已扩为 10 个平台（另含 OpenCode、自定义供应商），后端白名单由同一份目录生成；`tare` 标识错误已修复（`platforms.rs` 测试断言 `!known("tare")`） | — |
+| Claude / Codex | 能力不变：连接、本机会话、订阅额度、组织用量、网关余额、实时增量、成本估算 | — |
+| Gemini | 已声明 `auth_connection` / `api_connection` / `local_sessions` / `subscription_quota`；本机 `~/.gemini/tmp` 会话采集；订阅额度经本机 Google 登录或官方 Gemini CLI 独立授权查询（`gemini_quota.rs`） | API Key 不提供额度与余额 |
+| Grok | 已声明连接与 `subscription_quota`（`grok_quota.rs`、`grok_browser_auth.rs` 设备授权）；`native_sources` 登记 `~/.grok/auth.json` 作为账号来源 | 未声明 `local_sessions`，会话采集仍未接入 |
+| Zcode | 本机 `~/.zcode/cli/db/db.sqlite` 会话采集与 `~/.zcode/v2/credentials.json` 账号来源均已接入；BigModel Coding Plan Key 与账号额度、浏览器独立授权（`zcode_quota.rs`、`zcode_browser_auth.rs`） | 团队及 Start Plan 依服务权限，真实样本见 `docs/todo/2026-10-22-unverified-integrations.md` |
+| Trae | 国内 / 国际两版本机登录来源与浏览器授权、订阅额度（`trae_quota.rs`、`trae_browser_auth.rs`） | 未声明 `local_sessions`，会话采集未接入；企业私有域名不支持 |
+| Qoder | 国内 / 国际两版 `projects` JSONL 会话采集、额度与积分（`qoder_quota.rs`、`qoder_desktop.rs`） | 国际版 usage 字段缺失问题见 2026-10-01 更新 |
+| Workbuddy | `~/.workbuddy` 与 `~/.workbuddy-ai` 两版会话采集、积分与额度（`workbuddy_quota.rs`、`workbuddy_browser_auth.rs`） | 服务端拒绝本地授权时需在原工具重新登录 |

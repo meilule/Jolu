@@ -290,31 +290,33 @@ P1、P2 解决当下「一直不行」的问题，先行；P3 起按鼠鼠排期
 
 ## 附录 A · 差异总表（对照研究结论，2026-11-08）
 
+> 2026-11-11 核对：第 1–7、10–14、19、21–23 行的「Jolu」列已按当前代码更新（每格以「2026-11-11：」开头，括号内保留原值）；其余行未复核。完整差距仍以 `2026-11-09-magpie-parity-full-audit-authoritative.md` 为准。
+
 | # | 能力 | magpie | Jolu | 结论 |
 |---|---|---|---|---|
-| 1 | Claude Code 模型键 | 删 ANTHROPIC_MODEL、写顶层 model、4 档 env + SMALL_FAST + SUBAGENT、_NAME/_DESCRIPTION、[1m]、云开关暂存 | 只写 BASE_URL + AUTH_TOKEN | **P1.2** |
-| 2 | 模型 id 解析 | [1m] 剥离、裸名兜底、目录索引 | 精确 slug 匹配（默认来源为新增补丁） | **P1.1** |
-| 3 | 转发层模型名 | 不二次校验 | zcode 曾要求必带 `/`（已修，其余待排查） | **P1.1** |
-| 4 | 网关鉴权 | 任意 token（回环） | 手动 Key + 接线 Key 严格校验 | **P2.2** |
-| 5 | ZCode 凭据 | 直读 credentials.json coding-plan Key（键名判家族） | OAuth→项目→Key→短期 token 多步链 | **P2.1** |
-| 6 | ZCode 双家族 | zai / bigmodel 键名即家族 | 登录写死 bigmodel（z.ai 支持本轮刚加） | **P2.1** |
-| 7 | ZCode 试用条目 | -Trial 两种拒绝话术分档休置 | 无 | P2.1 |
+| 1 | Claude Code 模型键 | 删 ANTHROPIC_MODEL、写顶层 model、4 档 env + SMALL_FAST + SUBAGENT、_NAME/_DESCRIPTION、[1m]、云开关暂存 | 2026-11-11：已对齐——`gateway/wiring.rs` 写顶层 `model`、各档 `ANTHROPIC_DEFAULT_*_MODEL` 及 `_NAME` / `_DESCRIPTION`、`ANTHROPIC_SMALL_FAST_MODEL`、`CLAUDE_CODE_SUBAGENT_MODEL`，接线时暂存并移除 6 个云端开关、断开还原（原：只写 BASE_URL + AUTH_TOKEN） | **P1.2** |
+| 2 | 模型 id 解析 | [1m] 剥离、裸名兜底、目录索引 | 2026-11-11：已对齐——`gateway/route.rs` 剥 `[1m]` / `[1M]`、裸模型名按目录查来源（原：精确 slug 匹配） | **P1.1** |
+| 3 | 转发层模型名 | 不二次校验 | 2026-11-11：ZCode / WorkBuddy / Grok 适配器剥前缀、可不带 `/`，Qoder 只剥本来源前缀；其余适配器待核实（原：zcode 曾要求必带 `/`） | **P1.1** |
+| 4 | 网关鉴权 | 任意 token（回环） | 2026-11-11：已对齐——`gateway/access.rs` 宽松模式：仅回环且未开局域网共享时任意令牌放行；开共享后强校验（原：手动 Key + 接线 Key 严格校验） | **P2.2** |
+| 5 | ZCode 凭据 | 直读 credentials.json coding-plan Key（键名判家族） | 2026-11-11：已对齐——`gateway/adapter/zcode.rs` `forward_credential` 先直读本机 credentials.json 的 Coding Plan Key，团队套餐用项目 Key 覆盖，都拿不到才退回 OAuth 多步链（原：只有多步链） | **P2.1** |
+| 6 | ZCode 双家族 | zai / bigmodel 键名即家族 | 2026-11-11：已对齐——`zcode_quota.rs` 按键名判家族（含 `:bigmodel-` 走中国站，否则 z.ai）（原：登录写死 bigmodel） | **P2.1** |
+| 7 | ZCode 试用条目 | -Trial 两种拒绝话术分档休置 | 2026-11-11：仍未见实现（`gateway/` 中搜不到 `-Trial` 分档休置逻辑），待核实是否另有位置 | P2.1 |
 | 8 | 路由分组 | 5 策略 + 嵌套 + 意图路由 | 无（有亲和/冷却） | P3 |
 | 9 | 多账号转移 | 权重/轮位/上限保持/rest 休置 | 有池与冷却，无转移策略 | P3 |
-| 10 | Provider 预设 | ~30 家 + models.dev 元数据 | 自定义地址为主 | P4 |
-| 11 | 导入 | CC Switch / Claude Code / Codex / Alma | 无 | P4 |
-| 12 | Profiles | 一套配置一键切换 | 无 | P4 |
-| 13 | 隐私脱敏 | 规则+本地模型+流式回填+Insights | 会话交接脱敏（局部） | P5 |
-| 14 | 网关中间件 | onRequest/onEvent/onResponse + New API 同款内置 | 无 | P6 |
+| 10 | Provider 预设 | ~30 家 + models.dev 元数据 | 2026-11-11：部分对齐——`frontend/src/lib/providerCatalog.ts` 预设库 12 家（映射到 custom，只预填地址），`gateway/models_dev.rs` 拉取 models.dev 元数据补上下文窗口 / 输出上限（原：自定义地址为主） | P4 |
+| 11 | 导入 | CC Switch / Claude Code / Codex / Alma | 2026-11-11：部分对齐——`gateway/import_sources.rs` 支持 CC Switch / Claude Code / Codex 三个来源（只读、键不出后端）；Alma 未接（原：无） | P4 |
+| 12 | Profiles | 一套配置一键切换 | 2026-11-11：已有——`gateway/profiles.rs` 存「agent → 主模型」命名快照，切换时对已接线 agent 重放接线并做 drift 检测（原：无） | P4 |
+| 13 | 隐私脱敏 | 规则+本地模型+流式回填+Insights | 2026-11-11：部分对齐——`gateway/mask.rs` 规则脱敏 + 非流式 / SSE 流式回填、占位符只在内存；本地模型与 Insights 未见实现（原：会话交接脱敏（局部）） | P5 |
+| 14 | 网关中间件 | onRequest/onEvent/onResponse + New API 同款内置 | 2026-11-11：部分对齐——`gateway/middleware.rs` 五个内置（model-map、param-override、system-prompt、word-guard 请求侧，think-tags 仅非流式响应侧），失败隔离；无流式响应侧 / onEvent 钩子（原：无） | P6 |
 | 15 | 插件系统 | Bun + npm，订阅全部外置 | 无（全内置） | P6（决策点） |
 | 16 | 搜索/图像/视频工具 | 多引擎轮转 MCP | 无 | P7 |
 | 17 | Library | 指令/MCP/skills 写入各 agent 格式 | Skills 管理只管 skills 文件 | P7 |
 | 18 | CLI / TUI / Web UI | 全量 | 无（桌面 GUI） | P8 |
-| 19 | 局域网共享/远程/Docker | 有 | 无 | P8 |
+| 19 | 局域网共享/远程/Docker | 有 | 2026-11-11：部分对齐——局域网共享与命名客户端 Key（`gateway/access.rs`，过期 / 模型白名单 / 只读 / 每日请求数）及每日 Token 预算（`gateway/budget.rs`）已有；远程与 Docker 未见实现（原：无） | P8 |
 | 20 | 同步备份 | WebDAV/S3/GitHub | 无 | P8 |
-| 21 | agent 版本管理/WSL | 有 | 无 | P8 |
-| 22 | warm-up | 定时激活 5h 窗口 | 无 | P8 |
-| 23 | 账单/OTLP | 有 | 无（有用量统计） | P8 |
+| 21 | agent 版本管理/WSL | 有 | 2026-11-11：部分对齐——`agent_version.rs` 只读检测版本并提示更新命令（不自动更新），`wsl_probe.rs` 只读探测 WSL 内安装，WSL 接线未做（原：无） | P8 |
+| 22 | warm-up | 定时激活 5h 窗口 | 2026-11-11：已有——`warmup.rs` / `warmup_run.rs` 每日定时经已接线 agent 发最小请求，默认关闭（原：无） | P8 |
+| 23 | 账单/OTLP | 有 | 2026-11-11：部分对齐——`otlp.rs` 按平台 + 模型聚合导出 OTLP 指标，默认关闭；独立账单功能未见实现，待核实（原：无（有用量统计）） | P8 |
 | 24 | 签到 | WorkBuddy、Trae CN、Qoder 活动、ZCode 礼包 | WorkBuddy 国内、Qoder、Trae 国内 | 基本对齐 |
 | 25 | 灵动岛 | 无（菜单栏面板） | 有（独有） | 保持 |
 | 26 | 自动化任务 | 无 | 有（独有） | 保持 |

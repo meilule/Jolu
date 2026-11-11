@@ -1354,7 +1354,7 @@ async fn wsl_probe_agents() -> Result<wsl_probe::WslProbe, String> {
 
 /// 导出最近 `days` 天的用量到 OTLP 端点（批次 G §3.12）。
 ///
-/// 只导聚合值（平台 + 模型 + token 计数），不含会话、连接、Key 或请求正文。
+/// 只导聚合值（平台 + 模型 + token 计数，以及按命名 Key 名的请求数），不含会话、连接、Key 原文或请求正文。
 /// 端点与认证头由调用方传；认证头只在本函数内使用，不回显任何值。
 #[tauri::command]
 async fn otlp_export_usage(
@@ -1364,12 +1364,15 @@ async fn otlp_export_usage(
     let now_ms = chrono::Utc::now().timestamp_millis();
     let since_ms = now_ms - span_days * 24 * 60 * 60 * 1000;
     let db = app.state::<Db>().0.clone();
-    let points = with_database(db, move |conn| otlp::aggregate(conn, since_ms, now_ms)).await?;
+    let (points, keys) = with_database(db, move |conn| {
+        Ok::<_, String>((otlp::aggregate(conn, since_ms, now_ms)?, otlp::aggregate_keys(conn, since_ms, now_ms)?))
+    })
+    .await?;
     let mut headers = Vec::new();
     if let Some(value) = authorization.filter(|v| !v.trim().is_empty()) {
         headers.push(("authorization".to_string(), value));
     }
-    otlp::export(&endpoint, &headers, &points, now_ms).await
+    otlp::export(&endpoint, &headers, &points, &keys, now_ms).await
 }
 
 #[tauri::command]
@@ -2042,8 +2045,8 @@ async fn connection_balance(app: tauri::AppHandle, db: State<'_, Db>, id: String
 
 #[tauri::command]
 fn get_settings(cfg: State<Cfg>) -> settings::Settings {
-    // 前端只拿掩码版：搜索 Key 明文不出后端（AGENTS.md 纪律）
-    cfg.0.get().masked()
+    // 搜索 Key 在序列化时自动掩码（gateway::search::secret_keys），明文不出后端
+    cfg.0.get()
 }
 
 /// 设置界面改灵动岛平台：与托盘子菜单是同一个值，改完要刷新托盘勾选态

@@ -10,7 +10,7 @@
 //! - 未接线的 agent 不自动接线：Profile 只改变「已接东西」的模型，不替用户决定接什么。
 
 use rusqlite::{Connection, OptionalExtension};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// agent → 主模型的有序映射（BTreeMap 保证快照 JSON 稳定，便于对比与测试）。
@@ -160,6 +160,7 @@ pub(crate) fn diff(current_wired: &AgentModels, profile: &Profile) -> BTreeMap<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn memory_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();

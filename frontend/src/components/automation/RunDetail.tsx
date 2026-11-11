@@ -9,6 +9,7 @@ import { JoluButton } from "@/components/ui/JoluButton"
 import { Card, MetricCard } from "@/components/usage/usageControls"
 import { KeyValue, SectionTitle } from "./automationParts"
 import type { AccountRef } from "./TaskList"
+import { MetricGrid } from "../ui/MetricGrid"
 
 const EVENT_ICONS: Record<string, LucideIcon> = {
   start: Play,
@@ -77,7 +78,7 @@ export function RunDetail({ detail, now, account, onBack, onOpenSession, onStop,
         )}
       </div>
 
-      <div className="grid grid-cols-4 gap-3">
+      <MetricGrid>
         <MetricCard label="运行结果" value={status.label} note={resultNote} />
         <MetricCard label="实际执行" value={durationText(exec)} note="不含等待时长" />
         <MetricCard label="等待额度" value={wait ? durationText(wait) : "—"} note={run.waits ? (run.status === "completed" ? "已从原会话继续" : `${run.waits} 次等待`) : "未经历额度等待"} />
@@ -86,7 +87,7 @@ export function RunDetail({ detail, now, account, onBack, onOpenSession, onStop,
           value={formatTokens(tokens).replace(" ", "")}
           note={tokens === null ? "执行器未返回用量" : `输入 ${formatTokens(run.input_tokens).replace(" ", "")} / 输出 ${formatTokens(run.output_tokens).replace(" ", "")}`}
         />
-      </div>
+      </MetricGrid>
 
       <div className="flex items-start gap-4">
         <div className="flex w-[640px] min-w-0 shrink flex-col gap-3.5">

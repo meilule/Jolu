@@ -1,7 +1,7 @@
 # 能力汇聚与转发正确性 · 交接文档（2026-11-10）
 
 **交给：接手成员**
-**状态：** 批 1–5 后端已实现并通过验证，**未提交**（见 §7）；界面 UI 未做（见 §6）
+**状态：** 批 1–5 后端已实现并已提交（`d8d291f`）；界面 UI 未做（见 §6）。2026-11-11：§7.3 的 Key 掩码改为序列化默认掩码（所有命令与事件都覆盖），§2 P1 已做；剩余项并入 `docs/plans/2026-11-09-complete-remaining-work.md` 阶段 1B
 **基线：** 后端 1204 测试全绿（44 ignored）、前端 444、`tsc` 通过、clippy 无 error
 **参照物：** [yetone/magpie](https://github.com/yetone/magpie) @ `8016124`
 **规划来源：** [`2026-11-10-capability-and-correctness-plan.md`](./2026-11-10-capability-and-correctness-plan.md)、[`2026-11-09-magpie-parity-full-audit-authoritative.md`](./2026-11-09-magpie-parity-full-audit-authoritative.md)

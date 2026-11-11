@@ -38,5 +38,5 @@
 ## 验证
 
 - [x] V-1 cargo test、前端 node --test、tsc、vite build
-- [ ] V-2 官网 pnpm test / build
+- [ ] V-2 官网 pnpm test / build —— 2026-11-11 核对：已不适用。仓库根目录只有 `backend/`、`frontend/`、`docs/`、`scripts/`，`git ls-files` 中没有官网工程目录，根 `package.json` 也没有官网相关脚本；AGENTS.md §4 写明「官网地址暂时置空」。无可执行对象，不再作为待办。
 - [x] V-3 Git 提交并推送（2026-10-07 鼠鼠授权）

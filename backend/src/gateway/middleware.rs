@@ -13,7 +13,7 @@
 //! word-guard / system-prompt / think-tags 为后续内置（本模块留扩展位）：
 //! 它们触碰消息内容，与 P5 隐私脱敏的执行顺序要先定义（脱敏最先）。
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use serde_json::Value;
 
 #[derive(Debug, Clone, serde::Serialize)]

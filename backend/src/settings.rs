@@ -248,28 +248,10 @@ pub fn validate_display_preferences(opacity: u8, scale: u16, shrink_scale: u16, 
     Ok(())
 }
 
-impl Settings {
-    /// 给前端的副本：搜索后端的 Key 只留掩码（AGENTS.md：API Key 只在后端处理，
-    /// 前端列表只返回掩码）。写操作仍然用原文——`search_apis` 的写入走
-    /// [`SearchApiConfig::with_keys`]，前端从不回传 Key 明文。
-    pub fn masked(&self) -> Self {
-        let mut copy = self.clone();
-        for api in &mut copy.search_apis {
-            api.keys = api.keys.iter().map(|key| mask_key(key)).collect();
-        }
-        copy
-    }
-}
-
-/// 掩码：保留前 4 后 4，中间省略；短 Key 全遮。
-fn mask_key(key: &str) -> String {
-    let trimmed = key.trim();
-    if trimmed.len() <= 8 {
-        return "••••••••".into();
-    }
-    let head: String = trimmed.chars().take(4).collect();
-    let tail: String = trimmed.chars().rev().take(4).collect::<String>().chars().rev().collect();
-    format!("{head}••••{tail}")
+/// 落盘用的序列化：搜索 Key 输出原文。其他任何序列化（命令返回、事件）都是掩码，
+/// 见 `gateway::search::secret_keys`。
+fn persisted_json(settings: &Settings) -> serde_json::Result<Vec<u8>> {
+    crate::gateway::search::secret_keys::reveal(|| serde_json::to_vec_pretty(settings))
 }
 
 impl Default for Settings {
@@ -365,7 +347,7 @@ impl Store {
         // 实例标识必须落盘：每次启动换一个会让「另一个 Jolu 接管」误判。
         if inner.instance_id.trim().is_empty() {
             inner.instance_id = new_instance_id();
-            if let Ok(json) = serde_json::to_vec_pretty(&inner) {
+            if let Ok(json) = persisted_json(&inner) {
                 let _ = std::fs::create_dir_all(dir);
                 let _ = std::fs::write(&path, json);
             }
@@ -397,7 +379,7 @@ impl Store {
         let mut guard = self.inner.lock().map_err(|e| format!("设置锁获取失败：{e}"))?;
         let mut next = guard.clone();
         f(&mut next);
-        let json = serde_json::to_vec_pretty(&next).map_err(|e| format!("设置序列化失败：{e}"))?;
+        let json = persisted_json(&next).map_err(|e| format!("设置序列化失败：{e}"))?;
         let temporary = self.path.with_extension("json.tmp");
         let write = || -> std::io::Result<()> {
             if let Some(parent) = self.path.parent() { std::fs::create_dir_all(parent)?; }
@@ -422,8 +404,7 @@ impl Store {
 mod tests {
     use super::*;
 
-    #[test]
-    fn masked_keeps_search_keys_out_of_the_frontend_copy() {
+    fn with_search_keys() -> Settings {
         let mut settings = Settings::default();
         settings.search_apis = vec![crate::gateway::search::SearchApiConfig {
             vendor: "tavily".into(),
@@ -431,13 +412,37 @@ mod tests {
             url: None,
             off: false,
         }];
-        let masked = settings.masked();
-        assert_eq!(masked.search_apis[0].keys[0], "tvly••••5678", "长 Key 保留前 4 后 4");
-        assert_eq!(masked.search_apis[0].keys[1], "••••••••", "短 Key 全遮");
-        // 原文不动（写路径仍在后端）
-        assert_eq!(settings.search_apis[0].keys[0], "tvly-abcdefgh12345678");
-        // 非敏感字段原样
-        assert_eq!(masked.search_apis[0].vendor, "tavily");
+        settings
+    }
+
+    #[test]
+    fn any_serialization_outside_the_store_masks_search_keys() {
+        // 命令返回值与 settings-changed 事件都走普通序列化：默认就必须是掩码，
+        // 新加的命令忘了处理也不会把 Key 明文交给前端
+        let json = serde_json::to_string(&with_search_keys()).unwrap();
+        assert!(!json.contains("tvly-abcdefgh12345678"), "{json}");
+        assert!(!json.contains("short"), "{json}");
+        let value = serde_json::to_value(with_search_keys()).unwrap();
+        assert_eq!(value["search_apis"][0]["keys"][0], "tvly••••5678", "长 Key 保留前 4 后 4");
+        assert_eq!(value["search_apis"][0]["keys"][1], "••••••••", "短 Key 全遮");
+        assert_eq!(value["search_apis"][0]["vendor"], "tavily", "非敏感字段原样");
+    }
+
+    #[test]
+    fn the_store_persists_search_keys_in_plain_text_and_reads_them_back() {
+        let dir = std::env::temp_dir().join(format!("jolu-settings-search-keys-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = super::Store::load(&dir);
+        let returned = store.try_update(|s| s.search_apis = with_search_keys().search_apis).unwrap();
+        assert_eq!(returned.search_apis[0].keys[0], "tvly-abcdefgh12345678", "内存里仍是原文，后端照常可用");
+        let disk = std::fs::read_to_string(dir.join("settings.json")).unwrap();
+        assert!(disk.contains("tvly-abcdefgh12345678"), "落盘必须是原文，否则重启后 Key 就废了");
+        let last_good = std::fs::read_to_string(dir.join("settings.json.lastgood")).unwrap();
+        assert!(last_good.contains("tvly-abcdefgh12345678"));
+        assert_eq!(super::Store::load(&dir).get().search_apis[0].keys[1], "short");
+        // 落盘之后的普通序列化仍是掩码（放行只在保存过程内有效）
+        assert!(!serde_json::to_string(&store.get()).unwrap().contains("tvly-abcdefgh12345678"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
     use super::Settings;
 

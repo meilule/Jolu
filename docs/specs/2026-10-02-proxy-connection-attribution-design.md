@@ -2,6 +2,12 @@
 
 鼠鼠批准的方案；实现随 `todo/2026-10-01-platform-completion.md` 第 5 组落地。
 
+> 2026-11-11 核对（对照 `backend/src/lib.rs` 的 `generate_handler!` 与 `backend/src/db.rs` / `usage_stats.rs` / `attribution.rs`）：识别、落库（`db::apply_proxy_timing`）与备份 `attributions` 段与下文一致；「查询」一节的命令名已过期：
+> - 不存在 `connection_attributed_count` 命令；归账记录数的实际实现是 `db::attributed_request_count`（仅后端内部与测试使用，未注册为 Tauri 命令），以及 `stats_overview` 返回的 `Overview.attributed` 字段（`usage_stats::count_attributed`）。
+> - 六个旧统计命令已不再注册；`db.rs` 里的 `*_scoped` 函数仍在，但当前只有 `cost_estimate` 命令带可选参数 `connection`。用量统计页改用 `stats_overview` / `stats_calls` / `stats_activity`，按 `usage_stats::StatsFilter.connections`（多选，可含 `__unattributed__`）筛选。
+> - 下文「本机统计范围：全部本机记录 / 仅此连接」分段控件在当前前端中搜不到，已由用量统计页的账号筛选取代。
+> - `backend/src/attribution.rs` 是后来新增的实时归因（exact / mapped / platform 三档，供灵动岛显示正在跑的连接，经 `live_usage` 返回的 `attribution` 字段），不提供独立 Tauri 命令。
+
 ## 问题
 
 `requests` 表只按平台存储，本机统计无法区分同平台下的多个账号或 API Key。本地代理只知道平台与上游地址，不知道是哪条连接；「启用连接」写进 CLI 的配置也不带连接 id。
