@@ -2,6 +2,7 @@ import { invoke, isTauri, type AppSettings } from "./api"
 import type { DefaultPage, MainPage } from "./mainNavigation"
 import type { Density } from "./appearance"
 import type { NetworkDiagnosisDto, NetworkMode } from "./networkSettings"
+import type { LibraryAgentDto, SearchApiDto, SearchHitDto, SearchVendorDto } from "./searchSettings"
 
 /** 设置 · 数据与存储（画板 92）：请求记录与会话索引的条数 */
 export interface StorageCountsDto {
@@ -34,6 +35,18 @@ export const settingsApi = {
   privacyMaskingSet: (on: boolean) => invoke<AppSettings>("privacy_masking_set", { on }),
   /** ZCode 通道顺序（画板待确认）：开 = 先试免费 Start Plan；立即生效，不用重启网关 */
   zcodeFreeFirstSet: (on: boolean) => invoke<AppSettings>("zcode_free_first_set", { on }),
+  /** 联网搜索（画板待确认）：可选后端清单 */
+  searchVendors: () => invoke<SearchVendorDto[]>("search_vendors"),
+  /** 联网搜索：整体保存；Key 传掩码表示保留原 Key、传原文表示新填。返回的设置里 Key 仍是掩码 */
+  searchApisSet: (apis: SearchApiDto[]) => invoke<AppSettings>("search_apis_set", { apis }),
+  /** 联网搜索：用已保存的配置试搜（依次尝试启用的后端） */
+  searchTry: (query: string) => invoke<SearchHitDto[]>("search_try", { query }),
+  /** 搜索插件（MCP）：各 agent 的安装状态 */
+  libraryList: () => invoke<LibraryAgentDto[]>("library_list"),
+  /** 搜索插件：装到某个 agent（只写 Jolu 自己的条目，同名第三方条目拒绝覆盖） */
+  libraryInstall: (agent: string) => invoke<{ agent: string; name: string; created: boolean }>("library_install", { agent }),
+  /** 搜索插件：从某个 agent 移除（只删 Jolu 装的） */
+  libraryRemove: (agent: string, name: string) => invoke<boolean>("library_remove", { agent, name }),
   /** 批次 G：保持系统唤醒；不支持的系统上打开会报错，不假装成功 */
   setKeepAwake: (on: boolean) => invoke<AppSettings>("set_keep_awake", { on }),
   /** 批次 G：每日 warm-up 开关与触发小时（后端按 0–23 截断） */

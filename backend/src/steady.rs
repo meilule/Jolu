@@ -22,9 +22,15 @@ fn transient(error: &io::Error) -> bool {
 
 pub fn read(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
     let path = path.as_ref();
+    retry(|| std::fs::read(path))
+}
+
+/// 重试循环本身：遇到暂时性错误（不存在 / 被占用）最多再试 `ATTEMPTS - 1` 次。
+/// 单独拆出来是为了能不靠线程时序测试它。
+fn retry<T>(mut attempt_once: impl FnMut() -> io::Result<T>) -> io::Result<T> {
     let mut attempt = 1;
     loop {
-        match std::fs::read(path) {
+        match attempt_once() {
             Err(error) if attempt < ATTEMPTS && transient(&error) => {
                 attempt += 1;
                 std::thread::sleep(PAUSE);
@@ -72,19 +78,27 @@ mod tests {
 
     #[test]
     fn a_file_replaced_by_rename_is_read_instead_of_reported_missing() {
-        // 模拟 rename 覆盖窗口：读的时候文件暂时不存在，几毫秒后出现
-        let dir = temp("window");
-        let path = dir.join("settings.json");
-        let writer = {
-            let path = path.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(8));
-                std::fs::write(&path, br#"{"keep":true}"#).unwrap();
-            })
-        };
-        assert_eq!(read_to_string(&path).unwrap(), r#"{"keep":true}"#);
-        writer.join().unwrap();
-        let _ = std::fs::remove_dir_all(dir);
+        // 模拟 rename 覆盖窗口：前几次读到「不存在」/「被占用」，之后读到内容。
+        // 不用线程 + sleep 模拟：Windows 计时粒度约 15ms，并行跑测试时线程调度会把窗口拖过重试上限。
+        let mut calls = 0;
+        let result = retry(|| {
+            calls += 1;
+            match calls {
+                1 => Err(io::Error::from(io::ErrorKind::NotFound)),
+                2 => Err(io::Error::from_raw_os_error(SHARING_VIOLATION)),
+                _ => Ok("内容"),
+            }
+        });
+        assert_eq!(result.unwrap(), "内容");
+        assert_eq!(calls, 3);
+        // 非暂时性错误不重试
+        let mut calls = 0;
+        let error = retry::<()>(|| { calls += 1; Err(io::Error::from(io::ErrorKind::InvalidData)) }).unwrap_err();
+        assert_eq!((error.kind(), calls), (io::ErrorKind::InvalidData, 1));
+        // 一直不存在：试满次数后照常报 NotFound
+        let mut calls = 0;
+        let error = retry::<()>(|| { calls += 1; Err(io::Error::from(io::ErrorKind::NotFound)) }).unwrap_err();
+        assert_eq!((error.kind(), calls), (io::ErrorKind::NotFound, ATTEMPTS));
     }
 
     #[test]

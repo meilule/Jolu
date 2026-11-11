@@ -198,6 +198,99 @@ pub async fn run_search(
     Err(last.unwrap_or_else(|| SearchError::Other("没有可用的搜索 Key".into())))
 }
 
+/// 界面提交的一个后端配置。`keys` 里的每一项要么是新填的 Key 原文，要么是界面上
+/// 显示的掩码（含 `•`）——掩码表示「保留原来那把」。
+///
+/// 为什么这样设计：前端只拿得到掩码（[`secret_keys`]），保存时不可能回传原文；
+/// 真实 Key 不会含 `•`，所以掩码可以无歧义地当成「保留」的标记。
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchApiInput {
+    pub vendor: String,
+    #[serde(default)]
+    pub keys: Vec<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub off: bool,
+}
+
+/// 把界面提交的配置与已有配置合并成要保存的配置：掩码换回原 Key、逗号 / 空白分隔的
+/// 多 Key 拆开去重、地址去空白。掩码对不上（原 Key 已被删）或后端不认识时报错，不猜。
+pub fn merge_inputs(existing: &[SearchApiConfig], inputs: Vec<SearchApiInput>) -> Result<Vec<SearchApiConfig>, String> {
+    let mut merged = Vec::new();
+    for input in inputs {
+        let vendor = input.vendor.trim().to_string();
+        if !VENDORS.iter().any(|(id, _)| *id == vendor) {
+            return Err(format!("未知搜索后端「{vendor}」"));
+        }
+        let url = input.url.map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
+        if vendor == "searxng" && url.is_none() {
+            return Err("SearXNG 需要填写实例地址".into());
+        }
+        let mut keys: Vec<String> = Vec::new();
+        let pieces = input.keys.iter().flat_map(|raw| {
+            raw.split(|c: char| c == ',' || c == ';' || c.is_whitespace()).map(str::to_string).collect::<Vec<_>>()
+        });
+        for piece in pieces.filter(|p| !p.is_empty()) {
+            let key = if piece.contains('•') {
+                existing
+                    .iter()
+                    .filter(|api| api.vendor == vendor)
+                    .flat_map(|api| api.keys.iter())
+                    .find(|key| secret_keys::mask(key) == piece)
+                    .cloned()
+                    .ok_or_else(|| format!("{} 的 Key「{piece}」对不上已保存的 Key，请重新填写原文", display_name(&vendor)))?
+            } else {
+                piece
+            };
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+        if keys.is_empty() && !backends::key_optional(&vendor) {
+            return Err(format!("{} 至少要填一把 Key", display_name(&vendor)));
+        }
+        merged.push(SearchApiConfig { vendor, keys, url, off: input.off });
+    }
+    Ok(merged)
+}
+
+/// 依次问每个未暂停的后端，第一个有结果的为准；全都失败时把各自的原因一起报出来。
+/// Key 轮转的冷却只在本次调用内有效。
+pub async fn search_in_order(configs: &[SearchApiConfig], query: &str, count: usize) -> Result<Vec<SearchHit>, String> {
+    let active: Vec<&SearchApiConfig> = configs.iter().filter(|api| !api.off).collect();
+    if active.is_empty() {
+        return Err("还没有启用的搜索后端".into());
+    }
+    let mut refused_tail: Vec<(String, i64)> = Vec::new();
+    let mut reasons = Vec::new();
+    for config in active {
+        let now = chrono::Utc::now().timestamp_millis();
+        match run_search(config, query, count, &mut refused_tail, now).await {
+            Ok(hits) => return Ok(hits),
+            Err(error) => reasons.push(format!("{}：{error}", display_name(&config.vendor))),
+        }
+    }
+    Err(format!("搜索失败——{}", reasons.join("；")))
+}
+
+/// 界面用的后端清单。
+#[derive(Debug, Clone, Serialize)]
+pub struct VendorInfo {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub key_optional: bool,
+    /// 必须填地址（SearXNG）
+    pub needs_url: bool,
+}
+
+pub fn vendor_infos() -> Vec<VendorInfo> {
+    VENDORS
+        .iter()
+        .map(|(id, name)| VendorInfo { id, name, key_optional: backends::key_optional(id), needs_url: backends::default_base(id).is_none() })
+        .collect()
+}
+
 /// 后端显示名；未注册的 id 原样返回。
 pub(crate) fn display_name(vendor: &str) -> &str {
     VENDORS
@@ -247,6 +340,46 @@ mod tests {
             url: None,
             off: false,
         }
+    }
+
+
+    #[test]
+    fn masked_keys_from_the_screen_keep_the_saved_originals() {
+        let existing = vec![config("tavily", &["tvly-abcdefgh12345678", "tvly-zzzzzzzz87654321"])];
+        let inputs = vec![SearchApiInput {
+            vendor: "tavily".into(),
+            keys: vec!["tvly••••5678, tvly-newnewnew11112222".into(), "tvly••••5678".into()],
+            url: Some("  ".into()),
+            off: false,
+        }];
+        let merged = merge_inputs(&existing, inputs).unwrap();
+        assert_eq!(merged[0].keys, vec!["tvly-abcdefgh12345678".to_string(), "tvly-newnewnew11112222".to_string()], "掩码换回原文、去重、删掉的那把不再保留");
+        assert_eq!(merged[0].url, None, "空白地址视为未填");
+    }
+
+    #[test]
+    fn unmatched_masks_unknown_vendors_and_missing_keys_are_refused() {
+        let existing = vec![config("tavily", &["tvly-abcdefgh12345678"])];
+        let stale = SearchApiInput { vendor: "tavily".into(), keys: vec!["tvly••••0000".into()], url: None, off: false };
+        assert!(merge_inputs(&existing, vec![stale]).unwrap_err().contains("对不上"));
+        let other_vendor = SearchApiInput { vendor: "brave".into(), keys: vec!["tvly••••5678".into()], url: None, off: false };
+        assert!(merge_inputs(&existing, vec![other_vendor]).is_err(), "掩码只在同一后端里找");
+        let unknown = SearchApiInput { vendor: "bing".into(), keys: vec!["k".into()], url: None, off: false };
+        assert!(merge_inputs(&existing, vec![unknown]).unwrap_err().contains("bing"));
+        let empty = SearchApiInput { vendor: "exa".into(), keys: vec![], url: None, off: false };
+        assert!(merge_inputs(&existing, vec![empty]).unwrap_err().contains("至少"));
+        let you = SearchApiInput { vendor: "you".into(), keys: vec![], url: None, off: false };
+        assert!(merge_inputs(&existing, vec![you]).is_ok(), "You.com 可免 Key");
+        let searxng = SearchApiInput { vendor: "searxng".into(), keys: vec![], url: None, off: false };
+        assert!(merge_inputs(&existing, vec![searxng]).unwrap_err().contains("实例地址"));
+    }
+
+    #[tokio::test]
+    async fn search_in_order_reports_every_backend_when_all_fail() {
+        let configs = vec![config("tavily", &[]), config("exa", &[])];
+        let error = search_in_order(&configs, "rust", 3).await.unwrap_err();
+        assert!(error.contains("Tavily") && error.contains("Exa"), "{error}");
+        assert!(search_in_order(&[], "rust", 3).await.unwrap_err().contains("没有启用"));
     }
 
     #[test]

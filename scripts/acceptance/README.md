@@ -47,6 +47,10 @@ Remove-Item Env:JOLU_DEV_URL                                 # 验收结束后�
   3. 在 `output/acceptance/node` 里设置 `JOLU_DEV_URL` 后运行脚本。
   脚本经应用命令创建两个指向合成上游的自定义来源、开启转发，临时读取剪贴板里的手动接入 Key 后恢复原文本；每个 CLI 用 `output/acceptance/cli-home/<工具>` 作为独立主目录，并去掉本机 shell 里的 `ANTHROPIC_*` / `OPENAI_*` / `GEMINI_*` 等变量，不读写真实配置。核对：运行中显示、结束后无残留在途请求、各工具会话 ID 与其本地会话文件一致、来源关联、Gemini 只记流水不猜会话。报告与截图在 `output/acceptance/gateway-unified-desktop/`。OpenCode 首次在空主目录运行会下载 provider，可能需要几分钟。
 
+## 档位面板与联网搜索设置
+
+- `gateway-tiers-search.e2e.mjs`：浏览器预览，挂载真实的接线弹窗（含档位面板）与设置页「联网搜索 / 搜索插件」分区，原生调用全部合成（不读写任何工具配置）。核对：Opus 4.5 只给到 high、Haiku 不给 effort、只有一个 effort 被选中、「跟随子代理」在子代理跟随主模型时填主模型；搜索 Key 只显示掩码、保存时掩码原样交回、新 Key 原文只交一次、试搜结果展示、Trae 标为不支持。先 `pnpm dev`，再 `JOLU_PREVIEW_URL=http://localhost:5173 node scripts/acceptance/gateway-tiers-search.e2e.mjs`；截图在 `output/acceptance/gateway-tiers-search/`。
+
 ## 观测模式标记头
 
 观测模式（`proxy_mode = observe`）经本机代理转发的每个响应都带 `x-jolu-proxy: 1`，统一网关的响应带 `x-jolu-gateway: <来源 slug>`。验收时用它区分「请求确实经过了 Jolu」和「客户端绕过代理直连」：

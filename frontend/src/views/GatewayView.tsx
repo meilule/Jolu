@@ -21,6 +21,7 @@ import {
   CatalogDialog, CodexDialog, GeminiDialog, MessageDialog, RenameDialog, WiringDialog, orderGroups,
 } from "@/components/gateway/GatewayDialogs"
 import { SourceManageDialog } from "@/components/gateway/SourceManageDialog"
+import { emptyTierDraft, tierDraftFrom, tierModelsFrom, type TierDraft } from "@/lib/tierModels"
 import type { Connection } from "@/types"
 
 /**
@@ -75,6 +76,8 @@ export function GatewayView() {
   const [claudeModelChoice, setClaudeModelChoice] = useState("")
   /** Claude Code 的 subagent 独立模型；空串 = 跟随主模型 */
   const [claudeSubagent, setClaudeSubagent] = useState("")
+  /** Claude Code 档位自选草稿；接线与「应用档位」都带上它，重接线不会把自选档位冲掉 */
+  const [tierDraft, setTierDraft] = useState<TierDraft>(emptyTierDraft)
   /** 局域网共享开关的当前值（来自 settings；只读展示，写入走 gateway_shared_lan_set） */
   const [sharedLan, setSharedLan] = useState(false)
   /** Profile（配置一键切换）列表；接线面板里保存 / 应用 */
@@ -230,6 +233,26 @@ export function GatewayView() {
     }, "模型清单已更新")
   }
 
+  // 打开接线弹窗时，用接线记录里实际写入的值回填主模型 / 子代理 / 档位（只对已接线的 Claude Code）
+  const wiringOpen = dialog?.kind === "wiring"
+  useEffect(() => {
+    if (!wiringOpen || !isTauri) return
+    let alive = true
+    gatewayApi.wiringApplied("claude-code").then((applied) => {
+      if (!alive || !applied) return
+      if (applied.model) setClaudeModelChoice(applied.model.replace(/\[1m\]$/i, ""))
+      setClaudeSubagent(applied.subagent_model ?? "")
+      setTierDraft(tierDraftFrom(applied.tiers, applied.subagent_model))
+    }).catch(() => { /* 读不到回填值不影响接线，保留当前选择 */ })
+    return () => { alive = false }
+  }, [wiringOpen])
+
+  const claudeTiers = () => tierModelsFrom(tierDraft, claudeModel, claudeSubagent) ?? undefined
+  const applyTiers = () => run(
+    () => gatewayApi.setWiring("claude-code", true, claudeModel || null, claudeSubagent || null, claudeTiers()),
+    "档位已写入 Claude Code",
+  )
+
   const wire = (agent: string) => {
     if (agent === "codex") return setDialog({ kind: "codex" })
     if (agent === "gemini") return setDialog({ kind: "gemini" })
@@ -246,7 +269,7 @@ export function GatewayView() {
         : "将更新这个工具的本机配置，使其通过 Jolu 统一网关调用模型。原连接配置会被保留，断开时恢复。"
       : "将更新这个工具的本机配置，使其通过 Jolu 统一网关调用模型。原连接配置会被保留，断开时恢复。"
     const subagent = agent === "claude-code" ? claudeSubagent || null : null
-    setDialog({ kind: "confirm", title: `接入 ${agentLabel(agent)}？`, description: detail, label: "确认接入", work: () => run(() => gatewayApi.setWiring(agent, true, model, subagent), `已接入 ${agentLabel(agent)}`, true) })
+    setDialog({ kind: "confirm", title: `接入 ${agentLabel(agent)}？`, description: detail, label: "确认接入", work: () => run(() => gatewayApi.setWiring(agent, true, model, subagent, agent === "claude-code" ? claudeTiers() : undefined), `已接入 ${agentLabel(agent)}`, true) })
   }
   const confirmUnwire = (agent: string) => setDialog({ kind: "confirm", title: `断开 ${agentLabel(agent)}？`, description: "将恢复这个工具接入前的连接配置，后续请求不再通过 Jolu 统一网关。", label: "确认断开", danger: true, work: () => run(() => gatewayApi.setWiring(agent, false), `已断开 ${agentLabel(agent)}`, true) })
   const profileApply = (name: string) => setDialog({ kind: "confirm", title: `应用 Profile「${name}」？`, description: "将把这套配置里各工具的主模型重新写入当前已接线的工具；配置被外部改写的会跳过。", label: "应用", work: () => run(async () => { const result = await gatewayApi.profilesApply(name); await refresh(); return result.message }, name, true) })
@@ -409,7 +432,7 @@ export function GatewayView() {
       {dialog?.kind === "serve-conflict" && <MessageDialog title="这个来源没有加入模型池" tone="danger" message={dialog.message} onClose={() => setDialog({ kind: "manage" })} />}
       {dialog?.kind === "shared" && <SharedAccessDialog shared={sharedLan} busy={busy} onSharedChange={(on) => { setSharedLan(on); void run(() => gatewayApi.setSharedLan(on), on ? "已开启局域网共享（重启接入后监听生效）" : "已关闭局域网共享", true).then((ok) => { if (!ok) setSharedLan(!on) }) }} onClose={() => setDialog(null)} run={(work, title) => run(work, title)} />}
       {dialog?.kind === "middleware" && <MiddlewareDialog busy={busy} onClose={() => setDialog(null)} run={(work, title) => run(work, title)} />}
-      {dialog?.kind === "wiring" && <WiringDialog agents={agents} models={claudeModels} modelChoice={claudeModel} onModelChoice={setClaudeModelChoice} subagentChoice={claudeSubagent} onSubagentChoice={setClaudeSubagent} profiles={profiles} onProfileApply={profileApply} onProfileSave={profileSave} onProfileDelete={profileDelete} busy={busy} onClose={() => setDialog(null)} onWire={(agent) => { setDialog(null); wire(agent) }} onUnwire={confirmUnwire} onAccept={confirmAccept} />}
+      {dialog?.kind === "wiring" && <WiringDialog agents={agents} models={claudeModels} modelChoice={claudeModel} onModelChoice={setClaudeModelChoice} subagentChoice={claudeSubagent} onSubagentChoice={setClaudeSubagent} tierDraft={tierDraft} onTierDraft={setTierDraft} onApplyTiers={applyTiers} profiles={profiles} onProfileApply={profileApply} onProfileSave={profileSave} onProfileDelete={profileDelete} busy={busy} onClose={() => setDialog(null)} onWire={(agent) => { setDialog(null); wire(agent) }} onUnwire={confirmUnwire} onAccept={confirmAccept} />}
       {dialog?.kind === "codex" && <CodexDialog returnFocusTo={accessTrigger.current} mode={agents.find((entry) => entry.agent === "codex")?.codex_mode ?? "provider"} busy={busy} onClose={() => setDialog(null)} onConfirm={() => run(() => gatewayApi.setWiring("codex", true), "已接入 Codex", true)} />}
       {dialog?.kind === "gemini" && <GeminiDialog returnFocusTo={accessTrigger.current} busy={busy} onClose={() => setDialog(null)} onConfirm={() => run(() => gatewayApi.setWiring("gemini", true), "已接入 Gemini CLI", true)} />}
       {dialog?.kind === "restore-failed" && <MessageDialog title="没能恢复工具配置" tone="danger" message={dialog.message} action={{ label: "重试断开", onClick: async () => { setDialog(null); await unwire(dialog.agent) } }} onClose={() => setDialog(null)} />}

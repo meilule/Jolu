@@ -9,6 +9,7 @@ import { AppearanceSection } from "@/components/settings/AppearanceSection"
 import { NetworkSection } from "@/components/settings/NetworkSection"
 import { PrivacySection } from "@/components/settings/PrivacySection"
 import { OpsSection } from "@/components/settings/OpsSection"
+import { SearchSection } from "@/components/settings/SearchSection"
 import { DataSection } from "@/components/settings/DataSection"
 import { NotificationSection } from "@/components/settings/NotificationSection"
 import { AboutSection } from "@/components/settings/AboutSection"
@@ -109,6 +110,8 @@ export function SettingsPage({ section, navigationRequest, onOpenSkills }: {
               <NetworkSection cfg={cfg} setDirty={setDirty} />
               {/* 待确认：隐私脱敏在 Jolu.pen 模块 G 没有画板，暂挂「网络与代理」页尾 */}
               <PrivacySection />
+              {/* 待确认：联网搜索与搜索插件在 Jolu.pen 模块 G 没有画板，暂挂「网络与代理」页尾（搜索走应用联网方式） */}
+              <SearchSection />
             </>
           )}
           {tab === "data" && (

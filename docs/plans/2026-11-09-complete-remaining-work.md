@@ -70,7 +70,7 @@
 - [x] B8 `web_fetch`（每跳过 netguard 并把连接钉在检查过的地址上；MCP 工具 + `jolu_cli fetch`，真实网页已试读）
 - [ ] B9 网关替身工具拦截 + 内部多轮（原计划 C-2，批 4 实际做成了档位，交接文档未列）
 - [x] B10 搜索插件安装扩到 ZCode（`~/.zcode/cli/config.json` 的 `mcp.servers`）、Qoder CLI 两版、WorkBuddy（`mcp.json`，需在 WorkBuddy 里批准）；Trae 无可靠来源，列为不支持。顺带修首版路径错误：Claude Code 应写 `~/.claude.json`（原写 `settings.json` 不生效）、Gemini 应写 `settings.json`（原写进 `.env`），卸载时清理旧位置
-- [ ] B11 界面：档位（四档 + effort + Auto 判别）、搜索插件安装面板（含 TS 桥接）、搜索 Key 配置（`setSearchApis`，只回传新 Key 或「保留」）
+- [x] B11 界面（无画板，标「待确认」）：接线弹窗内的档位面板（四档 + effort + Auto 判别，接线与「应用档位」都带上档位，回填实际写入值）；设置 ·「网络与代理」页尾的联网搜索（掩码即「保留原 Key」，试搜）与搜索插件安装列表；预览验收 `scripts/acceptance/gateway-tiers-search.e2e.mjs`
 - [ ] B12 magpie 行动清单：裸模型名优先走 agent 自己的订阅、命名 Key 同时请求数上限、Smart /「首选」文案核对、ZCode 会话去重核对、URL 安全 base64 转标准、Codex 大 `config.toml` 不全量解析、顺序路由恢复后回切选项
 - [ ] B13 远程 MCP（http / sse）——依赖 5.2 OAuth
 

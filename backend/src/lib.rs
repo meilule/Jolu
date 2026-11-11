@@ -2422,6 +2422,33 @@ fn privacy_masking_set(app: tauri::AppHandle, on: bool) -> Result<settings::Sett
     Ok(next)
 }
 
+/// 联网搜索：可选的后端清单（界面下拉用）。
+#[tauri::command]
+fn search_vendors() -> Vec<crate::gateway::search::VendorInfo> {
+    crate::gateway::search::vendor_infos()
+}
+
+/// 联网搜索：整体保存后端配置。界面只回传掩码或新填的 Key，掩码在这里换回原文
+/// （`gateway::search::merge_inputs`），返回的设置里 Key 仍是掩码。
+#[tauri::command]
+fn search_apis_set(app: tauri::AppHandle, apis: Vec<crate::gateway::search::SearchApiInput>) -> Result<settings::Settings, String> {
+    let cfg = app.state::<Cfg>();
+    let merged = crate::gateway::search::merge_inputs(&cfg.0.get().search_apis, apis)?;
+    let next = cfg
+        .0
+        .try_update(|settings| settings.search_apis = merged)
+        .map_err(|error| format!("保存搜索后端失败：{error}"))?;
+    let _ = app.emit("settings-changed", next.clone());
+    Ok(next)
+}
+
+/// 联网搜索：用已保存的配置试搜一次（依次尝试启用的后端），给界面核对 Key 是否可用。
+#[tauri::command]
+async fn search_try(app: tauri::AppHandle, query: String) -> Result<Vec<crate::gateway::search::SearchHit>, String> {
+    let configs = app.state::<Cfg>().0.get().search_apis;
+    crate::gateway::search::search_in_order(&configs, query.trim(), 5).await
+}
+
 /// ZCode Start Plan 优先开关（③5，gateway/adapter/zcode.rs）：开启后 ZCode 来源
 /// 先试免费的 Start Plan 通道（会话 JWT），非 2xx 再落 Coding Plan Key；关闭时
 /// 保持现状（Coding Plan Key 先、429/402 余额类失败落 Start Plan）。进程级开关
@@ -2549,6 +2576,24 @@ fn library_list(app: tauri::AppHandle) -> Result<Vec<LibraryAgentStatus>, String
         });
     }
     Ok(statuses)
+}
+
+/// 接线记录里实际写入的模型配置（Claude Code 的主模型、子代理、档位），给接线弹窗回填。
+#[derive(serde::Serialize)]
+struct WiringAppliedView {
+    model: Option<String>,
+    subagent_model: Option<String>,
+    tiers: Option<crate::gateway::wiring_store::TierModels>,
+}
+
+#[tauri::command]
+fn gateway_wiring_applied(app: tauri::AppHandle, agent: String) -> Result<Option<WiringAppliedView>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    Ok(crate::gateway::wiring_store::load(&conn, &agent)
+        .filter(|record| record.state == "wired")
+        .and_then(|record| record.applied())
+        .map(|applied| WiringAppliedView { model: applied.model, subagent_model: applied.subagent_model, tiers: applied.tiers }))
 }
 
 #[tauri::command]
@@ -4295,6 +4340,10 @@ pub fn run() {
             library_install,
             library_remove,
             library_list,
+            gateway_wiring_applied,
+            search_vendors,
+            search_apis_set,
+            search_try,
             set_keep_awake,
             set_warmup,
             set_otlp_endpoint,

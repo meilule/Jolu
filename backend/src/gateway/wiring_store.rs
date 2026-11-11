@@ -70,8 +70,8 @@ pub struct TierModels {
     pub haiku: Option<String>,
     #[serde(default)]
     pub fable: Option<String>,
-    /// 前端以 camelCase 传 `autoMode`；没有别名时这一档会被静默丢掉
-    #[serde(default, alias = "autoMode")]
+    /// 前端类型是 camelCase 的 `autoMode`：序列化与之一致，旧快照里的 `auto_mode` 照常读回
+    #[serde(default, rename = "autoMode", alias = "auto_mode")]
     pub auto_mode: Option<String>,
 }
 
@@ -271,6 +271,9 @@ mod tests {
     fn auto_mode_accepts_the_frontend_camel_case_name() {
         let tiers: TierModels = serde_json::from_str(r#"{"opus":null,"autoMode":"zcode/glm-5.3-flash"}"#).unwrap();
         assert_eq!(tiers.auto_mode.as_deref(), Some("zcode/glm-5.3-flash"));
+        let old: TierModels = serde_json::from_str(r#"{"auto_mode":"zcode/glm-5.3"}"#).unwrap();
+        assert_eq!(old.auto_mode.as_deref(), Some("zcode/glm-5.3"), "旧快照照常读回");
+        assert!(serde_json::to_string(&old).unwrap().contains("\"autoMode\""), "给前端的名字与其类型一致");
     }
 
     #[test]

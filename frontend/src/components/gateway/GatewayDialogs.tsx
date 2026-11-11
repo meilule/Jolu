@@ -1,4 +1,6 @@
 import { useRef, useState } from "react"
+import { TierPanel } from "./TierPanel"
+import type { TierDraft } from "@/lib/tierModels"
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { TriangleAlert, X } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -81,7 +83,7 @@ export function RenameDialog({ connection, busy, onClose, onSave }: { connection
  * `ANTHROPIC_MODEL`——它压过 /model 的选择，写了切换只在本会话生效。
  * 断开时按快照还原用户原来的全部模型配置。不选模型也能接（只写地址和令牌）。
  */
-export function WiringDialog({ agents, models, modelChoice, onModelChoice, subagentChoice, onSubagentChoice, profiles, onProfileApply, onProfileSave, onProfileDelete, busy, onClose, onWire, onUnwire, onAccept }: {
+export function WiringDialog({ agents, models, modelChoice, onModelChoice, subagentChoice, onSubagentChoice, tierDraft, onTierDraft, onApplyTiers, profiles, onProfileApply, onProfileSave, onProfileDelete, busy, onClose, onWire, onUnwire, onAccept }: {
   agents: WiringStatusDto[]
   /** 可选的 `<来源>/<模型>` 列表（来自模型目录，只含已接入来源；context 为 models.dev 上下文窗口） */
   models: { id: string; context?: number }[]
@@ -90,6 +92,10 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, subag
   /** Claude Code 的 subagent 独立模型；空串 = 跟随主模型 */
   subagentChoice: string
   onSubagentChoice: (value: string) => void
+  /** Claude Code 档位自选（批 4）草稿与应用 */
+  tierDraft: TierDraft
+  onTierDraft: (next: TierDraft) => void
+  onApplyTiers: () => void
   /** Profile（配置一键切换）：保存当前全部接线的主模型，应用时逐个重放 */
   profiles: { name: string; agents: Record<string, string>; created_ms: number }[]
   onProfileApply: (name: string) => void
@@ -145,6 +151,10 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, subag
           <span className="text-[8.5px] text-jolu-muted">
             Claude Code 的子代理任务（Task 工具）用它；留空即跟随主模型，也是 Claude Code 的缺省行为。
           </span>
+          {models.length > 0 && (
+            <TierPanel models={models} mainModel={modelChoice} subagent={subagentChoice} draft={tierDraft} onDraft={onTierDraft}
+              busy={busy} wired={claude.wired} onApply={onApplyTiers} />
+          )}
         </div>
       )}
       <div className="flex flex-col gap-1.5">

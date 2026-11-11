@@ -291,6 +291,9 @@ export const gatewayApi = {
    *  对应后端 `wiring_store::TierModels`；Auto 判别写 `CLAUDE_CODE_AUTO_MODE_MODEL`，「跟随子代理」由调用方填子代理的值。 */
   setWiringTiers: (agent: string, tiers: TierModels | null) =>
     invoke<string>("gateway_wiring_set", { agent, wired: true, tiers }),
+  /** 接线记录里实际写入的主模型 / 子代理 / 档位（只对已接线的工具有值），给接线弹窗回填 */
+  wiringApplied: (agent: string) =>
+    invoke<{ model: string | null; subagent_model: string | null; tiers: TierModels | null } | null>("gateway_wiring_applied", { agent }),
   /** 接受漂移：只清接线记录，不改用户的配置文件 */
   acceptWiring: (agent: string) => invoke<void>("gateway_wiring_accept", { agent }),
   /** 逃生门：还原全部接线并停网关 */

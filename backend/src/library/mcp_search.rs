@@ -95,7 +95,7 @@ async fn handle_tools_call(params: &serde_json::Value) -> Result<serde_json::Val
             if configs.is_empty() {
                 return Err("还没有配置搜索后端：在桌面端 settings.json 的 search_apis 里配置（vendor + keys）".into());
             }
-            Ok(match search_in_order(&configs, &query, count).await {
+            Ok(match search::search_in_order(&configs, &query, count).await {
                 Ok(hits) => tool_result(format_hits(&hits), false),
                 Err(reason) => tool_result(reason, true),
             })
@@ -121,21 +121,6 @@ async fn handle_tools_call(params: &serde_json::Value) -> Result<serde_json::Val
         }
         other => Err(format!("未知工具 {other}")),
     }
-}
-
-/// 依次问每个未暂停的后端，第一个有结果的为准；全都失败时把各自的原因一起报出来。
-/// Key 轮转的冷却只活在本进程内。
-async fn search_in_order(configs: &[SearchApiConfig], query: &str, count: usize) -> Result<Vec<search::SearchHit>, String> {
-    let mut refused_tail: Vec<(String, i64)> = Vec::new();
-    let mut reasons = Vec::new();
-    for config in configs {
-        let now = chrono::Utc::now().timestamp_millis();
-        match search::run_search(config, query, count, &mut refused_tail, now).await {
-            Ok(hits) => return Ok(hits),
-            Err(error) => reasons.push(format!("{}：{error}", search::display_name(&config.vendor))),
-        }
-    }
-    Err(format!("搜索失败——{}", reasons.join("；")))
 }
 
 /// 文本化输出：agent 读的是工具结果文本，列表逐条给标题 / 链接 / 摘要。
