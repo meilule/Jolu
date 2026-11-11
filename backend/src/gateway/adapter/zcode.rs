@@ -475,20 +475,15 @@ pub(crate) async fn forward(
     body: Bytes,
     session: &str,
 ) -> Response {
-    if protocol != CallerProtocol::Anthropic {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "ZCode 订阅使用 Anthropic Messages 协议",
-        );
-    }
-    let start_available = super::zcode_start::jwt_at().is_some();
+    // 3.4：Start Plan 只说 Anthropic；Chat / Responses 调用方只走 Coding Plan 通道的 OpenAI 兼容端点
+    let start_available = protocol == CallerProtocol::Anthropic && super::zcode_start::jwt_at().is_some();
     let now = chrono::Utc::now().timestamp_millis();
     forward_channels(&CHANNELS, &entry.connection_id, free_first(), start_available, now, |channel| {
         let (deps, body) = (deps.clone(), body.clone());
         async move {
             match channel {
                 Channel::StartPlan => super::zcode_start::forward(deps, entry, protocol, body, session).await,
-                Channel::CodingPlan => coding_plan_forward(deps, entry, body).await,
+                Channel::CodingPlan => coding_plan_forward(deps, entry, body, protocol).await,
             }
         }
     })
@@ -496,7 +491,7 @@ pub(crate) async fn forward(
 }
 
 /// Coding Plan 通道的一次转发（不含换通道——那由 [`forward_channels`] 决定）。
-async fn coding_plan_forward(deps: Arc<ProxyDeps>, entry: &PoolEntry, body: Bytes) -> Response {
+async fn coding_plan_forward(deps: Arc<ProxyDeps>, entry: &PoolEntry, body: Bytes, protocol: CallerProtocol) -> Response {
     // 凭据走三条链（对齐 magpie zcodeOwn）：个人 Coding Plan Key 先取；ZCode 切到
     // 团队套餐时项目 Key **覆盖**（团队额度在项目 Key 上，个人 Key 会 1113）；
     // 两条都拿不到再退回 `material_at` 的 OAuth 换取链——供应商页登录的产品功能
@@ -544,13 +539,43 @@ async fn coding_plan_forward(deps: Arc<ProxyDeps>, entry: &PoolEntry, body: Byte
     }
     let mut target = entry.clone();
     target.secret = Some(token);
-    target.base_url = Some(base.into());
-    target.protocol = "anthropic".into();
     // 请求体是 JSON：必须带上 content-type，否则上游按非对象解析，
     // 返回「Invalid request body: Input should be a valid dictionary」（400）。
     let mut headers = HeaderMap::new();
     headers.insert("content-type", HeaderValue::from_static("application/json"));
-    super::direct::forward(deps, &target, model.into(), Method::POST, "/v1/messages", &headers, body).await
+    match protocol {
+        CallerProtocol::Anthropic => {
+            target.base_url = Some(base.into());
+            target.protocol = "anthropic".into();
+            super::direct::forward(deps, &target, model.into(), Method::POST, "/v1/messages", &headers, body).await
+        }
+        // 3.4：GLM Coding Plan 另有 OpenAI 兼容端点（同一把 Key），Chat 直接发；Responses 先翻译成 Chat
+        CallerProtocol::Chat | CallerProtocol::Responses => {
+            target.base_url = Some(openai_base_of(base));
+            target.protocol = "openai".into();
+            let (chat, custom) = if protocol == CallerProtocol::Responses {
+                match crate::gateway::responses_chat::request(&value) {
+                    Ok(chat) => (Bytes::from(chat.to_string()), crate::gateway::responses_chat::custom_tool_names(&value)),
+                    Err(reason) => return error_response(StatusCode::BAD_REQUEST, &format!("Responses 请求转 Chat 失败：{reason}")),
+                }
+            } else {
+                (body, Vec::new())
+            };
+            let response = super::direct::forward(deps, &target, model.into(), Method::POST, "/chat/completions", &headers, chat).await;
+            if protocol == CallerProtocol::Responses {
+                crate::gateway::responses_chat::response_body(response, custom).await
+            } else {
+                response
+            }
+        }
+    }
+}
+
+/// Coding Plan 的 OpenAI 兼容端点：与 Anthropic 端点同站点，路径 `/api/coding/paas/v4`
+/// （BigModel 与 Z.ai 都提供，用同一把 Coding Plan Key）。
+pub(crate) fn openai_base_of(anthropic_base: &str) -> String {
+    let root = anthropic_base.trim_end_matches('/').trim_end_matches("/api/anthropic");
+    format!("{root}/api/coding/paas/v4")
 }
 
 #[cfg(all(test, windows))]
@@ -682,6 +707,12 @@ mod tests {
 #[cfg(test)]
 mod channel_tests {
     use super::*;
+
+    #[test]
+    fn the_openai_compatible_coding_plan_base_sits_beside_the_anthropic_one() {
+        assert_eq!(openai_base_of("https://open.bigmodel.cn/api/anthropic"), "https://open.bigmodel.cn/api/coding/paas/v4");
+        assert_eq!(openai_base_of("https://api.z.ai/api/anthropic/"), "https://api.z.ai/api/coding/paas/v4");
+    }
 
     #[test]
     fn team_seat_status_explains_why_the_team_key_cannot_be_used() {

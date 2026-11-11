@@ -92,7 +92,7 @@
 - [ ] 3.1 Claude 订阅：工具调用闭环、流式、图片（真实账号验收归鼠鼠）
 - [ ] 3.2 Gemini 订阅：流式与 Chat / Responses 转换
 - [x] 3.3 Codex 的 Responses → Chat 翻译（`gateway/responses_chat.rs`：请求含历史调用、图片、自由格式工具包装与拆回；回复含非流式与流式事件、推理摘要与用量）；OpenAI 官方 / Azure 以外的 OpenAI 协议来源自动走翻译；顺带让 Claude Code 也能用只有 Chat 的第三方来源（复用 Anthropic ↔ Chat 翻译）。真实 Codex 客户端未走过
-- [ ] 3.4 ZCode 协议转换（非 Anthropic 入口）
+- [x] 3.4 ZCode 协议转换（非 Anthropic 入口）：Chat / Responses 调用方走 Coding Plan 的 OpenAI 兼容端点（`/api/coding/paas/v4`，同一把 Key），Responses 经 `responses_chat` 翻译；Start Plan 仍只服务 Anthropic。真实账号未验收（当前无额度）
 - [ ] 3.5 Trae：Max 派生模型、GLM / DSML 文本工具模板、选路评分（名称多数票、misnamed）
 - [ ] 3.6 WorkBuddy：systemAsUser 重试、非流式适配
 - [ ] 3.7 中间件 `onEvent` 流式钩子；隐私脱敏 Insights 对照页、豁免清单、警告 / 拦截 / 脱敏三档、首次脱敏通知、与交接共用引擎
