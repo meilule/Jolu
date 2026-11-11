@@ -2586,6 +2586,12 @@ fn gateway_client_key_concurrency_set(app: tauri::AppHandle, name: String, cap: 
     crate::gateway::access::client_key_set_concurrency(&conn, &name, cap)
 }
 
+/// 接线前的提醒（只读）：比如 Claude Code 同时设了顶层 model 与 env.ANTHROPIC_MODEL。
+#[tauri::command]
+fn gateway_wiring_preflight(agent: String) -> Vec<String> {
+    crate::gateway::wiring::preflight_notices(&agent)
+}
+
 /// 接线记录里实际写入的模型配置（Claude Code 的主模型、子代理、档位），给接线弹窗回填。
 #[derive(serde::Serialize)]
 struct WiringAppliedView {
@@ -4349,6 +4355,7 @@ pub fn run() {
             library_remove,
             library_list,
             gateway_wiring_applied,
+            gateway_wiring_preflight,
             gateway_client_key_concurrency_set,
             search_vendors,
             search_apis_set,

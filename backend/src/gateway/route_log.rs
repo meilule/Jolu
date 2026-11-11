@@ -30,6 +30,8 @@ pub struct RouteLogEntry {
     pub client_key: Option<String>,
     /// 同一次网关请求的编号：分组成员失败转移时，各次尝试的行共享它（进程内递增，重启后从头计）
     pub request_id: Option<i64>,
+    /// 模型 id 怎么解析到来源的：`bare` = 请求用的是不带来源前缀的裸名（目录或默认来源兜底）
+    pub resolved_from: Option<String>,
 }
 
 pub struct NewEntry<'a> {
@@ -47,13 +49,15 @@ pub struct NewEntry<'a> {
     pub client_key: Option<&'a str>,
     /// 同一次网关请求的编号（见 [`RouteLogEntry::request_id`]）
     pub request_id: Option<i64>,
+    /// 见 [`RouteLogEntry::resolved_from`]
+    pub resolved_from: Option<&'a str>,
 }
 
 pub fn record(conn: &Connection, entry: NewEntry<'_>) {
     let _ = conn.execute(
         "INSERT INTO gateway_route_log(ts, agent, requested_model, source, upstream_model, status_code, result, duration_ms,
-                                       connection_id, session_platform, session_id, client_key, request_id)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                                       connection_id, session_platform, session_id, client_key, request_id, resolved_from)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             chrono::Local::now().timestamp_millis(),
             entry.agent,
@@ -68,6 +72,7 @@ pub fn record(conn: &Connection, entry: NewEntry<'_>) {
             entry.session_id,
             entry.client_key,
             entry.request_id,
+            entry.resolved_from,
         ],
     );
     // 只保留最近 1000 行；每 50 次写清理一次，避免每条请求都做一次 NOT IN 子查询。
@@ -82,7 +87,7 @@ pub fn record(conn: &Connection, entry: NewEntry<'_>) {
 }
 
 const COLUMNS: &str = "id, ts, agent, requested_model, source, upstream_model, status_code, result, duration_ms,
-                       connection_id, session_platform, session_id, client_key, request_id";
+                       connection_id, session_platform, session_id, client_key, request_id, resolved_from";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RouteLogEntry> {
     Ok(RouteLogEntry {
@@ -100,6 +105,7 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RouteLogEntry> {
         session_id: r.get(11)?,
         client_key: r.get(12)?,
         request_id: r.get(13)?,
+        resolved_from: r.get(14)?,
     })
 }
 
@@ -234,7 +240,7 @@ mod tests {
     fn entry(result: &str) -> NewEntry<'_> {
         NewEntry {
             agent: None, requested_model: "a/b", source: None, upstream_model: None, status_code: None, result,
-            duration_ms: None, connection_id: None, session_platform: None, session_id: None, client_key: None, request_id: None }
+            duration_ms: None, connection_id: None, session_platform: None, session_id: None, client_key: None, request_id: None, resolved_from: None }
     }
 
     fn db() -> Connection {
@@ -244,8 +250,8 @@ mod tests {
     #[test]
     fn recent_is_newest_first_and_keeps_metadata() {
         let conn = db();
-        record(&conn, NewEntry { agent: Some("codex"), requested_model: "kimi/kimi-k2", source: Some("kimi"), upstream_model: Some("kimi-k2"), status_code: Some(200), result: "ok", duration_ms: Some(42), connection_id: Some("c1"), session_platform: Some("codex"), session_id: Some("s1"), client_key: None, request_id: None });
-        record(&conn, NewEntry { agent: None, requested_model: "nope/m", source: None, upstream_model: None, status_code: Some(404), result: "rejected", duration_ms: None, connection_id: None, session_platform: None, session_id: None, client_key: None, request_id: None });
+        record(&conn, NewEntry { agent: Some("codex"), requested_model: "kimi/kimi-k2", source: Some("kimi"), upstream_model: Some("kimi-k2"), status_code: Some(200), result: "ok", duration_ms: Some(42), connection_id: Some("c1"), session_platform: Some("codex"), session_id: Some("s1"), client_key: None, request_id: None, resolved_from: None });
+        record(&conn, NewEntry { agent: None, requested_model: "nope/m", source: None, upstream_model: None, status_code: Some(404), result: "rejected", duration_ms: None, connection_id: None, session_platform: None, session_id: None, client_key: None, request_id: None, resolved_from: None });
         let rows = recent(&conn, 10).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].result, "rejected");
@@ -351,7 +357,7 @@ mod tests {
         let link = |model: &'static str, conn_id: &'static str, session: &'static str| NewEntry {
             agent: Some("codex"), requested_model: model, source: Some("kimi"), upstream_model: None, status_code: Some(200),
             result: "ok", duration_ms: None, connection_id: Some(conn_id), session_platform: Some("codex"), session_id: Some(session),
-            client_key: None, request_id: None };
+            client_key: None, request_id: None, resolved_from: None };
         record(&conn, link("kimi/a", "c1", "s1"));
         record(&conn, link("kimi/b", "c1", "s1"));
         record(&conn, link("kimi/a", "c2", "s1"));

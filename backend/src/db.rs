@@ -346,6 +346,8 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN client_key TEXT", []);
     // 同一次请求的多次尝试（分组成员转移）共享 request_id，界面据此标「第 N 次尝试」
     let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN request_id INTEGER", []);
+    // 裸名解析的请求标 bare（路由歧义时排查用，magpie resolved_from 同款）
+    let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN resolved_from TEXT", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN activity_state TEXT NOT NULL DEFAULT 'done'", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN activity_updated_ms INTEGER", []);
     let _ = conn.execute(

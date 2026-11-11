@@ -253,7 +253,7 @@ export function GatewayView() {
     "档位已写入 Claude Code",
   )
 
-  const wire = (agent: string) => {
+  const wire = async (agent: string) => {
     if (agent === "codex") return setDialog({ kind: "codex" })
     if (agent === "gemini") return setDialog({ kind: "gemini" })
     /*
@@ -269,7 +269,10 @@ export function GatewayView() {
         : "将更新这个工具的本机配置，使其通过 Jolu 统一网关调用模型。原连接配置会被保留，断开时恢复。"
       : "将更新这个工具的本机配置，使其通过 Jolu 统一网关调用模型。原连接配置会被保留，断开时恢复。"
     const subagent = agent === "claude-code" ? claudeSubagent || null : null
-    setDialog({ kind: "confirm", title: `接入 ${agentLabel(agent)}？`, description: detail, label: "确认接入", work: () => run(() => gatewayApi.setWiring(agent, true, model, subagent, agent === "claude-code" ? claudeTiers() : undefined), `已接入 ${agentLabel(agent)}`, true) })
+    // 接线前的提醒（如顶层 model 与 env.ANTHROPIC_MODEL 同时设置）：读不到就不提醒，不挡接线
+    const notices = agent === "claude-code" && isTauri ? await gatewayApi.wiringPreflight(agent).catch(() => [] as string[]) : []
+    const description = notices.length ? [detail, ...notices].join("\n\n") : detail
+    setDialog({ kind: "confirm", title: `接入 ${agentLabel(agent)}？`, description, label: "确认接入", work: () => run(() => gatewayApi.setWiring(agent, true, model, subagent, agent === "claude-code" ? claudeTiers() : undefined), `已接入 ${agentLabel(agent)}`, true) })
   }
   const confirmUnwire = (agent: string) => setDialog({ kind: "confirm", title: `断开 ${agentLabel(agent)}？`, description: "将恢复这个工具接入前的连接配置，后续请求不再通过 Jolu 统一网关。", label: "确认断开", danger: true, work: () => run(() => gatewayApi.setWiring(agent, false), `已断开 ${agentLabel(agent)}`, true) })
   const profileApply = (name: string) => setDialog({ kind: "confirm", title: `应用 Profile「${name}」？`, description: "将把这套配置里各工具的主模型重新写入当前已接线的工具；配置被外部改写的会跳过。", label: "应用", work: () => run(async () => { const result = await gatewayApi.profilesApply(name); await refresh(); return result.message }, name, true) })

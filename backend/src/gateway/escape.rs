@@ -243,7 +243,7 @@ pub fn wire_agents(
             }
             // 已经接线且文件仍是我们的值：幂等跳过，不重复快照。
             // 需要重新应用时沿用上一次保存的原值（A4：重新应用不重新快照）。
-            let (prior_snapshot, prior_model, prior_label, prior_subagent) = {
+            let (prior_snapshot, prior_model, prior_label, prior_values) = {
                 let state = app.state::<crate::Db>();
                 let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
                 match wiring_store::load(&conn, agent) {
@@ -262,10 +262,10 @@ pub fn wire_agents(
                         let applied = record.applied();
                         let model = applied.as_ref().and_then(|a| a.model.clone());
                         let label = applied.as_ref().and_then(|a| a.label.clone());
-                        let subagent = applied.as_ref().and_then(|a| a.subagent_model.clone());
-                        (record.original_json, model, label, subagent)
+                        let written = applied.as_ref().map(crate::gateway::wiring_store::Applied::written_values).unwrap_or_default();
+                        (record.original_json, model, label, written)
                     }
-                    None => (None, None, None, None),
+                    None => (None, None, None, Vec::new()),
                 }
             };
             // 先读原值、算好要写的值（快照已过滤所有网关值），写 pending 后再落盘
@@ -302,9 +302,14 @@ pub fn wire_agents(
                 prior_model.as_deref(),
                 prior_label.as_deref(),
                 subagent_model,
-                prior_subagent.as_deref(),
+                &prior_values,
                 tiers,
                 &tier_about,
+                &|token: &str| {
+                    let state = app.state::<crate::Db>();
+                    let Ok(conn) = state.0.lock() else { return false };
+                    crate::gateway::access::is_client_key(&conn, token)
+                },
                 |snapshot, applied| {
                     let state = app.state::<crate::Db>();
                     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;

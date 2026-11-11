@@ -113,6 +113,8 @@ export interface RouteLogDto {
   session_id?: string | null
   /** 同一次网关请求的编号：分组成员转移时各次尝试共享它（进程内递增，重启后从头计；旧行为 null） */
   request_id?: number | null
+  /** `bare`：请求用的是不带来源前缀的裸名（目录第一个来源或默认来源兜底） */
+  resolved_from?: string | null
 }
 
 /** 路由流水的一页（与后端 `RouteLogPage` 一致）。 */
@@ -300,6 +302,8 @@ export const gatewayApi = {
   /** 接线记录里实际写入的主模型 / 子代理 / 档位（只对已接线的工具有值），给接线弹窗回填 */
   wiringApplied: (agent: string) =>
     invoke<{ model: string | null; subagent_model: string | null; tiers: TierModels | null } | null>("gateway_wiring_applied", { agent }),
+  /** 接线前的提醒（只读），如 Claude Code 同时设了顶层 model 与 env.ANTHROPIC_MODEL */
+  wiringPreflight: (agent: string) => invoke<string[]>("gateway_wiring_preflight", { agent }),
   /** 接受漂移：只清接线记录，不改用户的配置文件 */
   acceptWiring: (agent: string) => invoke<void>("gateway_wiring_accept", { agent }),
   /** 逃生门：还原全部接线并停网关 */

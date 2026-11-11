@@ -406,6 +406,8 @@ pub(crate) fn record_route(
             session_id: meta.session_id(),
             client_key: meta.client_key.as_deref(),
             request_id: Some(request_id as i64),
+            // 不带来源前缀、也不是分组的模型 id 走的是裸名解析（目录里第一个暴露它的来源 / 默认来源）
+            resolved_from: (!meta.requested_model.contains('/')).then_some("bare"),
         },
     );
 }

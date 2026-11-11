@@ -147,6 +147,19 @@ impl TierModels {
     }
 }
 
+impl Applied {
+    /// 上次接线写进配置的模型类值（子代理、各档自选、Auto 判别）：重新快照与还原时
+    /// 据此认出「这是 Jolu 写的」，不能当用户原值收进快照、断开时再写回去。
+    pub fn written_values(&self) -> Vec<String> {
+        let mut values: Vec<String> = self.subagent_model.iter().cloned().collect();
+        if let Some(tiers) = &self.tiers {
+            values.extend([&tiers.opus, &tiers.sonnet, &tiers.haiku, &tiers.fable, &tiers.auto_mode].into_iter().flatten().cloned());
+        }
+        values.retain(|v| !v.trim().is_empty());
+        values
+    }
+}
+
 pub fn load(conn: &Connection, agent: &str) -> Option<WiringRecord> {
     conn.query_row(
         "SELECT agent_id, instance_id, owner, state, original_json, applied_json, token, wired_ms

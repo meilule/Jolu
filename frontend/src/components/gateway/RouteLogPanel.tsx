@@ -126,7 +126,10 @@ function RouteRow({ row, connection, attempt }: { row: RouteLogDto; connection: 
     <div className={cn(COLUMNS, "h-9 items-center border-t border-jolu-table-divider px-4")}>
       <span className="tabular-nums text-[10px] text-jolu-muted">{new Date(row.ts).toLocaleTimeString("zh-CN", { hour12: false })}</span>
       <span className="truncate text-[10.5px] text-jolu-text">{row.agent ? agentLabel(row.agent) : "—"}</span>
-      <span className="truncate text-[10px] text-jolu-muted" title={row.requested_model}>{row.requested_model}</span>
+      <span className="flex min-w-0 items-center gap-1" title={row.resolved_from === "bare" ? `${row.requested_model}（裸名：按模型目录第一个来源或默认来源解析）` : row.requested_model}>
+        <span className="truncate text-[10px] text-jolu-muted">{row.requested_model}</span>
+        {row.resolved_from === "bare" && <span className="shrink-0 rounded bg-jolu-track px-[5px] text-[8.5px] leading-3 text-jolu-muted">裸名</span>}
+      </span>
       <span className="flex min-w-0 items-center gap-1.5">
         <span className="truncate text-[10.5px] text-jolu-text">{name ? `${name}${model ? ` · ${model}` : ""}` : "—"}</span>
         {connection && <span className="shrink-0 rounded bg-jolu-track px-[5px] text-[8.5px] leading-3 text-jolu-muted">{routeTypeTag(connection.kind, connection.platformId)}</span>}

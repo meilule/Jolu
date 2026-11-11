@@ -344,6 +344,11 @@ fn client_key_usage(conn: &Connection, name: &str) -> Result<(Option<i64>, i64),
 }
 
 /// 严格模式下的命名 Key 匹配：逐把解密、常数时间比较，命中返回 Key 名。
+/// 这把 Key 是不是网关认的命名客户端 Key（接线时 keyHolds 用）。读不出来按「不是」处理。
+pub(crate) fn is_client_key(conn: &Connection, supplied: &str) -> bool {
+    client_store_init(conn).is_ok() && matches!(match_client_key(conn, supplied), Ok(Some(_)))
+}
+
 fn match_client_key(conn: &Connection, supplied: &str) -> Result<Option<String>, String> {
     client_store_init(conn)?;
     let mut stmt = conn
@@ -1036,7 +1041,7 @@ mod tests {
         super::super::route_log::record(&conn, super::super::route_log::NewEntry {
             agent: None, requested_model: "a/b", source: None, upstream_model: None, status_code: Some(200),
             result: "ok", duration_ms: None, connection_id: None, session_platform: None, session_id: None,
-            client_key: Some("quota"), request_id: None });
+            client_key: Some("quota"), request_id: None, resolved_from: None });
         let now = chrono::Local::now();
         let limited = check_client_key_limit_for(&conn, "quota", now, None, true).unwrap().unwrap();
         assert_eq!(limited.status, 429);
@@ -1087,7 +1092,7 @@ mod tests {
             connection_id: None,
             session_platform: None,
             session_id: None,
-            client_key: Some(client), request_id: None };
+            client_key: Some(client), request_id: None, resolved_from: None };
         // failed / rejected 与别的 Key 的请求都不计入当日额度
         super::super::route_log::record(&conn, row("ok", "quota"));
         super::super::route_log::record(&conn, row("failed", "quota"));
@@ -1167,7 +1172,7 @@ mod tests {
                     connection_id: None,
                     session_platform: None,
                     session_id: None,
-                    client_key: Some("lan-agent"), request_id: None },
+                    client_key: Some("lan-agent"), request_id: None, resolved_from: None },
             );
         }
         let refused = client

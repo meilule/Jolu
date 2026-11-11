@@ -58,7 +58,7 @@ export function ConfirmDialog({ title, description, confirmLabel, cancelLabel = 
           <button type="button" aria-label="关闭确认框" disabled={busy} onClick={dismiss} className="grid size-8 shrink-0 place-items-center rounded-lg text-jolu-muted outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-40"><X aria-hidden className="size-4" /></button>
         </div>
         <Dialog.Description className="flex items-start gap-2 rounded-lg bg-jolu-stage px-3 py-2.5 text-xs leading-relaxed text-jolu-muted">
-          <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0" /><span>{description}</span>
+          <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0" /><span className="whitespace-pre-line">{description}</span>
         </Dialog.Description>
         {children}
         {error && <p role="alert" className="rounded-lg bg-jolu-danger-soft px-3 py-2.5 text-xs leading-relaxed text-jolu-danger">{error}</p>}
