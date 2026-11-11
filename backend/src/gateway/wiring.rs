@@ -985,6 +985,7 @@ fn config_path(agent: &str) -> Option<PathBuf> {
 fn write_atomic(path: &Path, bytes: Vec<u8>) -> Result<(), String> {
     use std::io::Write;
     let temporary = path.with_extension("jolu-wiring.tmp");
+    let previous = crate::steady::read(path).ok();
     let write = || -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -998,7 +999,41 @@ fn write_atomic(path: &Path, bytes: Vec<u8>) -> Result<(), String> {
     write().map_err(|error| {
         let _ = std::fs::remove_file(&temporary);
         format!("写入 {} 失败：{error}", path.display())
-    })
+    })?;
+    // 2.10 写后校验：读回来要与写入的一致、且仍是合法的 JSON / TOML；不对就放回原内容并报错。
+    // 为什么：rename 成功不代表 agent 读到的是我们写的（同时有别的程序改写、杀毒软件拦截等），
+    // 写坏的配置会让工具整个起不来，必须当场发现
+    if let Err(reason) = verify_written(path, &bytes) {
+        match previous {
+            Some(previous) => {
+                let _ = std::fs::write(path, previous);
+            }
+            None => {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        return Err(format!("写入 {} 后校验失败，已放回原内容：{reason}", path.display()));
+    }
+    Ok(())
+}
+
+/// 读回刚写的文件：内容要一致，按扩展名重新解析一遍。
+fn verify_written(path: &Path, expected: &[u8]) -> Result<(), String> {
+    let actual = crate::steady::read(path).map_err(|error| format!("读回失败：{error}"))?;
+    if actual != expected {
+        return Err("读回的内容与写入的不一致（可能有别的程序同时改写）".into());
+    }
+    let text = String::from_utf8_lossy(&actual);
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("json") if !text.trim().is_empty() => {
+            serde_json::from_str::<serde_json::Value>(&text).map_err(|error| format!("不是有效 JSON：{error}"))?;
+        }
+        Some("toml") => {
+            text.parse::<toml_edit::DocumentMut>().map_err(|error| format!("不是有效 TOML：{error}"))?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// 写前备份到应用数据目录（沿用 cli_apply 的纪律：备份失败则不写）。
@@ -1917,6 +1952,23 @@ mod tests {
         assert!(wired["provider"].get("builtin:zai").is_some());
         let restored: serde_json::Value = serde_json::from_str(&zcode_config_restore(&wired.to_string()).unwrap()).unwrap();
         assert!(restored["provider"].get("jolu").is_none() && restored["provider"].get("builtin:zai").is_some());
+    }
+
+    #[test]
+    fn a_write_that_does_not_parse_is_rolled_back_to_the_previous_content() {
+        let dir = std::env::temp_dir().join(format!("jolu-write-verify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"keep":true}"#).unwrap();
+        let error = write_atomic(&path, b"{ broken".to_vec()).unwrap_err();
+        assert!(error.contains("校验失败") && error.contains("JSON"), "{error}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), r#"{"keep":true}"#, "放回原内容");
+        write_atomic(&path, br#"{"ok":1}"#.to_vec()).unwrap();
+        let toml = dir.join("config.toml");
+        assert!(write_atomic(&toml, b"a = [".to_vec()).unwrap_err().contains("TOML"));
+        assert!(!toml.exists(), "原来没有的文件写坏了就删掉");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

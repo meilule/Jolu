@@ -93,6 +93,34 @@ impl crate::proxy_config::ProxyPlatform {
 }
 
 /// 待关联队列长度（测试与诊断用）。
+
+/// 绑定监听端口（2.10 抽出来以便测试）。
+///
+/// - 观测模式不依赖固定端口：CLI 配置按实际端口写入，被占用时回退随机端口；观测模式永不共享，
+///   `bind_host` 在这条分支里恒为 127.0.0.1。
+/// - 中转模式的端口已经写进各 agent 的配置：悄悄换端口会让它们全部连不上，所以被占用时拒绝启动。
+pub(crate) async fn bind_listener(
+    bind_host: &'static str,
+    port: u16,
+    mode: crate::gateway::Mode,
+) -> Result<(tokio::net::TcpListener, u16), String> {
+    match tokio::net::TcpListener::bind((bind_host, port)).await {
+        Ok(listener) => Ok((listener, port)),
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse && mode == crate::gateway::Mode::Observe => {
+            let listener = tokio::net::TcpListener::bind((bind_host, 0))
+                .await
+                .map_err(|fallback| format!("端口 {port} 已被占用，且无法分配随机端口：{fallback}"))?;
+            let actual = listener.local_addr().map_err(|e| format!("读取监听端口失败：{e}"))?.port();
+            eprintln!("[代理] 端口 {port} 已被占用，改用 {actual}");
+            Ok((listener, actual))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => Err(format!(
+            "端口 {port} 已被占用；模型入口必须使用固定端口，请先释放该端口或换一个端口再接入工具"
+        )),
+        Err(error) => Err(format!("监听 {bind_host}:{port} 失败：{error}")),
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn pending_len() -> usize {
     PENDING.lock().map(|q| q.len()).unwrap_or(0)
@@ -872,26 +900,7 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
     // 同步上下文里绑定端口：占用等错误要直接反馈给设置页，不能吞进后台任务。
     // 端口被占用时自动改用系统分配的随机端口并落库——用户配置的端口只是"首选"，
     // 不能因为别的程序临时占用就整条链路不可用（CLI 接线写的是实际生效端口）。
-    let (listener, port) = tauri::async_runtime::block_on(async move {
-        match tokio::net::TcpListener::bind((bind_host, port)).await {
-            Ok(listener) => Ok((listener, port)),
-            // 观测模式不依赖固定端口：CLI 配置会按实际端口写入，可以回退随机端口。
-            // 观测模式永不共享，bind_host 在这条分支里恒为 127.0.0.1。
-            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse && mode == crate::gateway::Mode::Observe => {
-                let listener = tokio::net::TcpListener::bind((bind_host, 0)).await.map_err(|fallback| {
-                    format!("端口 {port} 已被占用，且无法分配随机端口：{fallback}")
-                })?;
-                let actual = listener.local_addr().map_err(|e| format!("读取监听端口失败：{e}"))?.port();
-                eprintln!("[代理] 端口 {port} 已被占用，改用 {actual}");
-                Ok((listener, actual))
-            }
-            // 中转模式的端口已经写进各 agent 的配置：悄悄换端口会让它们全部连不上。
-            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => Err(format!(
-                "端口 {port} 已被占用；模型入口必须使用固定端口，请先释放该端口或换一个端口再接入工具"
-            )),
-            Err(error) => Err(format!("监听 {bind_host}:{port} 失败：{error}")),
-        }
-    })?;
+    let (listener, port) = tauri::async_runtime::block_on(bind_listener(bind_host, port, mode))?;
     // 刻意不改写 settings.proxy_port：那是用户填写的偏好（"首选端口"），
     // 临时冲突不该永久改写它——改了下个版本默认值就跟着变了。
     // 实际生效端口由 ProxyStatus.port 如实上报，界面据此提示。
@@ -1240,6 +1249,17 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn relay_refuses_an_occupied_port_and_observe_falls_back_to_a_random_one() {
+        let taken = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = taken.local_addr().unwrap().port();
+        let error = super::bind_listener("127.0.0.1", port, crate::gateway::Mode::Relay).await.unwrap_err();
+        assert!(error.contains("已被占用") && error.contains("固定端口"), "{error}");
+        let (_listener, actual) = super::bind_listener("127.0.0.1", port, crate::gateway::Mode::Observe).await.unwrap();
+        assert_ne!(actual, port, "观测模式换随机端口继续");
+        drop(taken);
+    }
     use super::*;
 
     fn isolated_configs(test: &str, check: impl FnOnce(&std::path::Path)) {
