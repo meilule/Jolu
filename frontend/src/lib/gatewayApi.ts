@@ -68,6 +68,21 @@ export interface ClientKeySummaryDto {
   today_requests: number
   /** 同时请求数上限；null = 不限（超出的请求排队，不拒绝） */
   max_concurrency?: number | null
+  /** Token 与费用（美元）上限；null = 不限 */
+  budget?: KeyBudgetDto
+  /** 只能用的连接 id；null = 不限 */
+  accounts?: string[] | null
+  /** 今日 / 本周 / 本月已花：[Token, 美元] */
+  spend?: [number, number][]
+}
+
+export interface KeyBudgetDto {
+  tokens_per_day?: number | null
+  tokens_per_week?: number | null
+  tokens_per_month?: number | null
+  cost_per_day?: number | null
+  cost_per_week?: number | null
+  cost_per_month?: number | null
 }
 
 /** 路由分组成员（与后端 `GroupMember` 一致）：`paused_until_ms` 缺省 = 未暂停，保存时须原样带回。 */
@@ -261,6 +276,9 @@ export const gatewayApi = {
     }),
   /** 撤销客户端 Key：删除立即失效，历史流水归属保留。 */
   revokeClientKey: (name: string) => invoke<void>("gateway_client_key_revoke", { name }),
+  /** 命名 Key 的 Token / 费用上限与账号范围；字段留 null 即不限，账号范围 null 或空数组即不限 */
+  setClientKeyLimits: (name: string, budget: KeyBudgetDto, accounts: string[] | null) =>
+    invoke<void>("gateway_client_key_limits_set", { name, budget, accounts }),
   /** 命名 Key 的同时请求数上限：null = 不限，1–1000 */
   setClientKeyConcurrency: (name: string, cap: number | null) => invoke<void>("gateway_client_key_concurrency_set", { name, cap }),
 

@@ -1,15 +1,22 @@
-import { useState } from "react"
+import { Fragment, useState } from "react"
 import { Network, TriangleAlert } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { gatewayApi, type ClientKeySummaryDto, type IssuedClientKeyDto } from "@/lib/gatewayApi"
 import { useToast } from "@/components/ui/Toast"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { Button, Modal } from "./GatewayDialogs"
+import { useConnections } from "@/hooks/useConnections"
 import {
   EXPIRY_CHOICES,
   KEY_ONCE_NOTICE,
   TOKENS_LIMIT_NOTICE,
+  BUDGET_FIELDS,
+  budgetForm,
+  budgetFromForm,
+  budgetTags,
   constraintTags,
+  spendLines,
+  type BudgetForm,
   concurrencyOptions,
   expiresAtFrom,
   isExhausted,
@@ -41,6 +48,9 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
   run: (work: () => Promise<unknown>, successTitle?: string) => Promise<boolean>
 }) {
   const toast = useToast()
+  const { connections } = useConnections()
+  /** 正在编辑上限的 Key（待确认：无画板，行下展开的最小版） */
+  const [editing, setEditing] = useState<{ name: string; form: BudgetForm; accounts: string[]; error: string | null } | null>(null)
   const [rows, setRows] = useState<ClientKeySummaryDto[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -219,7 +229,8 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
               <span>名称</span><span>Key</span><span title="超出的请求按到达顺序排队，不拒绝">同时请求</span><span>每日上限</span><span>今日用量</span><span>最近使用</span><span />
             </div>
             {rows.map((row) => (
-              <div key={row.name}
+              <Fragment key={row.name}>
+              <div
                 className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1.2fr)_72px_88px_96px_88px_56px] items-center gap-2 border-t border-jolu-border px-2.5 py-1.5 text-[10px]">
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate text-jolu-text" title={row.name}>{row.name}</span>
@@ -228,6 +239,16 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
                       {constraintTags(row, Date.now()).map((tag) => (
                         <span key={tag.text} className={cn("text-[8.5px]", tag.danger ? "text-jolu-danger" : "text-jolu-muted")}>{tag.text}</span>
                       ))}
+                    </span>
+                  )}
+                  {budgetTags(row).length > 0 && (
+                    <span className="flex flex-wrap gap-1">
+                      {budgetTags(row).map((tag) => <span key={tag} className="text-[8.5px] text-jolu-muted">{tag}</span>)}
+                    </span>
+                  )}
+                  {spendLines(row).length > 0 && (
+                    <span className="truncate text-[8.5px] text-jolu-muted" title="按 Key 出账：Token 与按价目估算的费用（未收录价目的模型不计费用）">
+                      {spendLines(row).map((line) => `${line.label} ${line.tokens} · ${line.cost}`).join("　")}
                     </span>
                   )}
                 </span>
@@ -255,11 +276,72 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
                   {usageText(row)}
                 </span>
                 <span className="truncate text-jolu-muted">{lastUsedText(row.last_used_ms, Date.now())}</span>
-                <button type="button" disabled={busy} onClick={() => setRevoking(row.name)}
-                  className="justify-self-end text-[9px] text-jolu-danger outline-none hover:underline focus-visible:outline-2 focus-visible:outline-jolu-danger disabled:opacity-50">
-                  撤销
-                </button>
+                <span className="flex flex-col items-end gap-0.5 justify-self-end">
+                  <button type="button" disabled={busy} onClick={() => setEditing(editing?.name === row.name ? null : { name: row.name, form: budgetForm(row.budget), accounts: row.accounts ?? [], error: null })}
+                    className="text-[9px] text-jolu-on outline-none hover:underline focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-50">
+                    限额
+                  </button>
+                  <button type="button" disabled={busy} onClick={() => setRevoking(row.name)}
+                    className="text-[9px] text-jolu-danger outline-none hover:underline focus-visible:outline-2 focus-visible:outline-jolu-danger disabled:opacity-50">
+                    撤销
+                  </button>
+                </span>
               </div>
+              {editing?.name === row.name && (
+                <div className="flex flex-col gap-2 border-t border-jolu-border bg-jolu-side px-2.5 py-2 text-[9.5px]" data-limits-editor>
+                  <span className="text-jolu-muted">留空即不限。Token 上限请求前按估算预扣；费用上限按价目估算、已花达到后拒绝（未收录价目的模型不计入）。待确认：暂无设计稿。</span>
+                  <div className="grid grid-cols-3 gap-2">
+                    {BUDGET_FIELDS.map((field) => (
+                      <label key={field.key} className="flex flex-col gap-0.5">
+                        <span className="text-jolu-muted">{field.label}</span>
+                        <input
+                          aria-label={`${row.name} ${field.label}`}
+                          inputMode={field.money ? "decimal" : "numeric"}
+                          value={editing.form[field.key]}
+                          onChange={(event) => setEditing({ ...editing, form: { ...editing.form, [field.key]: event.target.value }, error: null })}
+                          className="h-7 rounded-md border border-jolu-border bg-jolu-bg px-2 text-[10px] text-jolu-text outline-none focus:border-jolu-accent"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <span className="text-jolu-muted">只能使用这些账号（都不勾 = 不限）</span>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1">
+                      {connections.map((connection) => (
+                        <label key={connection.id} className="flex items-center gap-1 text-jolu-text">
+                          <input
+                            type="checkbox"
+                            checked={editing.accounts.includes(connection.id)}
+                            onChange={(event) => setEditing({
+                              ...editing,
+                              accounts: event.target.checked ? [...editing.accounts, connection.id] : editing.accounts.filter((id) => id !== connection.id),
+                            })}
+                          />
+                          {connection.name}
+                        </label>
+                      ))}
+                      {connections.length === 0 && <span className="text-jolu-muted">还没有连接</span>}
+                    </div>
+                  </div>
+                  {editing.error && <span className="text-jolu-danger">{editing.error}</span>}
+                  <div className="flex items-center gap-2">
+                    <Button label="保存限额" primary disabled={busy} onClick={async () => {
+                      const parsed = budgetFromForm(editing.form)
+                      if (parsed.error !== undefined) { setEditing({ ...editing, error: parsed.error }); return }
+                      try {
+                        await gatewayApi.setClientKeyLimits(row.name, parsed.budget, editing.accounts.length ? editing.accounts : null)
+                        setEditing(null)
+                        toast.success("限额已保存", row.name)
+                        await load()
+                      } catch (reason) {
+                        setEditing({ ...editing, error: String(reason) })
+                      }
+                    }} />
+                    <Button label="取消" disabled={busy} onClick={() => setEditing(null)} />
+                  </div>
+                </div>
+              )}
+              </Fragment>
             ))}
           </div>
         )}

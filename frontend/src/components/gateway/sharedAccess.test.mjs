@@ -96,3 +96,18 @@ test("同时请求数下拉：常用值加上当前的非常用值，0 表示不
   assert.deepEqual(concurrencyOptions(null).map((o) => o.label), ["不限", "1 个", "2 个", "3 个", "5 个", "10 个"])
   assert.deepEqual(concurrencyOptions(7).map((o) => o.value), [0, 1, 2, 3, 5, 7, 10], "经 CLI 设的 7 也能显示")
 })
+
+test("按 Key 出账与上限表单：空串不限、非法值拒绝、标签只列设了的", async () => {
+  const { spendLines, budgetForm, budgetFromForm, budgetTags } = await import("./sharedAccess.ts")
+  assert.deepEqual(spendLines({ spend: [[1500, 0.004], [2_300_000, 1.2], [0, 0]] }).map((l) => `${l.label} ${l.tokens} ${l.cost}`),
+    ["今日 1.5K $0.0040", "本周 2.3M $1.20", "本月 0 $0"])
+  assert.deepEqual(spendLines({}), [], "旧版后端没有数据")
+  const form = budgetForm({ tokens_per_week: 50000, cost_per_month: 12.5 })
+  assert.equal(form.tokens_per_week, "50000")
+  assert.equal(form.cost_per_day, "")
+  assert.deepEqual(budgetFromForm({ ...form, cost_per_day: " 0.5 " }), { budget: { tokens_per_day: null, tokens_per_week: 50000, tokens_per_month: null, cost_per_day: 0.5, cost_per_week: null, cost_per_month: 12.5 } })
+  assert.match(budgetFromForm({ ...form, tokens_per_day: "1.5" }).error, /整数/)
+  assert.match(budgetFromForm({ ...form, cost_per_week: "-1" }).error, /正数/)
+  assert.deepEqual(budgetTags({ budget: { tokens_per_week: 50000, cost_per_month: 12.5 }, accounts: ["c1"] }), ["每周 Token 50K", "每月费用 $12.5", "限 1 个账号"])
+})
+

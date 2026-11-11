@@ -24,7 +24,7 @@ fn init(conn: &Connection) -> Result<(), String> {
         .map_err(|_| "无法准备网关密钥存储".into())
 }
 
-fn client_store_init(conn: &Connection) -> Result<(), String> {
+pub(crate) fn client_store_init(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS gateway_client_keys (
             name             TEXT PRIMARY KEY,
@@ -39,12 +39,20 @@ fn client_store_init(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|_| "无法准备网关客户端密钥存储".to_string())?;
     // 旧库补列：已存在时 ALTER 报错，忽略即可（幂等）
-    let migrations: [&str; 4] = [
+    let migrations: [&str; 10] = [
         "ALTER TABLE gateway_client_keys ADD COLUMN expires_ms INTEGER",
         "ALTER TABLE gateway_client_keys ADD COLUMN models_json TEXT",
         "ALTER TABLE gateway_client_keys ADD COLUMN read_only INTEGER NOT NULL DEFAULT 0",
         // 同时请求数上限（key_slots.rs）；NULL = 不限
         "ALTER TABLE gateway_client_keys ADD COLUMN max_concurrency INTEGER",
+        // 周 / 月 Token 上限与日 / 周 / 月费用上限（美元，budget.rs）；NULL = 不限
+        "ALTER TABLE gateway_client_keys ADD COLUMN tokens_per_week INTEGER",
+        "ALTER TABLE gateway_client_keys ADD COLUMN tokens_per_month INTEGER",
+        "ALTER TABLE gateway_client_keys ADD COLUMN cost_per_day REAL",
+        "ALTER TABLE gateway_client_keys ADD COLUMN cost_per_week REAL",
+        "ALTER TABLE gateway_client_keys ADD COLUMN cost_per_month REAL",
+        // 账号范围：只能用这些连接（JSON 数组，连接 id）；NULL = 不限
+        "ALTER TABLE gateway_client_keys ADD COLUMN accounts_json TEXT",
     ];
     for statement in migrations {
         let _ = conn.execute(statement, rusqlite::params![]);
@@ -168,6 +176,12 @@ pub struct ClientKeySummary {
     pub today_requests: i64,
     /// 同时请求数上限；None = 不限（`key_slots.rs`）
     pub max_concurrency: Option<i64>,
+    /// Token 与费用上限（日上限即 `tokens_per_day`，其余见 `budget::KeyBudget`）
+    pub budget: crate::gateway::budget::KeyBudget,
+    /// 只能用的连接 id；None = 不限
+    pub accounts: Option<Vec<String>>,
+    /// 今日 / 本周 / 本月已花（Token，美元）：按 Key 出账
+    pub spend: [(i64, f64); 3],
 }
 
 fn generate_client_key() -> Result<String, String> {
@@ -294,7 +308,15 @@ pub fn client_keys_list(conn: &Connection) -> Result<Vec<ClientKeySummary>, Stri
             .as_deref()
             .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
             .filter(|list| !list.is_empty());
+        let now = chrono::Local::now();
+        let spend = [crate::gateway::budget::Window::Day, crate::gateway::budget::Window::Week, crate::gateway::budget::Window::Month]
+            .map(|window| crate::gateway::budget::spent_in(conn, &name, window, now).unwrap_or((0, 0.0)));
+        let budget = crate::gateway::budget::budget_of(conn, &name).ok().flatten().unwrap_or_default();
+        let accounts = client_key_accounts(conn, &name);
         out.push(ClientKeySummary {
+            budget,
+            accounts,
+            spend,
             masked: format!("••••••••{}", &key[key.len() - 4..]),
             name,
             tokens_per_day,
@@ -309,6 +331,51 @@ pub fn client_keys_list(conn: &Connection) -> Result<Vec<ClientKeySummary>, Stri
         });
     }
     Ok(out)
+}
+
+/// 某把 Key 能用的连接 id（None = 不限或 Key 不存在）。
+pub fn client_key_accounts(conn: &Connection, name: &str) -> Option<Vec<String>> {
+    conn.query_row("SELECT accounts_json FROM gateway_client_keys WHERE name = ?1", [name], |row| row.get::<_, Option<String>>(0))
+        .ok()
+        .flatten()
+        .and_then(|text| serde_json::from_str::<Vec<String>>(&text).ok())
+        .filter(|list| !list.is_empty())
+}
+
+/// 设置 Token / 费用上限与账号范围。上限只能留空或填正数；账号范围空数组等于不限。
+pub fn client_key_set_limits(
+    conn: &Connection,
+    name: &str,
+    budget: &crate::gateway::budget::KeyBudget,
+    accounts: Option<Vec<String>>,
+) -> Result<(), String> {
+    client_store_init(conn)?;
+    for (label, value) in [("每日 Token", budget.tokens_per_day), ("每周 Token", budget.tokens_per_week), ("每月 Token", budget.tokens_per_month)] {
+        if value.is_some_and(|n| n <= 0) {
+            return Err(format!("{label}上限只能留空或填正整数"));
+        }
+    }
+    for (label, value) in [("每日费用", budget.cost_per_day), ("每周费用", budget.cost_per_week), ("每月费用", budget.cost_per_month)] {
+        if value.is_some_and(|n| !(n > 0.0) || !n.is_finite()) {
+            return Err(format!("{label}上限只能留空或填正数"));
+        }
+    }
+    let accounts = accounts
+        .map(|list| list.into_iter().map(|id| id.trim().to_string()).filter(|id| !id.is_empty()).collect::<Vec<_>>())
+        .filter(|list| !list.is_empty());
+    let accounts_json = accounts.as_ref().map(|list| serde_json::to_string(list)).transpose().map_err(|error| error.to_string())?;
+    let changed = conn
+        .execute(
+            "UPDATE gateway_client_keys SET tokens_per_day = ?2, tokens_per_week = ?3, tokens_per_month = ?4,
+                    cost_per_day = ?5, cost_per_week = ?6, cost_per_month = ?7, accounts_json = ?8 WHERE name = ?1",
+            rusqlite::params![name, budget.tokens_per_day, budget.tokens_per_week, budget.tokens_per_month,
+                budget.cost_per_day, budget.cost_per_week, budget.cost_per_month, accounts_json],
+        )
+        .map_err(|error| format!("保存上限失败：{error}"))?;
+    if changed == 0 {
+        return Err(format!("没有名为「{name}」的客户端 Key"));
+    }
+    Ok(())
 }
 
 /// 某把 Key 的同时请求数上限（None = 不限或 Key 不存在）。
@@ -1058,6 +1125,23 @@ mod tests {
         // 空白模型名被过滤掉；全空白的白名单等于没设（不限）
         let issued = client_key_issue(&conn, "blank-models", None, None, None, Some(vec!["  ".into(), "".into()]), false).unwrap();
         assert!(issued.models.is_none(), "全空白的白名单按未设处理");
+    }
+
+    #[test]
+    fn limits_and_account_scope_round_trip_and_bad_values_are_refused() {
+        let conn = migrated_conn();
+        client_key_issue(&conn, "desk", None, None, None, None, false).unwrap();
+        let budget = crate::gateway::budget::KeyBudget { tokens_per_week: Some(50_000), cost_per_month: Some(12.5), ..Default::default() };
+        client_key_set_limits(&conn, "desk", &budget, Some(vec!["c1".into(), " ".into()])).unwrap();
+        let row = client_keys_list(&conn).unwrap().into_iter().find(|k| k.name == "desk").unwrap();
+        assert_eq!(row.budget, budget);
+        assert_eq!(row.accounts, Some(vec!["c1".to_string()]), "空白 id 去掉");
+        assert_eq!(client_key_accounts(&conn, "desk"), Some(vec!["c1".to_string()]));
+        client_key_set_limits(&conn, "desk", &budget, Some(vec![])).unwrap();
+        assert_eq!(client_key_accounts(&conn, "desk"), None, "空范围等于不限");
+        let bad = crate::gateway::budget::KeyBudget { cost_per_day: Some(0.0), ..Default::default() };
+        assert!(client_key_set_limits(&conn, "desk", &bad, None).is_err());
+        assert!(client_key_set_limits(&conn, "ghost", &budget, None).unwrap_err().contains("ghost"));
     }
 
     #[test]

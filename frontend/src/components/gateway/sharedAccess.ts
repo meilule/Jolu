@@ -9,7 +9,7 @@
  * - `last_used_ms` 为 null 表示从未使用
  */
 
-import type { ClientKeySummaryDto } from "@/lib/gatewayApi"
+import type { ClientKeySummaryDto, KeyBudgetDto } from "@/lib/gatewayApi"
 
 /** 每日上限的展示文案：未设置时写「不限」，而不是 0。 */
 export function limitText(value: number | null | undefined): string {
@@ -118,3 +118,67 @@ export function concurrencyOptions(current: number | null | undefined): { value:
   if (typeof current === "number" && current > 0 && !values.includes(current)) values.push(current)
   return values.sort((a, b) => a - b).map((value) => ({ value, label: value === 0 ? "不限" : `${value} 个` }))
 }
+
+/** 按 Key 出账：今日 / 本周 / 本月的 Token 与费用。没有数据（旧版后端）时为空。 */
+export function spendLines(row: Pick<ClientKeySummaryDto, "spend">): { label: string; tokens: string; cost: string }[] {
+  const labels = ["今日", "本周", "本月"]
+  return (row.spend ?? []).slice(0, 3).map(([tokens, cost], index) => ({
+    label: labels[index],
+    tokens: compactTokens(tokens),
+    cost: cost > 0 ? `$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}` : "$0",
+  }))
+}
+
+function compactTokens(n: number): string {
+  const trim = (text: string) => (text.endsWith(".0") ? text.slice(0, -2) : text)
+  if (n >= 1_000_000) return `${trim((n / 1_000_000).toFixed(1))}M`
+  if (n >= 1_000) return `${trim((n / 1_000).toFixed(1))}K`
+  return String(n)
+}
+
+/** 上限编辑表单：六个数字框（空串 = 不限）+ 账号范围（勾选的连接 id） */
+export const BUDGET_FIELDS: readonly { key: keyof KeyBudgetDto; label: string; money: boolean }[] = [
+  { key: "tokens_per_day", label: "每日 Token", money: false },
+  { key: "tokens_per_week", label: "每周 Token", money: false },
+  { key: "tokens_per_month", label: "每月 Token", money: false },
+  { key: "cost_per_day", label: "每日费用（$）", money: true },
+  { key: "cost_per_week", label: "每周费用（$）", money: true },
+  { key: "cost_per_month", label: "每月费用（$）", money: true },
+]
+
+export type BudgetForm = Record<keyof KeyBudgetDto, string>
+
+export function budgetForm(budget: KeyBudgetDto | undefined): BudgetForm {
+  const out = {} as BudgetForm
+  for (const field of BUDGET_FIELDS) {
+    const value = budget?.[field.key]
+    out[field.key] = typeof value === "number" ? String(value) : ""
+  }
+  return out
+}
+
+/** 表单 → 提交值；有非法值时返回错误文案 */
+export function budgetFromForm(form: BudgetForm): { budget: KeyBudgetDto; error?: undefined } | { error: string; budget?: undefined } {
+  const budget: KeyBudgetDto = {}
+  for (const field of BUDGET_FIELDS) {
+    const text = form[field.key].trim()
+    if (!text) { budget[field.key] = null; continue }
+    const value = Number(text)
+    if (!Number.isFinite(value) || value <= 0) return { error: `${field.label}只能留空或填正数` }
+    if (!field.money && !Number.isInteger(value)) return { error: `${field.label}只能填整数` }
+    budget[field.key] = value
+  }
+  return { budget }
+}
+
+/** 列表里的上限说明：只列设了的（每日 Token 已在「每日上限」那一栏的口径之外，单独列出） */
+export function budgetTags(row: Pick<ClientKeySummaryDto, "budget" | "accounts">): string[] {
+  const tags: string[] = []
+  for (const field of BUDGET_FIELDS) {
+    const value = row.budget?.[field.key]
+    if (typeof value === "number") tags.push(field.money ? `${field.label.replace("（$）", "")} $${value}` : `${field.label} ${compactTokens(value)}`)
+  }
+  if (row.accounts && row.accounts.length > 0) tags.push(`限 ${row.accounts.length} 个账号`)
+  return tags
+}
+

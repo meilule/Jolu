@@ -525,10 +525,16 @@ pub(crate) async fn handle(
         Some(name) => crate::gateway::key_slots::acquire(name, cap).await,
         None => None,
     };
-    // 命名 Key 的每日 Token 预算（budget.rs）：先按估算预扣，响应结束按实际用量回冲
+    // 实际路由到的（平台，模型）：候选循环填，响应结束时计费用（budget.rs）
+    let routed: crate::gateway::budget::Routed = Default::default();
+    // 命名 Key 的账号范围：只能用这些连接
+    let allowed_accounts = client_key.as_deref().and_then(|name| {
+        deps.db.lock().ok().and_then(|conn| crate::gateway::access::client_key_accounts(&conn, name))
+    });
+    // 命名 Key 的 Token / 费用预算（budget.rs）：先按估算预扣，响应结束按实际用量回冲
     let reservation = match client_key.as_deref() {
         Some(name) => match deps.db.lock() {
-            Ok(conn) => match crate::gateway::budget::reserve(&conn, name, &body, chrono::Local::now()) {
+            Ok(conn) => match crate::gateway::budget::reserve(&conn, name, &body, chrono::Local::now(), routed.clone()) {
                 Ok(reservation) => reservation,
                 Err(refusal) => return refusal_response(&refusal),
             },
@@ -740,9 +746,28 @@ pub(crate) async fn handle(
             None => true,
         })
         .collect();
+    // 命名 Key 的账号范围（2.6）：范围外的候选去掉；一个都不剩时如实拒绝，不悄悄换别的来源
+    let candidates: Vec<(route::PoolEntry, String)> = match allowed_accounts.as_ref() {
+        Some(allowed) => {
+            let before: Vec<String> = candidates.iter().map(|(entry, _)| entry.slug.clone()).collect();
+            let kept: Vec<_> = candidates.into_iter().filter(|(entry, _)| allowed.contains(&entry.connection_id)).collect();
+            if kept.is_empty() {
+                return error_response(
+                    StatusCode::FORBIDDEN,
+                    &format!("这把客户端 Key 只能使用指定的账号，本次要用的来源（{}）不在范围内", before.join("、")),
+                );
+            }
+            kept
+        }
+        None => candidates,
+    };
     let total = candidates.len();
     for (index, (entry, upstream_model)) in candidates.into_iter().enumerate() {
         let last = index + 1 == total;
+        if let Ok(mut cell) = routed.lock() {
+            let priced_model = if upstream_model.is_empty() { route::split_model_id(&model).map(|(_, m)| m.to_string()).unwrap_or_else(|| model.clone()) } else { upstream_model.clone() };
+            *cell = Some((entry.platform.clone(), priced_model));
+        }
         if !route::source_is_current(&deps, &entry) {
             if last {
                 return error_response(StatusCode::SERVICE_UNAVAILABLE, "来源已关闭或配置已变化，请刷新后重试");

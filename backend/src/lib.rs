@@ -2586,6 +2586,19 @@ fn gateway_client_key_concurrency_set(app: tauri::AppHandle, name: String, cap: 
     crate::gateway::access::client_key_set_concurrency(&conn, &name, cap)
 }
 
+/// 命名客户端 Key 的 Token / 费用上限与账号范围（2.6）：上限留空即不限，账号范围为空即不限。
+#[tauri::command]
+fn gateway_client_key_limits_set(
+    app: tauri::AppHandle,
+    name: String,
+    budget: crate::gateway::budget::KeyBudget,
+    accounts: Option<Vec<String>>,
+) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    crate::gateway::access::client_key_set_limits(&conn, &name, &budget, accounts)
+}
+
 /// 接线前的提醒（只读）：比如 Claude Code 同时设了顶层 model 与 env.ANTHROPIC_MODEL。
 #[tauri::command]
 fn gateway_wiring_preflight(agent: String) -> Vec<String> {
@@ -4356,6 +4369,7 @@ pub fn run() {
             library_list,
             gateway_wiring_applied,
             gateway_wiring_preflight,
+            gateway_client_key_limits_set,
             gateway_client_key_concurrency_set,
             search_vendors,
             search_apis_set,
