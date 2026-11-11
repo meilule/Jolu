@@ -1,5 +1,6 @@
 import { Code, Hexagon } from "lucide-react"
 import { cn } from "@/lib/utils"
+import type { PlatformId } from "@/types"
 import type { ProviderId } from "@/lib/providerCatalog"
 import qoderLogo from "@/assets/platforms/qoder.svg"
 import zcodeLogo from "@/assets/platforms/zcode.png"
@@ -128,6 +129,17 @@ const COLOR_CLASS: Partial<Record<ProviderId, string>> = {
   codex: "text-logo-codex",
   gemini: "text-logo-gemini",
   grok: "text-logo-grok",
+  // 厂商预设：官方品牌色（Ollama / LM Studio 品牌本身就是黑白，继续跟随主题）
+  deepseek: "text-logo-deepseek",
+  kimi: "text-logo-kimi",
+  minimax: "text-logo-minimax",
+  qwen: "text-logo-qwen",
+  openrouter: "text-logo-openrouter",
+  groq: "text-logo-groq",
+  stepfun: "text-logo-stepfun",
+  together: "text-logo-together",
+  fireworks: "text-logo-fireworks",
+  siliconflow: "text-logo-siliconflow",
 }
 
 export interface PlatformLogoProps {
@@ -138,7 +150,19 @@ export interface PlatformLogoProps {
   className?: string
 }
 
-export function PlatformLogo({ platform, size = 16, className }: PlatformLogoProps) {
+/**
+ * 区域版本 id 共用平台的标识（同一产品分国内外两个条目，logo 只有一份）：
+ * ZCode 国内版 = ZCode、Qoder CN = Qoder、WorkBuddy AI = WorkBuddy、Trae CN = Trae。
+ */
+const PLATFORM_ALIASES: Partial<Record<ProviderId, PlatformId>> = {
+  "zcode-bigmodel": "zcode",
+  "qoder-cn": "qoder",
+  "workbuddy-ai": "workbuddy",
+  "trae-cn": "trae",
+}
+
+export function PlatformLogo({ platform: rawPlatform, size = 16, className }: PlatformLogoProps) {
+  const platform = PLATFORM_ALIASES[rawPlatform] ?? rawPlatform
   // 官方资产优先：Qoder / ZCode / WorkBuddy 用官网下载的图标文件
   const imageSrc = IMAGE_SOURCES[platform]
   if (imageSrc) {

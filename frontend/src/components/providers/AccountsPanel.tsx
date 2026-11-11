@@ -405,8 +405,10 @@ function AccountCard({ account, current, located, selecting = false, selected = 
   }
   const emptyReason=isApi && balance.state && balance.state.state!=="ok" ? balance.state.reason : quota.state && quota.state.state!=="ok" ? quota.state.reason : "供应商未返回可展示的额度或余额"
   const name = displayName(account, hidden)
+  // 高度交给 grid 默认 stretch，且不能写 min-h-0：min-h-0 + 额度区 flex-1/overflow-hidden
+  // 会让卡片固有高度不含额度区，行高塌陷后额度盒整块被裁（窄窗两列时额度盒消失，E1 实验证实）
   return (
-    <article role="listitem" data-account-card data-account-id={account.id} data-account-located={located ? "true" : undefined} className={cn("jolu-card flex h-full min-h-0 min-w-0 flex-col gap-1.5 rounded-xl border bg-jolu-cc-surface p-3", current ? "border-jolu-accent" : "border-jolu-border", located && "ring-2 ring-jolu-accent ring-inset")}>
+    <article role="listitem" data-account-card data-account-id={account.id} data-account-located={located ? "true" : undefined} className={cn("jolu-card flex min-w-0 flex-col gap-1.5 rounded-xl border bg-jolu-cc-surface p-3", current ? "border-jolu-accent" : "border-jolu-border", located && "ring-2 ring-jolu-accent ring-inset")}>
       <div className="flex h-8 shrink-0 items-center gap-2">
         {selecting && <input type="checkbox" aria-label={selectionLabel ?? "选择账号"} checked={selected} disabled={disabled} onChange={onToggle} className="size-4 shrink-0 cursor-pointer accent-jolu-accent disabled:cursor-default" />}
         <span className="grid size-6 shrink-0 place-items-center"><PlatformLogo platform={connectionLogoId(account)} size={22} /></span>

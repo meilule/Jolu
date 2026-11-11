@@ -100,6 +100,17 @@
   --logo-codex: #0d0d0d;
   --logo-gemini: #1a73e8;
   --logo-grok: #111111;
+  /* 厂商预设标识（官方品牌色，来源见 docs/verification 未列；Ollama / LM Studio 品牌即黑白，跟随主题） */
+  --logo-deepseek: #4d6bfe;
+  --logo-kimi: #0d0d0d;
+  --logo-minimax: #e73562;
+  --logo-qwen: #615ced;
+  --logo-openrouter: #94a3b8;
+  --logo-groq: #f55036;
+  --logo-stepfun: #005aff;
+  --logo-together: #6366f1;
+  --logo-fireworks: #5019c5;
+  --logo-siliconflow: #6e29f6;
   /* 刷新柔光：白底上白高光不可见，浅色主题用深色柔影。
      0.13 在白底上约是 255→222，可感知；再浅（试过 0.055）几乎看不出来。 */
   --refresh-shimmer: rgba(15, 15, 20, 0.13);
@@ -328,6 +339,17 @@
   --logo-codex: #f0f0f0;
   --logo-gemini: #7ca9f5;
   --logo-grok: #f0f0f0;
+  /* 厂商预设深色：只有 Kimi 翻浅（官方 K 是纯黑，深底看不见）；其余品牌色在深浅底都成立 */
+  --logo-deepseek: #4d6bfe;
+  --logo-kimi: #f0f0f0;
+  --logo-minimax: #e73562;
+  --logo-qwen: #615ced;
+  --logo-openrouter: #94a3b8;
+  --logo-groq: #f55036;
+  --logo-stepfun: #005aff;
+  --logo-together: #6366f1;
+  --logo-fireworks: #5019c5;
+  --logo-siliconflow: #6e29f6;
   /* 深色主题反过来：白色柔光。深底上同样的比例更显眼，取值略低于浅色 */
   --refresh-shimmer: rgba(255, 255, 255, 0.11);
 
@@ -376,6 +398,16 @@
   --color-logo-codex: var(--logo-codex);
   --color-logo-gemini: var(--logo-gemini);
   --color-logo-grok: var(--logo-grok);
+  --color-logo-deepseek: var(--logo-deepseek);
+  --color-logo-kimi: var(--logo-kimi);
+  --color-logo-minimax: var(--logo-minimax);
+  --color-logo-qwen: var(--logo-qwen);
+  --color-logo-openrouter: var(--logo-openrouter);
+  --color-logo-groq: var(--logo-groq);
+  --color-logo-stepfun: var(--logo-stepfun);
+  --color-logo-together: var(--logo-together);
+  --color-logo-fireworks: var(--logo-fireworks);
+  --color-logo-siliconflow: var(--logo-siliconflow);
 
   --color-jolu-cc-surface: var(--jolu-cc-surface);
   --color-jolu-cc-track: var(--jolu-cc-track);
