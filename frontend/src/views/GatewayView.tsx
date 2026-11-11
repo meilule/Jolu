@@ -81,7 +81,7 @@ export function GatewayView() {
   /** 局域网共享开关的当前值（来自 settings；只读展示，写入走 gateway_shared_lan_set） */
   const [sharedLan, setSharedLan] = useState(false)
   /** Profile（配置一键切换）列表；接线面板里保存 / 应用 */
-  const [profiles, setProfiles] = useState<{ name: string; agents: Record<string, string>; created_ms: number }[]>([])
+  const [profiles, setProfiles] = useState<import("@/lib/gatewayApi").ProfileDto[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [tick, setTick] = useState(0)
@@ -275,7 +275,12 @@ export function GatewayView() {
     setDialog({ kind: "confirm", title: `接入 ${agentLabel(agent)}？`, description, label: "确认接入", work: () => run(() => gatewayApi.setWiring(agent, true, model, subagent, agent === "claude-code" ? claudeTiers() : undefined), `已接入 ${agentLabel(agent)}`, true) })
   }
   const confirmUnwire = (agent: string) => setDialog({ kind: "confirm", title: `断开 ${agentLabel(agent)}？`, description: "将恢复这个工具接入前的连接配置，后续请求不再通过 Jolu 统一网关。", label: "确认断开", danger: true, work: () => run(() => gatewayApi.setWiring(agent, false), `已断开 ${agentLabel(agent)}`, true) })
-  const profileApply = (name: string) => setDialog({ kind: "confirm", title: `应用 Profile「${name}」？`, description: "将把这套配置里各工具的主模型重新写入当前已接线的工具；配置被外部改写的会跳过。", label: "应用", work: () => run(async () => { const result = await gatewayApi.profilesApply(name); await refresh(); return result.message }, name, true) })
+  // 切换前先说清哪些工具的配置已被外部改写（会被跳过），不在确认之后才发现（2.7）
+  const driftedText = () => {
+    const drifted = agents.filter((entry) => entry.drift && entry.drift !== "unreachable").map((entry) => agentLabel(entry.agent))
+    return drifted.length ? `\n\n注意：${drifted.join("、")} 的配置已被外部改写或接线未完成，这次会跳过它们。` : ""
+  }
+  const profileApply = (name: string) => setDialog({ kind: "confirm", title: `应用 Profile「${name}」？`, description: `将把这套配置里各工具的主模型、档位与子代理重新写入当前已接线的工具；保存了默认来源的会一并切换。${driftedText()}`, label: "应用", work: () => run(async () => { const result = await gatewayApi.profilesApply(name); await refresh(); return result.message }, name, true) })
   const profileSave = (name: string) => setDialog({ kind: "confirm", title: `保存 Profile「${name}」？`, description: "把当前所有已接线工具的主模型存成这套配置；之后可一键切回。", label: "保存", work: () => run(async () => { await gatewayApi.profilesSave(name); await refresh(); return "已保存" }, name, true) })
   const profileDelete = (name: string) => setDialog({ kind: "confirm", title: `删除 Profile「${name}」？`, description: "只删除这份快照，不影响工具当前配置。", label: "删除", danger: true, work: () => run(() => gatewayApi.profilesDelete(name), "已删除", true) })
   const confirmAccept = (agent: string) => setDialog({ kind: "confirm", title: `接受 ${agentLabel(agent)} 的现有配置？`, description: "将以工具当前的外部配置为准，结束 Jolu 对这份接线记录的管理。确认前请核对配置变动。", label: "接受现状", work: () => run(() => gatewayApi.acceptWiring(agent), "已接受现状", true) })

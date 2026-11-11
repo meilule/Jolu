@@ -32,6 +32,29 @@ export interface RoutingMember {
   model: string
   /** 临时暂停到这个时刻（毫秒）；缺省或 null = 未暂停。保存分组时必须原样带回，否则后端会清掉。 */
   paused_until_ms?: number | null
+  /** 「轮转」权重（每轮出现几次）；缺省按 1 */
+  weight?: number | null
+}
+
+/** 成员可固定的推理档位（写在模型名后：`模型:high`）；只认这些词，`qwen:7b` 里的冒号不算 */
+export const MEMBER_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const
+const EFFORT_WORDS = ["none", "minimal", ...MEMBER_EFFORTS]
+
+/** 成员模型拆成（基础模型，固定档位） */
+export function memberParts(model: string): { base: string; effort: string | null } {
+  const at = model.lastIndexOf(":")
+  if (at > 0 && EFFORT_WORDS.includes(model.slice(at + 1).toLowerCase())) return { base: model.slice(0, at), effort: model.slice(at + 1).toLowerCase() }
+  return { base: model, effort: null }
+}
+
+/** 设置某个成员的固定档位（null = 跟随请求） */
+export function setMemberEffort(members: RoutingMember[], member: RoutingMember, effort: string | null): RoutingMember[] {
+  return members.map((item) => (sameMember(item, member) ? { ...item, model: effort ? `${memberParts(item.model).base}:${effort}` : memberParts(item.model).base } : item))
+}
+
+/** 设置某个成员的轮转权重（null 或 1 = 默认） */
+export function setMemberWeight(members: RoutingMember[], member: RoutingMember, weight: number | null): RoutingMember[] {
+  return members.map((item) => (sameMember(item, member) ? { ...item, weight: weight && weight > 1 ? Math.min(Math.floor(weight), 100) : null } : item))
 }
 
 /**
@@ -79,7 +102,7 @@ export function selectableCatalog(models: CatalogEntry[]): CatalogEntry[] {
 
 /** 成员是否已勾选（按 slug + model 匹配）。 */
 export function hasRoutingMember(members: RoutingMember[], member: RoutingMember): boolean {
-  return members.some((item) => item.slug === member.slug && item.model === member.model)
+  return members.some((item) => sameMember(item, member))
 }
 
 /** 暂停时长选项（分钟）：到期自动恢复，与后端 `GroupMember::is_paused` 一致。 */
@@ -90,7 +113,10 @@ export const PAUSE_CHOICES: readonly { minutes: number; text: string }[] = [
   { minutes: 1440, text: "24 小时" },
 ]
 
-const sameMember = (a: RoutingMember, b: RoutingMember) => a.slug === b.slug && a.model === b.model
+/** 同一成员：来源相同、基础模型相同（固定档位不影响身份——目录里只有基础模型） */
+function sameMember(a: RoutingMember, b: RoutingMember): boolean {
+  return a.slug === b.slug && memberParts(a.model).base === memberParts(b.model).base
+}
 
 /** 设置 / 清除某个成员的暂停到期时间（null = 恢复）；其他成员原样保留。 */
 export function pauseMember(members: RoutingMember[], member: RoutingMember, untilMs: number | null): RoutingMember[] {
@@ -112,14 +138,14 @@ export function pausedText(member: RoutingMember, now: number): string {
 /** 勾选 / 取消勾选一个成员：已存在则移除，否则追加到末尾。 */
 export function toggleRoutingMember(members: RoutingMember[], member: RoutingMember): RoutingMember[] {
   return hasRoutingMember(members, member)
-    ? members.filter((item) => !(item.slug === member.slug && item.model === member.model))
+    ? members.filter((item) => !sameMember(item, member))
     : [...members, member]
 }
 
 /** 成员里不在可选目录中的条目（目录刷新后可能已下架；编辑时保留显示，可取消勾选移除）。 */
 export function offCatalogMembers(members: RoutingMember[], models: CatalogEntry[]): RoutingMember[] {
   const selectable = selectableCatalog(models)
-  return members.filter((member) => !selectable.some((item) => item.slug === member.slug && item.model === member.model))
+  return members.filter((member) => !selectable.some((item) => sameMember({ slug: item.slug, model: item.model }, member)))
 }
 
 /** 分组 id 校验：小写字母数字连字符、不以连字符开头；返回错误文案，合法或未填时为 null（未填由按钮禁用负责）。 */

@@ -9,6 +9,8 @@
 
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// 轮转游标（rotate 策略）：按分组 slug 记忆，进程内即可——重启归零无害，
 /// 只影响「从哪个成员开始」，不影响成员顺序本身。
@@ -43,6 +45,32 @@ pub(crate) struct GroupMember {
     /// 临时暂停到这个时刻（毫秒）；None = 未暂停。旧数据缺这个字段按未暂停处理。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused_until_ms: Option<i64>,
+    /// 「轮转」时的权重（每轮出现几次）；None / 0 按 1。其他策略不看它。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<u32>,
+}
+
+/// 成员失败后的休置时长：可转移错误（429 / 5xx 等）之后这个成员排到候选末尾一会儿，
+/// 别让下一个请求又先撞上它（magpie 成员 rest 的近似；账号级冷却另由 429 的 Retry-After 管）。
+const MEMBER_REST_MS: i64 = 60_000;
+
+static RESTED: std::sync::LazyLock<Mutex<HashMap<String, i64>>> = std::sync::LazyLock::new(Default::default);
+
+fn rest_key(group: &str, member: &GroupMember) -> String {
+    format!("{group}\0{}\0{}", member.slug, member.model)
+}
+
+/// 记一次成员失败：`group` 是分组 slug。
+pub(crate) fn rest_member(group: &str, slug: &str, model: &str, now_ms: i64) {
+    let key = format!("{group}\0{slug}\0{model}");
+    if let Ok(mut map) = RESTED.lock() {
+        map.retain(|_, until| *until > now_ms);
+        map.insert(key, now_ms + MEMBER_REST_MS);
+    }
+}
+
+fn is_rested(group: &str, member: &GroupMember, now_ms: i64) -> bool {
+    RESTED.lock().map(|map| map.get(&rest_key(group, member)).is_some_and(|until| *until > now_ms)).unwrap_or(false)
 }
 
 impl GroupMember {
@@ -257,10 +285,21 @@ pub(crate) fn ordered_members(
     }
     match group.strategy.as_str() {
         "rotate" => {
+            // 带权轮转：权重 w 的成员每轮出现 w 次（相邻），游标按总权重取模
             let counter = rotate_state.entry(group.slug.clone()).or_insert(0);
-            let offset = *counter as usize % members.len().max(1);
+            let weights: Vec<u64> = members.iter().map(|m| m.weight.filter(|w| *w > 0).unwrap_or(1) as u64).collect();
+            let total: u64 = weights.iter().sum::<u64>().max(1);
+            let mut position = *counter % total;
             *counter += 1;
-            members.rotate_left(offset);
+            let mut start = 0;
+            for (index, weight) in weights.iter().enumerate() {
+                if position < *weight {
+                    start = index;
+                    break;
+                }
+                position -= weight;
+            }
+            members.rotate_left(start);
         }
         "usage" => {
             members.sort_by_key(|m| usage_of(&m.slug));
@@ -285,6 +324,16 @@ pub(crate) fn ordered_members(
             }
         }
         _ => {}
+    }
+    // 刚失败过的成员（休置中）排到末尾，不剔除
+    let rested = members.iter().filter(|m| is_rested(&group.slug, m, now_ms)).count();
+    if rested > 0 {
+        members.sort_by_key(|m| is_rested(&group.slug, m, now_ms));
+        let text = format!("{rested} 个成员刚失败过，休置中，已排到候选末尾");
+        note = Some(match note {
+            Some(existing) => format!("{existing}；{text}"),
+            None => text,
+        });
     }
     // Cap hold：额度用满的成员降到末尾（stable sort 保序），不剔除
     let exhausted_count = members.iter().filter(|m| exhausted_of(&m.slug)).count();
@@ -359,7 +408,33 @@ mod tests {
     use super::*;
 
     fn member(slug: &str, model: &str) -> GroupMember {
-        GroupMember { slug: slug.into(), model: model.into(), paused_until_ms: None }
+        GroupMember { slug: slug.into(), model: model.into(), paused_until_ms: None, weight: None }
+    }
+
+    #[test]
+    fn weighted_rotation_gives_each_member_its_share_of_turns() {
+        let mut heavy = member("a", "m1");
+        heavy.weight = Some(3);
+        let group = RoutingGroup { id: "g".into(), slug: "weighted".into(), name: "带权".into(), strategy: "rotate".into(), members: vec![heavy, member("b", "m2")], created_ms: 0 };
+        let mut state = std::collections::HashMap::new();
+        let no_usage = |_: &str| 0;
+        let firsts: Vec<String> = (0..8)
+            .map(|_| ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None).0[0].slug.clone())
+            .collect();
+        assert_eq!(firsts, ["a", "a", "a", "b", "a", "a", "a", "b"], "a 每轮 3 次、b 1 次");
+    }
+
+    #[test]
+    fn a_member_that_just_failed_rests_at_the_back_then_returns() {
+        let group = RoutingGroup { id: "g".into(), slug: "rest-test".into(), name: "休置".into(), strategy: "order".into(), members: vec![member("a", "m1"), member("b", "m2")], created_ms: 0 };
+        let mut state = std::collections::HashMap::new();
+        let no_usage = |_: &str| 0;
+        rest_member("rest-test", "a", "m1", 1_000);
+        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 1_500, None);
+        assert_eq!(ordered[0].slug, "b");
+        assert!(note.unwrap().contains("休置"));
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 1_000 + MEMBER_REST_MS + 1, None);
+        assert_eq!(ordered[0].slug, "a", "休置到期回到原位");
     }
 
     fn no_resets(_: &str) -> Option<i64> {

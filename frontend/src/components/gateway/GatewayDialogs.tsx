@@ -97,7 +97,7 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, subag
   onTierDraft: (next: TierDraft) => void
   onApplyTiers: () => void
   /** Profile（配置一键切换）：保存当前全部接线的主模型，应用时逐个重放 */
-  profiles: { name: string; agents: Record<string, string>; created_ms: number }[]
+  profiles: import("@/lib/gatewayApi").ProfileDto[]
   onProfileApply: (name: string) => void
   onProfileSave: (name: string) => void
   onProfileDelete: (name: string) => void
@@ -162,8 +162,8 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, subag
           <div key={entry.agent} className="flex items-center gap-2 rounded-lg border border-jolu-border bg-jolu-bg px-2.5 py-2">
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="text-[10.5px] text-jolu-text">{agentLabel(entry.agent)}</span>
-              <span className={cn("truncate text-[8.5px]", entry.wired ? "text-jolu-on" : entry.drift ? "text-jolu-danger" : "text-jolu-muted")}>
-                {entry.wired ? "已接入" : entry.drift === "foreign" ? "已被另一个 Jolu 接管" : entry.drift === "removed" ? "配置里已移除" : entry.drift === "changed" ? "配置被改写" : entry.drift === "pending" ? "上次接线未完成" : entry.reason ?? "未接入"}
+              <span className={cn("truncate text-[8.5px]", entry.drift === "unreachable" ? "text-jolu-danger" : entry.wired ? "text-jolu-on" : entry.drift ? "text-jolu-danger" : "text-jolu-muted")}>
+                {entry.drift === "unreachable" ? "已接入，但网关没在运行：请求会失败" : entry.wired ? "已接入" : entry.drift === "foreign" ? "已被另一个 Jolu 接管" : entry.drift === "removed" ? "配置里已移除" : entry.drift === "changed" ? "配置被改写" : entry.drift === "pending" ? "上次接线未完成" : entry.reason ?? "未接入"}
               </span>
             </div>
             {entry.wired ? <Button label="断开" disabled={busy} onClick={() => onUnwire(entry.agent)} /> : entry.drift ? (<><Button label="重新应用" primary disabled={busy} onClick={() => onWire(entry.agent)} /><Button label="接受现状" disabled={busy} onClick={() => onAccept(entry.agent)} /></>) : (<Button label="接线" primary disabled={busy || (!entry.config_path && !!entry.reason)} onClick={() => onWire(entry.agent)} />)}
@@ -191,7 +191,11 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, subag
               profiles.map((profile) => (
                 <div key={profile.name} className="flex items-center gap-2 rounded-lg bg-jolu-bg px-2 py-1.5">
                   <span className="min-w-0 flex-1 truncate text-[10.5px] text-jolu-text">{profile.name}</span>
-                  <span className="shrink-0 text-[8.5px] text-jolu-muted">{Object.keys(profile.agents).length} 个工具</span>
+                  <span className="shrink-0 text-[8.5px] text-jolu-muted" title={profile.extras?.favorites?.length ? `常用：${profile.extras.favorites.join("、")}` : undefined}>
+                    {Object.keys(profile.agents).length} 个工具
+                    {profile.extras?.agents && Object.keys(profile.extras.agents).length > 0 ? " · 含档位" : ""}
+                    {profile.extras?.default_connection ? " · 含默认来源" : ""}
+                  </span>
                   <Button label="应用" primary disabled={busy} onClick={() => onProfileApply(profile.name)} />
                   <Button label="删除" disabled={busy} onClick={() => onProfileDelete(profile.name)} />
                 </div>

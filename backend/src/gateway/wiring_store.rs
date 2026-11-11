@@ -147,6 +147,31 @@ impl TierModels {
     }
 }
 
+/// 来源改 id（slug）后，接线里写过的 `旧id/模型` 都要换成 `新id/模型`，否则工具用旧 id 请求只会拿到 404。
+/// 返回（主模型，子代理，档位）的新值；没有任何一项用到旧 id 时返回 None（不用重写）。
+pub fn renamed_slug(applied: &Applied, old: &str, new: &str) -> Option<(Option<String>, Option<String>, Option<TierModels>)> {
+    let prefix = format!("{old}/");
+    let swap = |value: &Option<String>| -> (Option<String>, bool) {
+        match value {
+            Some(v) if v.starts_with(&prefix) => (Some(format!("{new}/{}", &v[prefix.len()..])), true),
+            other => (other.clone(), false),
+        }
+    };
+    let (model, a) = swap(&applied.model);
+    let (subagent, b) = swap(&applied.subagent_model);
+    let mut changed = a || b;
+    let tiers = applied.tiers.as_ref().map(|tiers| {
+        let mut out = tiers.clone();
+        for slot in [&mut out.opus, &mut out.sonnet, &mut out.haiku, &mut out.fable, &mut out.auto_mode] {
+            let (next, hit) = swap(slot);
+            changed |= hit;
+            *slot = next;
+        }
+        out
+    });
+    changed.then_some((model, subagent, tiers))
+}
+
 impl Applied {
     /// 上次接线写进配置的模型类值（子代理、各档自选、Auto 判别）：重新快照与还原时
     /// 据此认出「这是 Jolu 写的」，不能当用户原值收进快照、断开时再写回去。
@@ -279,6 +304,24 @@ pub fn import_legacy(conn: &Connection, snapshots: &std::collections::BTreeMap<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renaming_a_source_rewrites_every_value_that_named_it() {
+        let applied = Applied {
+            model: Some("kimi/kimi-k2[1m]".into()),
+            subagent_model: Some("zcode/glm".into()),
+            tiers: Some(TierModels { opus: Some("kimi/kimi-k2:high".into()), sonnet: None, haiku: Some("kimi-old/x".into()), fable: None, auto_mode: Some("kimi/k".into()) }),
+            ..Default::default()
+        };
+        let (model, subagent, tiers) = renamed_slug(&applied, "kimi", "moonshot").expect("用到了旧 id");
+        assert_eq!(model.as_deref(), Some("moonshot/kimi-k2[1m]"));
+        assert_eq!(subagent.as_deref(), Some("zcode/glm"), "别的来源不动");
+        let tiers = tiers.unwrap();
+        assert_eq!(tiers.opus.as_deref(), Some("moonshot/kimi-k2:high"));
+        assert_eq!(tiers.haiku.as_deref(), Some("kimi-old/x"), "前缀要整段匹配，kimi-old 不是 kimi");
+        assert_eq!(tiers.auto_mode.as_deref(), Some("moonshot/k"));
+        assert!(renamed_slug(&applied, "nobody", "x").is_none());
+    }
 
     #[test]
     fn auto_mode_accepts_the_frontend_camel_case_name() {

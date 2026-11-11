@@ -98,3 +98,18 @@ test("按额度排的策略说明列表顺序只决定平局，并提示没有�
   assert.match(strategyOrderNote("order"), /按列表顺序/)
   assert.equal(strategyOrderNote("unknown"), "", "未知策略不编说明")
 })
+
+test("成员固定档位写在模型名后，身份按基础模型认；权重 1 以下按默认", async () => {
+  const { memberParts, setMemberEffort, setMemberWeight, hasRoutingMember, toggleRoutingMember } = await import("./routingGroups.ts")
+  assert.deepEqual(memberParts("glm-5.3:high"), { base: "glm-5.3", effort: "high" })
+  assert.deepEqual(memberParts("qwen:7b"), { base: "qwen:7b", effort: null })
+  const members = [{ slug: "z", model: "glm-5.3" }]
+  const fixed = setMemberEffort(members, { slug: "z", model: "glm-5.3" }, "high")
+  assert.equal(fixed[0].model, "glm-5.3:high")
+  assert.ok(hasRoutingMember(fixed, { slug: "z", model: "glm-5.3" }), "目录里的基础模型仍认得出")
+  assert.equal(setMemberEffort(fixed, { slug: "z", model: "glm-5.3" }, null)[0].model, "glm-5.3")
+  assert.equal(toggleRoutingMember(fixed, { slug: "z", model: "glm-5.3" }).length, 0, "取消勾选能去掉带档位的成员")
+  assert.equal(setMemberWeight(members, members[0], 3)[0].weight, 3)
+  assert.equal(setMemberWeight(members, members[0], 1)[0].weight, null)
+})
+

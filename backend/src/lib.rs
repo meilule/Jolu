@@ -2636,6 +2636,10 @@ fn gateway_wiring_set(
     if let Some(tiers) = tiers.as_ref() {
         tiers.validate()?;
     }
+    // 手动改接线：之后的请求不再算「来自 Profile」
+    if let Ok(conn) = app.state::<Db>().0.lock() {
+        crate::gateway::profiles::set_active(&conn, None);
+    }
     let result = gateway_wiring_set_inner(&app, agent, wired, model.as_deref(), subagent_model.as_deref(), tiers.as_ref());
     let _ = app.emit("gateway-wiring-changed", ());
     result
@@ -2741,8 +2745,27 @@ fn gateway_group_move(
 #[tauri::command]
 fn gateway_set_slug(app: tauri::AppHandle, connection_id: String, slug: String) -> Result<String, String> {
     let state = app.state::<Db>();
-    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-    connections::set_slug(&conn, &connection_id, &slug)
+    let (old, new, record) = {
+        let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+        let old: Option<String> = conn
+            .query_row("SELECT slug FROM connections WHERE id = ?1", [&connection_id], |r| r.get(0))
+            .ok()
+            .flatten();
+        let new = connections::set_slug(&conn, &connection_id, &slug)?;
+        (old, new, crate::gateway::wiring_store::load(&conn, "claude-code"))
+    };
+    // 2.7：Claude Code 的接线里写着 `旧id/模型` 时一并改成新 id 重写，否则改名后工具请求全是 404
+    if let (Some(old), Some(record)) = (old.filter(|o| *o != new), record.filter(|r| r.state == "wired")) {
+        if let Some((model, subagent, tiers)) = record.applied().and_then(|applied| crate::gateway::wiring_store::renamed_slug(&applied, &old, &new)) {
+            let model = model.map(|m| m.trim_end_matches("[1m]").trim_end_matches("[1M]").to_string());
+            if let Err(error) = crate::gateway::escape::wire_agents(&app, &["claude-code".to_string()], model.as_deref(), subagent.as_deref(), tiers.as_ref()) {
+                eprintln!("[接线] 来源改 id 后重写 Claude Code 接线失败：{error}");
+                return Err(format!("菜单 id 已改为「{new}」，但 Claude Code 的接线没能同步更新：{error}。请在接线面板重新接线"));
+            }
+            let _ = app.emit("gateway-wiring-changed", ());
+        }
+    }
+    Ok(new)
 }
 
 /// 模型清单：只读数据库缓存，不打上游。
@@ -2777,7 +2800,9 @@ fn gateway_profiles_save(app: tauri::AppHandle, name: String) -> Result<crate::g
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
     let agents = crate::gateway::profiles::capture_current(&conn)?;
-    crate::gateway::profiles::save(&conn, &name, &agents)
+    let default_connection = app.state::<Cfg>().0.get().gateway_default_connection;
+    let extras = crate::gateway::profiles::capture_extras(&conn, default_connection, chrono::Utc::now().timestamp_millis());
+    crate::gateway::profiles::save_with(&conn, &name, &agents, &extras)
 }
 
 /// 删除 Profile。
@@ -2811,14 +2836,16 @@ fn gateway_profiles_apply(app: tauri::AppHandle, name: String) -> Result<crate::
             skipped.push(agent.clone());
             continue;
         }
-        // tier_own：切主模型时保留该 agent 现有的档位自选，不重置为跟随
-        let keep_tiers = {
+        // Profile 存了档位与子代理就用它的；旧 Profile 没存时保留该 agent 现有的（tier_own）——
+        // 以前这里传空子代理，每次切换都会把用户的子代理模型删掉
+        let current = {
             let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-            crate::gateway::wiring_store::load(&conn, agent)
-                .and_then(|record| record.applied())
-                .and_then(|applied| applied.tiers)
+            crate::gateway::wiring_store::load(&conn, agent).and_then(|record| record.applied())
         };
-        match crate::gateway::escape::wire_agents(&app, std::slice::from_ref(agent), Some(model), None, keep_tiers.as_ref()) {
+        let saved = profile.extras.agents.get(agent);
+        let tiers = saved.and_then(|s| s.tiers.clone()).or_else(|| current.as_ref().and_then(|a| a.tiers.clone()));
+        let subagent = saved.map(|s| s.subagent_model.clone()).unwrap_or_else(|| current.as_ref().and_then(|a| a.subagent_model.clone()));
+        match crate::gateway::escape::wire_agents(&app, std::slice::from_ref(agent), Some(model), subagent.as_deref(), tiers.as_ref()) {
             Ok(_) => switched.push(format!("{agent} → {model}")),
             Err(error) => skipped.push(format!("{agent}（{error}）")),
         }
@@ -2828,6 +2855,14 @@ fn gateway_profiles_apply(app: tauri::AppHandle, name: String) -> Result<crate::
             "没有可切换的 agent：{}",
             if skipped.is_empty() { "Profile 里没有已接线的成员".into() } else { format!("跳过：{}", skipped.join("、")) }
         ));
+    }
+    // 默认来源：Profile 存了就切过去（裸名兜底跟着 Profile 走）
+    if let Some(default_connection) = profile.extras.default_connection.clone() {
+        let _ = app.state::<Cfg>().0.try_update(|settings| settings.gateway_default_connection = Some(default_connection));
+    }
+    {
+        let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+        crate::gateway::profiles::set_active(&conn, Some(&profile.name));
     }
     let mut message = format!("已切换 {}", switched.join("、"));
     if !skipped.is_empty() {
@@ -3846,6 +3881,8 @@ fn start_initialization(app: tauri::AppHandle, data_dir: std::path::PathBuf) {
 fn initialize_app(app: &tauri::AppHandle, data_dir: &std::path::Path) -> Result<(), String> {
     if app.try_state::<Db>().is_none() {
         let conn = db::open(&data_dir.join("usage.db")).map_err(|error| error.to_string())?;
+        // 路由流水标「来自 Profile」用：读回上次生效的 Profile
+        crate::gateway::profiles::load_active(&conn);
         app.manage(Db(Arc::new(Mutex::new(conn))));
     }
     if app.try_state::<DbRead>().is_none() {

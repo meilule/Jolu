@@ -157,7 +157,7 @@ mod tests {
         NewEntry {
             agent: Some("codex"), requested_model: "kimi/k2", source: Some("kimi"), upstream_model: Some("k2"),
             status_code: Some(200), result: "ok", duration_ms: Some(10), connection_id: Some(conn_id),
-            session_platform: Some(platform), session_id: Some(session), client_key: None, request_id: None, resolved_from: None }
+            session_platform: Some(platform), session_id: Some(session), client_key: None, request_id: None, resolved_from: None, profile: None }
     }
 
     #[test]

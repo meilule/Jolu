@@ -17,6 +17,7 @@ pub mod access;
 pub mod base64_input;
 pub mod budget;
 pub mod key_slots;
+pub mod member_effort;
 pub mod bridge;
 pub mod catalog;
 pub mod escape;

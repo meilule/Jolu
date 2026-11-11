@@ -408,6 +408,7 @@ pub(crate) fn record_route(
             request_id: Some(request_id as i64),
             // 不带来源前缀、也不是分组的模型 id 走的是裸名解析（目录里第一个暴露它的来源 / 默认来源）
             resolved_from: (!meta.requested_model.contains('/')).then_some("bare"),
+            profile: crate::gateway::profiles::active().as_deref(),
         },
     );
 }
@@ -776,6 +777,8 @@ pub(crate) async fn handle(
             continue;
         }
         let meta = linked(&meta, &entry);
+        // 分组成员可带固定 effort（`来源/模型:high`，2.7）：发上游用裸模型，effort 写进请求体
+        let (upstream_model, member_effort) = crate::gateway::member_effort::split(&upstream_model);
         // 订阅适配器从请求体读模型：分组成员的模型与请求不同时要重写 body 的 model 字段
         let try_body = if upstream_model.is_empty() || upstream_model == model {
             body.clone()
@@ -784,6 +787,10 @@ pub(crate) async fn handle(
                 Ok(bytes) => bytes,
                 Err(_) => body.clone(),
             }
+        };
+        let try_body = match member_effort.as_deref() {
+            Some(effort) => crate::gateway::member_effort::apply(protocol, &try_body, effort),
+            None => try_body,
         };
         // Claude Code 的联网服务端工具：上游不是真 Claude 时由网关代为执行（tool_loop.rs）
         let target_model = if upstream_model.is_empty() { model.as_str() } else { upstream_model.as_str() };
@@ -817,6 +824,14 @@ pub(crate) async fn handle(
         };
         if !is_retryable_status(response.status()) || last {
             return response;
+        }
+        // 分组成员失败：休置一会儿，下一个请求先试别的成员（2.7）
+        if let Some(group_slug) = model.strip_prefix("group/") {
+            let member_model = match member_effort.as_deref() {
+                Some(effort) => format!("{upstream_model}:{effort}"),
+                None => upstream_model.clone(),
+            };
+            crate::gateway::routing_groups::rest_member(group_slug, &entry.slug, &member_model, chrono::Utc::now().timestamp_millis());
         }
         eprintln!("[路由] 成员「{}」返回 {}，转移下一个候选", entry.slug, response.status());
     }

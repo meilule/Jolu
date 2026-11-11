@@ -8,6 +8,7 @@ import { Button } from "./GatewayDialogs"
 import {
   PAUSE_CHOICES, ROUTING_STRATEGIES, hasRoutingMember, isMemberPaused, offCatalogMembers, pauseMember, pausedText,
   routingMemberId, routingSlugError, selectableCatalog, strategyOrderNote, strategyText, toggleRoutingMember,
+  MEMBER_EFFORTS, memberParts, setMemberEffort, setMemberWeight,
   type RoutingGroupDto, type RoutingMember,
 } from "./routingGroups"
 
@@ -247,10 +248,28 @@ function MemberPicker({ catalog, members, disabled, onChange }: {
             onChange={() => onChange(toggleRoutingMember(members, row.member))} className="size-3.5 accent-[var(--jolu-accent)]" />
           <code className="min-w-0 flex-1 truncate font-mono text-jolu-text">{routingMemberId(row.member)}</code>
           {row.off && <span className="shrink-0 text-[9px] text-jolu-warn">不在目录</span>}
-          {hasRoutingMember(members, row.member) && (
-            <PauseControl member={members.find((item) => item.slug === row.member.slug && item.model === row.member.model) ?? row.member}
-              disabled={disabled} onChange={(until) => onChange(pauseMember(members, row.member, until))} />
-          )}
+          {hasRoutingMember(members, row.member) && (() => {
+            const current = members.find((item) => item.slug === row.member.slug && memberParts(item.model).base === memberParts(row.member.model).base) ?? row.member
+            return (
+              <>
+                {/* 待确认：固定档位与轮转权重在 Jolu.pen 没有画板 */}
+                <select value={memberParts(current.model).effort ?? ""} disabled={disabled} aria-label={`${routingMemberId(row.member)} 的固定档位`}
+                  title="固定推理档位：转发给这个成员时按此档位问上游（请求本来没要推理时不加）"
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={(event) => onChange(setMemberEffort(members, row.member, event.target.value || null))}
+                  className="h-5 rounded border border-jolu-border bg-jolu-bg px-1 text-[9px] text-jolu-muted outline-none focus:border-jolu-accent">
+                  <option value="">跟随请求</option>
+                  {MEMBER_EFFORTS.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+                </select>
+                <input type="number" min={1} max={100} value={current.weight ?? 1} disabled={disabled} aria-label={`${routingMemberId(row.member)} 的轮转权重`}
+                  title="「轮转」策略下每轮出现几次"
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={(event) => onChange(setMemberWeight(members, row.member, Number(event.target.value) || null))}
+                  className="h-5 w-10 rounded border border-jolu-border bg-jolu-bg px-1 text-[9px] text-jolu-muted outline-none focus:border-jolu-accent" />
+                <PauseControl member={current} disabled={disabled} onChange={(until) => onChange(pauseMember(members, row.member, until))} />
+              </>
+            )
+          })()}
         </label>
       ))}
       {rows.length === 0 && <p className="px-2.5 py-3 text-[10.5px] text-jolu-muted">模型目录为空：先在来源行「拉取」模型清单，再来勾选成员。</p>}

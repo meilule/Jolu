@@ -19,7 +19,7 @@ export interface WiringStatusDto {
   /** 接线记录阶段：idle / pending / wired；旧版后端不返回 */
   state?: "idle" | "pending" | "wired" | null
   /** 漂移：pending / removed / changed / foreign */
-  drift?: "pending" | "removed" | "changed" | "foreign" | null
+  drift?: "pending" | "removed" | "changed" | "foreign" | "unreachable" | null
   /** Codex 检测到的登录方式 */
   codex_mode?: "oauth" | "provider" | null
 }
@@ -90,6 +90,20 @@ export interface GroupMemberDto {
   slug: string
   model: string
   paused_until_ms?: number | null
+  /** 「轮转」权重；缺省按 1 */
+  weight?: number | null
+}
+
+/** Profile（与后端 `profiles::Profile` 一致）；extras 是 2.7 起保存的档位 / 子代理 / 默认来源 / 常用模型 */
+export interface ProfileDto {
+  name: string
+  agents: Record<string, string>
+  created_ms: number
+  extras?: {
+    agents?: Record<string, { subagent_model?: string | null; tiers?: TierModels | null }>
+    default_connection?: string | null
+    favorites?: string[]
+  }
 }
 
 /** 网关中间件（与后端 `gateway::middleware::Middleware` 一致）。 */
@@ -130,6 +144,8 @@ export interface RouteLogDto {
   request_id?: number | null
   /** `bare`：请求用的是不带来源前缀的裸名（目录第一个来源或默认来源兜底） */
   resolved_from?: string | null
+  /** 请求时生效的 Profile 名 */
+  profile?: string | null
 }
 
 /** 路由流水的一页（与后端 `RouteLogPage` 一致）。 */
@@ -289,7 +305,7 @@ export const gatewayApi = {
   deleteMiddleware: (name: string) => invoke<void>("gateway_middleware_delete", { name }),
 
   /** Profile（配置一键切换）：保存当前已接线 agent 的主模型快照，应用时逐个重放接线。 */
-  profilesList: () => invoke<{ name: string; agents: Record<string, string>; created_ms: number }[]>("gateway_profiles_list"),
+  profilesList: () => invoke<ProfileDto[]>("gateway_profiles_list"),
   profilesSave: (name: string) => invoke<{ name: string; agents: Record<string, string>; created_ms: number }>("gateway_profiles_save", { name }),
   profilesDelete: (name: string) => invoke<boolean>("gateway_profiles_delete", { name }),
   profilesApply: (name: string) =>

@@ -29,29 +29,78 @@ pub(crate) struct Profile {
     pub name: String,
     pub agents: AgentModels,
     pub created_ms: i64,
+    /// 档位、子代理、默认来源与常用模型（2.7）；旧 Profile 没有，按空处理
+    pub extras: ProfileExtras,
+}
+
+/// 一个 agent 除主模型外的接线决策。
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct AgentExtras {
+    #[serde(default)]
+    pub subagent_model: Option<String>,
+    #[serde(default)]
+    pub tiers: Option<crate::gateway::wiring_store::TierModels>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ProfileExtras {
+    #[serde(default)]
+    pub agents: BTreeMap<String, AgentExtras>,
+    /// 网关默认来源（裸名兜底）的连接 id
+    #[serde(default)]
+    pub default_connection: Option<String>,
+    /// 保存时最常用的几个模型 id（按近 7 天请求数），给切换时参考
+    #[serde(default)]
+    pub favorites: Vec<String>,
+}
+
+/// 当前生效的 Profile：应用 Profile 后设上，手动改接线时清掉；路由流水按它标「来自 Profile」。
+static ACTIVE: std::sync::LazyLock<std::sync::RwLock<Option<String>>> = std::sync::LazyLock::new(Default::default);
+
+pub(crate) fn set_active(conn: &Connection, name: Option<&str>) {
+    if let Ok(mut active) = ACTIVE.write() {
+        *active = name.map(str::to_string);
+    }
+    let _ = conn.execute_batch("CREATE TABLE IF NOT EXISTS profile_active (id INTEGER PRIMARY KEY CHECK (id = 1), name TEXT);");
+    let _ = conn.execute("INSERT INTO profile_active(id, name) VALUES(1, ?1) ON CONFLICT(id) DO UPDATE SET name = excluded.name", [name]);
+}
+
+/// 启动时从库里读回当前生效的 Profile。
+pub(crate) fn load_active(conn: &Connection) {
+    let name: Option<String> = conn.query_row("SELECT name FROM profile_active WHERE id = 1", [], |r| r.get(0)).ok().flatten();
+    if let Ok(mut active) = ACTIVE.write() {
+        *active = name;
+    }
+}
+
+pub(crate) fn active() -> Option<String> {
+    ACTIVE.read().ok().and_then(|active| active.clone())
 }
 
 fn table(conn: &Connection) -> rusqlite::Result<()> {
+    let _ = conn.execute("ALTER TABLE profiles ADD COLUMN extras_json TEXT", []);
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS profiles (
             name         TEXT PRIMARY KEY,
             agents_json  TEXT NOT NULL,
-            created_ms   INTEGER NOT NULL
+            created_ms   INTEGER NOT NULL,
+            extras_json  TEXT
         );",
     )
 }
 
 pub(crate) fn list(conn: &Connection) -> rusqlite::Result<Vec<Profile>> {
     table(conn)?;
-    let mut stmt = conn.prepare("SELECT name, agents_json, created_ms FROM profiles ORDER BY created_ms ASC")?;
+    let mut stmt = conn.prepare("SELECT name, agents_json, created_ms, extras_json FROM profiles ORDER BY created_ms ASC")?;
     let rows = stmt.query_map([], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, Option<String>>(3)?))
     })?;
     let mut out = Vec::new();
     for row in rows {
-        let (name, agents_json, created_ms) = row?;
+        let (name, agents_json, created_ms, extras_json) = row?;
+        let extras = extras_json.and_then(|text| serde_json::from_str::<ProfileExtras>(&text).ok()).unwrap_or_default();
         match serde_json::from_str::<AgentModels>(&agents_json) {
-            Ok(agents) => out.push(Profile { name, agents, created_ms }),
+            Ok(agents) => out.push(Profile { name, agents, created_ms, extras }),
             Err(error) => eprintln!("[Profile] 「{name}」的快照无效，已跳过：{error}"),
         }
     }
@@ -60,6 +109,11 @@ pub(crate) fn list(conn: &Connection) -> rusqlite::Result<Vec<Profile>> {
 
 /// 保存 / 覆盖一个 Profile。`agents` 里模型为空的条目被丢弃——Profile 存的是决策，不是空占位。
 pub(crate) fn save(conn: &Connection, name: &str, agents: &AgentModels) -> Result<Profile, String> {
+    save_with(conn, name, agents, &ProfileExtras::default())
+}
+
+/// 连同档位、子代理、默认来源与常用模型一起存。
+pub(crate) fn save_with(conn: &Connection, name: &str, agents: &AgentModels, extras: &ProfileExtras) -> Result<Profile, String> {
     let name = name.trim();
     if name.is_empty() || name.len() > 64 {
         return Err("Profile 名称不能为空且不超过 64 字符".into());
@@ -74,16 +128,17 @@ pub(crate) fn save(conn: &Connection, name: &str, agents: &AgentModels) -> Resul
     }
     table(conn).map_err(|error| error.to_string())?;
     let agents_json = serde_json::to_string(&agents).map_err(|error| format!("快照序列化失败：{error}"))?;
+    let extras_json = serde_json::to_string(extras).map_err(|error| format!("快照序列化失败：{error}"))?;
     conn.execute(
-        "INSERT INTO profiles(name, agents_json, created_ms) VALUES(?1,?2,?3)
-         ON CONFLICT(name) DO UPDATE SET agents_json = excluded.agents_json",
-        rusqlite::params![name, agents_json, chrono::Utc::now().timestamp_millis()],
+        "INSERT INTO profiles(name, agents_json, created_ms, extras_json) VALUES(?1,?2,?3,?4)
+         ON CONFLICT(name) DO UPDATE SET agents_json = excluded.agents_json, extras_json = excluded.extras_json",
+        rusqlite::params![name, agents_json, chrono::Utc::now().timestamp_millis(), extras_json],
     )
     .map_err(|error| error.to_string())?;
     let created_ms: i64 = conn
         .query_row("SELECT created_ms FROM profiles WHERE name = ?1", [name], |r| r.get(0))
         .map_err(|error| error.to_string())?;
-    Ok(Profile { name: name.into(), agents, created_ms })
+    Ok(Profile { name: name.into(), agents, created_ms, extras: extras.clone() })
 }
 
 pub(crate) fn delete(conn: &Connection, name: &str) -> Result<bool, String> {
@@ -97,25 +152,47 @@ pub(crate) fn delete(conn: &Connection, name: &str) -> Result<bool, String> {
 pub(crate) fn get(conn: &Connection, name: &str) -> Result<Option<Profile>, String> {
     table(conn).map_err(|error| error.to_string())?;
     conn.query_row(
-        "SELECT name, agents_json, created_ms FROM profiles WHERE name = ?1",
+        "SELECT name, agents_json, created_ms, extras_json FROM profiles WHERE name = ?1",
         [name],
         |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, i64>(2)?,
+                r.get::<_, Option<String>>(3)?,
             ))
         },
     )
     .optional()
     .map_err(|error| error.to_string())?
-    .map(|(name, agents_json, created_ms)| {
+    .map(|(name, agents_json, created_ms, extras_json)| {
         let display = name.clone();
+        let extras = extras_json.and_then(|text| serde_json::from_str::<ProfileExtras>(&text).ok()).unwrap_or_default();
         serde_json::from_str::<AgentModels>(&agents_json)
-            .map(|agents| Profile { name, agents, created_ms })
+            .map(|agents| Profile { name, agents, created_ms, extras })
             .map_err(|error| format!("Profile「{display}」的快照无效：{error}"))
     })
     .transpose()
+}
+
+/// 「保存当前」的附加部分：各已接线 agent 的子代理与档位、默认来源、近 7 天最常用的 5 个模型。
+pub(crate) fn capture_extras(conn: &Connection, default_connection: Option<String>, now_ms: i64) -> ProfileExtras {
+    let mut agents = BTreeMap::new();
+    for agent in crate::gateway::wiring::AGENTS {
+        let Some(applied) = crate::gateway::wiring_store::load(conn, agent).filter(|r| r.state == "wired").and_then(|r| r.applied()) else { continue };
+        let extras = AgentExtras { subagent_model: applied.subagent_model, tiers: applied.tiers };
+        if extras != AgentExtras::default() {
+            agents.insert(agent.to_string(), extras);
+        }
+    }
+    let favorites = conn
+        .prepare(
+            "SELECT requested_model FROM gateway_route_log WHERE ts >= ?1 AND result = 'ok'
+              GROUP BY requested_model ORDER BY COUNT(*) DESC, MAX(ts) DESC LIMIT 5",
+        )
+        .and_then(|mut stmt| stmt.query_map([now_ms - 7 * 24 * 3_600_000], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>())
+        .unwrap_or_default();
+    ProfileExtras { agents, default_connection, favorites }
 }
 
 /// 「保存当前」：从各 agent 的接线记录里收集已接线 agent 的主模型。
@@ -169,6 +246,32 @@ mod tests {
     }
 
     #[test]
+    fn extras_round_trip_and_old_profiles_read_as_empty() {
+        let conn = memory_db();
+        let agents: AgentModels = [("claude-code".to_string(), "zcode/glm".to_string())].into_iter().collect();
+        let mut extras = ProfileExtras { default_connection: Some("c1".into()), favorites: vec!["zcode/glm".into()], ..Default::default() };
+        extras.agents.insert("claude-code".into(), AgentExtras { subagent_model: Some("kimi/k2".into()), tiers: None });
+        save_with(&conn, "work", &agents, &extras).unwrap();
+        assert_eq!(get(&conn, "work").unwrap().unwrap().extras, extras);
+        conn.execute("UPDATE profiles SET extras_json = NULL WHERE name = 'work'", []).unwrap();
+        assert_eq!(get(&conn, "work").unwrap().unwrap().extras, ProfileExtras::default(), "旧 Profile 没有附加部分");
+    }
+
+    #[test]
+    fn capture_extras_keeps_frequent_models_of_the_last_week() {
+        let conn = memory_db();
+        conn.execute_batch(
+            "CREATE TABLE gateway_route_log (ts INTEGER, requested_model TEXT, result TEXT);
+             CREATE TABLE agent_wiring (agent_id TEXT, state TEXT, applied_json TEXT, instance_id TEXT, owner TEXT, original_json TEXT, token TEXT, wired_ms INTEGER);
+             INSERT INTO gateway_route_log VALUES (1000, 'a/x', 'ok'), (1001, 'a/x', 'ok'), (1002, 'b/y', 'ok'), (1003, 'c/z', 'failed');",
+        )
+        .unwrap();
+        let extras = capture_extras(&conn, Some("c9".into()), 2000);
+        assert_eq!(extras.favorites, vec!["a/x".to_string(), "b/y".to_string()], "按次数排，失败的不算");
+        assert_eq!(extras.default_connection.as_deref(), Some("c9"));
+    }
+
+    #[test]
     fn save_round_trip_and_overwrite() {
         let conn = memory_db();
         let mut agents = AgentModels::new();
@@ -215,7 +318,7 @@ mod tests {
         agents.insert("claude-code".into(), "kimi/kimi-k2.5".into());
         agents.insert("codex".into(), "kimi/kimi-k2.5".into());
         agents.insert("gemini".into(), "x/y".into());
-        let profile = Profile { name: "p".into(), agents, created_ms: 0 };
+        let profile = Profile { name: "p".into(), agents, created_ms: 0, extras: ProfileExtras::default() };
         let changes = diff(&current, &profile);
         // claude-code 有变化；codex 目标与当前相同 → 无需切换；gemini 未接线 → 不动
         assert_eq!(changes["claude-code"], Some("kimi/kimi-k2.5".into()));

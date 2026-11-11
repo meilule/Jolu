@@ -38,10 +38,22 @@ pub fn status(settings: &Settings, conn: &Connection) -> GatewayStatus {
             .iter()
             .map(|agent| {
                 let record = crate::gateway::wiring_store::load(conn, agent);
-                wiring::status_with(agent, settings.proxy_port, record.as_ref())
+                unreachable_when_stopped(settings, wiring::status_with(agent, settings.proxy_port, record.as_ref()))
             })
             .collect(),
     }
+}
+
+/// 工具已接到网关、但网关没在中转模式运行：配置看起来是对的，工具的请求却全部会失败。
+/// 单独标成漂移「网关不可达」，别让「已接入」掩盖它（2.7）。
+pub(crate) fn unreachable_when_stopped(settings: &Settings, mut status: wiring::WiringStatus) -> wiring::WiringStatus {
+    let (mode, _) = crate::gateway::mode_from(settings);
+    let running = settings.proxy_enabled && mode == crate::gateway::Mode::Relay;
+    if status.wired && !running {
+        status.drift = Some("unreachable".into());
+        status.reason = Some("统一网关没有在中转模式运行：这个工具的请求会全部失败。请开启网关，或断开接线恢复直连".into());
+    }
+    status
 }
 
 /// 读不到数据库时的降级快照：设置照给，接线一律按「未接线」报。
@@ -65,6 +77,20 @@ pub fn status_without_db(settings: &Settings) -> GatewayStatus {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn wired_tools_with_a_stopped_gateway_are_flagged_unreachable() {
+        let status = crate::gateway::wiring::WiringStatus {
+            agent: "claude-code".into(), wired: true, config_path: None, notice: None, reason: None,
+            state: Some("wired".into()), drift: None, codex_mode: None,
+        };
+        let mut settings = crate::settings::Settings::default();
+        settings.proxy_enabled = false;
+        let flagged = super::unreachable_when_stopped(&settings, status.clone());
+        assert_eq!(flagged.drift.as_deref(), Some("unreachable"));
+        let unwired = crate::gateway::wiring::WiringStatus { wired: false, ..status };
+        assert_eq!(super::unreachable_when_stopped(&settings, unwired.clone()), unwired, "没接线的不标");
+    }
     use super::*;
     use crate::settings::Settings;
 
