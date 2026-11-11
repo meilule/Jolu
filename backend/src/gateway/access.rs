@@ -39,10 +39,12 @@ fn client_store_init(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|_| "无法准备网关客户端密钥存储".to_string())?;
     // 旧库补列：已存在时 ALTER 报错，忽略即可（幂等）
-    let migrations: [&str; 3] = [
+    let migrations: [&str; 4] = [
         "ALTER TABLE gateway_client_keys ADD COLUMN expires_ms INTEGER",
         "ALTER TABLE gateway_client_keys ADD COLUMN models_json TEXT",
         "ALTER TABLE gateway_client_keys ADD COLUMN read_only INTEGER NOT NULL DEFAULT 0",
+        // 同时请求数上限（key_slots.rs）；NULL = 不限
+        "ALTER TABLE gateway_client_keys ADD COLUMN max_concurrency INTEGER",
     ];
     for statement in migrations {
         let _ = conn.execute(statement, rusqlite::params![]);
@@ -164,6 +166,8 @@ pub struct ClientKeySummary {
     pub last_used_ms: Option<i64>,
     /// 当日已计入限额的成功请求数（口径见 [`check_client_key_limit`]）
     pub today_requests: i64,
+    /// 同时请求数上限；None = 不限（`key_slots.rs`）
+    pub max_concurrency: Option<i64>,
 }
 
 fn generate_client_key() -> Result<String, String> {
@@ -263,7 +267,7 @@ fn decrypt_client_key(name: &str, protected: &str) -> Result<String, String> {
 pub fn client_keys_list(conn: &Connection) -> Result<Vec<ClientKeySummary>, String> {
     client_store_init(conn)?;
     let mut stmt = conn
-        .prepare("SELECT name, protected, tokens_per_day, requests_per_day, created_ms, expires_ms, models_json, read_only FROM gateway_client_keys ORDER BY created_ms, name")
+        .prepare("SELECT name, protected, tokens_per_day, requests_per_day, created_ms, expires_ms, models_json, read_only, max_concurrency FROM gateway_client_keys ORDER BY created_ms, name")
         .map_err(|_| "无法读取网关客户端密钥".to_string())?;
     let rows = stmt
         .query_map([], |row| {
@@ -276,12 +280,13 @@ pub fn client_keys_list(conn: &Connection) -> Result<Vec<ClientKeySummary>, Stri
                 row.get::<_, Option<i64>>(5)?,
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, i64>(7)?,
+                row.get::<_, Option<i64>>(8)?,
             ))
         })
         .map_err(|_| "无法读取网关客户端密钥".to_string())?;
     let mut out = Vec::new();
     for row in rows {
-        let (name, protected, tokens_per_day, requests_per_day, created_ms, expires_ms, models_json, read_only) =
+        let (name, protected, tokens_per_day, requests_per_day, created_ms, expires_ms, models_json, read_only, max_concurrency) =
             row.map_err(|_| "无法读取网关客户端密钥".to_string())?;
         let (last_used_ms, today_requests) = client_key_usage(conn, &name)?;
         let key = decrypt_client_key(&name, &protected)?;
@@ -300,9 +305,31 @@ pub fn client_keys_list(conn: &Connection) -> Result<Vec<ClientKeySummary>, Stri
             read_only: read_only != 0,
             last_used_ms,
             today_requests,
+            max_concurrency,
         });
     }
     Ok(out)
+}
+
+/// 某把 Key 的同时请求数上限（None = 不限或 Key 不存在）。
+pub fn client_key_concurrency(conn: &Connection, name: &str) -> Option<u32> {
+    conn.query_row("SELECT max_concurrency FROM gateway_client_keys WHERE name = ?1", [name], |row| row.get::<_, Option<i64>>(0))
+        .ok()
+        .flatten()
+        .and_then(|cap| crate::gateway::key_slots::validate(Some(cap)).ok().flatten())
+}
+
+/// 设置同时请求数上限：None = 不限，1–1000 有效。Key 不存在时报错。
+pub fn client_key_set_concurrency(conn: &Connection, name: &str, cap: Option<i64>) -> Result<(), String> {
+    client_store_init(conn)?;
+    let cap = crate::gateway::key_slots::validate(cap)?;
+    let changed = conn
+        .execute("UPDATE gateway_client_keys SET max_concurrency = ?2 WHERE name = ?1", rusqlite::params![name, cap])
+        .map_err(|error| format!("保存同时请求数失败：{error}"))?;
+    if changed == 0 {
+        return Err(format!("没有名为「{name}」的客户端 Key"));
+    }
+    Ok(())
 }
 
 /// 某 Key 的流水使用情况：最近使用时间与当日成功请求数（限额同一口径）。
@@ -1027,6 +1054,21 @@ mod tests {
         // 空白模型名被过滤掉；全空白的白名单等于没设（不限）
         let issued = client_key_issue(&conn, "blank-models", None, None, None, Some(vec!["  ".into(), "".into()]), false).unwrap();
         assert!(issued.models.is_none(), "全空白的白名单按未设处理");
+    }
+
+    #[test]
+    fn concurrency_cap_round_trips_and_rejects_out_of_range_values() {
+        let conn = migrated_conn();
+        client_key_issue(&conn, "laptop", None, None, None, None, false).unwrap();
+        assert_eq!(client_key_concurrency(&conn, "laptop"), None, "新签发默认不限");
+        client_key_set_concurrency(&conn, "laptop", Some(3)).unwrap();
+        assert_eq!(client_key_concurrency(&conn, "laptop"), Some(3));
+        assert_eq!(client_keys_list(&conn).unwrap()[0].max_concurrency, Some(3), "列表里带上上限");
+        assert!(client_key_set_concurrency(&conn, "laptop", Some(0)).is_err());
+        assert_eq!(client_key_concurrency(&conn, "laptop"), Some(3), "非法值不改原设置");
+        client_key_set_concurrency(&conn, "laptop", None).unwrap();
+        assert_eq!(client_key_concurrency(&conn, "laptop"), None);
+        assert!(client_key_set_concurrency(&conn, "ghost", Some(2)).unwrap_err().contains("ghost"));
     }
 
     #[test]

@@ -239,7 +239,10 @@ pub(crate) fn ordered_members(
             None => note_text,
         });
     }
-    if let Some(bound) = affinity_member {
+    // 会话亲和：已绑定的成员提到最前（保 prompt cache）。「顺序」策略除外——用户要的是
+    // 「第一个能用就用第一个」：第一个休息时会话落到第二个，第一个恢复后要还给它，
+    // 不能因为绑定一直粘在第二个上（magpie `82ca554`）。
+    if let Some(bound) = affinity_member.filter(|_| group.strategy != "order") {
         if let Some(index) = members.iter().position(|m| m.slug == bound) {
             let member = members.remove(index);
             members.insert(0, member);
@@ -357,6 +360,31 @@ mod tests {
         assert_eq!(third[0].slug, "c");
         let (fourth, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None);
         assert_eq!(fourth[0].slug, "a", "转满一圈回到开头");
+    }
+
+    #[test]
+    fn order_gives_the_conversation_back_to_the_first_once_it_is_ready() {
+        let mut group = RoutingGroup {
+            id: "g".into(),
+            slug: "ordered".into(),
+            name: "顺序".into(),
+            strategy: "order".into(),
+            members: vec![member("a", "m1"), member("b", "m2")],
+            created_ms: 0,
+        };
+        let mut state = std::collections::HashMap::new();
+        let no_usage = |_: &str| 0;
+        // a 用满时会话落到 b 并绑定 b
+        let a_exhausted = |slug: &str| slug == "a";
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &a_exhausted, 0, Some("b"));
+        assert_eq!(ordered[0].slug, "b");
+        // a 恢复后：即使会话绑定在 b，也回到 a
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, Some("b"));
+        assert_eq!(ordered[0].slug, "a", "顺序策略不被绑定粘住");
+        // 其他策略仍保留绑定
+        group.strategy = "rotate".into();
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, Some("b"));
+        assert_eq!(ordered[0].slug, "b");
     }
 
     #[test]

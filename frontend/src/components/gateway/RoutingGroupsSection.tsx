@@ -7,7 +7,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { Button } from "./GatewayDialogs"
 import {
   PAUSE_CHOICES, ROUTING_STRATEGIES, hasRoutingMember, isMemberPaused, offCatalogMembers, pauseMember, pausedText,
-  routingMemberId, routingSlugError, selectableCatalog, strategyText, toggleRoutingMember,
+  routingMemberId, routingSlugError, selectableCatalog, strategyOrderNote, strategyText, toggleRoutingMember,
   type RoutingGroupDto, type RoutingMember,
 } from "./routingGroups"
 
@@ -149,6 +149,7 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
                               {editStrategyOptions.map((item) => <option key={item.value} value={item.value}>{item.text}</option>)}
                             </select>
                           </div>
+                          {strategyOrderNote(editStrategy) && <span className="text-[9.5px] text-jolu-muted">{strategyOrderNote(editStrategy)}</span>}
                           <MemberPicker catalog={catalog} members={editMembers} disabled={busy} onChange={setEditMembers} />
                           <div className="flex items-center gap-2">
                             <Button label="保存" primary disabled={busy || editMembers.length === 0} onClick={() => void saveEdit(group)} />
@@ -186,6 +187,7 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
                       </select>
                     </label>
                   </div>
+                  {strategyOrderNote(newStrategy) && <span className="text-[9.5px] text-jolu-muted">{strategyOrderNote(newStrategy)}</span>}
                   {slugError && <span className="text-[9.5px] text-jolu-danger">{slugError}</span>}
                   {slugTaken && <span className="text-[9.5px] text-jolu-danger">「{slugTrimmed}」已经有同 id 的分组。</span>}
                   <div className="flex flex-col gap-1">

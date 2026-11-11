@@ -90,3 +90,11 @@ test("暂停判定与文案：到期视为恢复", () => {
   assert.match(pausedText({ slug: "a", model: "m", paused_until_ms: 1_000 + 3_600_000 }, 1_000), /^暂停至 /)
   assert.ok(PAUSE_CHOICES.length >= 3 && PAUSE_CHOICES.every((choice) => choice.minutes > 0))
 })
+
+test("按额度排的策略说明列表顺序只决定平局，并提示没有额度数据的成员排最后", async () => {
+  const { strategyOrderNote } = await import("./routingGroups.ts")
+  assert.match(strategyOrderNote("smart"), /只在重置时间相同时/)
+  assert.match(strategyOrderNote("smart"), /排在最后/)
+  assert.match(strategyOrderNote("order"), /按列表顺序/)
+  assert.equal(strategyOrderNote("unknown"), "", "未知策略不编说明")
+})

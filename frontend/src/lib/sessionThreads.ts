@@ -5,9 +5,20 @@ import type { SessionItemDto, SessionStatus } from "./api.ts"
 
 export const UNKNOWN_PROJECT = "未识别项目"
 
+/** ZCode 草稿会话的分组名与键：没有项目时 ZCode 为每个会话在 `~/.zcode/workspace/` 下自建一个目录
+ * （`draft-<id>`、`<毫秒>-<uuid>` 等），它们不是用户的项目，逐个成组只会刷出一堆单会话「项目」。
+ * 参照 magpie `a39b63e` / `7cabf0d`（ZCode 3.17.2 的 workspaceDirectory）。 */
+export const ZCODE_DRAFTS = "ZCode 草稿会话"
+export const ZCODE_DRAFTS_KEY = "zcode:drafts"
+
+export function isZcodeDraft(cwd: string | null): boolean {
+  return !!cwd && /[\\/]\.zcode[\\/]workspace[\\/][^\\/]+[\\/]*$/i.test(cwd)
+}
+
 /** 项目名取目录最后一段：D:/develop/jolu → jolu */
 export function projectName(cwd: string | null): string {
   if (!cwd) return UNKNOWN_PROJECT
+  if (isZcodeDraft(cwd)) return ZCODE_DRAFTS
   const parts = cwd.split(/[\\/]+/).filter(Boolean)
   return parts[parts.length - 1] ?? cwd
 }
@@ -18,6 +29,7 @@ export function projectName(cwd: string | null): string {
  */
 export function projectKey(cwd: string | null): string {
   if (!cwd) return ""
+  if (isZcodeDraft(cwd)) return ZCODE_DRAFTS_KEY
   return cwd.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
 }
 
@@ -43,8 +55,10 @@ export function groupByProject(sessions: readonly SessionItemDto[], sort: Sessio
   }
   const groups = [...map.values()]
   for (const g of groups) g.sessions.sort(sorter(sort))
+  // 真实项目 → ZCode 草稿会话 → 未识别项目
+  const rank = (g: ProjectGroup) => (!g.key ? 2 : g.key === ZCODE_DRAFTS_KEY ? 1 : 0)
   return groups.sort((a, b) => {
-    if (!a.key !== !b.key) return a.key ? -1 : 1
+    if (rank(a) !== rank(b)) return rank(a) - rank(b)
     if (sort === "tokens") return groupTokens(b) - groupTokens(a)
     return b.lastTs - a.lastTs
   })

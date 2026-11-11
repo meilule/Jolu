@@ -553,6 +553,8 @@ async fn gemini_generate(
             );
         }
     };
+    // Gemini 的 inlineData 常是 URL 安全 base64（google-genai SDK），先统一成标准写法
+    let body = crate::gateway::base64_input::standardize_body(body);
     crate::gateway::adapter::gemini::handle(deps, model, method, body, &headers, client_key).await
 }
 

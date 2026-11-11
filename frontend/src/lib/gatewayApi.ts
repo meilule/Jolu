@@ -66,6 +66,8 @@ export interface ClientKeySummaryDto {
   read_only: boolean
   last_used_ms: number | null
   today_requests: number
+  /** 同时请求数上限；null = 不限（超出的请求排队，不拒绝） */
+  max_concurrency?: number | null
 }
 
 /** 路由分组成员（与后端 `GroupMember` 一致）：`paused_until_ms` 缺省 = 未暂停，保存时须原样带回。 */
@@ -255,6 +257,8 @@ export const gatewayApi = {
     }),
   /** 撤销客户端 Key：删除立即失效，历史流水归属保留。 */
   revokeClientKey: (name: string) => invoke<void>("gateway_client_key_revoke", { name }),
+  /** 命名 Key 的同时请求数上限：null = 不限，1–1000 */
+  setClientKeyConcurrency: (name: string, cap: number | null) => invoke<void>("gateway_client_key_concurrency_set", { name, cap }),
 
   /** 网关中间件：按 sort 顺序在选路前改写请求体；保存前后端会试跑配置，跑不通拒绝保存。 */
   middlewares: () => invoke<MiddlewareDto[]>("gateway_middleware_list"),

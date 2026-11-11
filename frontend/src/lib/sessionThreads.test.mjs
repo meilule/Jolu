@@ -63,3 +63,19 @@ test("键盘导航只包含展开项目的会话", () => {
   const groups = groupByProject([item("a", "D:/p", 2), item("b", "D:/q", 1)])
   assert.equal(visibleRows(groups, new Set(["d:/p"])).length, 3)
 })
+
+test("ZCode 自建的草稿目录归成一组，排在真实项目之后、未识别项目之前", async () => {
+  const { groupByProject, isZcodeDraft, ZCODE_DRAFTS } = await import("./sessionThreads.ts")
+  assert.ok(isZcodeDraft(String.raw`C:\Users\someone\.zcode\workspace\draft-abc`))
+  assert.ok(isZcodeDraft("/home/u/.zcode/workspace/1762700000000-0b7f1e2a-93c4-4d58-8f21-aabbccddeeff/"))
+  assert.ok(!isZcodeDraft("D:/develop/jolu"))
+  assert.ok(!isZcodeDraft("/home/u/.zcode/workspace/draft-1/src"), "草稿目录里的子目录不是草稿根")
+  const row = (id, cwd, ts) => ({ session_id: id, cwd, last_ts: ts, fresh_input: 0, cache_read: 0, cache_write: 0, output: 0 })
+  const groups = groupByProject([
+    row("a", "C:/Users/u/.zcode/workspace/draft-1", 300),
+    row("b", "C:/Users/u/.zcode/workspace/1762-uuid", 200),
+    row("c", "D:/develop/jolu", 100),
+    row("d", null, 400),
+  ])
+  assert.deepEqual(groups.map((g) => [g.name, g.sessions.length]), [["jolu", 1], [ZCODE_DRAFTS, 2], ["未识别项目", 1]])
+})

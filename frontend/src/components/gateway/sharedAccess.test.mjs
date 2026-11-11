@@ -90,3 +90,9 @@ test("约束标签：过期、到期剩余、模型白名单、只读分别如�
     [{ text: "限 2 个模型", danger: false }, { text: "只读", danger: false }],
   )
 })
+
+test("同时请求数下拉：常用值加上当前的非常用值，0 表示不限", async () => {
+  const { concurrencyOptions } = await import("./sharedAccess.ts")
+  assert.deepEqual(concurrencyOptions(null).map((o) => o.label), ["不限", "1 个", "2 个", "3 个", "5 个", "10 个"])
+  assert.deepEqual(concurrencyOptions(7).map((o) => o.value), [0, 1, 2, 3, 5, 7, 10], "经 CLI 设的 7 也能显示")
+})

@@ -2578,6 +2578,14 @@ fn library_list(app: tauri::AppHandle) -> Result<Vec<LibraryAgentStatus>, String
     Ok(statuses)
 }
 
+/// 命名客户端 Key 的同时请求数上限：None = 不限，1–1000。立即对之后到达的请求生效。
+#[tauri::command]
+fn gateway_client_key_concurrency_set(app: tauri::AppHandle, name: String, cap: Option<i64>) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    crate::gateway::access::client_key_set_concurrency(&conn, &name, cap)
+}
+
 /// 接线记录里实际写入的模型配置（Claude Code 的主模型、子代理、档位），给接线弹窗回填。
 #[derive(serde::Serialize)]
 struct WiringAppliedView {
@@ -4341,6 +4349,7 @@ pub fn run() {
             library_remove,
             library_list,
             gateway_wiring_applied,
+            gateway_client_key_concurrency_set,
             search_vendors,
             search_apis_set,
             search_try,

@@ -278,6 +278,41 @@ pub(crate) fn canonical_model(model: &str) -> &str {
     }
 }
 
+/// 发请求的 agent 自己的订阅平台：Claude Code 的 Claude 账号、Codex 的 ChatGPT 账号等。
+fn own_platforms(agent: &str) -> &'static [&'static str] {
+    match agent {
+        "claude-code" => &["claude"],
+        "codex" => &["codex"],
+        "gemini" => &["gemini"],
+        "opencode" => &["opencode"],
+        "zcode" => &["zcode"],
+        _ => &[],
+    }
+}
+
+/// 裸模型名选哪个来源：发请求的 agent 自己的订阅能服务这个名字时先给它，否则目录里第一个。
+///
+/// 为什么：Codex 自己登录着 ChatGPT、却因目录顺序把裸名 `gpt-6` 送去了别家（magpie freefcw 的
+/// 现场）——本该自己的订阅服务的请求，被白白送给池子里的第三方。参照 magpie `608c154`
+/// （`ownFirst` / `provider.OwnRoute`）；差异：Jolu 没有「自动发现分组」，所以没有 magpie
+/// 「分组关闭时多家都能服务就拒绝」那一条。带来源前缀的 id 与 `group/…` 不经过这里。
+///
+/// `entries`：（来源 slug，平台，种类 `api` / `auth`，模型名）。
+pub(crate) fn pick_bare<'a>(entries: impl IntoIterator<Item = (&'a str, Option<&'a str>, &'a str, &'a str)>, name: &str, agent: Option<&str>) -> Option<String> {
+    let own = agent.map(own_platforms).unwrap_or(&[]);
+    let mut first: Option<&str> = None;
+    for (slug, platform, kind, model) in entries {
+        if model != name {
+            continue;
+        }
+        if kind != "api" && platform.is_some_and(|p| own.contains(&p)) {
+            return Some(slug.to_string());
+        }
+        first.get_or_insert(slug);
+    }
+    first.map(str::to_string)
+}
+
 /// 选路：模型 id → slug 命中 → 协议检查 → 按连接类型分发。
 ///
 /// 模型 id 的解析顺序（对齐 magpie `provider::Resolve`）：
@@ -502,6 +537,22 @@ mod tests {
     fn no_history(_: &str) -> Option<String> {
         None
     }
+    #[test]
+    fn a_bare_name_goes_to_the_asking_agents_own_subscription_first() {
+        let catalog = [
+            ("relay", Some("custom"), "api", "gpt-6"),
+            ("chatgpt-me", Some("codex"), "auth", "gpt-6"),
+            ("claude-me", Some("claude"), "auth", "claude-opus-5-5"),
+        ];
+        assert_eq!(pick_bare(catalog, "gpt-6", Some("codex")).as_deref(), Some("chatgpt-me"), "Codex 自己的 ChatGPT 订阅先");
+        assert_eq!(pick_bare(catalog, "gpt-6", Some("claude-code")).as_deref(), Some("relay"), "别的 agent 仍按目录顺序");
+        assert_eq!(pick_bare(catalog, "gpt-6", None).as_deref(), Some("relay"), "认不出的客户端按目录顺序");
+        assert_eq!(pick_bare(catalog, "nope", Some("codex")), None);
+        // 同平台的 API Key 来源不算「自己的订阅」
+        let keys = [("relay", Some("custom"), "api", "m"), ("codex-key", Some("codex"), "api", "m")];
+        assert_eq!(pick_bare(keys, "m", Some("codex")).as_deref(), Some("relay"));
+    }
+
     fn no_bare(_: &str) -> Option<String> {
         None
     }

@@ -10,6 +10,7 @@ import {
   KEY_ONCE_NOTICE,
   TOKENS_LIMIT_NOTICE,
   constraintTags,
+  concurrencyOptions,
   expiresAtFrom,
   isExhausted,
   parseModelList,
@@ -214,12 +215,12 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
         )}
         {rows !== null && rows.length > 0 && (
           <div className="overflow-hidden rounded-lg border border-jolu-border">
-            <div className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1.2fr)_88px_96px_88px_56px] items-center gap-2 bg-jolu-side px-2.5 py-1.5 text-[8.5px] font-medium text-jolu-muted">
-              <span>名称</span><span>Key</span><span>每日上限</span><span>今日用量</span><span>最近使用</span><span />
+            <div className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1.2fr)_72px_88px_96px_88px_56px] items-center gap-2 bg-jolu-side px-2.5 py-1.5 text-[8.5px] font-medium text-jolu-muted">
+              <span>名称</span><span>Key</span><span title="超出的请求按到达顺序排队，不拒绝">同时请求</span><span>每日上限</span><span>今日用量</span><span>最近使用</span><span />
             </div>
             {rows.map((row) => (
               <div key={row.name}
-                className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1.2fr)_88px_96px_88px_56px] items-center gap-2 border-t border-jolu-border px-2.5 py-1.5 text-[10px]">
+                className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1.2fr)_72px_88px_96px_88px_56px] items-center gap-2 border-t border-jolu-border px-2.5 py-1.5 text-[10px]">
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate text-jolu-text" title={row.name}>{row.name}</span>
                   {constraintTags(row, Date.now()).length > 0 && (
@@ -231,6 +232,24 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
                   )}
                 </span>
                 <code className="truncate font-mono text-[9.5px] text-jolu-muted" title={row.masked}>{row.masked}</code>
+                {/* 待确认：同时请求数在 Jolu.pen 没有画板，用原生下拉做最小版 */}
+                <select
+                  aria-label={`${row.name} 的同时请求数`}
+                  value={row.max_concurrency ?? 0}
+                  disabled={busy}
+                  onChange={async (event) => {
+                    const cap = Number(event.target.value)
+                    try {
+                      await gatewayApi.setClientKeyConcurrency(row.name, cap > 0 ? cap : null)
+                      await load()
+                    } catch (reason) {
+                      setError(String(reason))
+                    }
+                  }}
+                  className="h-6 min-w-0 rounded-md border border-jolu-border bg-jolu-bg px-1 text-[9.5px] text-jolu-text outline-none focus:border-jolu-accent disabled:opacity-50"
+                >
+                  {concurrencyOptions(row.max_concurrency).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
                 <span className="text-jolu-text">{limitText(row.requests_per_day)}</span>
                 <span className={cn("tnum", isExhausted(row) ? "text-jolu-danger" : "text-jolu-text")} title={isExhausted(row) ? "今日额度已用满，后续请求会被拒绝" : undefined}>
                   {usageText(row)}

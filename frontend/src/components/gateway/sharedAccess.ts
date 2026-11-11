@@ -108,3 +108,13 @@ export function constraintTags(
   if (row.read_only) tags.push({ text: "只读", danger: false })
   return tags
 }
+
+/** 同时请求数的常用选项（magpie 同款）；0 表示不限 */
+export const CONCURRENCY_CHOICES = [0, 1, 2, 3, 5, 10] as const
+
+/** 下拉选项：常用值，加上当前已设但不在常用里的值（比如经 CLI 设的 7） */
+export function concurrencyOptions(current: number | null | undefined): { value: number; label: string }[] {
+  const values: number[] = [...CONCURRENCY_CHOICES]
+  if (typeof current === "number" && current > 0 && !values.includes(current)) values.push(current)
+  return values.sort((a, b) => a - b).map((value) => ({ value, label: value === 0 ? "不限" : `${value} 个` }))
+}

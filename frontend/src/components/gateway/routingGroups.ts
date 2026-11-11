@@ -46,6 +46,22 @@ export const ROUTING_STRATEGIES: readonly { value: string; text: string }[] = [
   { value: "pace", text: "配速（余量最足的先用）" },
 ]
 
+/**
+ * 策略对成员顺序的含义。按额度排的策略（usage / smart / pace）里，顺序只在额度相同时决定先后；
+ * 还没有额度数据的成员（比如刚加的账号）排在最后，要等其他成员用到上限附近才会轮到——
+ * 这是规则本身，不是故障（magpie `4436b7d` 修过同样的误解：把新账号排第一却一直用不到）。
+ */
+export function strategyOrderNote(strategy: string): string {
+  switch (strategy) {
+    case "order": return "按列表顺序用，前一个失败或用满才换下一个；前面的恢复后，会话会回到它。"
+    case "rotate": return "每个请求换下一个成员，列表顺序只决定起点。"
+    case "usage": return "用量最少的先用；列表顺序只在用量相同时决定先后。"
+    case "smart": return "额度最快重置的先用；列表顺序只在重置时间相同时决定先后。还没有额度数据的成员（如刚加的账号）排在最后。"
+    case "pace": return "本周期余量最足的先用；列表顺序只在余量相同时决定先后。还没有额度数据的成员排在最后。"
+    default: return ""
+  }
+}
+
 /** 策略显示文案；未知值原样返回，不悄悄替换成默认策略。 */
 export function strategyText(strategy: string): string {
   return ROUTING_STRATEGIES.find((item) => item.value === strategy)?.text ?? strategy

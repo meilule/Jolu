@@ -458,6 +458,8 @@ pub(crate) async fn handle(
     client_key: Option<String>,
 ) -> Response {
     let started = std::time::Instant::now();
+    // 内联字节统一成标准 base64（base64_input.rs）：在任何人读请求体之前做
+    body = crate::gateway::base64_input::standardize_body(body);
     let request_id = crate::gateway::activity::next_request_id();
     let identity = agent_from_headers(&headers);
     let agent = identity.agent.clone();
@@ -511,6 +513,15 @@ pub(crate) async fn handle(
             }
         }
     }
+    // 命名 Key 的同时请求数（key_slots.rs）：满了按到达顺序排队；在预扣之前取，
+    // 排队中客户端断开时不会留下预扣
+    let cap = client_key.as_deref().and_then(|name| {
+        deps.db.lock().ok().and_then(|conn| crate::gateway::access::client_key_concurrency(&conn, name))
+    });
+    let slot = match client_key.as_deref() {
+        Some(name) => crate::gateway::key_slots::acquire(name, cap).await,
+        None => None,
+    };
     // 命名 Key 的每日 Token 预算（budget.rs）：先按估算预扣，响应结束按实际用量回冲
     let reservation = match client_key.as_deref() {
         Some(name) => match deps.db.lock() {
@@ -560,15 +571,16 @@ pub(crate) async fn handle(
                 .ok()
                 .and_then(|conn| route::historical_slug_message(&conn, slug))
         };
-        // 裸模型名 → 目录里第一个暴露它的来源（对齐 magpie 的裸名解析）。
+        // 裸模型名 → 发请求的 agent 自己的订阅优先，否则目录里第一个暴露它的来源（route::pick_bare）。
         // 只在模型 id 不带前缀时被调用，因此正常带前缀的请求不多这一次查询。
         let bare = |name: &str| -> Option<String> {
             let conn = deps.db.lock().ok()?;
-            crate::gateway::catalog::list(&conn)
-                .ok()?
-                .into_iter()
-                .find(|entry| entry.model == name)
-                .map(|entry| entry.slug)
+            let catalog = crate::gateway::catalog::list(&conn).ok()?;
+            route::pick_bare(
+                catalog.iter().map(|entry| (entry.slug.as_str(), entry.platform.as_deref(), entry.kind.as_str(), entry.model.as_str())),
+                name,
+                agent.as_deref(),
+            )
         };
         let mut affinity = match state.affinity.lock() {
             Ok(g) => g,
@@ -733,10 +745,11 @@ pub(crate) async fn handle(
     error_response(StatusCode::SERVICE_UNAVAILABLE, "没有可用的候选成员")
     }
     .await;
-    match reservation {
+    let response = match reservation {
         Some(reservation) => crate::gateway::budget::meter(response, reservation, budget_db),
         None => response,
-    }
+    };
+    crate::gateway::key_slots::hold(response, slot)
 }
 
 /// 命名 Key 的拒绝 → 响应：状态按拒绝种类，只有限额拒绝带 Retry-After。
