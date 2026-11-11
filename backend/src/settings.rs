@@ -402,7 +402,6 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     fn with_search_keys() -> Settings {
         let mut settings = Settings::default();

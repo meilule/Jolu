@@ -17,6 +17,7 @@
 //! `plugins/search`（调用），Key 轮转语义同 `SearchPickTurns`。
 
 pub mod backends;
+pub mod fetch;
 
 use serde::{Deserialize, Serialize};
 
@@ -35,7 +36,7 @@ pub struct SearchHit {
 /// 一个后端的配置（来自设置文件）。Key 列表按用户排的顺序。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SearchApiConfig {
-    /// 后端 id：`tavily` / `searxng` / `doubao`
+    /// 后端 id，见 [`VENDORS`]
     pub vendor: String,
     /// 一个或多个 Key，逗号分隔的写法在这里拆开存。
     ///
@@ -117,8 +118,14 @@ impl std::fmt::Display for SearchError {
 /// 元素顺序即 CLI 的展示顺序。
 pub(crate) const VENDORS: &[(&str, &str)] = &[
     ("tavily", "Tavily"),
-    ("searxng", "SearXNG"),
+    ("brave", "Brave Search"),
+    ("exa", "Exa"),
+    ("firecrawl", "Firecrawl"),
+    ("you", "You.com"),
+    ("deepseek", "DeepSeek"),
     ("doubao", "豆包搜索（火山引擎）"),
+    ("wsa", "元宝搜索（腾讯云）"),
+    ("searxng", "SearXNG"),
 ];
 
 /// 发起一次搜索：从配置里挑后端，逐 Key 尝试，被拒的排到最后。
@@ -144,14 +151,17 @@ pub async fn run_search(
         .map(|k| k.trim().to_string())
         .filter(|k| !k.is_empty())
         .collect();
-    if keys.is_empty() && config.vendor != "searxng" {
-        // SearXNG 可免 Key（自建实例），其余后端没 Key 无从谈起
+    if !VENDORS.iter().any(|(id, _)| *id == config.vendor) {
+        return Err(SearchError::Other(format!("未知搜索后端「{}」", config.vendor)));
+    }
+    if keys.is_empty() && !backends::key_optional(&config.vendor) {
+        // SearXNG（自建）与 You.com（免费搜索）可免 Key，其余后端没 Key 无从谈起
         return Err(SearchError::Other(format!(
             "后端 {} 还没有配置 Key",
             display_name(&config.vendor)
         )));
     }
-    // SearXNG 免 Key 也要跑一轮：空 Key 占位，否则下面的 for 循环直接落到
+    // 免 Key 的后端也要跑一轮：空 Key 占位，否则下面的 for 循环直接落到
     // 「没有可用的搜索 Key」兜底，把配置错误盖成了缺 Key
     let keys = if keys.is_empty() { vec![String::new()] } else { keys };
     // 被拒过的 Key 排到最后（冷却期内先试别的）
@@ -173,12 +183,7 @@ pub async fn run_search(
 
     let mut last: Option<SearchError> = None;
     for key in &ordered {
-        let result = match config.vendor.as_str() {
-            "tavily" => backends::tavily::search(config.url.as_deref(), key, query, count).await,
-            "searxng" => backends::searxng::search(config.url.as_deref(), key, query, count).await,
-            "doubao" => backends::doubao::search(config.url.as_deref(), key, query, count).await,
-            other => return Err(SearchError::Other(format!("未知搜索后端「{other}」"))),
-        };
+        let result = backends::search(&config.vendor, config.url.as_deref(), key, query, count).await;
         match result {
             Ok(hits) => return Ok(hits),
             Err(SearchError::Refused(reason)) => {

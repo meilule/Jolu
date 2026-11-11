@@ -42,6 +42,7 @@ async fn run(args: &[String]) -> Result<(), String> {
         "quota" => quota(rest),
         "restore" => restore(),
         "search" => search(rest).await,
+        "fetch" => fetch(rest).await,
         "library" => library(rest).await,
         other => Err(format!("未知子命令「{other}」，运行 `jolu help` 查看用法")),
     }
@@ -60,6 +61,7 @@ jolu — Jolu 命令行（只读）
   jolu quota <连接 id>            查一个连接的额度
   jolu restore                    把已接线 agent 的配置还原到接线前（卸载/排障用）
   jolu search <关键词>            用设置里第一个启用的搜索后端搜一次
+  jolu fetch <网址>               读取一个公网网页的正文（与 MCP 的 web_fetch 相同，内网地址拒绝）
   jolu library install <agent>    把「Jolu 搜索」MCP 装进指定 agent
   jolu library remove <agent> <名> 卸载（只删 Jolu 装的）
   jolu library list               各 agent 的安装状态
@@ -69,7 +71,7 @@ jolu — Jolu 命令行（只读）
 
 搜索后端与 Key 在桌面端 settings.json 的 search_apis 里配置。
 说明：
-  除 restore 与 search 外，所有子命令只读桌面端已有数据，不会启动网关监听，也不会写配置。"
+  除 restore、search 与 fetch 外，所有子命令只读桌面端已有数据，不会启动网关监听，也不会写配置。"
     );
 }
 
@@ -250,6 +252,20 @@ async fn search(args: &[String]) -> Result<(), String> {
         println!("  {}", hit.url);
         if !hit.snippet.is_empty() { println!("  {}", hit.snippet); }
     }
+    Ok(())
+}
+
+async fn fetch(args: &[String]) -> Result<(), String> {
+    let Some(url) = args.first() else {
+        return Err("用 `jolu fetch <网址>` 指定要读的网页".into());
+    };
+    let page = jolu_lib::gateway::search::fetch::fetch(url, 4000).await?;
+    println!("■ {}
+  {}
+", page.title, page.url);
+    println!("{}", page.text);
+    if page.truncated { println!("
+（只显示前 4000 字）"); }
     Ok(())
 }
 

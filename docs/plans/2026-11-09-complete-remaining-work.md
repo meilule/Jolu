@@ -65,11 +65,11 @@
 - [x] B3 OTLP 导出带命名 Key 名（`jolu.gateway.key.request.count`，属性 `jolu.gateway_key.name`）
 - [x] B4 统计卡 5 处与骨架屏按容器宽度减列（`components/ui/MetricGrid.tsx`）
 - [ ] B5 会话详情按钮行与全局 `button { white-space: nowrap }` 的桌面端验证；账号管理窄屏无画板依据（待鼠鼠确认）
-- [ ] B6 搜索后端补 Brave / Exa / Firecrawl / You.com / DeepSeek / 元宝 6 个
-- [ ] B7 档位 effort 可用值校验（models.dev efforts，未知模型不拦）
-- [ ] B8 `web_fetch`（经 netguard）
+- [x] B6 搜索后端补 Brave / Exa / Firecrawl / You.com / DeepSeek / 元宝 6 个；豆包改按火山文档的 `Query` / `Result.WebResults` 形状（首版字段不符）；跨主机重定向不跟随（Key 在自定义头里）；MCP 依次尝试所有启用的后端
+- [x] B7 档位 effort 可用值校验（按 Claude Code 对各模型实际发送的范围，别家模型为全集；models.dev 没有 efforts 数据，未用）；顺带修 `autoMode` 字段名不一致导致 Auto 判别档被丢弃
+- [x] B8 `web_fetch`（每跳过 netguard 并把连接钉在检查过的地址上；MCP 工具 + `jolu_cli fetch`，真实网页已试读）
 - [ ] B9 网关替身工具拦截 + 内部多轮（原计划 C-2，批 4 实际做成了档位，交接文档未列）
-- [ ] B10 搜索插件安装扩到 Qoder / Trae / ZCode / WorkBuddy（格式先取真实样本，取不到的如实标不支持）
+- [x] B10 搜索插件安装扩到 ZCode（`~/.zcode/cli/config.json` 的 `mcp.servers`）、Qoder CLI 两版、WorkBuddy（`mcp.json`，需在 WorkBuddy 里批准）；Trae 无可靠来源，列为不支持。顺带修首版路径错误：Claude Code 应写 `~/.claude.json`（原写 `settings.json` 不生效）、Gemini 应写 `settings.json`（原写进 `.env`），卸载时清理旧位置
 - [ ] B11 界面：档位（四档 + effort + Auto 判别）、搜索插件安装面板（含 TS 桥接）、搜索 Key 配置（`setSearchApis`，只回传新 Key 或「保留」）
 - [ ] B12 magpie 行动清单：裸模型名优先走 agent 自己的订阅、命名 Key 同时请求数上限、Smart /「首选」文案核对、ZCode 会话去重核对、URL 安全 base64 转标准、Codex 大 `config.toml` 不全量解析、顺序路由恢复后回切选项
 - [ ] B13 远程 MCP（http / sse）——依赖 5.2 OAuth

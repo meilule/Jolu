@@ -1591,15 +1591,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn redact_is_linear_on_pathological_input() {
-        // 比「放大 4 倍输入后耗时放大多少」而不是比绝对秒数：调试构建在全量并行测试下
-        // 机器负载高，固定 1 秒上限会偶发超时；线性约 4 倍，平方级约 16 倍，取 10 倍为界。
-        // 每档取 3 次最快值，压掉调度抖动；再加 20ms 余量吸收极短耗时的计时噪声。
-        let units: [(&str, usize); 10] = [
-            ("-", 50_000), ("a", 50_000), ("sk-", 17_500), ("password=", 5_500), ("eyJ", 17_500),
-            ("://", 17_500), ("x-api-key ", 5_000), ("\"a\":", 12_500), ("mysql -p ", 5_500), ("AbC1", 12_500),
-        ];
+    /// 断言 `redact` 对病态输入是线性的：比「输入放大 4 倍后耗时放大多少」而不是比绝对秒数。
+    /// 调试构建在全量并行测试下负载高，固定 1 秒上限会偶发超时；线性约 4 倍、平方级约 16 倍，
+    /// 取 10 倍为界。每档取 3 次最快值压掉调度抖动，再加 20ms 余量吸收极短耗时的计时噪声。
+    fn assert_linear(unit: &str, count: usize) {
         let fastest = |text: &str| {
             (0..3)
                 .map(|_| {
@@ -1610,13 +1605,22 @@ mod tests {
                 .min()
                 .unwrap()
         };
-        for (unit, count) in units {
-            let small = fastest(&unit.repeat(count));
-            let large = fastest(&unit.repeat(count * 4));
-            assert!(
-                large <= small * 10 + std::time::Duration::from_millis(20),
-                "「{unit}」输入放大 4 倍，耗时从 {small:?} 变成 {large:?}，不是线性"
-            );
+        let small = fastest(&unit.repeat(count));
+        let large = fastest(&unit.repeat(count * 4));
+        assert!(
+            large <= small * 10 + std::time::Duration::from_millis(20),
+            "「{}」输入放大 4 倍，耗时从 {small:?} 变成 {large:?}，不是线性",
+            unit.chars().take(12).collect::<String>()
+        );
+    }
+
+    #[test]
+    fn redact_is_linear_on_pathological_input() {
+        for (unit, count) in [
+            ("-", 50_000), ("a", 50_000), ("sk-", 17_500), ("password=", 5_500), ("eyJ", 17_500),
+            ("://", 17_500), ("x-api-key ", 5_000), ("\"a\":", 12_500), ("mysql -p ", 5_500), ("AbC1", 12_500),
+        ] {
+            assert_linear(unit, count);
         }
     }
 
@@ -1677,12 +1681,10 @@ mod tests {
 
     #[test]
     fn redact_skips_values_it_does_not_mask() {
-        let cases = ["token=***".repeat(22_000), "cookie:***".repeat(20_000), "&token=***".repeat(20_000), "-----BEGIN X PRIVATE KEY-----\n".repeat(7_000), "密码：".repeat(60_000)];
-        for text in cases {
-            let started = std::time::Instant::now();
-            let _ = redact(&text);
-            let spent = started.elapsed();
-            assert!(spent < std::time::Duration::from_secs(1), "{} 字符用了 {spent:?}（开头：{}）", text.len(), text.chars().take(12).collect::<String>());
+        for (unit, count) in [
+            ("token=***", 5_500), ("cookie:***", 5_000), ("&token=***", 5_000), ("-----BEGIN X PRIVATE KEY-----\n", 1_750), ("密码：", 15_000),
+        ] {
+            assert_linear(unit, count);
         }
     }
 

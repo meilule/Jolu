@@ -2526,6 +2526,10 @@ struct LibraryAgentStatus {
     installed: Vec<String>,
     /// 配置文件可定位且存在；false = 从未初始化（装了会新建文件）
     config_present: bool,
+    /// 能不能装；不能时 `note` 写原因
+    supported: bool,
+    /// 不支持的原因，或装好后用户还要做的事
+    note: Option<String>,
 }
 
 #[tauri::command]
@@ -2533,13 +2537,15 @@ fn library_list(app: tauri::AppHandle) -> Result<Vec<LibraryAgentStatus>, String
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库不可用".to_string())?;
     let mut statuses = Vec::new();
-    for agent in crate::gateway::wiring::AGENTS {
-        let config_present = crate::gateway::wiring::config_path_for(agent)
-            .is_some_and(|path| crate::steady::exists(&path));
+    for agent in library::LIBRARY_AGENTS {
+        let unsupported = library::unsupported_reason(agent);
+        let config_present = library::mcp_config_path(agent).is_some_and(|path| crate::steady::exists(&path));
         statuses.push(LibraryAgentStatus {
             agent: agent.to_string(),
             installed: library::applied_names(&conn, agent),
             config_present,
+            supported: unsupported.is_none(),
+            note: unsupported.or_else(|| library::install_note(agent)).map(str::to_string),
         });
     }
     Ok(statuses)
@@ -2555,6 +2561,9 @@ fn gateway_wiring_set(
     // 档位自选（批 4）：每档的最终写入值（可带 :effort）；None 的档位跟随主模型。
     tiers: Option<crate::gateway::wiring_store::TierModels>,
 ) -> Result<String, String> {
+    if let Some(tiers) = tiers.as_ref() {
+        tiers.validate()?;
+    }
     let result = gateway_wiring_set_inner(&app, agent, wired, model.as_deref(), subagent_model.as_deref(), tiers.as_ref());
     let _ = app.emit("gateway-wiring-changed", ());
     result

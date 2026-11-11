@@ -1,5 +1,5 @@
 //! 搜索 MCP 协议处理（能力汇聚第 2 层，批 5）：stdio 上说 MCP 协议，
-//! 把批 3 的搜索能力以 `web_search` 工具暴露给 agent。
+//! 把批 3 的搜索能力以 `web_search` / `web_fetch` 工具暴露给 agent。
 //!
 //! 形态：`jolu.exe --mcp-search`，由 agent 自己拉起（agent 的 mcpServers 配置
 //! 指向本可执行文件），stdin/stdout 即 MCP 通道，一行一个 JSON-RPC 消息。
@@ -7,13 +7,13 @@
 //! `lib.rs::run_mcp_search`。
 //!
 //! 管什么：
-//! - `initialize` / `tools/list` / `tools/call`（`web_search`）三个方法；
+//! - `initialize` / `tools/list` / `tools/call`（`web_search`、`web_fetch`）三个方法；
 //! - 搜索配置从桌面端数据目录的 `settings.json`（`search_apis`）读取，
 //!   与 CLI `jolu search`、未来 UI 同一份数据源；
 //! - Key 轮转的冷却状态只活在本进程内（agent 会话生命周期）。
 //!
 //! 不管什么：
-//! - 不做 `web_fetch`（结果 URL 的抓取是后续项）；
+//! - 不渲染脚本：`web_fetch` 只读服务器直接给的 HTML / 文本（见 `gateway::search::fetch`）；
 //! - 不读网关数据库——MCP server 与网关监听是完全独立的两条进程，
 //!   互不依赖对方存活。
 //!
@@ -42,7 +42,7 @@ pub(crate) async fn handle_line(line: &str) -> Option<String> {
         "tools/list" => Ok(serde_json::json!({
             "tools": [{
                 "name": "web_search",
-                "description": "联网搜索：按用户配置的搜索后端（Tavily / SearXNG / 豆包）返回网页结果列表。",
+                "description": "联网搜索：按用户配置的搜索后端（Tavily、Brave、Exa、Firecrawl、You.com、DeepSeek、豆包、元宝、SearXNG）返回网页结果列表。第一个后端失败时依次换下一个。",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -50,6 +50,17 @@ pub(crate) async fn handle_line(line: &str) -> Option<String> {
                         "count": { "type": "integer", "description": "结果条数（默认 5，最多 20）" },
                     },
                     "required": ["query"],
+                },
+            }, {
+                "name": "web_fetch",
+                "description": "读取一个公网网页的正文（HTML 转纯文本，不执行脚本）。只读 http / https，内网与本机地址会被拒绝。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string", "description": "要读取的网页地址" },
+                        "max_chars": { "type": "integer", "description": "最多返回的字符数（默认 20000，最多 100000）" },
+                    },
+                    "required": ["url"],
                 },
             }],
         })),
@@ -67,42 +78,86 @@ pub(crate) async fn handle_line(line: &str) -> Option<String> {
     Some(response.to_string())
 }
 
-/// `tools/call`：目前只有 `web_search`。
-async fn handle_tools_call(params: &serde_json::Value) -> Result<serde_json::Value, String> {
-    let name = params["name"].as_str().unwrap_or_default();
-    if name != "web_search" {
-        return Err(format!("未知工具 {name}"));
-    }
-    let arguments = &params["arguments"];
-    let query = arguments["query"].as_str().unwrap_or_default().to_string();
-    let count = arguments["count"].as_u64().unwrap_or(5).clamp(1, 20) as usize;
-
-    let config = search_config().ok_or("还没有配置搜索后端：在桌面端 settings.json 的 search_apis 里配置（vendor + keys）")?;
-    let mut refused_tail: Vec<(String, i64)> = Vec::new();
-    let now = chrono::Utc::now().timestamp_millis();
-    let hits = search::run_search(&config, &query, count, &mut refused_tail, now)
-        .await
-        .map_err(|error| error.to_string())?;
-
-    // 文本化输出：agent 读的是工具结果文本，列表逐条给标题 / 链接 / 摘要
-    let mut text = if hits.is_empty() { "没有搜索结果。".to_string() } else { String::new() };
-    for (index, hit) in hits.iter().enumerate() {
-        text.push_str(&format!("{}. {}\n   {}\n", index + 1, hit.title, hit.url));
-        if !hit.snippet.is_empty() {
-            text.push_str(&format!("   {}\n", hit.snippet));
-        }
-    }
-    Ok(serde_json::json!({
-        "content": [{ "type": "text", "text": text }],
-        "isError": false,
-    }))
+/// 工具结果：失败也作为结果返回（`isError: true`），让 agent 读到原因自己决定下一步，
+/// 而不是当成协议错误。
+fn tool_result(text: String, is_error: bool) -> serde_json::Value {
+    serde_json::json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
 }
 
-/// 读搜索配置：第一个未暂停的后端。与 CLI `jolu search` 同一份数据源。
-fn search_config() -> Option<SearchApiConfig> {
-    let directory = crate::service::paths::config_directory().ok()?;
+/// `tools/call`：`web_search` 与 `web_fetch`。
+async fn handle_tools_call(params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let arguments = &params["arguments"];
+    match params["name"].as_str().unwrap_or_default() {
+        "web_search" => {
+            let query = arguments["query"].as_str().unwrap_or_default().to_string();
+            let count = arguments["count"].as_u64().unwrap_or(5).clamp(1, 20) as usize;
+            let configs = search_configs();
+            if configs.is_empty() {
+                return Err("还没有配置搜索后端：在桌面端 settings.json 的 search_apis 里配置（vendor + keys）".into());
+            }
+            Ok(match search_in_order(&configs, &query, count).await {
+                Ok(hits) => tool_result(format_hits(&hits), false),
+                Err(reason) => tool_result(reason, true),
+            })
+        }
+        "web_fetch" => {
+            let url = arguments["url"].as_str().unwrap_or_default();
+            let max_chars = arguments["max_chars"].as_u64().map(|n| n as usize).unwrap_or(search::fetch::TEXT_DEFAULT).clamp(500, 100_000);
+            Ok(match search::fetch::fetch(url, max_chars).await {
+                Ok(page) => {
+                    let mut text = format!("{}
+{}
+
+{}", page.title, page.url, page.text);
+                    if page.truncated {
+                        text.push_str(&format!("
+
+（正文超过 {max_chars} 字，已截断）"));
+                    }
+                    tool_result(text, false)
+                }
+                Err(reason) => tool_result(reason, true),
+            })
+        }
+        other => Err(format!("未知工具 {other}")),
+    }
+}
+
+/// 依次问每个未暂停的后端，第一个有结果的为准；全都失败时把各自的原因一起报出来。
+/// Key 轮转的冷却只活在本进程内。
+async fn search_in_order(configs: &[SearchApiConfig], query: &str, count: usize) -> Result<Vec<search::SearchHit>, String> {
+    let mut refused_tail: Vec<(String, i64)> = Vec::new();
+    let mut reasons = Vec::new();
+    for config in configs {
+        let now = chrono::Utc::now().timestamp_millis();
+        match search::run_search(config, query, count, &mut refused_tail, now).await {
+            Ok(hits) => return Ok(hits),
+            Err(error) => reasons.push(format!("{}：{error}", search::display_name(&config.vendor))),
+        }
+    }
+    Err(format!("搜索失败——{}", reasons.join("；")))
+}
+
+/// 文本化输出：agent 读的是工具结果文本，列表逐条给标题 / 链接 / 摘要。
+fn format_hits(hits: &[search::SearchHit]) -> String {
+    let mut text = if hits.is_empty() { "没有搜索结果。".to_string() } else { String::new() };
+    for (index, hit) in hits.iter().enumerate() {
+        text.push_str(&format!("{}. {}
+   {}
+", index + 1, hit.title, hit.url));
+        if !hit.snippet.is_empty() {
+            text.push_str(&format!("   {}
+", hit.snippet));
+        }
+    }
+    text
+}
+
+/// 读搜索配置：全部未暂停的后端，按用户排的顺序。与 CLI `jolu search` 同一份数据源。
+fn search_configs() -> Vec<SearchApiConfig> {
+    let Ok(directory) = crate::service::paths::config_directory() else { return Vec::new() };
     let settings = crate::service::settings::read_settings(&directory);
-    settings.search_apis.into_iter().find(|api| !api.off)
+    settings.search_apis.into_iter().filter(|api| !api.off).collect()
 }
 
 #[cfg(test)]
@@ -122,9 +177,11 @@ mod tests {
             .expect("tools/list 有响应");
         let value: serde_json::Value = serde_json::from_str(&response).unwrap();
         let tools = value["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 1);
+        assert_eq!(tools.len(), 2);
         assert_eq!(tools[0]["name"], "web_search");
         assert_eq!(tools[0]["inputSchema"]["required"][0], "query");
+        assert_eq!(tools[1]["name"], "web_fetch");
+        assert_eq!(tools[1]["inputSchema"]["required"][0], "url");
     }
 
     #[tokio::test]
@@ -133,13 +190,22 @@ mod tests {
         assert!(handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).await.is_none());
         // 未知工具：报错但带 id
         let response = handle_line(
-            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"web_fetch","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"web_shell","arguments":{}}}"#,
         )
         .await
         .expect("未知工具也有响应");
         let value: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(value["id"], 7);
-        assert!(value["error"]["message"].as_str().unwrap().contains("web_fetch"));
+        assert!(value["error"]["message"].as_str().unwrap().contains("web_shell"));
+        // web_fetch 读内网地址：作为工具结果报错（isError），agent 读得到原因
+        let response = handle_line(
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"web_fetch","arguments":{"url":"http://127.0.0.1:9/"}}}"#,
+        )
+        .await
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["result"]["isError"], true);
+        assert!(value["result"]["content"][0]["text"].as_str().unwrap().contains("不在公网"));
     }
 
     #[tokio::test]

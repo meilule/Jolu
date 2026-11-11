@@ -62,7 +62,6 @@ pub(crate) fn apply(entry: &mut CatalogModel, over: ModelOverride) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn workbuddy_deepseek_is_capped_at_128k_and_others_are_not() {

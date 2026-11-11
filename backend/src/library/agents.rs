@@ -78,12 +78,43 @@ pub(super) fn read_server_names(path: &Path, agent: &str, key: &str) -> Result<V
         }
         _ => {
             let value = parse_lenient_json(&text, path)?;
-            Ok(value
-                .get(key)
-                .and_then(|v| v.as_object())
-                .map(|object| object.keys().cloned().collect())
-                .unwrap_or_default())
+            Ok(object_at(&value, key).map(|object| object.keys().cloned().collect()).unwrap_or_default())
         }
+    }
+}
+
+/// 按点分路径取对象（`mcp.servers` → `value["mcp"]["servers"]`）；路径上任一段不是对象返回 None。
+fn object_at<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
+    key.split('.').try_fold(value, |current, segment| current.get(segment))?.as_object()
+}
+
+/// 按点分路径取可写对象，沿途缺的段补成空对象；路径上有段已是非对象值时报错（不覆盖用户的数据）。
+fn object_at_mut<'a>(
+    value: &'a mut serde_json::Value, key: &str, path: &Path,
+) -> Result<&'a mut serde_json::Map<String, serde_json::Value>, String> {
+    if value.is_null() {
+        *value = serde_json::json!({});
+    }
+    let mut current = value;
+    for segment in key.split('.') {
+        let object = current
+            .as_object_mut()
+            .ok_or_else(|| format!("{} 里「{key}」的上级不是对象，Jolu 不改动它", path.display()))?;
+        current = object.entry(segment.to_string()).or_insert_with(|| serde_json::json!({}));
+    }
+    current
+        .as_object_mut()
+        .ok_or_else(|| format!("{} 里的「{key}」不是对象，Jolu 不改动它", path.display()))
+}
+
+/// 各 agent 的条目形状（参照 magpie `mcp.go` 的 entry）：Claude Code / ZCode / WorkBuddy
+/// 带 `type: stdio`；Gemini 与 Qoder CLI 只写 command + args。
+fn json_entry(agent: &str, server: &McpServerItem) -> serde_json::Value {
+    match agent {
+        "claude-code" | "zcode" | "workbuddy" => {
+            serde_json::json!({"type": "stdio", "command": server.command, "args": server.args})
+        }
+        _ => serde_json::json!({"command": server.command, "args": server.args}),
     }
 }
 
@@ -109,14 +140,12 @@ pub(super) fn write_server(path: &Path, agent: &str, key: &str, server: &McpServ
                 "command": command,
                 "enabled": true,
             });
-            value[key][server.name.clone()] = entry;
+            object_at_mut(&mut value, key, path)?.insert(server.name.clone(), entry);
             write_json_atomic(path, &value)
         }
-        // claude-code 与 gemini 同形状：mcpServers.<name> = {command, args}
         _ => {
             let mut value = parse_lenient_json_or_empty(&text, path)?;
-            value[key][server.name.clone()] =
-                serde_json::json!({"command": server.command, "args": server.args});
+            object_at_mut(&mut value, key, path)?.insert(server.name.clone(), json_entry(agent, server));
             write_json_atomic(path, &value)
         }
     }
@@ -144,20 +173,24 @@ pub(super) fn remove_server(path: &Path, agent: &str, key: &str, name: &str) -> 
         }
         _ => {
             let mut value = parse_lenient_json(&text, path)?;
-            let removed = value
-                .get_mut(key)
-                .and_then(|v| v.as_object_mut())
-                .is_some_and(|object| object.remove(name).is_some());
-            // 键空了就整段移除，避免留下 `"mcpServers": {}` 的空壳
-            if removed {
-                if let Some(object) = value.as_object_mut() {
-                    if object.get(key).and_then(|v| v.as_object()).is_some_and(|empty| empty.is_empty()) {
-                        object.remove(key);
-                    }
-                }
-                write_json_atomic(path, &value)?;
+            if object_at(&value, key).is_none_or(|object| !object.contains_key(name)) {
+                return Ok(false);
             }
-            Ok(removed)
+            object_at_mut(&mut value, key, path)?.remove(name);
+            // 键空了就从最深一层往上逐段移除，避免留下 `"mcpServers": {}` / `"mcp": {"servers": {}}` 的空壳
+            let segments: Vec<&str> = key.split('.').collect();
+            for depth in (1..=segments.len()).rev() {
+                let (parent, last) = (segments[..depth - 1].join("."), segments[depth - 1]);
+                let holder = if parent.is_empty() { value.as_object_mut() } else { object_at_mut(&mut value, &parent, path).ok() };
+                let Some(holder) = holder else { break };
+                if holder.get(last).and_then(|v| v.as_object()).is_some_and(|object| object.is_empty()) {
+                    holder.remove(last);
+                } else {
+                    break;
+                }
+            }
+            write_json_atomic(path, &value)?;
+            Ok(true)
         }
     }
 }
@@ -388,6 +421,46 @@ mod tests {
         assert_eq!(value["mcp"]["jolu-search"]["enabled"], true);
         assert!(remove_server(&path, "opencode", "mcp", "jolu-search").unwrap());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn zcode_nested_key_round_trip_keeps_the_rest_of_the_file() {
+        let path = temp_path("zcode.json");
+        std::fs::write(&path, r#"{"provider":{"x":1},"mcp":{"enabled":true,"servers":{"mine":{"command":"y"}}}}"#).unwrap();
+        write_server(&path, "zcode", "mcp.servers", &server()).unwrap();
+        let names = read_server_names(&path, "zcode", "mcp.servers").unwrap();
+        assert!(names.contains(&"jolu-search".to_string()) && names.contains(&"mine".to_string()));
+        let value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["mcp"]["servers"]["jolu-search"]["type"], "stdio");
+        assert_eq!(value["mcp"]["enabled"], true, "同级的用户设置保留");
+        assert!(value.get("mcp.servers").is_none(), "不能写成字面量键");
+        assert!(remove_server(&path, "zcode", "mcp.servers", "jolu-search").unwrap());
+        let value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(value["mcp"]["servers"].get("mine").is_some(), "别人的条目还在");
+        // 只剩 Jolu 的条目时，删完逐层清掉空壳
+        let lonely = temp_path("zcode-lonely.json");
+        write_server(&lonely, "zcode", "mcp.servers", &server()).unwrap();
+        assert!(remove_server(&lonely, "zcode", "mcp.servers", "jolu-search").unwrap());
+        assert_eq!(std::fs::read_to_string(&lonely).unwrap().trim(), "{}");
+    }
+
+    #[test]
+    fn a_non_object_on_the_key_path_is_refused_not_overwritten() {
+        let path = temp_path("zcode-bad.json");
+        std::fs::write(&path, r#"{"mcp":"off"}"#).unwrap();
+        assert!(write_server(&path, "zcode", "mcp.servers", &server()).unwrap_err().contains("不是对象"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), r#"{"mcp":"off"}"#);
+    }
+
+    #[test]
+    fn entry_shapes_follow_each_agent() {
+        for (agent, typed) in [("workbuddy", true), ("claude-code", true), ("gemini", false), ("qoder", false)] {
+            let path = temp_path(&format!("{agent}.json"));
+            write_server(&path, agent, "mcpServers", &server()).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(value["mcpServers"]["jolu-search"].get("type").is_some(), typed, "{agent}");
+            assert_eq!(value["mcpServers"]["jolu-search"]["args"][0], "--mcp-search");
+        }
     }
 
     #[test]

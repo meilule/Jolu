@@ -70,11 +70,71 @@ pub struct TierModels {
     pub haiku: Option<String>,
     #[serde(default)]
     pub fable: Option<String>,
-    #[serde(default)]
+    /// 前端以 camelCase 传 `autoMode`；没有别名时这一档会被静默丢掉
+    #[serde(default, alias = "autoMode")]
     pub auto_mode: Option<String>,
 }
 
+/// Claude Code 的 effort 全集（2.1.285 起），也是它对未知模型（别家经网关的模型）发的范围。
+pub(crate) const CLAUDE_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+
+/// 写在档位值里会被当成 effort 的词。冒号后不是这些词的（`qwen3:32b`、`llama3:latest`）属于模型名本身，
+/// 所以拼错的 effort 无法在这里识别，会原样当模型名写入。
+const EFFORT_WORDS: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// 档位值拆成（模型，effort）：`<来源>/<模型>[1m]:<effort>`，effort 可省。
+pub(crate) fn split_tier_value(value: &str) -> (&str, Option<&str>) {
+    match value.rsplit_once(':') {
+        Some((model, effort)) if EFFORT_WORDS.contains(&effort.trim().to_ascii_lowercase().as_str()) => (model, Some(effort.trim())),
+        _ => (value, None),
+    }
+}
+
+/// 某个模型在 Claude Code 里可设的 effort：认得的 Claude 模型按 Claude Code 实际发送的范围，
+/// Haiku 与更早的模型没有（空），新模型与别家模型是全集。
+///
+/// 为什么：effort 填了模型不收的值，Claude Code 会静默按更低一档发或直接报错，用户看不出
+/// 档位没按设定生效。参照 magpie `internal/agent/claude.go::claudeEffortsFor`（克隆 `0ee424e`）；
+/// 差异：magpie 先查供应商目录里的 efforts，Jolu 的 models.dev 元数据没有这一项，只用内置表。
+pub(crate) fn tier_efforts(model: &str) -> Option<&'static [&'static str]> {
+    let id = model.rsplit('/').next().unwrap_or(model).trim_end_matches("[1m]").to_ascii_lowercase().replace('.', "-");
+    let Some(at) = id.find("claude-") else { return Some(CLAUDE_EFFORTS) };
+    let rest = &id[at + "claude-".len()..];
+    if rest.starts_with('3') || rest.starts_with("instant") || rest.starts_with('2') {
+        return Some(&[]);
+    }
+    let mut parts = rest.split('-');
+    let family = parts.next().unwrap_or_default();
+    let major = parts.next().unwrap_or_default();
+    let minor = parts.next().filter(|p| p.len() <= 2 && p.chars().all(|c| c.is_ascii_digit())).unwrap_or_default();
+    let name = if minor.is_empty() { format!("{family}-{major}") } else { format!("{family}-{major}-{minor}") };
+    Some(match name.as_str() {
+        "opus-4-5" => &["low", "medium", "high"],
+        "opus-4-6" | "sonnet-4-6" => &["low", "medium", "high", "max"],
+        "haiku-4-5" | "sonnet-4-5" | "opus-4" | "sonnet-4" | "opus-4-1" | "opus-4-0" | "sonnet-4-0" => &[],
+        _ => CLAUDE_EFFORTS,
+    })
+}
+
 impl TierModels {
+    /// 写入前校验每档的 effort：拼错的词、模型不收的档位都拒绝，并说出可选值。
+    pub fn validate(&self) -> Result<(), String> {
+        for (tier, value) in [
+            ("opus", &self.opus), ("sonnet", &self.sonnet), ("haiku", &self.haiku), ("fable", &self.fable), ("auto", &self.auto_mode),
+        ] {
+            let Some(value) = value.as_deref().map(str::trim).filter(|v| !v.is_empty()) else { continue };
+            let (model, effort) = split_tier_value(value);
+            let Some(effort) = effort else { continue };
+            let allowed = tier_efforts(model).unwrap_or(CLAUDE_EFFORTS);
+            if allowed.is_empty() {
+                return Err(format!("{tier} 档的 {model} 不支持 effort，请去掉「:{effort}」"));
+            }
+            if !allowed.contains(&effort.to_ascii_lowercase().as_str()) {
+                return Err(format!("{tier} 档的 {model} 不能设 effort「{effort}」，可选：{}", allowed.join(" / ")));
+            }
+        }
+        Ok(())
+    }
     /// 按 tier 名取值（"opus" / "sonnet" / "haiku" / "fable"；其他名字返回 None）。
     pub fn tier(&self, tier: &str) -> Option<&str> {
         match tier {
@@ -206,6 +266,46 @@ pub fn import_legacy(conn: &Connection, snapshots: &std::collections::BTreeMap<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_mode_accepts_the_frontend_camel_case_name() {
+        let tiers: TierModels = serde_json::from_str(r#"{"opus":null,"autoMode":"zcode/glm-5.3-flash"}"#).unwrap();
+        assert_eq!(tiers.auto_mode.as_deref(), Some("zcode/glm-5.3-flash"));
+    }
+
+    #[test]
+    fn tier_efforts_follow_what_claude_code_sends_each_model() {
+        assert_eq!(tier_efforts("claude/claude-opus-4-5"), Some(&["low", "medium", "high"][..]));
+        assert_eq!(tier_efforts("anthropic/claude-sonnet-4.6"), Some(&["low", "medium", "high", "max"][..]), "点号写法同样识别");
+        assert_eq!(tier_efforts("claude-haiku-4-5"), Some(&[][..]), "Haiku 不收 effort");
+        assert_eq!(tier_efforts("claude-3-5-sonnet-latest"), Some(&[][..]));
+        assert_eq!(tier_efforts("claude-opus-5-5[1m]"), Some(CLAUDE_EFFORTS), "新模型全套");
+        assert_eq!(tier_efforts("zcode/glm-5.3-flash"), Some(CLAUDE_EFFORTS), "别家模型按 Claude Code 的全套");
+    }
+
+    #[test]
+    fn validate_rejects_efforts_a_model_does_not_take() {
+        let ok = TierModels {
+            opus: Some("claude/claude-opus-4-6:max".into()),
+            sonnet: Some("zcode/glm-5.3-flash:low".into()),
+            haiku: None,
+            fable: Some("claude/claude-fable-5-1[1m]".into()),
+            auto_mode: Some("zcode/glm-5.3-flash".into()),
+        };
+        assert!(ok.validate().is_ok());
+        let xhigh_on_46 = TierModels { opus: Some("claude/claude-opus-4-6:xhigh".into()), ..ok.clone() };
+        let error = xhigh_on_46.validate().unwrap_err();
+        assert!(error.contains("opus") && error.contains("xhigh") && error.contains("low / medium / high / max"), "{error}");
+        let haiku_effort = TierModels { haiku: Some("claude/claude-haiku-4-5:low".into()), ..ok.clone() };
+        assert!(haiku_effort.validate().unwrap_err().contains("不支持 effort"));
+        let none_on_claude = TierModels { sonnet: Some("claude/claude-sonnet-5:minimal".into()), ..ok.clone() };
+        assert!(none_on_claude.validate().unwrap_err().contains("minimal"), "minimal 不是 Claude Code 的档位");
+        // 冒号后不是 effort 词的（Ollama 标签、参数量）属于模型名，不当 effort 看
+        for model in ["local/qwen3:32b", "ollama/llama3:latest"] {
+            let tag = TierModels { sonnet: Some(model.into()), ..ok.clone() };
+            assert!(tag.validate().is_ok(), "{model}");
+        }
+    }
 
     fn db() -> Connection {
         crate::db::open(std::path::Path::new(":memory:")).unwrap()
