@@ -35,6 +35,74 @@ pub(crate) fn record_usage(deps: &std::sync::Arc<crate::proxy::ProxyDeps>, entry
     if saved.is_err() { eprintln!("[网关] 订阅调用已完成，但本次用量记录保存失败"); }
 }
 
+/// 给不自己记账的订阅适配器（Grok、WorkBuddy、ZCode）套一层：响应流读完（或客户端断开）时
+/// 从流里读出用量写进 `requests`。只认上游给出的数字（`budget::UsageMeter`），读不到就不记——
+/// 不按字数估算，未知与零要分开。
+///
+/// 为什么不在各适配器里分别解析：三家回的格式各不相同（Chat 流、Responses、转回 Anthropic 后的流），
+/// 计量器已经认这几种，套在响应外层一处就够。
+pub(crate) fn record_usage_on_end(
+    deps: std::sync::Arc<crate::proxy::ProxyDeps>,
+    entry: super::route::PoolEntry,
+    model: Option<String>,
+    started: std::time::Instant,
+    response: axum::response::Response,
+) -> axum::response::Response {
+    if !response.status().is_success() {
+        return response;
+    }
+    let (parts, body) = response.into_parts();
+    let stream = UsageRecorder { inner: body.into_data_stream(), meter: Default::default(), pending: Some((deps, entry, model, started)) };
+    axum::response::Response::from_parts(parts, axum::body::Body::from_stream(stream))
+}
+
+type Pending = (std::sync::Arc<crate::proxy::ProxyDeps>, super::route::PoolEntry, Option<String>, std::time::Instant);
+
+struct UsageRecorder {
+    inner: axum::body::BodyDataStream,
+    meter: super::budget::UsageMeter,
+    pending: Option<Pending>,
+}
+
+impl UsageRecorder {
+    fn settle(&mut self) {
+        let Some((deps, entry, model, started)) = self.pending.take() else { return };
+        self.meter.finish();
+        let (input, output) = self.meter.parts();
+        if input.is_none() && output.is_none() {
+            return;
+        }
+        let (input, output) = (input.unwrap_or(0), output.unwrap_or(0));
+        let response = serde_json::json!({
+            "model": model,
+            "usage": {"input_tokens": input, "output_tokens": output, "total_tokens": input + output},
+        });
+        record_usage(&deps, &entry, &response, started.elapsed().as_millis() as i64);
+    }
+}
+
+impl futures_util::Stream for UsageRecorder {
+    type Item = Result<axum::body::Bytes, axum::Error>;
+    fn poll_next(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+        let polled = std::pin::Pin::new(&mut self.inner).poll_next(cx);
+        match &polled {
+            std::task::Poll::Ready(Some(Ok(chunk))) => {
+                let chunk = chunk.clone();
+                self.meter.feed(&chunk);
+            }
+            std::task::Poll::Ready(None) => self.settle(),
+            _ => {}
+        }
+        polled
+    }
+}
+
+impl Drop for UsageRecorder {
+    fn drop(&mut self) {
+        self.settle();
+    }
+}
+
 #[derive(serde::Serialize)]
 pub(crate) struct Capability {
     pub connection_id: String,
@@ -226,6 +294,46 @@ pub(crate) fn save_refresh(
 #[cfg(all(test, windows))]
 pub(crate) mod tests {
     use super::*;
+
+    fn workbuddy_entry() -> crate::gateway::route::PoolEntry {
+        crate::gateway::route::PoolEntry {
+            connection_id: "c-wb".into(), slug: "wb".into(), name: "WorkBuddy".into(), platform: "workbuddy".into(),
+            kind: "auth".into(), protocol: "openai".into(), base_url: None, secret: None, account_fp: None, model: None,
+            status: "connected".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn streamed_usage_is_recorded_once_the_body_is_read_and_unknown_usage_is_not_invented() {
+        let deps = crate::proxy::test_support::bare_deps();
+        let chat_stream = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}
+
+data: {\"choices\":[],\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":30}}
+
+data: [DONE]
+
+";
+        let response = axum::response::Response::new(axum::body::Body::from(chat_stream));
+        let wrapped = super::record_usage_on_end(deps.clone(), workbuddy_entry(), Some("deepseek-v4.1-flash".into()), std::time::Instant::now(), response);
+        let text = axum::body::to_bytes(wrapped.into_body(), 1 << 20).await.unwrap();
+        assert!(text.ends_with(b"[DONE]
+
+"), "正文原样透传");
+        let rows: Vec<(String, Option<i64>, Option<i64>, Option<i64>, Option<String>)> = {
+            let conn = deps.db.lock().unwrap();
+            let mut stmt = conn.prepare("SELECT platform, input_tokens, output_tokens, total_tokens, model FROM requests").unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).unwrap().map(Result::unwrap).collect()
+        };
+        assert_eq!(rows, vec![("workbuddy".to_string(), Some(120), Some(30), Some(150), Some("deepseek-v4.1-flash".to_string()))]);
+        // 流里没有用量：不记，不编
+        let silent = axum::response::Response::new(axum::body::Body::from("data: {\"choices\":[]}
+
+"));
+        let wrapped = super::record_usage_on_end(deps.clone(), workbuddy_entry(), None, std::time::Instant::now(), silent);
+        let _ = axum::body::to_bytes(wrapped.into_body(), 1 << 20).await.unwrap();
+        let count: i64 = deps.db.lock().unwrap().query_row("SELECT COUNT(*) FROM requests", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1);
+    }
     use base64::Engine;
 
     pub(crate) fn codex_bundle(token: &str, account: &str) -> Value {

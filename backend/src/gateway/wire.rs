@@ -950,7 +950,13 @@ async fn forward_one(
                         }
                     };
                     guard.finish();
-                    response
+                    // Grok / WorkBuddy / ZCode 的适配器不自己记账：流结束时从流里读用量入库
+                    if matches!(platform, "grok" | "workbuddy" | "zcode") {
+                        let model = Some(if upstream_model.is_empty() { requested_model.to_string() } else { upstream_model.to_string() });
+                        crate::gateway::subscription::record_usage_on_end(deps.clone(), entry.clone(), model, started, response)
+                    } else {
+                        response
+                    }
                 }
             };
             record_route(

@@ -194,6 +194,13 @@ impl UsageMeter {
     }
 }
 
+impl UsageMeter {
+    /// `finish` 之后读输入（含缓存读写）与输出；没读到的为 None。
+    pub(crate) fn parts(&self) -> (Option<i64>, Option<i64>) {
+        (self.input, self.output)
+    }
+}
+
 fn int(value: &Value, pointer: &str) -> Option<i64> {
     value.pointer(pointer).and_then(Value::as_i64)
 }
