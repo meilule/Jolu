@@ -10,16 +10,22 @@
 //!   本身（解引用即真值），进程重启后由下一次请求重新学得。
 //! - **失败即拒发**：脱敏开启但占位符表不可写时请求直接 503，绝不原样放行。
 //!
+//! 3.7 起每类值可选处理方式（遮住 / 只记录 / 拦下，[`Action`]）与「从不脱敏」豁免清单
+//! （整段匹配、不分大小写）；每次命中留一条只在内存里的记录（[`records`]，给设置页的
+//! 对照视图用：只存种类、长度、开头几个字与前后文，不存原值），第一次真的遮住时调
+//! [`on_first_mask`] 注册的钩子（系统通知）。交接摘要的脱敏（`handoff_facts::redact`）
+//! 也调本模块的 [`sensitive_spans`]，两边用同一套识别规则与同一份豁免清单。
+//!
 //! 规则是对 [`crate::handoff_facts::redact`] 遮蔽形状的子集复用：前缀 Key 共用同一份
 //! [`crate::handoff_facts::PREFIX_KEYS`]；私钥块、`Bearer`/`Authorization`、
 //! `token=`/`api_key=` 一类凭证键值、邮箱与校验位合法的卡号 / 身份证号在这里按
 //! 「可回填」重写。handoff_facts 只需要把命中换成 `***`，网关需要能换回原值，
 //! 所以不直接调它的 redact，而是共用常量、各自产出（避免两套前缀清单各写各的）。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex, OnceLock, RwLock};
 
 use axum::body::Body;
 use axum::response::Response;
@@ -41,6 +47,219 @@ pub(crate) fn set_enabled(on: bool) {
 /// 脱敏开启时返回引擎；关闭时返回 None（调用方对请求体与响应体都不做任何处理）。
 pub(crate) fn request_masker() -> Option<&'static Masker> {
     if ENABLED.load(Ordering::Relaxed) { Some(&MASKER) } else { None }
+}
+
+/* ─────────────────────── 处理方式与豁免（3.7） ─────────────────────── */
+
+/// 一类值的处理方式（magpie `RedactActions` 同款三档）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Action {
+    /// 换成占位符（默认）
+    Mask,
+    /// 原样发出，只留记录
+    Warn,
+    /// 整个请求不发，给调用方一条说明原因的错误
+    Block,
+}
+
+impl Action {
+    pub(crate) fn parse(text: &str) -> Option<Self> {
+        match text {
+            "mask" => Some(Self::Mask),
+            "warn" => Some(Self::Warn),
+            "block" => Some(Self::Block),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Mask => "mask",
+            Self::Warn => "warn",
+            Self::Block => "block",
+        }
+    }
+}
+
+/// 处理方式表 + 豁免清单。
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Policy {
+    actions: HashMap<&'static str, Action>,
+    allow: HashSet<String>,
+}
+
+impl Policy {
+    /// 设置里的原样配置 → 策略。未知种类 / 处理方式报错（保存前校验）。
+    pub(crate) fn new(actions: &BTreeMap<String, String>, allow: &[String]) -> Result<Self, String> {
+        let mut map = HashMap::new();
+        for (kind, action) in actions {
+            let kind = TYPES.iter().find(|t| **t == kind.as_str()).ok_or_else(|| format!("未知的脱敏种类「{kind}」"))?;
+            let action = Action::parse(action).ok_or_else(|| format!("未知的处理方式「{action}」，只能是 mask / warn / block"))?;
+            if action != Action::Mask {
+                map.insert(*kind, action);
+            }
+        }
+        let allow = allow.iter().map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty()).collect();
+        Ok(Self { actions: map, allow })
+    }
+
+    fn action(&self, kind: &str) -> Action {
+        self.actions.get(kind).copied().unwrap_or(Action::Mask)
+    }
+
+    fn allows(&self, value: &str) -> bool {
+        !self.allow.is_empty() && self.allow.contains(&value.trim().to_lowercase())
+    }
+}
+
+static POLICY: LazyLock<RwLock<Policy>> = LazyLock::new(|| RwLock::new(Policy::default()));
+
+/// 设置页保存 / 启动时调用。
+pub(crate) fn set_policy(policy: Policy) {
+    if let Ok(mut current) = POLICY.write() {
+        *current = policy;
+    }
+}
+
+fn policy() -> Policy {
+    POLICY.read().map(|p| p.clone()).unwrap_or_default()
+}
+
+/// 种类的中文名（错误提示与界面共用）。
+pub(crate) fn kind_label(kind: &str) -> &'static str {
+    match kind {
+        "APIKEY" => "API Key",
+        "PRIVATEKEY" => "私钥",
+        "TOKEN" => "令牌",
+        "EMAIL" => "邮箱",
+        "CARD" => "银行卡号",
+        "IDCARD" => "身份证号",
+        _ => "敏感值",
+    }
+}
+
+/* ───────────────────────── 命中记录（3.7） ───────────────────────── */
+
+/// 一处命中。不存原值：只有种类、长度、开头几个字与前后文（前文取自已脱敏的结果，
+/// 后文截在下一处命中之前，所以记录里不会带出别的原值）。
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct Hit {
+    pub kind: &'static str,
+    pub action: &'static str,
+    pub length: usize,
+    pub preview: String,
+    pub placeholder: Option<String>,
+    pub left: String,
+    pub right: String,
+}
+
+/// 一次请求的脱敏结果。
+#[derive(Debug, Default)]
+pub(crate) struct Report {
+    pub hits: Vec<Hit>,
+    /// 真的换成占位符的处数
+    pub masked: usize,
+    /// 命中「拦下」的种类
+    pub blocked: Vec<&'static str>,
+}
+
+/// 单次请求最多记这么多处命中（记录只为看个究竟，不必穷举）。
+const REPORT_HITS_MAX: usize = 200;
+/// 内存里最多留这么多条请求记录。
+const RECORDS_MAX: usize = 100;
+const CONTEXT_CHARS: usize = 24;
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct MaskRecord {
+    pub id: u64,
+    pub at_ms: i64,
+    /// 协议入口（messages / chat / responses）
+    pub entry: String,
+    pub blocked: bool,
+    pub masked: usize,
+    pub hits: Vec<Hit>,
+}
+
+static RECORDS: LazyLock<Mutex<VecDeque<MaskRecord>>> = LazyLock::new(|| Mutex::new(VecDeque::new()));
+static RECORD_SEQ: AtomicU64 = AtomicU64::new(1);
+static FIRST_HOOK: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+static FIRST_FIRED: AtomicBool = AtomicBool::new(false);
+
+/// 最近的脱敏记录（新的在前）。
+pub(crate) fn records() -> Vec<MaskRecord> {
+    RECORDS.lock().map(|r| r.iter().rev().cloned().collect()).unwrap_or_default()
+}
+
+pub(crate) fn clear_records() {
+    if let Ok(mut r) = RECORDS.lock() {
+        r.clear();
+    }
+}
+
+/// 本进程第一次真的遮住值时调一次（启动时注册；钩子自己决定要不要弹通知）。
+pub(crate) fn on_first_mask(hook: impl Fn() + Send + Sync + 'static) {
+    let _ = FIRST_HOOK.set(Box::new(hook));
+}
+
+fn remember(entry: &str, report: &Report) {
+    if report.hits.is_empty() {
+        return;
+    }
+    let record = MaskRecord {
+        id: RECORD_SEQ.fetch_add(1, Ordering::Relaxed),
+        at_ms: chrono::Utc::now().timestamp_millis(),
+        entry: entry.to_string(),
+        blocked: !report.blocked.is_empty(),
+        masked: report.masked,
+        hits: report.hits.clone(),
+    };
+    if let Ok(mut r) = RECORDS.lock() {
+        r.push_back(record);
+        while r.len() > RECORDS_MAX {
+            r.pop_front();
+        }
+    }
+    if report.masked > 0 && !FIRST_FIRED.swap(true, Ordering::Relaxed) {
+        if let Some(hook) = FIRST_HOOK.get() {
+            hook();
+        }
+    }
+}
+
+fn head_chars(text: &str, n: usize) -> String {
+    text.chars().take(n).collect()
+}
+
+fn tail_chars(text: &str, n: usize) -> String {
+    let count = text.chars().count();
+    text.chars().skip(count.saturating_sub(n)).collect()
+}
+
+/// 原值的开头几个字（邮箱只露两个）。
+fn preview(kind: &str, value: &str) -> String {
+    let n = if kind == "EMAIL" { 2 } else { 4 };
+    let shown: String = value.chars().take(n).collect();
+    format!("{shown}…")
+}
+
+/// 「从不脱敏」清单里有没有这个值（交接摘要的脱敏也遵守）。
+pub(crate) fn allowed_value(value: &str) -> bool {
+    POLICY.read().is_ok_and(|p| p.allows(value))
+}
+
+/// 交接摘要等别处的脱敏用：本模块规则识别出的、属于 `kinds` 的敏感片段（字节区间），
+/// 豁免清单里的值除外。不看处理方式——出现就遮。
+pub(crate) fn sensitive_spans(text: &str, kinds: &[&str]) -> Vec<(usize, usize)> {
+    let policy = policy();
+    collect_spans(text.as_bytes())
+        .into_iter()
+        .filter(|span| kinds.contains(&span.kind))
+        .filter_map(|span| {
+            let start = floor_boundary(text, span.start);
+            let end = floor_boundary(text, span.end);
+            (end > start && !policy.allows(&text[start..end])).then_some((start, end))
+        })
+        .collect()
 }
 
 /* ───────────────────────────── 占位符 ───────────────────────────── */
@@ -567,35 +786,39 @@ impl Masker {
     ///
     /// 返回类型比 magpie 的对应入口多一层 Result：脱敏开启却无法保证「换回」时，
     /// 宁可拒发也不能让改写后的请求离开本机。
+    #[cfg(test)]
     pub(crate) fn mask_body(&self, body: &[u8]) -> Result<Option<(axum::body::Bytes, usize)>, ()> {
-        // 不是 JSON：不强脱，放行原文
-        let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else {
-            return Ok(None);
-        };
-        let mut hits = 0usize;
-        self.mask_value(&mut value, &mut hits)?;
-        if hits == 0 {
-            return Ok(None);
-        }
-        Ok(Some((axum::body::Bytes::from(value.to_string()), hits)))
+        let (masked, report) = self.mask_body_with(body, &Policy::default())?;
+        Ok(masked.map(|bytes| (bytes, report.masked)))
     }
 
-    fn mask_value(&self, value: &mut serde_json::Value, hits: &mut usize) -> Result<(), ()> {
+    /// 按策略脱敏，连同命中明细一起返回。改写过的请求体只在真的换了占位符时给出。
+    pub(crate) fn mask_body_with(&self, body: &[u8], policy: &Policy) -> Result<(Option<axum::body::Bytes>, Report), ()> {
+        let mut report = Report::default();
+        // 不是 JSON：不强脱，放行原文
+        let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else {
+            return Ok((None, report));
+        };
+        self.mask_value(&mut value, policy, &mut report)?;
+        let masked = (report.masked > 0).then(|| axum::body::Bytes::from(value.to_string()));
+        Ok((masked, report))
+    }
+
+    fn mask_value(&self, value: &mut serde_json::Value, policy: &Policy, report: &mut Report) -> Result<(), ()> {
         match value {
             serde_json::Value::String(text) => {
-                if let Some((masked, count)) = self.mask_text(text)? {
+                if let Some(masked) = self.mask_text(text, policy, report)? {
                     *text = masked;
-                    *hits += count;
                 }
             }
             serde_json::Value::Array(items) => {
                 for item in items {
-                    self.mask_value(item, hits)?;
+                    self.mask_value(item, policy, report)?;
                 }
             }
             serde_json::Value::Object(fields) => {
                 for (_, field) in fields.iter_mut() {
-                    self.mask_value(field, hits)?;
+                    self.mask_value(field, policy, report)?;
                 }
             }
             _ => {}
@@ -603,33 +826,66 @@ impl Masker {
         Ok(())
     }
 
-    /// 单个字符串值的脱敏。None = 没有命中。占位符先记上表再拼进结果：
-    /// 表不可写时整个请求按失败处理（拒发）。
-    fn mask_text(&self, text: &str) -> Result<Option<(String, usize)>, ()> {
-        let spans = collect_spans(text.as_bytes());
+    /// 单个字符串值的脱敏。None = 没有换任何占位符。占位符先记上表再拼进结果：
+    /// 表不可写时整个请求按失败处理（拒发）。豁免清单里的值不算命中；「只记录」与
+    /// 「拦下」的值原样留在文本里，只进报告。
+    fn mask_text(&self, text: &str, policy: &Policy, report: &mut Report) -> Result<Option<String>, ()> {
+        let spans: Vec<(usize, usize, &'static str)> = collect_spans(text.as_bytes())
+            .into_iter()
+            .map(|span| (floor_boundary(text, span.start), floor_boundary(text, span.end), span.kind))
+            .filter(|(start, end, _)| end > start && !policy.allows(&text[*start..*end]))
+            .collect();
         if spans.is_empty() {
             return Ok(None);
         }
         let mut out = String::with_capacity(text.len());
         let mut cursor = 0usize;
-        let hits = spans.len();
-        for span in spans {
-            let start = floor_boundary(text, span.start);
-            let end = floor_boundary(text, span.end);
-            if end <= start || start < cursor {
+        let mut changed = false;
+        for (i, &(start, end, kind)) in spans.iter().enumerate() {
+            if start < cursor {
                 continue;
             }
             out.push_str(&text[cursor..start]);
             let value = &text[start..end];
-            let ph = placeholder(span.kind, value);
-            let mut values = self.values.lock().map_err(|_| ())?;
-            values.entry(ph.clone()).or_insert_with(|| value.to_string());
-            drop(values);
-            out.push_str(&ph);
+            let action = policy.action(kind);
+            let placeholder = if action == Action::Mask {
+                let ph = placeholder(kind, value);
+                let mut values = self.values.lock().map_err(|_| ())?;
+                values.entry(ph.clone()).or_insert_with(|| value.to_string());
+                Some(ph)
+            } else {
+                None
+            };
+            if report.hits.len() < REPORT_HITS_MAX {
+                let next = spans.get(i + 1).map(|s| s.0.max(end)).unwrap_or(text.len());
+                report.hits.push(Hit {
+                    kind,
+                    action: action.as_str(),
+                    length: value.chars().count(),
+                    preview: preview(kind, value),
+                    placeholder: placeholder.clone(),
+                    left: tail_chars(&out, CONTEXT_CHARS),
+                    right: head_chars(&text[end..next], CONTEXT_CHARS),
+                });
+            }
+            match (action, placeholder) {
+                (Action::Mask, Some(ph)) => {
+                    out.push_str(&ph);
+                    report.masked += 1;
+                    changed = true;
+                }
+                (Action::Block, _) => {
+                    if !report.blocked.contains(&kind) {
+                        report.blocked.push(kind);
+                    }
+                    out.push_str(value);
+                }
+                _ => out.push_str(value),
+            }
             cursor = end;
         }
         out.push_str(&text[cursor..]);
-        Ok(Some((out, hits)))
+        Ok(changed.then_some(out))
     }
 
     /// 占位符换回真值（响应回填用）。表里没有的形似占位符原样保留；
@@ -733,15 +989,28 @@ const RESPONSE_BUFFER_LIMIT: usize = 64 * 1024 * 1024;
 /// - 关闭：原样；
 /// - 开启且引擎可用：命中才改写，未命中原样；
 /// - 开启但引擎不可用：`Err`（503 拒发）——绝不原样放行。
-pub(crate) fn prepare_request(body: axum::body::Bytes) -> Result<axum::body::Bytes, Response> {
+pub(crate) fn prepare_request(body: axum::body::Bytes, entry: &str) -> Result<axum::body::Bytes, Response> {
     let Some(masker) = request_masker() else { return Ok(body) };
-    let masked = if masker.available() { masker.mask_body(&body) } else { Err(()) };
+    let policy = policy();
+    let masked = if masker.available() { masker.mask_body_with(&body, &policy) } else { Err(()) };
     match masked {
-        Ok(Some((masked, hits))) => {
-            eprintln!("[网关] 隐私脱敏：请求体遮蔽 {hits} 处");
-            Ok(masked)
+        Ok((masked, report)) => {
+            remember(entry, &report);
+            if !report.blocked.is_empty() {
+                let kinds: Vec<&str> = report.blocked.iter().map(|k| kind_label(k)).collect();
+                return Err(crate::gateway::wire::error_response(
+                    axum::http::StatusCode::BAD_REQUEST,
+                    &format!("请求里带有设为「拦下」的{}，Jolu 没有把它发出；可在设置 › 隐私脱敏里改成「遮住」", kinds.join("、")),
+                ));
+            }
+            match masked {
+                Some(masked) => {
+                    eprintln!("[网关] 隐私脱敏：请求体遮蔽 {} 处", report.masked);
+                    Ok(masked)
+                }
+                None => Ok(body),
+            }
         }
-        Ok(None) => Ok(body),
         Err(()) => Err(crate::gateway::wire::error_response(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "隐私脱敏已开启但引擎暂不可用，为避免原文离开本机已拒绝本次请求",
@@ -756,10 +1025,8 @@ pub(crate) fn prepare_request(body: axum::body::Bytes) -> Result<axum::body::Byt
 ///
 /// 回填是尽力而为：占位符本身不是机密，恢复不了最多原样露出占位符，不构成泄漏；
 /// 这与请求侧「失败即拒发」不同——响应已经从上游回来了，拦下它没有安全收益。
-/// 响应侧中间件的装饰层（think-tags）：只处理**非流式** JSON 响应。
-///
-/// 流式增量里剥 `<think>` 会拆散跨块标签、破坏 SSE 语义，所以 `text/event-stream`
-/// 原样放行（这个边界写在 `middleware.rs` 的 `restore_chain` 注释里）。
+/// 响应侧中间件的装饰层（think-tags）：非流式 JSON 整段处理；`text/event-stream`
+/// 逐事件交给 `middleware::EventChain`（onEvent）。
 pub(crate) async fn restore_middleware(response: Response, middlewares: &[crate::gateway::middleware::Middleware]) -> Response {
     if !middlewares.iter().any(|m| m.enabled && m.kind == "think-tags") {
         return response;
@@ -770,7 +1037,11 @@ pub(crate) async fn restore_middleware(response: Response, middlewares: &[crate:
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.contains("event-stream"));
     if is_stream {
-        return response;
+        // 流式：逐事件处理（onEvent，3.7）
+        let Some(chain) = crate::gateway::middleware::EventChain::new(middlewares) else { return response };
+        let (mut parts, body) = response.into_parts();
+        parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+        return Response::from_parts(parts, Body::from_stream(crate::gateway::middleware::transform_sse(body.into_data_stream(), chain)));
     }
     let (mut parts, body) = response.into_parts();
     let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
@@ -1116,12 +1387,43 @@ mod tests {
         let _guard = test_support::GATE.lock().unwrap();
         let body = axum::body::Bytes::from(r#"{"text":"token=abcdefgh12345"}"#);
         // 默认关闭：原样
-        assert_eq!(prepare_request(body.clone()).unwrap(), body);
+        assert_eq!(prepare_request(body.clone(), "chat").unwrap(), body);
         set_enabled(true);
-        let masked = prepare_request(body.clone()).unwrap();
+        let masked = prepare_request(body.clone(), "chat").unwrap();
         assert_ne!(masked, body, "开启后必须脱敏");
         assert!(!String::from_utf8_lossy(&masked).contains("abcdefgh12345"));
+        let record = records().into_iter().next().expect("命中要留记录");
+        assert_eq!(record.hits[0].kind, "TOKEN");
+        assert!(!serde_json::to_string(&record).unwrap().contains("abcdefgh12345"), "记录里不能有原值");
+        // 拦下：整个请求不发
+        set_policy(Policy::new(&BTreeMap::from([("TOKEN".to_string(), "block".to_string())]), &[]).unwrap());
+        let refused = prepare_request(body.clone(), "chat").unwrap_err();
+        assert_eq!(refused.status(), axum::http::StatusCode::BAD_REQUEST);
+        set_policy(Policy::default());
         set_enabled(false);
-        assert_eq!(prepare_request(body.clone()).unwrap(), body, "关闭后必须原样");
+        assert_eq!(prepare_request(body.clone(), "chat").unwrap(), body, "关闭后必须原样");
+    }
+
+    #[test]
+    fn actions_and_the_allow_list_change_what_is_sent() {
+        let masker = Masker::new();
+        let body = br#"{"text":"mail a@example.com key sk-ant-api03-ABCDEFGHIJKLMNOPQRST team@corp.io"}"#;
+        let policy = Policy::new(
+            &BTreeMap::from([("EMAIL".to_string(), "warn".to_string())]),
+            &["TEAM@corp.io".to_string()],
+        )
+        .unwrap();
+        let (masked, report) = masker.mask_body_with(body, &policy).unwrap();
+        let text = String::from_utf8(masked.unwrap().to_vec()).unwrap();
+        assert!(text.contains("a@example.com"), "只记录的种类原样发出：{text}");
+        assert!(!text.contains("sk-ant-api03"), "其余种类照常遮住：{text}");
+        assert!(text.contains("team@corp.io"), "豁免清单整段匹配、不分大小写");
+        assert_eq!(report.masked, 1);
+        assert_eq!(report.hits.len(), 2, "豁免的值不算命中");
+        assert_eq!(report.hits[0].action, "warn");
+        assert_eq!(report.hits[0].preview, "a@…");
+        assert!(report.hits[1].left.contains("a@example.com"), "前文取自发出的文本（只记录的值原样）：{}", report.hits[1].left);
+        assert!(Policy::new(&BTreeMap::from([("EMAIL".to_string(), "drop".to_string())]), &[]).is_err());
+        assert!(Policy::new(&BTreeMap::from([("NAME".to_string(), "mask".to_string())]), &[]).is_err());
     }
 }

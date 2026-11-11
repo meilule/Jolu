@@ -171,6 +171,16 @@ pub struct Settings {
     /// 换成占位符，回复回来再换回真值（见 gateway/mask.rs）。默认关闭，旧配置文件缺字段按关闭处理。
     #[serde(default)]
     pub privacy_masking: bool,
+    /// 隐私脱敏（3.7）：各种类的处理方式，只存非默认（遮住）的项：`warn` 原样发出只留记录，
+    /// `block` 整个请求不发。键是 `gateway::mask` 的种类名（APIKEY / EMAIL …）。
+    #[serde(default)]
+    pub privacy_actions: std::collections::BTreeMap<String, String>,
+    /// 隐私脱敏（3.7）：从不脱敏的值（整段匹配、不分大小写），交接摘要的脱敏也遵守。
+    #[serde(default)]
+    pub privacy_allow: Vec<String>,
+    /// 第一次真的遮住值时的系统通知已经发过（只提醒一次）。
+    #[serde(default)]
+    pub privacy_first_noticed: bool,
     /// ZCode Start Plan 优先（③5）：开启后 ZCode 来源的凭据顺序变为「免费的
     /// Start Plan 通道（登录会话 JWT）先试，失败落 Coding Plan Key」；关闭时
     /// Coding Plan Key 先、429/402 余额类失败落 Start Plan。默认关闭，旧配置
@@ -314,6 +324,9 @@ impl Default for Settings {
             notify_task_resumed: true,
             notify_task_finished: true,
             privacy_masking: false,
+            privacy_actions: std::collections::BTreeMap::new(),
+            privacy_allow: Vec::new(),
+            privacy_first_noticed: false,
             zcode_free_first: false,
         }
     }

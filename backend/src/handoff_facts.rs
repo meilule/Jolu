@@ -827,7 +827,15 @@ pub fn redact(text: &str) -> String {
     url_spans(&scan, &mut spans);
     flag_spans(&scan, &mut spans);
     misc_spans(&scan, &mut spans);
-    spans.retain(|(a, b)| b > a);
+    // 与网关隐私脱敏共用的识别规则（3.7）：本模块没有的卡号、身份证号（校验位合法才算）
+    // 取网关引擎的结果；邮箱按本模块的约定不遮（通知与交接里它是联系人上下文）。
+    // 设置里「从不脱敏」的值两边都放过
+    let offsets: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
+    let to_char = |byte: usize| offsets.partition_point(|&b| b < byte);
+    for (a, b) in crate::gateway::mask::sensitive_spans(text, &["CARD", "IDCARD"]) {
+        spans.push((to_char(a), to_char(b)));
+    }
+    spans.retain(|(a, b)| b > a && !crate::gateway::mask::allowed_value(&chars[*a..*b].iter().collect::<String>()));
     if spans.is_empty() {
         return text.to_string();
     }
@@ -1449,6 +1457,13 @@ mod tests {
         assert_eq!(masked(&format!("key {zhipu}"), "AbCdEfGh12345678"), "key ***");
         masked("value=7a1f0c2e9b8d4f6a3c5e7b9d1f2a4c6e8", "7a1f0c2e9b8d4f6a3c5e7b9d1f2a4c6e8");
         masked("blob Zm9vYmFyQmF6UXV4MTIzNDU2Nzg5MEFCQ0RFRkdISUpL", "Zm9vYmFyQmF6UXV4MTIzNDU2Nzg5MEFCQ0RFRkdISUpL");
+    }
+
+    #[test]
+    fn redact_uses_the_gateway_engine_for_card_numbers() {
+        let out = redact("付款卡 4111 1111 1111 1111，订单 1234 5678");
+        assert!(!out.contains("4111 1111"), "校验位合法的卡号走网关引擎遮住：{out}");
+        assert!(out.contains("1234 5678"), "普通数字不动：{out}");
     }
 
     #[test]

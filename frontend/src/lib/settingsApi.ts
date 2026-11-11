@@ -3,6 +3,7 @@ import type { DefaultPage, MainPage } from "./mainNavigation"
 import type { Density } from "./appearance"
 import type { NetworkDiagnosisDto, NetworkMode } from "./networkSettings"
 import type { LibraryAgentDto, SearchApiDto, SearchHitDto, SearchVendorDto } from "./searchSettings"
+import type { MaskRecordDto } from "@/components/settings/privacyMasking"
 
 /** 设置 · 数据与存储（画板 92）：请求记录与会话索引的条数 */
 export interface StorageCountsDto {
@@ -33,6 +34,11 @@ export const settingsApi = {
   setTaskNotify: (resumed: boolean | null, finished: boolean | null) => invoke<AppSettings>("set_task_notify", { resumed, finished }),
   /** 设置 · 隐私脱敏（P5，画板待确认）：开关立即生效并广播 settings-changed；返回最新设置 */
   privacyMaskingSet: (on: boolean) => invoke<AppSettings>("privacy_masking_set", { on }),
+  /** 隐私脱敏的处理方式与豁免清单（画板待确认）：保存即生效 */
+  privacyPolicySet: (actions: Record<string, string>, allow: string[]) => invoke<AppSettings>("privacy_policy_set", { actions, allow }),
+  /** 最近的脱敏记录（只在内存、不含原值；新的在前） */
+  privacyRecords: () => invoke<MaskRecordDto[]>("privacy_records"),
+  privacyRecordsClear: () => invoke<void>("privacy_records_clear"),
   /** ZCode 通道顺序（画板待确认）：开 = 先试免费 Start Plan；立即生效，不用重启网关 */
   zcodeFreeFirstSet: (on: boolean) => invoke<AppSettings>("zcode_free_first_set", { on }),
   /** 联网搜索（画板待确认）：可选后端清单 */

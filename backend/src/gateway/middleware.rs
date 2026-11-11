@@ -267,8 +267,8 @@ fn mask_strings(value: &mut Value, words: &[&str]) {
 /// 响应侧中间件链（目前只有 think-tags）：
 /// `{"mode": "strip"}` 剥掉 `<think>…</think>`；`{"mode": "wrap"}` 把独立的思考字段包进 `<think>` 放到正文前。
 ///
-/// 只用于**非流式**响应体：流式增量里剥标签会拆散跨块标签，破坏 SSE 语义，
-/// 所以流式响应不处理（模块注释写明这个边界）。
+/// 只用于**非流式**响应体；流式回复走 [`EventChain`]（onEvent，按结构化的思考字段 / 块逐事件
+/// 处理，不在增量文本里找标签，所以跨块的标签不会被拆坏）。
 pub(crate) fn restore_chain(middlewares: &[Middleware], text: &str) -> String {
     let mut out = text.to_string();
     for middleware in middlewares {
@@ -341,9 +341,237 @@ fn strip_think_tags(text: &str) -> String {
     out
 }
 
+/* ───────────────────── 流式事件钩子 onEvent（3.7） ───────────────────── */
+
+/// 一条流式回复的事件链：对每个 SSE 事件（已解析的 JSON）调用启用中间件的 onEvent，
+/// 一个事件可以变成零个（丢掉）或多个（拆开）。目前实现 onEvent 的内置只有 think-tags：
+/// - strip：Chat 片段去掉 `reasoning_content` / `reasoning`；Anthropic 的 thinking /
+///   redacted_thinking 块整块丢掉，后面块的 index 往前补齐（SDK 按 index 拼块）；
+/// - wrap：Chat 的思考增量改成正文，首段前加 `<think>`、转入正文或结束时补 `</think>`；
+///   Anthropic 的 thinking 块改成同位置的文本块，开头 `<think>`、结尾 `</think>`，签名丢弃。
+pub(crate) struct EventChain {
+    wrap: bool,
+    /// Anthropic：被丢掉的块 index
+    dropped: Vec<u64>,
+    /// Anthropic wrap：改成文本块的思考块 index
+    wrapping: Vec<u64>,
+    /// Chat wrap：正在输出思考（已经发了 `<think>`）
+    in_reasoning: bool,
+}
+
+impl EventChain {
+    /// 没有需要逐事件处理的中间件时返回 None（调用方原样转发）。
+    pub(crate) fn new(middlewares: &[Middleware]) -> Option<Self> {
+        let think = middlewares.iter().find(|m| m.enabled && m.kind == "think-tags")?;
+        let wrap = think.config.get("mode").and_then(Value::as_str) == Some("wrap");
+        Some(Self { wrap, dropped: Vec::new(), wrapping: Vec::new(), in_reasoning: false })
+    }
+
+    pub(crate) fn on_event(&mut self, mut event: Value) -> Vec<Value> {
+        if event.get("choices").is_some() {
+            self.on_chat(&mut event);
+            return vec![event];
+        }
+        let Some(kind) = event.get("type").and_then(Value::as_str).map(str::to_owned) else {
+            return vec![event];
+        };
+        let index = event.get("index").and_then(Value::as_u64);
+        match (kind.as_str(), index) {
+            ("content_block_start", Some(index)) => {
+                let block = event["content_block"]["type"].as_str().unwrap_or_default();
+                if block == "redacted_thinking" || (block == "thinking" && !self.wrap) {
+                    self.dropped.push(index);
+                    return Vec::new();
+                }
+                if block == "thinking" {
+                    self.wrapping.push(index);
+                    event["content_block"] = serde_json::json!({"type": "text", "text": ""});
+                    let at = self.shift(index);
+                    event["index"] = at.into();
+                    let open = serde_json::json!({"type": "content_block_delta", "index": at, "delta": {"type": "text_delta", "text": "<think>"}});
+                    return vec![event, open];
+                }
+                event["index"] = self.shift(index).into();
+                vec![event]
+            }
+            ("content_block_delta" | "content_block_stop", Some(index)) => {
+                if self.dropped.contains(&index) {
+                    return Vec::new();
+                }
+                let at = self.shift(index);
+                event["index"] = at.into();
+                if self.wrapping.contains(&index) {
+                    if kind == "content_block_stop" {
+                        let close = serde_json::json!({"type": "content_block_delta", "index": at, "delta": {"type": "text_delta", "text": "</think>"}});
+                        return vec![close, event];
+                    }
+                    match event["delta"]["type"].as_str() {
+                        Some("thinking_delta") => {
+                            let text = event["delta"]["thinking"].clone();
+                            event["delta"] = serde_json::json!({"type": "text_delta", "text": text});
+                        }
+                        // 签名只对思考块有意义，改成文本块后不再回传
+                        _ => return Vec::new(),
+                    }
+                }
+                vec![event]
+            }
+            _ => vec![event],
+        }
+    }
+
+    /// 丢掉的块在它前面的个数（index 往前补齐）。
+    fn shift(&self, index: u64) -> u64 {
+        index - self.dropped.iter().filter(|d| **d < index).count() as u64
+    }
+
+    fn on_chat(&mut self, event: &mut Value) {
+        let Some(choices) = event.get_mut("choices").and_then(Value::as_array_mut) else { return };
+        for choice in choices {
+            let finished = choice.get("finish_reason").is_some_and(|f| !f.is_null());
+            let Some(delta) = choice.get_mut("delta").and_then(Value::as_object_mut) else { continue };
+            let reasoning = ["reasoning_content", "reasoning"]
+                .iter()
+                .filter_map(|k| delta.remove(*k))
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .find(|r| !r.is_empty());
+            delta.remove("reasoning_details");
+            if !self.wrap {
+                continue;
+            }
+            let content = delta.get("content").and_then(Value::as_str).unwrap_or_default().to_string();
+            let mut text = String::new();
+            if let Some(reasoning) = reasoning {
+                if !self.in_reasoning {
+                    text.push_str("<think>");
+                    self.in_reasoning = true;
+                }
+                text.push_str(&reasoning);
+            }
+            if self.in_reasoning && (!content.is_empty() || finished) {
+                text.push_str("</think>");
+                self.in_reasoning = false;
+            }
+            text.push_str(&content);
+            if !text.is_empty() {
+                delta.insert("content".into(), Value::String(text));
+            }
+        }
+    }
+}
+
+/// 用事件链改写一条 SSE 流：按空行切事件，`data:` 是 JSON 的交给链处理，其余（`[DONE]`、
+/// 注释、非 JSON）原样转发。原来带 `event:` 行的，改写后的事件按其 `type` 写 `event:`。
+pub(crate) fn transform_sse<S, E>(upstream: S, chain: EventChain) -> impl futures_util::Stream<Item = Result<axum::body::Bytes, std::convert::Infallible>>
+where
+    S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,
+{
+    use futures_util::StreamExt;
+    futures_util::stream::unfold(
+        (Box::pin(upstream), chain, String::new(), false),
+        |(mut upstream, mut chain, mut buffer, done)| async move {
+            if done {
+                return None;
+            }
+            loop {
+                let (ended, chunk) = match upstream.next().await {
+                    Some(Ok(bytes)) => (false, String::from_utf8_lossy(&bytes).replace("\r\n", "\n")),
+                    _ => (true, String::new()),
+                };
+                buffer.push_str(&chunk);
+                let mut out = String::new();
+                while let Some(at) = buffer.find("\n\n") {
+                    let block: String = buffer.drain(..at + 2).collect();
+                    out.push_str(&rewrite_block(&mut chain, &block));
+                }
+                if ended {
+                    if !buffer.trim().is_empty() {
+                        let rest = std::mem::take(&mut buffer) + "\n\n";
+                        out.push_str(&rewrite_block(&mut chain, &rest));
+                    }
+                    return Some((Ok(axum::body::Bytes::from(out)), (upstream, chain, buffer, true)));
+                }
+                if !out.is_empty() {
+                    return Some((Ok(axum::body::Bytes::from(out)), (upstream, chain, buffer, false)));
+                }
+            }
+        },
+    )
+}
+
+fn rewrite_block(chain: &mut EventChain, block: &str) -> String {
+    let mut named = false;
+    let mut data = Vec::new();
+    for line in block.lines() {
+        if line.starts_with("event:") {
+            named = true;
+        } else if let Some(d) = line.strip_prefix("data:") {
+            data.push(d.trim_start());
+        }
+    }
+    let joined = data.join("\n");
+    let Ok(value) = serde_json::from_str::<Value>(&joined) else {
+        return block.to_string();
+    };
+    let mut out = String::new();
+    for event in chain.on_event(value) {
+        if named {
+            out.push_str(&format!("event: {}\n", event.get("type").and_then(Value::as_str).unwrap_or("message")));
+        }
+        out.push_str(&format!("data: {event}\n\n"));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_strip_drops_thinking_blocks_and_renumbers_the_rest() {
+        let mut chain = EventChain::new(&[middleware("think-tags", serde_json::json!({"mode": "strip"}))]).unwrap();
+        let start = chain.on_event(serde_json::json!({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}}));
+        assert!(start.is_empty());
+        assert!(chain.on_event(serde_json::json!({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "嗯"}})).is_empty());
+        let text = chain.on_event(serde_json::json!({"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}}));
+        assert_eq!(text[0]["index"], 0, "后面的块往前补齐");
+        let chat = chain.on_event(serde_json::json!({"choices": [{"delta": {"reasoning_content": "想", "content": "答"}}]}));
+        assert_eq!(chat[0]["choices"][0]["delta"], serde_json::json!({"content": "答"}));
+    }
+
+    #[test]
+    fn stream_wrap_turns_reasoning_into_think_tagged_text() {
+        let mut chain = EventChain::new(&[middleware("think-tags", serde_json::json!({"mode": "wrap"}))]).unwrap();
+        let a = chain.on_event(serde_json::json!({"choices": [{"delta": {"reasoning_content": "想"}}]}));
+        let b = chain.on_event(serde_json::json!({"choices": [{"delta": {"reasoning_content": "好了"}}]}));
+        let c = chain.on_event(serde_json::json!({"choices": [{"delta": {"content": "答"}}]}));
+        assert_eq!(a[0]["choices"][0]["delta"]["content"], "<think>想");
+        assert_eq!(b[0]["choices"][0]["delta"]["content"], "好了");
+        assert_eq!(c[0]["choices"][0]["delta"]["content"], "</think>答");
+        let mut anthropic = EventChain::new(&[middleware("think-tags", serde_json::json!({"mode": "wrap"}))]).unwrap();
+        let start = anthropic.on_event(serde_json::json!({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}}));
+        assert_eq!(start[0]["content_block"]["type"], "text");
+        assert_eq!(start[1]["delta"]["text"], "<think>");
+        assert!(anthropic.on_event(serde_json::json!({"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "s"}})).is_empty());
+        let stop = anthropic.on_event(serde_json::json!({"type": "content_block_stop", "index": 0}));
+        assert_eq!(stop[0]["delta"]["text"], "</think>");
+        assert_eq!(stop[1]["type"], "content_block_stop");
+    }
+
+    #[tokio::test]
+    async fn sse_streams_are_rewritten_event_by_event() {
+        let chain = EventChain::new(&[middleware("think-tags", serde_json::json!({"mode": "strip"}))]).unwrap();
+        let chunks: Vec<Result<axum::body::Bytes, std::convert::Infallible>> = vec![
+            Ok("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\"}}\n\nevent: content_block_start\nda".into()),
+            Ok("ta: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\"}}\r\n\r\ndata: [DONE]\n\n".into()),
+        ];
+        use futures_util::StreamExt;
+        let out: Vec<_> = transform_sse(futures_util::stream::iter(chunks), chain).collect().await;
+        let text: String = out.into_iter().map(|b| String::from_utf8(b.unwrap().to_vec()).unwrap()).collect();
+        assert!(!text.contains("thinking"), "{text}");
+        assert!(text.contains("event: content_block_start\ndata: {\"content_block\":{\"type\":\"text\"},\"index\":0"), "{text}");
+        assert!(text.ends_with("data: [DONE]\n\n"), "{text}");
+    }
     use serde_json::json;
 
     fn middleware(kind: &str, config: Value) -> Middleware {

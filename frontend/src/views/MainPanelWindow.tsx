@@ -8,6 +8,7 @@ import { applyAppearance, normalizeDensity } from "@/lib/appearance"
 import { useSettings } from "@/hooks/useSettings"
 import { AppIcon } from "@/components/brand/AppIcon"
 import { ToastProvider, ToastViewport } from "@/components/ui/Toast"
+import { PrivacyFirstNotice } from "@/components/settings/PrivacyRecordsDialog"
 import { TipProvider } from "@/components/ui/Tip"
 import { PANEL_HEIGHT, PANEL_WIDTH, TitleBar } from "@/components/panel/Chrome"
 import { PageHeader, REPO_URL } from "@/components/panel/PageHeader"
@@ -229,6 +230,7 @@ export function MainPanelWindow({
 
   return (
     <ToastProvider>
+    <PrivacyFirstNotice />
     <AppNotices
       deferredTarget={deferredNotice}
       onDeferredHandled={clearDeferredNotice}

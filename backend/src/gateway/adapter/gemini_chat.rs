@@ -93,7 +93,7 @@ pub(super) fn chat_to_gemini(chat: &Value) -> Result<Value, String> {
     let mut system: Vec<String> = Vec::new();
     let mut contents: Vec<Value> = Vec::new();
     let mut names: HashMap<String, String> = HashMap::new();
-    let mut push = |role: &str, parts: Vec<Value>, contents: &mut Vec<Value>| {
+    let push = |role: &str, parts: Vec<Value>, contents: &mut Vec<Value>| {
         if parts.is_empty() {
             return;
         }

@@ -383,6 +383,10 @@ export interface AppSettings {
   notify_task_finished: boolean
   /** 隐私脱敏（P5）：网关中转的请求在离开本机前按固定规则换成占位符；旧版设置缺省为关 */
   privacy_masking?: boolean
+  /** 隐私脱敏各种类的处理方式，只含非默认项（warn 只记录 / block 拦下）；缺省为全部遮住 */
+  privacy_actions?: Record<string, string>
+  /** 从不脱敏的值（整段匹配、不分大小写） */
+  privacy_allow?: string[]
   /** ZCode 通道顺序：true = 先试免费 Start Plan，再落 Coding Plan；旧版设置缺省为关 */
   zcode_free_first?: boolean
   /** 局域网共享允许连入的来源地址（IP / CIDR）；空 = 不限 */

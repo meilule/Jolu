@@ -2422,6 +2422,65 @@ fn privacy_masking_set(app: tauri::AppHandle, on: bool) -> Result<settings::Sett
     Ok(next)
 }
 
+/// 隐私脱敏的处理方式与豁免清单（3.7）：先按网关引擎的规则校验，再保存并立即生效。
+#[tauri::command]
+fn privacy_policy_set(
+    app: tauri::AppHandle,
+    actions: std::collections::BTreeMap<String, String>,
+    allow: Vec<String>,
+) -> Result<settings::Settings, String> {
+    let mut seen = std::collections::HashSet::new();
+    let allow: Vec<String> = allow
+        .into_iter()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty() && v.chars().count() <= 4096 && seen.insert(v.to_lowercase()))
+        .take(500)
+        .collect();
+    let policy = crate::gateway::mask::Policy::new(&actions, &allow)?;
+    let actions: std::collections::BTreeMap<String, String> = actions.into_iter().filter(|(_, a)| a != "mask").collect();
+    let next = app
+        .state::<Cfg>()
+        .0
+        .try_update(|settings| {
+            settings.privacy_actions = actions.clone();
+            settings.privacy_allow = allow.clone();
+        })
+        .map_err(|error| format!("保存隐私脱敏设置失败：{error}"))?;
+    crate::gateway::mask::set_policy(policy);
+    let _ = app.emit("settings-changed", next.clone());
+    Ok(next)
+}
+
+/// 最近的脱敏记录（只在内存，新的在前；不含原值）。
+#[tauri::command]
+fn privacy_records() -> Vec<crate::gateway::mask::MaskRecord> {
+    crate::gateway::mask::records()
+}
+
+#[tauri::command]
+fn privacy_records_clear() {
+    crate::gateway::mask::clear_records();
+}
+
+/// 第一次真的遮住值：发一次系统通知并记下（之后不再提醒）。
+fn privacy_first_notice(app: &tauri::AppHandle) {
+    let cfg = &app.state::<Cfg>().0;
+    if cfg.get().privacy_first_noticed {
+        return;
+    }
+    if let Ok(next) = cfg.try_update(|settings| settings.privacy_first_noticed = true) {
+        let _ = app.emit("settings-changed", next);
+    }
+    let _ = app.emit("privacy-first-mask", ());
+    use tauri_plugin_notification::NotificationExt;
+    let _ = app
+        .notification()
+        .builder()
+        .title("隐私脱敏已生效")
+        .body("Jolu 第一次在请求离开本机前把敏感值换成了占位符，回复里会自动换回。可在设置 › 隐私脱敏查看记录。")
+        .show();
+}
+
 /// 联网搜索：可选的后端清单（界面下拉用）。
 #[tauri::command]
 fn search_vendors() -> Vec<crate::gateway::search::VendorInfo> {
@@ -4550,6 +4609,9 @@ pub fn run() {
             gateway_wiring_set,
             gateway_escape,
             privacy_masking_set,
+            privacy_policy_set,
+            privacy_records,
+            privacy_records_clear,
             zcode_free_first_set,
             gateway_groups,
             gateway_group_create,
@@ -4686,6 +4748,15 @@ pub fn run() {
             net::init(&app.state::<Cfg>().0.get()); // 任务 2.3：出站请求按已保存的联网方式发出
             // P5 隐私脱敏：按设置初始化进程级开关（privacy_masking_set 运行时改）
             crate::gateway::mask::set_enabled(app.state::<Cfg>().0.get().privacy_masking);
+            {
+                let saved = app.state::<Cfg>().0.get();
+                match crate::gateway::mask::Policy::new(&saved.privacy_actions, &saved.privacy_allow) {
+                    Ok(policy) => crate::gateway::mask::set_policy(policy),
+                    Err(reason) => eprintln!("[隐私脱敏] 保存的处理方式无效，按默认全部遮住：{reason}"),
+                }
+                let handle = app.handle().clone();
+                crate::gateway::mask::on_first_mask(move || privacy_first_notice(&handle));
+            }
             // ③5 ZCode Start Plan 优先：按设置初始化进程级开关（zcode_free_first_set 运行时改）。
             // 字段默认 false，与静态默认一致；用户开启过则重启后仍要生效，必须回读一次。
             crate::gateway::adapter::zcode::set_free_first(app.state::<Cfg>().0.get().zcode_free_first);

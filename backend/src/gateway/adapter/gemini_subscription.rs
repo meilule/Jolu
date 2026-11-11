@@ -268,7 +268,7 @@ fn record(deps: &Arc<ProxyDeps>, entry: &PoolEntry, model: &str, response: &Valu
 
 /// 读 Code Assist 的 SSE：每个事件拆出 `response` 交给 `each`（流结束时再调一次，
 /// 第一个参数为 None、第二个参数带最后看到的用量），`each` 返回要发给调用方的若干 JSON。
-fn relay<F>(response: reqwest::Response, mut each: F) -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>>
+fn relay<F>(response: reqwest::Response, each: F) -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>>
 where
     F: FnMut(Option<Value>, Option<&Value>) -> Vec<Value> + Send + 'static,
 {

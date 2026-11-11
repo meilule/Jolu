@@ -451,7 +451,7 @@ async fn messages(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Respo
     let client_key = request.extensions().get::<ClientKeyName>().map(|k| k.0.clone());
     match split(request).await {
         Ok((path, headers, body)) => {
-            let body = match crate::gateway::mask::prepare_request(body) {
+            let body = match crate::gateway::mask::prepare_request(body, "messages") {
                 Ok(body) => body,
                 Err(response) => return response,
             };
@@ -477,7 +477,7 @@ async fn chat(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Response 
     let client_key = request.extensions().get::<ClientKeyName>().map(|k| k.0.clone());
     match split(request).await {
         Ok((path, headers, body)) => {
-            let body = match crate::gateway::mask::prepare_request(body) {
+            let body = match crate::gateway::mask::prepare_request(body, "chat") {
                 Ok(body) => body,
                 Err(response) => return response,
             };
@@ -503,7 +503,7 @@ async fn responses(State(deps): State<Arc<ProxyDeps>>, request: Request) -> Resp
     let client_key = request.extensions().get::<ClientKeyName>().map(|k| k.0.clone());
     match split(request).await {
         Ok((path, headers, body)) => {
-            let body = match crate::gateway::mask::prepare_request(body) {
+            let body = match crate::gateway::mask::prepare_request(body, "responses") {
                 Ok(body) => body,
                 Err(response) => return response,
             };
