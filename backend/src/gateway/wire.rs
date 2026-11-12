@@ -625,6 +625,15 @@ pub(crate) async fn handle(
         let Some(group) = group else {
             return error_response(StatusCode::NOT_FOUND, &format!("没有名为「{group_slug}」的路由分组"));
         };
+        // 「按意图」（3.9）：先判档位（新的人工回合会多一次判定调用）。必须在拿轮转锁之前 await
+        let intent_verdict = if group.strategy == "intent" {
+            let verdict =
+                crate::gateway::intent::decide(deps.clone(), &group.slug, group.intent.as_ref(), protocol, &body, &session).await;
+            eprintln!("[路由分组] {}：{}", group.slug, verdict.note);
+            Some(verdict)
+        } else {
+            None
+        };
         // 会话已绑定的成员提到最前（prompt cache 值得保留，与单模型亲和同语义）
         let bound = state.affinity.lock().ok().and_then(|affinity| {
             let connection_id = affinity.get(&session)?;
@@ -637,7 +646,7 @@ pub(crate) async fn handle(
                 .and_then(|conn| route::member_usage(&conn, slug).ok())
                 .unwrap_or(0)
         };
-        let (ordered, note) = {
+        let (mut ordered, note) = {
             // smart / pace 的额度快照：成员 slug → 连接 id → 下一次重置时间
             let resets_of = |slug: &str| -> Option<i64> {
                 let connection_id = pool.iter().find(|e| e.slug == slug)?.connection_id.clone();
@@ -663,7 +672,14 @@ pub(crate) async fn handle(
                 bound.as_deref(),
             )
         };
-        group_note = note;
+        // 判定档位的成员排前、另一档留作兜底（会话亲和在档内仍然生效）
+        if let Some(verdict) = &intent_verdict {
+            crate::gateway::routing_groups::prefer_tier(&mut ordered, verdict.tier == crate::gateway::intent::Tier::Light);
+        }
+        group_note = match (note, intent_verdict.map(|verdict| verdict.note)) {
+            (Some(note), Some(intent)) => Some(format!("{intent}；{note}")),
+            (note, intent) => note.or(intent),
+        };
         let (expanded, skipped) = crate::gateway::routing_groups::expand(&ordered, 0, &|slug| {
             deps.db
                 .lock()

@@ -24,6 +24,16 @@ export interface RoutingGroupDto {
   strategy: string
   members: RoutingMember[]
   created_ms: number
+  /** 「按意图」的判定配置；其他策略缺省 */
+  intent?: IntentConfig | null
+}
+
+/** 「按意图」判定配置（与后端 `IntentConfig` 一致）。 */
+export interface IntentConfig {
+  /** 判意图用的模型 id（`来源/模型`，不能是分组） */
+  classifier: string
+  /** 判定超时毫秒；缺省按后端默认 4000 */
+  timeout_ms?: number | null
 }
 
 /** 路由分组成员：某个来源（slug）下的一个模型。 */
@@ -34,6 +44,8 @@ export interface RoutingMember {
   paused_until_ms?: number | null
   /** 「轮转」权重（每轮出现几次）；缺省按 1 */
   weight?: number | null
+  /** 「按意图」档位：light = 轻档（快问题用的便宜模型）；缺省 = 强档 */
+  tier?: string | null
 }
 
 /** 成员可固定的推理档位（写在模型名后：`模型:high`）；只认这些词，`qwen:7b` 里的冒号不算 */
@@ -67,7 +79,46 @@ export const ROUTING_STRATEGIES: readonly { value: string; text: string }[] = [
   { value: "usage", text: "用量最少优先" },
   { value: "smart", text: "智能（重置最近的先用）" },
   { value: "pace", text: "配速（余量最足的先用）" },
+  { value: "intent", text: "按意图（小模型分强 / 轻档）" },
 ]
+
+/** 判定超时范围（毫秒），与后端 `intent::MIN_TIMEOUT_MS` / `MAX_TIMEOUT_MS` 一致 */
+export const INTENT_TIMEOUT_RANGE = { min: 500, max: 15000, fallback: 4000 } as const
+
+/** 成员是否轻档（缺省或其他值都算强档，与后端 `GroupMember::is_light` 一致） */
+export function isLightMember(member: RoutingMember): boolean {
+  return member.tier === "light"
+}
+
+/** 设置某个成员的档位（light = 轻档，否则清掉回到强档） */
+export function setMemberTier(members: RoutingMember[], member: RoutingMember, light: boolean): RoutingMember[] {
+  return members.map((item) => (sameMember(item, member) ? { ...item, tier: light ? "light" : null } : item))
+}
+
+/**
+ * 「按意图」保存前检查（与后端 `validate_intent` 同规则）：返回第一条问题，没问题为 null。
+ * `timeout` 是输入框原文，空 = 用默认值。
+ */
+export function intentError(members: RoutingMember[], classifier: string, timeout: string): string | null {
+  const id = classifier.trim()
+  if (!id) return "选一个判意图用的模型。"
+  if (id.startsWith("group/")) return "判意图用的模型不能是路由分组。"
+  const slash = id.indexOf("/")
+  if (slash <= 0 || slash === id.length - 1) return "判意图用的模型要写成「来源/模型」。"
+  if (timeout.trim()) {
+    const ms = Number(timeout.trim())
+    if (!Number.isInteger(ms) || ms < INTENT_TIMEOUT_RANGE.min || ms > INTENT_TIMEOUT_RANGE.max) {
+      return `判定超时要在 ${INTENT_TIMEOUT_RANGE.min}–${INTENT_TIMEOUT_RANGE.max} 毫秒之间。`
+    }
+  }
+  if (!members.some(isLightMember) || members.every(isLightMember)) return "强档和轻档都至少要有一个成员。"
+  return null
+}
+
+/** 表单值 → 保存用的判定配置（先过 `intentError`） */
+export function intentConfig(classifier: string, timeout: string): IntentConfig {
+  return { classifier: classifier.trim(), timeout_ms: timeout.trim() ? Number(timeout.trim()) : null }
+}
 
 /**
  * 策略对成员顺序的含义。按额度排的策略（usage / smart / pace）里，顺序只在额度相同时决定先后；
@@ -81,6 +132,7 @@ export function strategyOrderNote(strategy: string): string {
     case "usage": return "用量最少的先用；列表顺序只在用量相同时决定先后。"
     case "smart": return "额度最快重置的先用；列表顺序只在重置时间相同时决定先后。还没有额度数据的成员（如刚加的账号）排在最后。"
     case "pace": return "本周期余量最足的先用；列表顺序只在余量相同时决定先后。还没有额度数据的成员排在最后。"
+    case "intent": return "每个新提问先让判定模型分强档或轻档，按列表顺序用该档成员，另一档留作兜底；工具调用的中间步骤沿用上次判定，判不出时走强档。每个新提问会多一次判定调用，用量记在路由流水里。"
     default: return ""
   }
 }

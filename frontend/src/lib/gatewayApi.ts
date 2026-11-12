@@ -92,6 +92,14 @@ export interface GroupMemberDto {
   paused_until_ms?: number | null
   /** 「轮转」权重；缺省按 1 */
   weight?: number | null
+  /** 「按意图」档位：light = 轻档；缺省 = 强档 */
+  tier?: string | null
+}
+
+/** 「按意图」分组的判定配置（与后端 `IntentConfig` 一致） */
+export interface IntentConfigDto {
+  classifier: string
+  timeout_ms?: number | null
 }
 
 /** Profile（与后端 `profiles::Profile` 一致）；extras 是 2.7 起保存的档位 / 子代理 / 默认来源 / 常用模型 */
@@ -311,10 +319,10 @@ export const gatewayApi = {
   profilesApply: (name: string) =>
     invoke<{ switched: string[]; skipped: string[]; message: string }>("gateway_profiles_apply", { name }),
   /** 路由分组（`group/<slug>`）：成员按策略分摊与转移。界面为待确认的最小可用版。 */
-  groupList: () => invoke<{ id: string; slug: string; name: string; strategy: string; members: GroupMemberDto[]; created_ms: number }[]>("gateway_routing_group_list"),
-  groupCreate: (slug: string, name: string, strategy: string, members: GroupMemberDto[]) =>
-    invoke<unknown>("gateway_routing_group_create", { slug, name, strategy, members }),
-  groupUpdate: (slug: string, patch: { name?: string; strategy?: string; members?: GroupMemberDto[] }) =>
+  groupList: () => invoke<{ id: string; slug: string; name: string; strategy: string; members: GroupMemberDto[]; created_ms: number; intent?: IntentConfigDto | null }[]>("gateway_routing_group_list"),
+  groupCreate: (slug: string, name: string, strategy: string, members: GroupMemberDto[], intent?: IntentConfigDto | null) =>
+    invoke<unknown>("gateway_routing_group_create", { slug, name, strategy, members, intent: intent ?? null }),
+  groupUpdate: (slug: string, patch: { name?: string; strategy?: string; members?: GroupMemberDto[]; intent?: IntentConfigDto | null }) =>
     invoke<unknown>("gateway_routing_group_update", { slug, ...patch }),
   groupDelete: (slug: string) => invoke<unknown>("gateway_routing_group_delete", { slug }),
   /** 连接进出模型池 */

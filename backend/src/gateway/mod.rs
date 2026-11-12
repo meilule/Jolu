@@ -23,6 +23,7 @@ pub mod catalog;
 pub mod escape;
 pub mod groups;
 pub mod routing_groups;
+pub(crate) mod intent;
 pub mod profiles;
 pub mod models_dev;
 pub mod zcode_start_prompt;

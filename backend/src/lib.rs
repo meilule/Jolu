@@ -3010,15 +3010,16 @@ fn gateway_routing_group_create(
     name: String,
     strategy: String,
     members: Vec<crate::gateway::routing_groups::GroupMember>,
+    intent: Option<crate::gateway::routing_groups::IntentConfig>,
 ) -> Result<crate::gateway::routing_groups::RoutingGroup, String> {
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-    let group = crate::gateway::routing_groups::create(&conn, &slug, &name, &strategy, &members)?;
+    let group = crate::gateway::routing_groups::create(&conn, &slug, &name, &strategy, &members, intent.as_ref())?;
     let _ = app.emit("gateway-catalog-changed", ());
     Ok(group)
 }
 
-/// 更新路由分组（名称 / 策略 / 成员，均可选）。
+/// 更新路由分组（名称 / 策略 / 成员 / 意图配置，均可选）。
 #[tauri::command]
 fn gateway_routing_group_update(
     app: tauri::AppHandle,
@@ -3026,10 +3027,11 @@ fn gateway_routing_group_update(
     name: Option<String>,
     strategy: Option<String>,
     members: Option<Vec<crate::gateway::routing_groups::GroupMember>>,
+    intent: Option<crate::gateway::routing_groups::IntentConfig>,
 ) -> Result<(), String> {
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-    crate::gateway::routing_groups::update(&conn, &slug, name.as_deref(), strategy.as_deref(), members.as_deref())?;
+    crate::gateway::routing_groups::update(&conn, &slug, name.as_deref(), strategy.as_deref(), members.as_deref(), intent.as_ref())?;
     let _ = app.emit("gateway-catalog-changed", ());
     Ok(())
 }

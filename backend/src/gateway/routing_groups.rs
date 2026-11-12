@@ -1,8 +1,9 @@
 //! 路由分组（`group/<slug>`）：把多个「来源/模型」成员组成一个可选的模型 id，
 //! 按策略在成员间分摊与转移（对齐 magpie 的 routing group 语义）。
 //!
-//! - 五种策略：`order`（依次到不能答）、`rotate`（逐请求轮转）、`usage`（最少先用）、
-//!   `smart`（配额剩余先到先用）、`pace`（按周期剩余配速）。smart / pace 依赖各账号的
+//! - 六种策略：`order`（依次到不能答）、`rotate`（逐请求轮转）、`usage`（最少先用）、
+//!   `smart`（配额剩余先到先用）、`pace`（按周期剩余配速）、`intent`（小模型判每轮意图，
+//!   强档 / 轻档成员分流，见 `intent.rs`；默认不启用，要用户专门建这种分组）。smart / pace 依赖各账号的
 //!   额度窗口快照，快照不可用时**降级为 order**并在路由 trace 里说明，不静默假装。
 //! - 成员支持嵌套分组（成员 slug 以 `group/` 开头时递归展开，深度有上限防环）。
 //! - 会话亲和与冷却在 wire 层的候选循环里生效，这里只产出**有序候选**。
@@ -35,6 +36,19 @@ pub(crate) struct RoutingGroup {
     pub strategy: String,
     pub members: Vec<GroupMember>,
     pub created_ms: i64,
+    /// 「按意图」策略的判定配置；其他策略不看它。旧数据没有这一列按 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<IntentConfig>,
+}
+
+/// 意图判定配置（`intent` 策略）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct IntentConfig {
+    /// 判意图用的模型 id（`<来源>/<模型>`，不能是分组）。
+    pub classifier: String,
+    /// 判定超时（毫秒）；None 按默认值。超时按强档走。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -48,6 +62,9 @@ pub(crate) struct GroupMember {
     /// 「轮转」时的权重（每轮出现几次）；None / 0 按 1。其他策略不看它。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weight: Option<u32>,
+    /// 「按意图」时的档位：`light` = 快问题用的便宜模型；其余（含缺省）= 强档。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
 }
 
 /// 成员失败后的休置时长：可转移错误（429 / 5xx 等）之后这个成员排到候选末尾一会儿，
@@ -78,6 +95,17 @@ impl GroupMember {
     pub(crate) fn is_paused(&self, now: i64) -> bool {
         self.paused_until_ms.is_some_and(|until| until > now)
     }
+
+    /// 是否轻档成员（`intent` 策略）；缺省或其他值都算强档。
+    pub(crate) fn is_light(&self) -> bool {
+        self.tier.as_deref() == Some("light")
+    }
+}
+
+/// 「按意图」：判定档位的成员排到前面，另一档留在后面兜底（stable，档内顺序与会话亲和不变）。
+/// 判定为强档时轻档成员仍是兜底——强档都失败时用便宜模型答总比报错好。
+pub(crate) fn prefer_tier(members: &mut [GroupMember], light: bool) {
+    members.sort_by_key(|m| m.is_light() != light);
 }
 
 pub(crate) fn normalize_strategy(strategy: &str) -> &'static str {
@@ -86,34 +114,63 @@ pub(crate) fn normalize_strategy(strategy: &str) -> &'static str {
         "usage" => "usage",
         "smart" => "smart",
         "pace" => "pace",
+        "intent" => "intent",
         _ => "order",
     }
 }
 
-fn row_to_group(id: String, slug: String, name: String, strategy: String, members_json: String, created_ms: i64) -> Result<RoutingGroup, String> {
+type GroupRow = (String, String, String, String, String, i64, Option<String>);
+
+fn read_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<GroupRow> {
+    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+}
+
+fn row_to_group((id, slug, name, strategy, members_json, created_ms, intent_json): GroupRow) -> Result<RoutingGroup, String> {
     let members: Vec<GroupMember> = serde_json::from_str(&members_json)
         .map_err(|error| format!("分组「{name}」的成员配置无效：{error}"))?;
-    Ok(RoutingGroup { id, slug, name, strategy, members, created_ms })
+    // 意图配置坏了不拖垮分组：按没配置处理，选路时会如实说明并按强档走
+    let intent = intent_json.as_deref().and_then(|text| serde_json::from_str::<IntentConfig>(text).ok());
+    Ok(RoutingGroup { id, slug, name, strategy, members, created_ms, intent })
+}
+
+/// 「按意图」策略的保存前检查：判定模型必须是普通模型 id，且两档都至少有一个成员。
+fn validate_intent(strategy: &str, members: &[GroupMember], intent: Option<&IntentConfig>) -> Result<(), String> {
+    if strategy != "intent" {
+        return Ok(());
+    }
+    let Some(intent) = intent else {
+        return Err("「按意图」分组需要指定判意图用的模型".into());
+    };
+    let classifier = intent.classifier.trim();
+    if classifier.starts_with("group/") {
+        return Err("判意图用的模型不能是路由分组（会自己调自己）".into());
+    }
+    if crate::gateway::route::split_model_id(classifier).is_none() {
+        return Err("判意图用的模型要写成「来源/模型」".into());
+    }
+    if let Some(ms) = intent.timeout_ms {
+        if !(crate::gateway::intent::MIN_TIMEOUT_MS..=crate::gateway::intent::MAX_TIMEOUT_MS).contains(&ms) {
+            return Err(format!(
+                "判定超时要在 {}–{} 毫秒之间",
+                crate::gateway::intent::MIN_TIMEOUT_MS,
+                crate::gateway::intent::MAX_TIMEOUT_MS
+            ));
+        }
+    }
+    if !members.iter().any(GroupMember::is_light) || members.iter().all(GroupMember::is_light) {
+        return Err("「按意图」分组的强档和轻档都至少要有一个成员".into());
+    }
+    Ok(())
 }
 
 pub(crate) fn list(conn: &Connection) -> rusqlite::Result<Vec<RoutingGroup>> {
     let mut stmt = conn.prepare(
-        "SELECT id, slug, name, strategy, members_json, created_ms FROM routing_groups ORDER BY created_ms ASC",
+        "SELECT id, slug, name, strategy, members_json, created_ms, intent_json FROM routing_groups ORDER BY created_ms ASC",
     )?;
-    let rows = stmt.query_map([], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, String>(2)?,
-            r.get::<_, String>(3)?,
-            r.get::<_, String>(4)?,
-            r.get::<_, i64>(5)?,
-        ))
-    })?;
+    let rows = stmt.query_map([], read_row)?;
     let mut out = Vec::new();
     for row in rows {
-        let (id, slug, name, strategy, members_json, created_ms) = row?;
-        match row_to_group(id, slug, name, strategy, members_json, created_ms) {
+        match row_to_group(row?) {
             Ok(group) => out.push(group),
             // 单个分组的成员配置坏了不拖垮整个列表；管理界面能看到名字并修复它
             Err(error) => eprintln!("[路由分组] {error}"),
@@ -124,22 +181,13 @@ pub(crate) fn list(conn: &Connection) -> rusqlite::Result<Vec<RoutingGroup>> {
 
 pub(crate) fn get(conn: &Connection, slug: &str) -> Result<Option<RoutingGroup>, String> {
     conn.query_row(
-        "SELECT id, slug, name, strategy, members_json, created_ms FROM routing_groups WHERE slug = ?1",
+        "SELECT id, slug, name, strategy, members_json, created_ms, intent_json FROM routing_groups WHERE slug = ?1",
         [slug],
-        |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, String>(4)?,
-                r.get::<_, i64>(5)?,
-            ))
-        },
+        read_row,
     )
     .optional()
     .map_err(|error| error.to_string())?
-    .map(|(id, slug, name, strategy, members_json, created_ms)| row_to_group(id, slug, name, strategy, members_json, created_ms))
+    .map(row_to_group)
     .transpose()
 }
 
@@ -205,7 +253,14 @@ fn lookup_in(conn: &Connection) -> impl Fn(&str) -> Option<Vec<GroupMember>> + '
     move |slug: &str| get(conn, slug).ok().flatten().map(|group| group.members)
 }
 
-pub(crate) fn create(conn: &Connection, slug: &str, name: &str, strategy: &str, members: &[GroupMember]) -> Result<RoutingGroup, String> {
+pub(crate) fn create(
+    conn: &Connection,
+    slug: &str,
+    name: &str,
+    strategy: &str,
+    members: &[GroupMember],
+    intent: Option<&IntentConfig>,
+) -> Result<RoutingGroup, String> {
     validate_members(members)?;
     let members = &dedupe_members(members)[..];
     let slug = slug.trim();
@@ -214,17 +269,29 @@ pub(crate) fn create(conn: &Connection, slug: &str, name: &str, strategy: &str, 
     }
     check_nesting(slug, members, &lookup_in(conn))?;
     let strategy = normalize_strategy(strategy);
-    let id = format!("rg-{}", chrono::Utc::now().timestamp_millis());
+    validate_intent(strategy, members, intent)?;
+    // id 带上 slug：只用毫秒时间戳时，同一毫秒建两个分组会主键冲突、被误报成「id 已被占用」
+    let id = format!("rg-{}-{slug}", chrono::Utc::now().timestamp_millis());
     let members_json = serde_json::to_string(members).map_err(|error| format!("成员序列化失败：{error}"))?;
+    let intent_json = intent.map(serde_json::to_string).transpose().map_err(|error| format!("意图配置序列化失败：{error}"))?;
     conn.execute(
-        "INSERT INTO routing_groups(id, slug, name, strategy, members_json, created_ms) VALUES(?1,?2,?3,?4,?5,?6)",
-        rusqlite::params![id, slug, name.trim(), strategy, members_json, chrono::Utc::now().timestamp_millis()],
+        "INSERT INTO routing_groups(id, slug, name, strategy, members_json, created_ms, intent_json) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+        rusqlite::params![id, slug, name.trim(), strategy, members_json, chrono::Utc::now().timestamp_millis(), intent_json],
     )
     .map_err(|error| if error.to_string().contains("UNIQUE") { format!("分组 id「{slug}」已被占用") } else { error.to_string() })?;
     get(conn, slug)?.ok_or_else(|| "分组创建后读取失败".into())
 }
 
-pub(crate) fn update(conn: &Connection, slug: &str, name: Option<&str>, strategy: Option<&str>, members: Option<&[GroupMember]>) -> Result<(), String> {
+/// 更新分组：名称 / 策略 / 成员 / 意图配置都可选，缺省的保持原值。
+/// 合并后的结果按「按意图」规则再检查一次（例如只改策略为 intent 时也要有判定模型与两档成员）。
+pub(crate) fn update(
+    conn: &Connection,
+    slug: &str,
+    name: Option<&str>,
+    strategy: Option<&str>,
+    members: Option<&[GroupMember]>,
+    intent: Option<&IntentConfig>,
+) -> Result<(), String> {
     let deduped = members.map(dedupe_members);
     let members = deduped.as_deref();
     if let Some(members) = members {
@@ -232,13 +299,19 @@ pub(crate) fn update(conn: &Connection, slug: &str, name: Option<&str>, strategy
         check_nesting(slug, members, &lookup_in(conn))?;
     }
     let strategy = strategy.map(normalize_strategy);
+    if let Some(current) = get(conn, slug)? {
+        let merged_strategy = strategy.unwrap_or(current.strategy.as_str());
+        let merged_members = members.unwrap_or(&current.members);
+        validate_intent(merged_strategy, merged_members, intent.or(current.intent.as_ref()))?;
+    }
     let members_json = match members {
         Some(members) => Some(serde_json::to_string(members).map_err(|error| format!("成员序列化失败：{error}"))?),
         None => None,
     };
+    let intent_json = intent.map(serde_json::to_string).transpose().map_err(|error| format!("意图配置序列化失败：{error}"))?;
     conn.execute(
-        "UPDATE routing_groups SET name = COALESCE(?2, name), strategy = COALESCE(?3, strategy), members_json = COALESCE(?4, members_json) WHERE slug = ?1",
-        rusqlite::params![slug, name, strategy, members_json],
+        "UPDATE routing_groups SET name = COALESCE(?2, name), strategy = COALESCE(?3, strategy), members_json = COALESCE(?4, members_json), intent_json = COALESCE(?5, intent_json) WHERE slug = ?1",
+        rusqlite::params![slug, name, strategy, members_json, intent_json],
     )
     .map_err(|error| error.to_string())?;
     Ok(())
@@ -408,14 +481,14 @@ mod tests {
     use super::*;
 
     fn member(slug: &str, model: &str) -> GroupMember {
-        GroupMember { slug: slug.into(), model: model.into(), paused_until_ms: None, weight: None }
+        GroupMember { slug: slug.into(), model: model.into(), paused_until_ms: None, weight: None, tier: None }
     }
 
     #[test]
     fn weighted_rotation_gives_each_member_its_share_of_turns() {
         let mut heavy = member("a", "m1");
         heavy.weight = Some(3);
-        let group = RoutingGroup { id: "g".into(), slug: "weighted".into(), name: "带权".into(), strategy: "rotate".into(), members: vec![heavy, member("b", "m2")], created_ms: 0 };
+        let group = RoutingGroup { id: "g".into(), slug: "weighted".into(), name: "带权".into(), strategy: "rotate".into(), members: vec![heavy, member("b", "m2")], created_ms: 0, intent: None };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0;
         let firsts: Vec<String> = (0..8)
@@ -426,7 +499,7 @@ mod tests {
 
     #[test]
     fn a_member_that_just_failed_rests_at_the_back_then_returns() {
-        let group = RoutingGroup { id: "g".into(), slug: "rest-test".into(), name: "休置".into(), strategy: "order".into(), members: vec![member("a", "m1"), member("b", "m2")], created_ms: 0 };
+        let group = RoutingGroup { id: "g".into(), slug: "rest-test".into(), name: "休置".into(), strategy: "order".into(), members: vec![member("a", "m1"), member("b", "m2")], created_ms: 0, intent: None };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0;
         rest_member("rest-test", "a", "m1", 1_000);
@@ -451,20 +524,60 @@ mod tests {
             "CREATE TABLE IF NOT EXISTS routing_groups (
                 id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
                 strategy TEXT NOT NULL DEFAULT 'order', members_json TEXT NOT NULL DEFAULT '[]',
-                created_ms INTEGER NOT NULL);",
+                created_ms INTEGER NOT NULL, intent_json TEXT);",
         )
         .unwrap();
         conn
     }
 
     #[test]
+    fn intent_groups_need_a_classifier_and_both_tiers() {
+        let conn = memory_db();
+        let light = |slug: &str| GroupMember { tier: Some("light".into()), ..member(slug, "small") };
+        let config = |classifier: &str| IntentConfig { classifier: classifier.into(), timeout_ms: None };
+        let both = [member("a", "big"), light("b")];
+        let error = create(&conn, "i1", "意图", "intent", &both, None).unwrap_err();
+        assert!(error.contains("判意图"), "{error}");
+        let error = create(&conn, "i1", "意图", "intent", &both, Some(&config("group/other"))).unwrap_err();
+        assert!(error.contains("不能是路由分组"), "{error}");
+        let error = create(&conn, "i1", "意图", "intent", &both, Some(&config("bare-model"))).unwrap_err();
+        assert!(error.contains("来源/模型"), "{error}");
+        let error = create(&conn, "i1", "意图", "intent", &[member("a", "big")], Some(&config("j/m"))).unwrap_err();
+        assert!(error.contains("强档和轻档"), "{error}");
+        let slow = IntentConfig { classifier: "j/m".into(), timeout_ms: Some(60_000) };
+        assert!(create(&conn, "i1", "意图", "intent", &both, Some(&slow)).unwrap_err().contains("毫秒"));
+        let group = create(&conn, "i1", "意图", "intent", &both, Some(&config("j/m"))).unwrap();
+        assert_eq!(group.strategy, "intent");
+        assert_eq!(group.intent, Some(config("j/m")));
+        assert!(group.members[1].is_light() && !group.members[0].is_light());
+        // 更新按合并后的结果检查：去掉轻档成员要拒绝；其他策略不要求意图配置
+        assert!(update(&conn, "i1", None, None, Some(&[member("a", "big")]), None).unwrap_err().contains("强档和轻档"));
+        create(&conn, "plain", "普通", "order", &[member("a", "big")], None).unwrap();
+        assert!(update(&conn, "plain", None, Some("intent"), None, None).unwrap_err().contains("判意图"));
+        update(&conn, "plain", None, Some("intent"), Some(&both), Some(&config("j/m"))).unwrap();
+        assert_eq!(get(&conn, "plain").unwrap().unwrap().intent, Some(config("j/m")));
+    }
+
+    #[test]
+    fn prefer_tier_keeps_order_within_each_tier() {
+        let light = |slug: &str| GroupMember { tier: Some("light".into()), ..member(slug, "m") };
+        let mut members = vec![member("s1", "m"), light("l1"), member("s2", "m"), light("l2")];
+        prefer_tier(&mut members, true);
+        let order: Vec<&str> = members.iter().map(|m| m.slug.as_str()).collect();
+        assert_eq!(order, ["l1", "l2", "s1", "s2"]);
+        prefer_tier(&mut members, false);
+        let order: Vec<&str> = members.iter().map(|m| m.slug.as_str()).collect();
+        assert_eq!(order, ["s1", "s2", "l1", "l2"]);
+    }
+
+    #[test]
     fn create_requires_nonempty_members_and_slug_shape() {
         let conn = memory_db();
-        assert!(create(&conn, "daily", "日常", "order", &[]).is_err(), "空成员要拒绝");
-        assert!(create(&conn, "Daily", "日常", "order", &[member("zcode", "glm-5.3")]).is_err(), "大写 id 要拒绝");
-        let group = create(&conn, "daily", "日常", "order", &[member("zcode", "glm-5.3")]).unwrap();
+        assert!(create(&conn, "daily", "日常", "order", &[], None).is_err(), "空成员要拒绝");
+        assert!(create(&conn, "Daily", "日常", "order", &[member("zcode", "glm-5.3")], None).is_err(), "大写 id 要拒绝");
+        let group = create(&conn, "daily", "日常", "order", &[member("zcode", "glm-5.3")], None).unwrap();
         assert_eq!(group.strategy, "order");
-        assert!(create(&conn, "daily", "重复", "order", &[member("zcode", "glm-5.3")]).is_err(), "slug 要唯一");
+        assert!(create(&conn, "daily", "重复", "order", &[member("zcode", "glm-5.3")], None).is_err(), "slug 要唯一");
     }
 
     #[test]
@@ -483,6 +596,7 @@ mod tests {
             strategy: "rotate".into(),
             members: vec![member("a", "m1"), member("b", "m2"), member("c", "m3")],
             created_ms: 0,
+            intent: None,
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;
@@ -528,6 +642,7 @@ mod tests {
             strategy: "order".into(),
             members: vec![member("a", "m1"), member("b", "m2")],
             created_ms: 0,
+            intent: None,
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0;
@@ -553,6 +668,7 @@ mod tests {
             strategy: "usage".into(),
             members: vec![member("a", "m1"), member("b", "m2")],
             created_ms: 0,
+            intent: None,
         };
         let mut state = std::collections::HashMap::new();
         let usage = |slug: &str| if slug == "a" { 100 } else { 3 };
@@ -572,6 +688,7 @@ mod tests {
             strategy: "smart".into(),
             members: vec![member("a", "m1"), member("b", "m2")],
             created_ms: 0,
+            intent: None,
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;
@@ -590,6 +707,7 @@ mod tests {
             strategy: "pace".into(),
             members: vec![member("a", "m1"), member("b", "m2")],
             created_ms: 0,
+            intent: None,
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;
@@ -608,6 +726,7 @@ mod tests {
             strategy: "smart".into(),
             members: vec![member("a", "m1"), member("b", "m2")],
             created_ms: 0,
+            intent: None,
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;
@@ -631,6 +750,7 @@ mod tests {
             strategy: "order".into(),
             members: vec![a, member("b", "m2")],
             created_ms: 0,
+            intent: None,
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;
@@ -655,6 +775,7 @@ mod tests {
             strategy: "order".into(),
             members: vec![a],
             created_ms: 0,
+            intent: None,
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;
@@ -672,6 +793,7 @@ mod tests {
             strategy: "order".into(),
             members: vec![member("a", "m1"), member("b", "m2")],
             created_ms: 0,
+            intent: None,
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;

@@ -14,8 +14,9 @@ const catalog = [
   { id: "empty/y", source: "坏数据", slug: "empty", model: "", kind: "api", status: "connected" },
 ]
 
-test("策略文案：五个策略，smart / pace 说明按额度重置时间排序，未知值原样返回", () => {
-  assert.equal(ROUTING_STRATEGIES.length, 5)
+test("策略文案：六个策略，smart / pace 说明按额度重置时间排序，未知值原样返回", () => {
+  assert.equal(ROUTING_STRATEGIES.length, 6)
+  assert.equal(strategyText("intent"), "按意图（小模型分强 / 轻档）")
   assert.equal(strategyText("order"), "顺序（失败换下一个）")
   assert.equal(strategyText("rotate"), "轮转（逐请求换）")
   assert.equal(strategyText("usage"), "用量最少优先")
@@ -113,3 +114,25 @@ test("成员固定档位写在模型名后，身份按基础模型认；权重 1
   assert.equal(setMemberWeight(members, members[0], 1)[0].weight, null)
 })
 
+
+test("按意图：档位切换与保存前检查和后端同规则", async () => {
+  const { intentError, intentConfig, isLightMember, setMemberTier, strategyOrderNote } = await import("./routingGroups.ts")
+  const members = [{ slug: "big", model: "opus" }, { slug: "small", model: "haiku" }]
+  assert.equal(intentError(members, "judge/mini", ""), "强档和轻档都至少要有一个成员。", "全是强档")
+  const tiered = setMemberTier(members, members[1], true)
+  assert.equal(isLightMember(tiered[1]), true)
+  assert.equal(isLightMember(tiered[0]), false, "缺省算强档")
+  assert.equal(intentError(tiered, "judge/mini", ""), null)
+  assert.equal(intentError(tiered, "", ""), "选一个判意图用的模型。")
+  assert.match(intentError(tiered, "group/auto", ""), /不能是路由分组/)
+  assert.match(intentError(tiered, "mini", ""), /来源\/模型/)
+  assert.match(intentError(tiered, "judge/mini", "100"), /500–15000/)
+  assert.match(intentError(tiered, "judge/mini", "1.5"), /毫秒/)
+  assert.equal(intentError(tiered, "judge/mini", "3000"), null)
+  const allLight = setMemberTier(tiered, tiered[0], true)
+  assert.equal(intentError(allLight, "judge/mini", ""), "强档和轻档都至少要有一个成员。", "全是轻档")
+  assert.equal(setMemberTier(tiered, tiered[1], false)[1].tier, null, "切回强档清掉字段")
+  assert.deepEqual(intentConfig(" judge/mini ", ""), { classifier: "judge/mini", timeout_ms: null })
+  assert.deepEqual(intentConfig("judge/mini", "3000"), { classifier: "judge/mini", timeout_ms: 3000 })
+  assert.match(strategyOrderNote("intent"), /判不出时走强档/)
+})

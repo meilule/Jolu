@@ -9,6 +9,7 @@ import {
   PAUSE_CHOICES, ROUTING_STRATEGIES, hasRoutingMember, isMemberPaused, offCatalogMembers, pauseMember, pausedText,
   routingMemberId, routingSlugError, selectableCatalog, strategyOrderNote, strategyText, toggleRoutingMember,
   MEMBER_EFFORTS, memberParts, setMemberEffort, setMemberWeight,
+  INTENT_TIMEOUT_RANGE, intentConfig, intentError, isLightMember, setMemberTier,
   type RoutingGroupDto, type RoutingMember,
 } from "./routingGroups"
 
@@ -44,10 +45,14 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
   const [newSlug, setNewSlug] = useState("")
   const [newStrategy, setNewStrategy] = useState("order")
   const [newMembers, setNewMembers] = useState<RoutingMember[]>([])
+  const [newClassifier, setNewClassifier] = useState("")
+  const [newTimeout, setNewTimeout] = useState("")
 
   /* ── 编辑表单（点开一行后从该分组带入） ── */
   const [editStrategy, setEditStrategy] = useState("order")
   const [editMembers, setEditMembers] = useState<RoutingMember[]>([])
+  const [editClassifier, setEditClassifier] = useState("")
+  const [editTimeout, setEditTimeout] = useState("")
 
   const reload = () => {
     if (!isTauri) return
@@ -79,23 +84,33 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
     setExpanded(slug)
     setEditStrategy(group.strategy)
     setEditMembers(group.members)
+    setEditClassifier(group.intent?.classifier ?? "")
+    setEditTimeout(group.intent?.timeout_ms ? String(group.intent.timeout_ms) : "")
   }
 
-  const resetCreating = () => { setCreating(false); setNewName(""); setNewSlug(""); setNewStrategy("order"); setNewMembers([]) }
+  const resetCreating = () => {
+    setCreating(false); setNewName(""); setNewSlug(""); setNewStrategy("order"); setNewMembers([]); setNewClassifier(""); setNewTimeout("")
+  }
 
   const slugTrimmed = newSlug.trim()
   const slugError = routingSlugError(slugTrimmed)
   const slugTaken = !!groups?.some((item) => item.slug === slugTrimmed)
-  const canCreate = !!newName.trim() && !!slugTrimmed && !slugError && !slugTaken && newMembers.length > 0
+  const newIntentError = newStrategy === "intent" ? intentError(newMembers, newClassifier, newTimeout) : null
+  const canCreate = !!newName.trim() && !!slugTrimmed && !slugError && !slugTaken && newMembers.length > 0 && !newIntentError
+  const editIntentError = editStrategy === "intent" ? intentError(editMembers, editClassifier, editTimeout) : null
 
   const create = async () => {
     const name = newName.trim()
-    const ok = await run(() => gatewayApi.groupCreate(slugTrimmed, name, newStrategy, newMembers), `已新建分组「${name}」`)
+    const intent = newStrategy === "intent" ? intentConfig(newClassifier, newTimeout) : null
+    const ok = await run(() => gatewayApi.groupCreate(slugTrimmed, name, newStrategy, newMembers, intent), `已新建分组「${name}」`)
     if (ok) { resetCreating(); reload() }
   }
 
   const saveEdit = async (group: RoutingGroupDto) => {
-    const ok = await run(() => gatewayApi.groupUpdate(group.slug, { strategy: editStrategy, members: editMembers }), "已保存分组")
+    const patch = editStrategy === "intent"
+      ? { strategy: editStrategy, members: editMembers, intent: intentConfig(editClassifier, editTimeout) }
+      : { strategy: editStrategy, members: editMembers }
+    const ok = await run(() => gatewayApi.groupUpdate(group.slug, patch), "已保存分组")
     if (ok) { setExpanded(null); reload() }
   }
 
@@ -151,11 +166,16 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
                             </select>
                           </div>
                           {strategyOrderNote(editStrategy) && <span className="text-[9.5px] text-jolu-muted">{strategyOrderNote(editStrategy)}</span>}
-                          <MemberPicker catalog={catalog} members={editMembers} disabled={busy} onChange={setEditMembers} />
+                          {editStrategy === "intent" && (
+                            <IntentFields catalog={catalog} classifier={editClassifier} timeout={editTimeout} disabled={busy}
+                              onClassifier={setEditClassifier} onTimeout={setEditTimeout} label={group.name} />
+                          )}
+                          <MemberPicker catalog={catalog} members={editMembers} disabled={busy} onChange={setEditMembers} showTier={editStrategy === "intent"} />
                           <div className="flex items-center gap-2">
-                            <Button label="保存" primary disabled={busy || editMembers.length === 0} onClick={() => void saveEdit(group)} />
+                            <Button label="保存" primary disabled={busy || editMembers.length === 0 || !!editIntentError} onClick={() => void saveEdit(group)} />
                             <Button label="取消" disabled={busy} onClick={() => setExpanded(null)} />
                             {editMembers.length === 0 && <span className="text-[9.5px] text-jolu-warn">至少保留一个成员。</span>}
+                            {editMembers.length > 0 && editIntentError && <span className="text-[9.5px] text-jolu-warn">{editIntentError}</span>}
                           </div>
                         </div>
                       )}
@@ -191,14 +211,19 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
                   {strategyOrderNote(newStrategy) && <span className="text-[9.5px] text-jolu-muted">{strategyOrderNote(newStrategy)}</span>}
                   {slugError && <span className="text-[9.5px] text-jolu-danger">{slugError}</span>}
                   {slugTaken && <span className="text-[9.5px] text-jolu-danger">「{slugTrimmed}」已经有同 id 的分组。</span>}
+                  {newStrategy === "intent" && (
+                    <IntentFields catalog={catalog} classifier={newClassifier} timeout={newTimeout} disabled={busy}
+                      onClassifier={setNewClassifier} onTimeout={setNewTimeout} label="新建分组" />
+                  )}
                   <div className="flex flex-col gap-1">
                     <span className="text-[9.5px] text-jolu-muted">成员 · 勾选即加入，模型 id = 来源/模型</span>
-                    <MemberPicker catalog={catalog} members={newMembers} disabled={busy} onChange={setNewMembers} />
+                    <MemberPicker catalog={catalog} members={newMembers} disabled={busy} onChange={setNewMembers} showTier={newStrategy === "intent"} />
                   </div>
                   <div className="flex items-center gap-2">
                     <Button label="创建" primary disabled={busy || !canCreate} onClick={() => void create()} />
                     <Button label="取消" disabled={busy} onClick={resetCreating} />
                     {newMembers.length === 0 && <span className="text-[9.5px] text-jolu-muted">至少勾选一个成员。</span>}
+                    {newMembers.length > 0 && newIntentError && <span className="text-[9.5px] text-jolu-warn">{newIntentError}</span>}
                   </div>
                 </div>
               ) : (
@@ -229,12 +254,49 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
   )
 }
 
+/**
+ * 「按意图」的判定设置（待确认：Jolu.pen 无画板）：判意图用的模型从目录里选（不含分组），
+ * 超时可空（默认 4000 毫秒）。判定模型宜选便宜、快的小模型——每个新提问都会调一次。
+ */
+function IntentFields({ catalog, classifier, timeout, disabled, onClassifier, onTimeout, label }: {
+  catalog: CatalogModelDto[]
+  classifier: string
+  timeout: string
+  disabled?: boolean
+  onClassifier: (value: string) => void
+  onTimeout: (value: string) => void
+  label: string
+}) {
+  const ids = selectableCatalog(catalog).map((item) => routingMemberId({ slug: item.slug, model: item.model }))
+  // 已保存的判定模型不在目录里（来源下架等）时保留显示，不悄悄换成别的
+  const options = classifier && !ids.includes(classifier) ? [classifier, ...ids] : ids
+  return (
+    <div className="flex flex-wrap items-end gap-2">
+      <label className="flex min-w-[180px] flex-1 flex-col gap-1">
+        <span className="text-[9.5px] text-jolu-muted">判意图用的模型（选便宜、快的）</span>
+        <select value={classifier} disabled={disabled} aria-label={`「${label}」判意图用的模型`} className={SELECT}
+          onChange={(event) => onClassifier(event.target.value)}>
+          <option value="">选择模型…</option>
+          {options.map((id) => <option key={id} value={id}>{id}{ids.includes(id) ? "" : "（不在目录）"}</option>)}
+        </select>
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-[9.5px] text-jolu-muted">判定超时（毫秒，可空）</span>
+        <input value={timeout} disabled={disabled} inputMode="numeric" aria-label={`「${label}」的判定超时`}
+          placeholder={`默认 ${INTENT_TIMEOUT_RANGE.fallback}`} onChange={(event) => onTimeout(event.target.value)} className={cn(INPUT, "w-[120px]")} />
+      </label>
+    </div>
+  )
+}
+
 /** 成员多选：模型目录条目（勾选即成员）+ 目录外的现存成员（保留显示，可取消勾选移除）。 */
-function MemberPicker({ catalog, members, disabled, onChange }: {
+function MemberPicker({ catalog, members, disabled, onChange, showTier }: {
   catalog: CatalogModelDto[]
   members: RoutingMember[]
   disabled?: boolean
   onChange: (next: RoutingMember[]) => void
+  /** 「按意图」时每个已选成员多一个强 / 轻档切换 */
+  showTier?: boolean
 }) {
   const rows: { key: string; member: RoutingMember; off: boolean }[] = [
     ...selectableCatalog(catalog).map((item) => ({ key: routingMemberId({ slug: item.slug, model: item.model }), member: { slug: item.slug, model: item.model }, off: false })),
@@ -252,6 +314,17 @@ function MemberPicker({ catalog, members, disabled, onChange }: {
             const current = members.find((item) => item.slug === row.member.slug && memberParts(item.model).base === memberParts(row.member.model).base) ?? row.member
             return (
               <>
+                {showTier && (
+                  /* 待确认：意图档位在 Jolu.pen 没有画板 */
+                  <select value={isLightMember(current) ? "light" : "strong"} disabled={disabled} aria-label={`${routingMemberId(row.member)} 的意图档位`}
+                    title="强档答需要动脑的提问，轻档答快问题"
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={(event) => onChange(setMemberTier(members, row.member, event.target.value === "light"))}
+                    className="h-5 rounded border border-jolu-border bg-jolu-bg px-1 text-[9px] text-jolu-muted outline-none focus:border-jolu-accent">
+                    <option value="strong">强档</option>
+                    <option value="light">轻档</option>
+                  </select>
+                )}
                 {/* 待确认：固定档位与轮转权重在 Jolu.pen 没有画板 */}
                 <select value={memberParts(current.model).effort ?? ""} disabled={disabled} aria-label={`${routingMemberId(row.member)} 的固定档位`}
                   title="固定推理档位：转发给这个成员时按此档位问上游（请求本来没要推理时不加）"
