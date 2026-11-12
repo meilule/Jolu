@@ -56,22 +56,23 @@ function byTension(a: Candidate, b: Candidate): number {
   return a.index - b.index
 }
 
-/** 订阅窗口的环序：周额度在外、5 小时在内（与改造前的内外圈一致） */
-const PLAN_KIND_ORDER: Readonly<Record<string, number>> = { "weekly-7d": 0, "rolling-5h": 1 }
+/** 按窗口长度定内外圈：月额度最外（4.2，待确认）、周额度其次、5 小时在内（与改造前的内外圈一致） */
+const LONG_KIND_ORDER: Readonly<Record<string, number>> = { monthly: 0, "weekly-7d": 1, "rolling-5h": 2 }
+
+function ringRank(window: QuotaWindow): number {
+  const rank = LONG_KIND_ORDER[windowSpec(window.key)?.kind ?? ""]
+  if (rank !== undefined) return rank
+  // 其他订阅窗口排在长窗口之后、日额度 / 积分之前
+  return isPlanWindowKey(window.key) ? 3 : 4
+}
 
 /**
- * 环序：订阅窗口在前（外圈），日额度 / 积分在后（内圈）；组内订阅按窗口长度、
- * 其余按水位从紧到松。
+ * 环序：月 / 周 / 5 小时按窗口长度在外圈，日额度 / 积分在内圈；同一档按水位从紧到松。
  */
 function byRingOrder(a: Candidate, b: Candidate): number {
-  const planA = isPlanWindowKey(a.window.key)
-  const planB = isPlanWindowKey(b.window.key)
-  if (planA !== planB) return planA ? -1 : 1
-  if (planA) {
-    const rankA = PLAN_KIND_ORDER[windowSpec(a.window.key)?.kind ?? ""] ?? 0
-    const rankB = PLAN_KIND_ORDER[windowSpec(b.window.key)?.kind ?? ""] ?? 0
-    if (rankA !== rankB) return rankA - rankB
-  }
+  const rankA = ringRank(a.window)
+  const rankB = ringRank(b.window)
+  if (rankA !== rankB) return rankA - rankB
   return byTension(a, b)
 }
 

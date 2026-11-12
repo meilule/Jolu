@@ -5,6 +5,7 @@ import { LiveTokenCounter } from "@/lib/liveTokenCounter"
 import { LiveCounts } from "@/lib/liveCounts"
 import type { DeltaPhase } from "@/components/island/TokenDelta"
 import type { SessionActivity } from "@/types"
+import { islandAttribution } from "@/lib/islandPresentation"
 
 export interface LiveUsage {
   /**
@@ -222,6 +223,7 @@ export function useLiveUsage(platform: string, enabled = true, dnd = false, paus
         updatedAtMs: session.last_seen_ms,
         startedAtMs: session.started_at_ms ?? undefined,
         highlighted: updatedIds.has(session.session_id),
+        source: sessionSource(session.attribution),
       } as SessionActivity)))
       if (updatedIds.size > 0) {
         if (highlightTimer !== null) window.clearTimeout(highlightTimer)
@@ -285,3 +287,8 @@ export function useLiveUsage(platform: string, enabled = true, dnd = false, paus
   }
 }
 
+/** 会话行的来源（4.2）：只有归到唯一已存连接（exact / mapped）时才给，平台档不显示 */
+function sessionSource(attribution: Parameters<typeof islandAttribution>[0]): SessionActivity["source"] {
+  const view = islandAttribution(attribution)
+  return view ? { name: view.name, confidence: view.confidence } : undefined
+}

@@ -98,3 +98,12 @@ test("lastWriteAt：取最新的会话时刻，时刻未知的会话不参与", 
   assert.equal(lastWriteAt([session("done")]), null)
   assert.equal(lastWriteAt([]), null)
 })
+
+test("可信度三档：运行中 / 在途为确证，只靠最近写入为推测，来源出错且无证据为不知道（4.2）", () => {
+  assert.equal(work([session("running")], { recentWindow: false }).level, "confirmed")
+  assert.equal(work([], { inFlight: 1 }).level, "confirmed")
+  assert.equal(work([session("unknown", 5_000)]).level, "inferred")
+  assert.equal(work([session("unknown", 5_000)], { sourceFailed: true }).level, "inferred", "有推测证据时不压成不知道")
+  assert.equal(work([], { sourceFailed: true }).level, "unknown")
+  assert.equal(work([session("done", 600_000)]).level, "idle")
+})

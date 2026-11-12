@@ -1332,6 +1332,17 @@ pub fn take_resume_confirmed(conn: &Connection, run_id: i64) -> rusqlite::Result
     Ok(n == 1)
 }
 
+/// 有任务在等额度恢复的账号（4.2：灵动岛「等额度」表情的数据源）。
+/// 只算未暂停任务的等待运行——暂停的任务不会被额度恢复唤醒，不该让岛一直显示在等。
+pub fn waiting_connections(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT json_extract(r.task_snapshot, '$.connection_id') FROM automation_runs r JOIN automation_tasks t ON t.id = r.task_id
+         WHERE r.status = 'waiting' AND t.state != 'paused' AND json_extract(r.task_snapshot, '$.connection_id') IS NOT NULL",
+    )?;
+    let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<_, _>>()?;
+    Ok(ids)
+}
+
 /// 该账号下等待额度的运行：额度检查前记下，检查后转为「需要处理」的发失败通知
 fn waiting_runs(conn: &Connection, connection_id: &str) -> rusqlite::Result<Vec<i64>> {
     let mut stmt = conn.prepare(
@@ -1973,6 +1984,12 @@ pub async fn automation_overview(app: AppHandle) -> Result<Overview, String> {
     blocking(&app, |conn| overview(conn, now_ms()).map_err(|e| e.to_string())).await
 }
 
+/// 有任务在等额度的账号 id（灵动岛用；变化时随 `automation-changed` 重查）。
+#[tauri::command]
+pub async fn automation_waiting_connections(app: AppHandle) -> Result<Vec<String>, String> {
+    blocking(&app, |conn| waiting_connections(conn).map_err(|e| e.to_string())).await
+}
+
 #[tauri::command]
 pub async fn automation_task(app: AppHandle, id: i64) -> Result<TaskDetail, String> {
     blocking(&app, move |conn| task_detail(conn, id)).await
@@ -2368,6 +2385,23 @@ mod tests {
             wait_deadline: None,
             serial_queue: true,
         }
+    }
+
+    #[test]
+    fn waiting_connections_list_accounts_with_unpaused_waiting_runs() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        assert!(waiting_connections(&conn).unwrap().is_empty());
+        let first = create_task(&conn, &input("quota"), 1_000).unwrap();
+        let mut other = input("quota");
+        other.connection_id = "c2".into();
+        create_task(&conn, &other, 1_001).unwrap();
+        create_task(&conn, &input("now"), 1_002).unwrap();
+        let mut ids = waiting_connections(&conn).unwrap();
+        ids.sort();
+        assert_eq!(ids, ["c1", "c2"], "同一账号去重；立即执行的任务不算等额度");
+        conn.execute("UPDATE automation_tasks SET state='paused' WHERE id=?1", [first]).unwrap();
+        assert_eq!(waiting_connections(&conn).unwrap(), ["c2"], "暂停的任务不算在等");
     }
 
     #[test]

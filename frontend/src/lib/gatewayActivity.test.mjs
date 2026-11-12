@@ -123,3 +123,12 @@ test("合并快照：快照之后结束的实时请求补加到今日统计，�
   assert.equal(merged.lastByAgent.codex.source, "zhipu", "快照补齐实时没有的 Agent")
   assert.equal(merged.shown.phase, "ok", "保留正在显示的结果")
 })
+
+test("在途记录带上被调用来源的连接 id；结束事件缺 id 时沿用开始事件的", () => {
+  let s = onStart(emptyActivity(T0), { ...start(7), connection_id: "conn-b" }, T0)
+  assert.equal(s.shown.connectionId, "conn-b")
+  s = onEnd(s, end(7), T0 + 1000)
+  assert.equal(s.shown.connectionId, "conn-b")
+  const old = onStart(emptyActivity(T0), start(8), T0)
+  assert.equal(old.shown.connectionId, null, "旧版后端不带 id")
+})

@@ -140,3 +140,11 @@ test("每段都落在半径上、长轴沿半径（放射状，与画板的 180 
     assert.ok(Math.abs(cross) < 1e-9, `段 ${index} 的长轴不是径向`)
   }
 })
+
+test("月窗口：弧段环、蓝色，按窗口长度排在最外圈（4.2，待确认）", async () => {
+  const { windowRingColor } = await import("./providers/registry.ts")
+  assert.equal(windowRingColor("30d", "grok"), "var(--pn-capsule-blue)")
+  assert.deepEqual(quotaRings("grok", [w("7d", 40), w("30d", 60)]).map((r) => r.window.key), ["30d", "7d"])
+  assert.deepEqual(quotaRings("opencode", [w("5h", 95), w("30d", 90)]).map((r) => r.window.key), ["30d", "5h"])
+  assert.deepEqual(quotaRings("opencode", [w("5h", 10), w("7d", 20), w("30d", 90)]).map((r) => r.window.key), ["30d", "7d"], "仍按最紧的两个选，再按长度排")
+})

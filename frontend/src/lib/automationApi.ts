@@ -210,6 +210,8 @@ export const AUTOMATION_CHANGED = "automation-changed"
 
 export const automationApi = {
   overview: () => invoke<AutomationOverviewDto>("automation_overview"),
+  /** 有任务在等额度恢复的账号 id（灵动岛「等额度」表情用） */
+  waitingConnections: () => invoke<string[]>("automation_waiting_connections"),
   task: (id: number) => invoke<TaskDetailDto>("automation_task", { id }),
   create: (input: TaskInputDto) => invoke<number>("automation_create", { input }),
   update: (id: number, input: TaskInputDto) => invoke<void>("automation_update", { id, input }),

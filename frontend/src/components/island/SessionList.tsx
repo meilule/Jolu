@@ -37,11 +37,17 @@ export function SessionList({
   sessions,
   totalCount,
   showUnknownTag = false,
+  onOpen,
+  showSource = false,
 }: {
   sessions: SessionActivity[]
   /** 当前范围内的会话总数，用于计算「还有 N 个会话」 */
   totalCount?: number
   showUnknownTag?: boolean
+  /** 点击 / 回车打开该会话（4.2 胶囊：在主窗口会话线程定位）；不传时行不可点 */
+  onOpen?: (session: SessionActivity) => void
+  /** 行内显示会话归到的连接名（4.2 胶囊）；经典样式不传，保持现状 */
+  showSource?: boolean
 }) {
   const [now, setNow] = useState(Date.now)
   const listRef = useRef<HTMLDivElement>(null)
@@ -116,7 +122,7 @@ export function SessionList({
         onPointerDown={(event) => event.stopPropagation()}
         onDoubleClick={(event) => event.stopPropagation()}>
       {sessions.map((s) => (
-        <SessionRow key={s.id} session={s} elapsed={elapsed(s)} showUnknownTag={showUnknownTag} />
+        <SessionRow key={s.id} session={s} elapsed={elapsed(s)} showUnknownTag={showUnknownTag} onOpen={onOpen} showSource={showSource} />
       ))}
       </div>
       {remaining > 0 && (
@@ -128,10 +134,12 @@ export function SessionList({
 }
 
 /** 单行会话。逐帧 Token 由本行按 countKey 订阅：追数时只有数字变化的行重渲染。 */
-function SessionRow({ session: s, elapsed, showUnknownTag }: {
+function SessionRow({ session: s, elapsed, showUnknownTag, onOpen, showSource }: {
   session: SessionActivity
   elapsed: string
   showUnknownTag: boolean
+  onOpen?: (session: SessionActivity) => void
+  showSource?: boolean
 }) {
   const live = useLiveCount(s.countKey)
   const deltaText = s.countKey ? (live == null ? "—" : `+${compactTokens(live)} Token`) : s.deltaText
@@ -139,9 +147,14 @@ function SessionRow({ session: s, elapsed, showUnknownTag }: {
     <div
       data-session-id={s.id}
       tabIndex={0}
-      aria-label={`${s.title}，本轮已执行 ${elapsed}，${deltaText === "—" ? "Token 暂无数据" : deltaText}`}
+      role={onOpen ? "button" : undefined}
+      title={onOpen ? "在主窗口打开这个会话" : undefined}
+      onClick={onOpen ? () => onOpen(s) : undefined}
+      onKeyDown={onOpen ? (event) => { if (event.key === "Enter") { event.preventDefault(); onOpen(s) } } : undefined}
+      aria-label={`${s.title}，本轮已执行 ${elapsed}，${deltaText === "—" ? "Token 暂无数据" : deltaText}${onOpen ? "。按 Enter 在主窗口打开" : ""}`}
       className={cn(
         "flex w-full shrink-0 items-center gap-2 rounded-[6px] px-1 py-0.5 transition-colors focus:outline-none focus:ring-1 focus:ring-inset focus:ring-accent-blue",
+        onOpen && "cursor-pointer hover:bg-black/[0.04] dark:hover:bg-white/[0.06]",
         s.highlighted && "bg-success-soft",
       )}
     >
@@ -149,6 +162,13 @@ function SessionRow({ session: s, elapsed, showUnknownTag }: {
       <span className="min-w-0 flex-1 truncate text-xs text-text-primary" title={s.title}>
         {s.title}
       </span>
+      {showSource && s.source && (
+        // 待确认（无画板）：mapped 是按配置推断的连接，用更浅的颜色区分
+        <span className={cn("max-w-[88px] shrink-0 truncate text-[10px]", s.source.confidence === "exact" ? "text-text-secondary" : "text-text-tertiary")}
+          title={s.source.confidence === "exact" ? `实际调用：${s.source.name}` : `按配置推断：${s.source.name}`}>
+          {s.source.name}
+        </span>
+      )}
       <StateTag state={s.state} showUnknown={showUnknownTag} />
       <span className="tnum shrink-0 font-mono text-[10px] text-text-secondary" title="本轮任务已执行时间">
         {elapsed}

@@ -68,6 +68,13 @@ export interface ActiveSession {
   attribution?: AttributionDto
 }
 
+/** 今日按连接分解（与后端 `usage_stats::SourceBreakdown` 一致） */
+export interface SourceBreakdownDto {
+  rows: { connection_id: string; name: string | null; requests: number; tokens: number | null }[]
+  total_requests: number
+  unattributed_requests: number
+}
+
 export interface LiveUsageDto {
   platform: string
   cursor: number
@@ -207,6 +214,8 @@ export type MainIntentDto =
   | { kind: "settings"; section: string }
   | { kind: "about"; version: string }
   | { kind: "automation"; task_id: number }
+  | { kind: "sessions"; platform: string; session_id: string }
+  | { kind: "usage"; platform: string | null; connection_id: string | null }
 
 /** 在系统默认浏览器打开链接。桌面端走 opener 插件，浏览器预览用新标签 */
 export async function openUrl(url: string): Promise<void> {
@@ -505,6 +514,10 @@ export const api = {
   setIslandStyle: (style: IslandStyle) => invoke<AppSettings>("set_island_style", { style }),
   /** 从灵动岛打开主窗口的指定页面（模型入口 / 灵动岛 / 供应商） */
   openMainSection: (section: "gateway" | "island" | "connections") => invoke<void>("open_main_section", { section }),
+  /** 灵动岛点会话：主窗口打开会话线程并定位 */
+  openMainSession: (platform: string, sessionId: string) => invoke<void>("open_main_session", { platform, sessionId }),
+  /** 灵动岛「查看用量」：主窗口打开用量统计，按今天与平台 / 连接预筛 */
+  openMainUsage: (platform: string | null, connectionId: string | null) => invoke<void>("open_main_usage", { platform, connectionId }),
   setRetentionDays: (days: number | null) => invoke<AppSettings>("set_retention_days", { days }),
   cleanupPreview: (days: number) => invoke<CleanupPreviewDto>("cleanup_preview", { days }),
   cleanupHistory: (days: number) => invoke<CleanupPreviewDto>("cleanup_history", { days }),
@@ -626,6 +639,8 @@ export const api = {
     invoke<LiveUsageDto>("live_usage", { platform, since }),
   /** 用量统计（模块 C）：概览与用量分析 */
   statsOverview: (filter: StatsFilterDto) => invoke<StatsOverviewDto>("stats_overview", { filter }),
+  /** 今日按已存连接分解（灵动岛展开卡片）；没有归属的记录单独计数 */
+  islandSourceBreakdown: (platform: string | null) => invoke<SourceBreakdownDto>("island_source_breakdown", { platform }),
   /** 全年活跃日历：只按供应商与账号筛选 */
   statsActivity: (platform: string | null, connections: string[], nowMs: number) =>
     invoke<StatsActivityDto>("stats_activity", { platform, connections, nowMs }),

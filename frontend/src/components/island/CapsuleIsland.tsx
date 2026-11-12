@@ -15,7 +15,8 @@ import { quotaRowsFor } from "@/lib/authQuotaRows"
 import { capsuleQuotaChips, CHIP_NAME_MAX_WIDTH, compactQuotaNumber, type CapsuleChipWindow } from "@/lib/capsuleQuotaChips"
 import { islandBucketQuotaView } from "@/lib/islandQuotaBuckets"
 import { quotaRings } from "@/lib/quotaRings"
-import { listenEvent } from "@/lib/api"
+import { api, compactTokens, isTauri, listenEvent } from "@/lib/api"
+import { sourceBreakdownView } from "@/lib/islandPresentation"
 import { useLiveCount } from "@/lib/liveCounts"
 import { islandIdFromSearch } from "@/lib/islandProfile"
 import { reducedMotion } from "@/lib/motion"
@@ -134,9 +135,13 @@ export function CapsuleIsland({
    * ZCode 本机登录只返回日额度桶，不是套餐窗口，但照样进环。
    * 顺序是外圈在前：订阅窗口优先、日额度在后；未知（没有已用百分比）的窗口不画环。
    */
+  // 4.2：网关正在调用另一条订阅连接时，额度环临时换成那条连接的额度（待确认：无画板，只换环不加新元素）
+  const follow = data.relayQuota ?? null
+  const ringPlatform = follow?.platform ?? data.platform
   const ringWindows = useMemo(
-    () => (data.kind === "auth" && !data.unavailable ? quotaRings(data.platform, data.quotas) : []),
-    [data.kind, data.unavailable, data.platform, data.quotas],
+    () => (follow ? quotaRings(follow.platform, follow.windows)
+      : data.kind === "auth" && !data.unavailable ? quotaRings(data.platform, data.quotas) : []),
+    [follow, data.kind, data.unavailable, data.platform, data.quotas],
   )
   const ringsFor = (aria: boolean): BotRing[] => ringWindows.map((ring) => {
     const q = ring.window
@@ -145,9 +150,9 @@ export function CapsuleIsland({
       p: q.usedPercent,
       // 几何跟着窗口走：5h / 7d 弧段环，日额度 / 积分桶刻度环
       geometry: ring.geometry,
-      color: ringColor(q, data.platform),
+      color: ringColor(q, ringPlatform),
       warn: q.usedPercent !== null && q.usedPercent >= 80,
-      aria: aria ? `${windowLabel(q)}额度${q.usedPercent === null ? "未知" : `已用 ${Math.round(q.usedPercent)}%`}${reset ? `，${reset} 后重置` : ""}。按 Enter 固定显示` : undefined,
+      aria: aria ? `${follow ? `正在调用「${follow.name}」· ` : ""}${windowLabel(q)}额度${q.usedPercent === null ? "未知" : `已用 ${Math.round(q.usedPercent)}%`}${reset ? `，${reset} 后重置` : ""}。按 Enter 固定显示` : undefined,
     }
   })
   const quotaUsed = useMemo(() => (showQuotas ? Object.fromEntries(quotaRows.map((q) => [q.key, q.usedPercent])) : {}), [showQuotas, quotaRows])
@@ -237,7 +242,7 @@ export function CapsuleIsland({
     connected: data.connected ?? data.status?.tone === "success",
     queryFailed: showQuotas && Boolean(data.queryFailed),
     quotaUsed: quotaRows.map((q) => q.usedPercent),
-    dragging, refreshing, working: writing, shot, inactiveMs: relay ? 0 : inactiveMs, docked: Boolean(dockEdge), hover,
+    dragging, waiting: Boolean(data.automationWaiting), refreshing, working: writing, shot, inactiveMs: relay ? 0 : inactiveMs, docked: Boolean(dockEdge), hover,
     relay: relay ? (relay.phase === "failed" ? "rejected" : relay.phase) : null,
   })
   // 逐帧数值来自追数存储；没有追数键（浏览器预览的示例数据）时不轮播，避免显示假的 0
@@ -537,6 +542,7 @@ export function CapsuleIsland({
   ].filter(Boolean) as string[]
 
   const sessionTotal = data.sessions?.length ?? 0
+  const breakdown = sourceBreakdownView(data.sourceBreakdown ?? null, compactTokens)
   const sectionTitle = sessionTotal > 0 ? (data.sessionSectionTitle ?? `运行中的会话 · ${sessionTotal}`) : "本轮 Token"
 
   // 原生窗口按中心对齐（停靠贴边居中 + 自由态中心缩放），所以气泡这类侧挂内容
@@ -589,6 +595,7 @@ export function CapsuleIsland({
               onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpenChange(true) } }}
             >
               <Bot
+                certainty={data.writingLevel}
                 size={view === "mini" ? 26 : 32}
                 ringWidth={view === "mini" ? 1.8 : 2}
                 ringGap={view === "mini" ? 1.2 : 1.5}
@@ -637,6 +644,7 @@ export function CapsuleIsland({
               <div className="cap-sec cap-hero">
                 <div className="cap-orb-l">
                   <Bot
+                certainty={data.writingLevel}
                     size={140} ringWidth={9} ringGap={5} inset={28} rings={ringsFor(true)} expr={expr} dockEdge={dockEdge}
                     ticker={open ? ticker : null} focus={focused} display={display} interactive={showQuotas}
                     onRingHover={onRingHover} onRingClick={togglePin} pinnedRing={pinRing}
@@ -659,7 +667,27 @@ export function CapsuleIsland({
                       />
                     </em>
                   </div>
-                  {sessionTotal > 0 && <SessionList sessions={data.sessions!} showUnknownTag={data.sessionStatusUnknown} />}
+                  {/* 4.2 待确认（无画板）：点会话在主窗口会话线程定位 */}
+                  {sessionTotal > 0 && (
+                    <SessionList sessions={data.sessions!} showUnknownTag={data.sessionStatusUnknown} showSource
+                      onOpen={isTauri ? (session) => void api.openMainSession(data.platform, session.id).catch(() => {}) : undefined} />
+                  )}
+                </div>
+              )}
+
+              {/* 4.2 待确认（无画板）：今日按来源，最多 5 行，未归属的记录不并进任何一行 */}
+              {breakdown && (
+                <div className="cap-sec cap-col">
+                  <div className="cap-sh">
+                    <span>今日按来源</span>
+                    {breakdown.coverage && <em className="cap-src-cov">{breakdown.coverage}</em>}
+                  </div>
+                  <div className="cap-src">
+                    {breakdown.rows.map((row) => (
+                      <div key={row.id} className="cap-src-row"><span title={row.name}>{row.name}</span><b className="cap-num">{row.value}</b></div>
+                    ))}
+                    {breakdown.more > 0 && <div className="cap-src-row cap-src-more"><span>另有 {breakdown.more} 个来源</span></div>}
+                  </div>
                 </div>
               )}
 
@@ -671,6 +699,15 @@ export function CapsuleIsland({
                 )}
                 {notes.map((text) => <p key={text} className="cap-note">{text}</p>)}
                 {data.sourceText && <SourceFooter text={data.sourceText} />}
+                {/* 4.2 待确认（无画板）：打开用量统计，按今天与本岛的平台 / 连接预筛 */}
+                {isTauri && (
+                  <div className="cap-lnk">
+                    <span>今日用量明细</span>
+                    <button type="button" onClick={() => void api.openMainUsage(data.platform, data.connectionId ?? null).catch(() => {})}>
+                      在主窗口查看
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>

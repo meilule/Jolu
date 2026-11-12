@@ -50,6 +50,8 @@ export interface ActiveRelay {
   endedAt: number | null
   durationMs: number | null
   statusCode: number | null
+  /** 被调用来源的连接 id（4.2：岛的额度环临时切到它）；旧版后端不返回时为 null */
+  connectionId?: string | null
 }
 
 export interface ActivityState {
@@ -109,6 +111,7 @@ export function onStart(state: ActivityState, event: RouteStartEvent, now: numbe
     requestId: event.request_id, agent: event.agent, source: event.source,
     model: modelPart(event.requested_model, event.source), phase: "in",
     startedAt: now, endedAt: null, durationMs: null, statusCode: null,
+    connectionId: event.connection_id ?? null,
   }
   const inFlight = [...state.inFlight, relay]
   // 同时有多个请求时，胶囊只显示最新开始的一条
@@ -124,6 +127,7 @@ export function onEnd(state: ActivityState, event: RouteEndEvent, now: number): 
     requestId: event.request_id, agent: event.agent, source: event.source ?? started?.source ?? null,
     model: modelPart(event.requested_model, event.source ?? started?.source ?? null), phase,
     startedAt: started?.startedAt ?? now, endedAt: now, durationMs: event.duration_ms, statusCode: event.status_code,
+    connectionId: event.connection_id ?? started?.connectionId ?? null,
   }
   const today = dayKey(now) === state.today.day ? { ...state.today } : { day: dayKey(now), ok: 0, rejected: 0, failed: 0 }
   countResult(today, event.result)

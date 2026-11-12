@@ -59,3 +59,8 @@ test("点击任务通知打开自动化页", () => {
 test("点击余额通知打开供应商账号管理", () => {
   assert.equal(pageForIntent({ kind: "providers", connection_id: "synthetic-api" }), "providers")
 })
+
+test("灵动岛跳转：点会话到会话线程，查看用量到用量统计（4.2）", () => {
+  assert.equal(pageForIntent({ kind: "sessions", platform: "claude", session_id: "s-1" }), "sessions")
+  assert.equal(pageForIntent({ kind: "usage", platform: "codex", connection_id: null }), "usage")
+})

@@ -8,19 +8,20 @@ import { useConnections } from "@/hooks/useConnections"
 import { shouldRefreshConnection } from "@/lib/refreshScope"
 import { useApiUsage, useBalance, useCostEstimate, useQuota } from "@/hooks/useQuota"
 import { toQuotaWindows } from "@/lib/quotaMap"
-import { api, isTauri, listenEvent } from "@/lib/api"
+import { api, isTauri, listenEvent, type SourceBreakdownDto } from "@/lib/api"
 import { islandIdFromSearch, islandProfile } from "@/lib/islandProfile"
 import { authQuotaRows } from "@/lib/authQuotaRows"
 import type { IslandMode, PlatformId } from "@/types"
 import { platformConfig, isFetchOnlyPlatform } from "@/lib/platforms"
 import { useSourceMetrics } from "@/hooks/useSourceMetrics"
 import { useCollectionStatus } from "@/hooks/useCollectionStatus"
-import { balanceSnapshotTime, connectionQueries, islandActiveConnection, islandAttribution, islandConnectionStatus, islandCost } from "@/lib/islandPresentation"
+import { balanceSnapshotTime, connectionQueries, islandActiveConnection, islandAttribution, islandConnectionStatus, islandCost, relayQuotaConnection } from "@/lib/islandPresentation"
 import { dockQuotaView } from "@/lib/dockQuotaView"
 import { carriedDeltaCountKey, carriedDeltaView, latchSessionDelta } from "@/lib/carriedDelta"
 import { islandWriting } from "@/lib/islandWriting"
 import { onUsageChanged } from "@/lib/usageChanges"
 import { useGatewayActivity } from "@/hooks/useGatewayActivity"
+import { useAutomationWaiting } from "@/hooks/useAutomationWaiting"
 
 /** 平台展示名。未知平台原样显示，不臆测 */
 const PLATFORM_NAMES: Record<string, string> = {
@@ -172,6 +173,12 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
   // 放在这里是因为 `working` 要把「网关请求在途」也算进去（§5.8），必须早于下面那次判定；
   // hook 调用顺序在每次渲染里都一样，位置前移不影响规则。
   const gateway = useGatewayActivity(capsule)
+  // 4.2：网关正在调用另一条订阅连接时，额度环临时切到它（结果停留结束后回到本岛连接）
+  const relayTarget = relayQuotaConnection(gateway.activity.shown, active?.id, connections, Boolean(cloneId))
+  const relayQuotaQuery = useQuota(relayTarget?.id ?? null)
+  const relayQuota = relayTarget && relayQuotaQuery.state?.state === "ok"
+    ? { platform: relayTarget.platformId, name: relayTarget.name, windows: toQuotaWindows(relayQuotaQuery.state.windows, quotaNow) }
+    : null
 
   // 胶囊的「正在写入」：三个信号任一为真（纯逻辑在 `lib/islandWriting.ts`，测试见同名 .test.mjs）
   //   1. 有 state === "running" 的会话（codex / claude 的生命周期来源）；
@@ -185,6 +192,7 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
     activeWindowSeconds: live.activeWindowSeconds,
     inFlight: gateway.relay ? gateway.activity.inFlight.length : 0,
     now: quotaNow,
+    sourceFailed,
   })
   const working = writing.working
   // 会话状态展示仍按来源可信度收敛：采集源出错时状态不可判定，逐条标「未知」。
@@ -231,6 +239,24 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
   const carriedDelta = carried.value
   const carriedSource = carried.source
   const carriedCountKey = carriedDeltaCountKey(carried.source, working)
+
+  // 4.2「今日按来源」：只在胶囊卡片展开时查，本平台统计有变化时重查
+  const [sourceBreakdown, setSourceBreakdown] = useState<SourceBreakdownDto | null>(null)
+  const breakdownOn = capsule && isTauri && mode === "expanded"
+  useEffect(() => {
+    if (!breakdownOn) return
+    let alive = true
+    const load = () => void api.islandSourceBreakdown(islandPlatform)
+      .then((value) => { if (alive) setSourceBreakdown(value) })
+      .catch(() => { if (alive) setSourceBreakdown(null) })
+    load()
+    const off = onUsageChanged(islandPlatform, load)
+    return () => { alive = false; off() }
+  }, [breakdownOn, islandPlatform])
+
+  // 「等额度」表情：本岛生效的连接上有自动化任务在等额度恢复（胶囊样式才读）
+  const waitingIds = useAutomationWaiting(capsule)
+  const automationWaiting = Boolean(active && waitingIds.has(active.id))
 
   const data: IslandData = isTauri || live.live
     ? {
@@ -293,6 +319,10 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
         // 胶囊收缩态用：是否有会话正在写入、本轮已写入的 Token 增量（未知为 null）。
         // 经典样式不读这两个字段。
         working,
+        automationWaiting,
+        writingLevel: writing.level,
+        relayQuota,
+        sourceBreakdown: breakdownOn ? sourceBreakdown : null,
         liveDelta,
         // 胶囊尾部增量段：锁存值 ?? 今日累计（§5.7），以及它来自哪一边（决定文案）。
         carriedDelta,

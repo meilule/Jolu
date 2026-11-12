@@ -22,6 +22,8 @@ import type {
 /** 胶囊环色：5 小时青、其余绿（与改动前 `ringColor()` 的分支一致） */
 const RING_CYAN = "var(--pn-capsule-cyan)"
 const RING_GREEN = "var(--pn-capsule-green)"
+/** 月窗口（4.2，按额度描述符说明 §459：monthly → blue；无画板，待确认） */
+const RING_BLUE = "var(--pn-capsule-blue)"
 
 /**
  * 窗口条目。同一个 key 在多家声明时必须逐字段一致（`providerRegistry.test.mjs` 断言）。
@@ -101,13 +103,13 @@ const W30D: ProviderWindow = {
   kind: "monthly",
   unit: "percent",
   countsAsPlan: false,
-  // A3-13 / A3-14 只定义了日额度的刻度环；月窗口还没有画板，保持弧段环（待鼠鼠确认）
+  // A3-13 / A3-14 只定义了日额度的刻度环；月窗口还没有画板：弧段环、蓝色、排在最外圈（4.2，待鼠鼠确认）
   ringGeometry: "arc",
   shortLabel: null,
   chipLabel: null,
   placeholderName: null,
   badgeTone: "blue",
-  ringColor: RING_GREEN,
+  ringColor: RING_BLUE,
 }
 /** 积分 / 额度包（Grok 积分额度、WorkBuddy 资源包） */
 const WCREDITS: ProviderWindow = {

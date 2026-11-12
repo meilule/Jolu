@@ -412,6 +412,51 @@ pub struct ProviderRow {
     pub cost: CostSummary,
 }
 
+/// 按已存连接分解的一行（4.2 灵动岛「今日按来源」）。
+#[derive(Debug, Serialize, PartialEq)]
+pub struct SourceRow {
+    pub connection_id: String,
+    /// 连接名；连接已删除时为 None（界面显示「已删除的连接」）
+    pub name: Option<String>,
+    pub requests: i64,
+    /// 已知 Token 之和；该连接的记录全部未知时为 None，不当作 0
+    pub tokens: Option<i64>,
+}
+
+/// 区间内按连接分解：只认网关 / 本地代理写入的精确归属（`requests.connection_id`），
+/// 没有归属的记录单独计数，不并进任何一行。
+#[derive(Debug, Serialize, PartialEq)]
+pub struct SourceBreakdown {
+    pub rows: Vec<SourceRow>,
+    pub total_requests: i64,
+    pub unattributed_requests: i64,
+}
+
+pub fn source_breakdown(conn: &Connection, platform: Option<&str>, start_ms: i64, end_ms: i64) -> rusqlite::Result<SourceBreakdown> {
+    let mut stmt = conn.prepare(
+        "SELECT r.connection_id, c.name, COUNT(*),
+                SUM(CASE WHEN r.total_known = 1 THEN r.total_tokens END)
+         FROM requests r LEFT JOIN connections c ON c.id = r.connection_id
+         WHERE r.ts >= ?1 AND r.ts < ?2 AND (?3 IS NULL OR r.platform = ?3)
+         GROUP BY r.connection_id",
+    )?;
+    let mut rows = Vec::new();
+    let (mut total, mut unattributed) = (0, 0);
+    let mapped = stmt.query_map(rusqlite::params![start_ms, end_ms, platform], |r| {
+        Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, i64>(2)?, r.get::<_, Option<i64>>(3)?))
+    })?;
+    for row in mapped {
+        let (id, name, requests, tokens) = row?;
+        total += requests;
+        match id {
+            Some(connection_id) => rows.push(SourceRow { connection_id, name, requests, tokens }),
+            None => unattributed += requests,
+        }
+    }
+    rows.sort_by(|a, b| b.tokens.unwrap_or(-1).cmp(&a.tokens.unwrap_or(-1)).then(b.requests.cmp(&a.requests)));
+    Ok(SourceBreakdown { rows, total_requests: total, unattributed_requests: unattributed })
+}
+
 #[derive(Debug, Serialize)]
 pub struct SessionRow {
     pub platform: String,
@@ -845,6 +890,32 @@ pub fn calls_csv(conn: &Connection, f: &StatsFilter) -> rusqlite::Result<(String
 mod tests {
     use super::*;
     use crate::db::{insert_records, RequestRecord};
+
+    #[test]
+    fn source_breakdown_groups_by_connection_and_counts_unattributed_apart() {
+        let conn = crate::db::open(std::path::Path::new(":memory:")).unwrap();
+        conn.execute("INSERT INTO connections(id,platform,kind,name,status,created_ms) VALUES('c-a','codex','auth','工作号','connected',1)", []).unwrap();
+        let insert = |key: &str, platform: &str, ts: i64, total: i64, known: i64, connection: Option<&str>| {
+            conn.execute(
+                "INSERT INTO requests(platform,source,dedup_key,ts,total_tokens,total_known,connection_id) VALUES(?1,'test',?2,?3,?4,?5,?6)",
+                rusqlite::params![platform, key, ts, total, known, connection],
+            )
+            .unwrap();
+        };
+        insert("1", "codex", 100, 50, 1, Some("c-a"));
+        insert("2", "codex", 110, 30, 1, Some("c-a"));
+        insert("3", "codex", 120, 0, 0, Some("c-gone"));
+        insert("4", "codex", 130, 70, 1, None);
+        insert("5", "claude", 140, 90, 1, Some("c-a"));
+        insert("6", "codex", 999, 10, 1, Some("c-a"));
+        let b = source_breakdown(&conn, Some("codex"), 0, 500).unwrap();
+        assert_eq!(b.total_requests, 4);
+        assert_eq!(b.unattributed_requests, 1, "没有归属的不并进任何一行");
+        assert_eq!(b.rows.len(), 2);
+        assert_eq!(b.rows[0], SourceRow { connection_id: "c-a".into(), name: Some("工作号".into()), requests: 2, tokens: Some(80) });
+        assert_eq!(b.rows[1], SourceRow { connection_id: "c-gone".into(), name: None, requests: 1, tokens: None }, "全未知不当 0；已删连接没有名字");
+        assert_eq!(source_breakdown(&conn, None, 0, 500).unwrap().total_requests, 5);
+    }
 
     fn rec(platform: &str, key: &str, ts: i64, model: &str, tokens: [Option<i64>; 5], session: Option<&str>) -> RequestRecord {
         RequestRecord {

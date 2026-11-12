@@ -129,9 +129,11 @@ test("后端 DTO 映射出的标签配色与改动前一致", () => {
 
 test("环色与改动前的 ringColor 分支一致", () => {
   assert.equal(windowRingColor("5h"), RING_CYAN)
-  for (const key of ["7d", "7d-opus", "7d-sonnet", "1d", "30d", "credits", "quota", "custom-key"]) {
+  for (const key of ["7d", "7d-opus", "7d-sonnet", "1d", "credits", "quota", "custom-key"]) {
     assert.equal(windowRingColor(key), RING_GREEN, key)
   }
+  // 4.2：月窗口改为蓝色（额度描述符说明 §459；无画板，待确认）
+  assert.equal(windowRingColor("30d"), "var(--pn-capsule-blue)")
   // 带平台查同一份缺省，结果不变
   assert.equal(windowRingColor("custom-key", "grok"), RING_GREEN)
 })

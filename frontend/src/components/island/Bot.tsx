@@ -157,6 +157,8 @@ export interface BotRing {
 
 export interface BotProps {
   size: number
+  /** 「正在写」的可信度（4.2）：inferred 时工作眼睛改青色，unknown 时空闲眼睛改灰色 */
+  certainty?: "confirmed" | "inferred" | "unknown" | "idle"
   /** 环宽、环间距、无环时的内边距 */
   ringWidth?: number
   ringGap?: number
@@ -180,7 +182,7 @@ const SMALL_FACE = 40
 const MIN_TICK_FACE = 16
 
 export function Bot({
-  size, ringWidth = 0, ringGap = 0, inset = 0, rings = [], expr, dockEdge = null, ticker = null,
+  size, ringWidth = 0, ringGap = 0, inset = 0, rings = [], expr, dockEdge = null, ticker = null, certainty,
   focus = null, display = null, interactive = false, onRingHover, onRingClick, pinnedRing = null, className,
 }: BotProps) {
   const count = rings.length
@@ -297,6 +299,7 @@ export function Bot({
       aria-hidden={interactive ? undefined : true}
       className={cn("cbot", e.cls, ticking && "cbot-ticking", display && "cbot-showing", className)}
       data-expr={expr}
+      data-certainty={certainty}
       data-small={small && count ? 1 : 0}
       style={{ ["--F" as string]: n(F), ["--z" as string]: n(size / F), ["--glow" as string]: e.g }}
     >

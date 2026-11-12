@@ -10,6 +10,7 @@ import { AnimatedTokens, TokenDelta, type DeltaPhase } from "./TokenDelta"
 import { SessionList } from "./SessionList"
 import type { CarriedDeltaSource } from "@/lib/carriedDelta"
 import type { PlatformId, QuotaWindow, SessionActivity } from "@/types"
+import type { SourceBreakdownDto } from "@/lib/api"
 
 /**
  * UsageIsland —— 宽 400、padding [12,16]、gap 10、圆角 18（附录 A.4）
@@ -65,6 +66,14 @@ export interface IslandData {
   queryFailed?: boolean
   /** 胶囊样式用：有会话正在写入 Token（来源提供可信运行状态时才为真）。经典样式不读 */
   working?: boolean
+  /** 「正在写」的可信度（胶囊眼睛：确证绿 / 推测青 / 不知道灰） */
+  writingLevel?: "confirmed" | "inferred" | "unknown" | "idle"
+  /** 本岛连接上有自动化任务在等额度恢复（胶囊的「等额度」表情） */
+  automationWaiting?: boolean
+  /** 今日按已存连接分解（胶囊展开卡片；卡片收起时为 null） */
+  sourceBreakdown?: SourceBreakdownDto | null
+  /** 网关正在调用的另一条订阅连接的额度（胶囊的额度环临时显示它；其余部分仍是本岛连接） */
+  relayQuota?: { platform: PlatformId; name: string; windows: QuotaWindow[] } | null
   /** 胶囊样式用：本轮已写入的 Token 增量；未知为 null，不写假的 0。经典样式不读 */
   liveDelta?: number | null
   /**

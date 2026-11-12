@@ -39,6 +39,11 @@ export interface UsageRequest {
   search: string
   range: DateRange
   nonce: number
+  /** 打开哪个分页；缺省为调用明细（会话 → 调用明细的原有跳转） */
+  tab?: UsageTab
+  /** 预筛的平台与账号（灵动岛「查看用量」） */
+  platform?: PlatformId | null
+  accounts?: string[]
 }
 
 export function UsageView({ active, request, onOpenSession }: {
@@ -64,9 +69,10 @@ export function UsageView({ active, request, onOpenSession }: {
 
   useEffect(() => {
     if (!request) return
-    setTab("calls")
+    setTab(request.tab ?? "calls")
     setRange(request.range)
-    setPlatform(null)
+    setPlatform(request.platform ?? null)
+    setAccounts(request.accounts ?? [])
     setModel(null)
     setStatus(null)
     setSearch(request.search)

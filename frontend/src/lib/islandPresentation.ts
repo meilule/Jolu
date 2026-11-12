@@ -86,3 +86,46 @@ export function balanceSnapshotTime(fetchedAt: Date | null | undefined): string 
   if (!fetchedAt) return null
   return `· ${fetchedAt.toLocaleTimeString("zh-CN", { hour12: false })} 获取`
 }
+
+/**
+ * 4.2「今日按来源」：最多 5 行（按 Token 降序，后端已排好），连接已删的写「已删除的连接」；
+ * 归属说明只在有未归属记录时出现（「n/m 条已归属」），全部归属时不打扰。
+ * 一条已归属的记录都没有时返回 null，整段不显示。
+ */
+export function sourceBreakdownView(
+  breakdown: { rows: { connection_id: string; name: string | null; requests: number; tokens: number | null }[]; total_requests: number; unattributed_requests: number } | null,
+  formatTokens: (value: number) => string,
+): { rows: { id: string; name: string; value: string }[]; more: number; coverage: string | null } | null {
+  if (!breakdown || breakdown.rows.length === 0) return null
+  const rows = breakdown.rows.slice(0, 5).map((row) => ({
+    id: row.connection_id,
+    name: row.name?.trim() || "已删除的连接",
+    value: row.tokens === null ? `${row.requests} 次 · Token 未知` : `${formatTokens(row.tokens)} Token`,
+  }))
+  const attributed = breakdown.total_requests - breakdown.unattributed_requests
+  return {
+    rows,
+    more: Math.max(0, breakdown.rows.length - rows.length),
+    coverage: breakdown.unattributed_requests > 0 ? `${attributed}/${breakdown.total_requests} 条已归属` : null,
+  }
+}
+
+/**
+ * 4.2「请求进入时额度环切到被调用来源」：网关正在转发（或刚转发完、结果还在显示）的请求
+ * 用的是另一条有额度可查的订阅连接时，返回那条连接，岛的额度环临时显示它的额度。
+ *
+ * 不切换的情况：本岛是分身（分身本来就绑定了一条连接）、请求没有连接 id、就是本岛的连接、
+ * 连接不在列表里或已暂停、不是订阅连接（API Key 连接没有额度环）。
+ */
+export function relayQuotaConnection(
+  relay: { connectionId?: string | null; phase: string } | null,
+  activeId: string | null | undefined,
+  connections: Connection[],
+  isClone: boolean,
+): Connection | null {
+  if (isClone || !relay?.connectionId || relay.phase === "rejected") return null
+  if (relay.connectionId === activeId) return null
+  const target = connections.find((item) => item.id === relay.connectionId)
+  if (!target || target.status === "paused" || target.kind !== "auth") return null
+  return target
+}

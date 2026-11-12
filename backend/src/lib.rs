@@ -739,6 +739,10 @@ enum MainIntent {
     About { version: String },
     /// 点击任务通知后打开自动化页并选中该任务。
     Automation { task_id: i64 },
+    /// 灵动岛点会话（4.2）：打开会话线程并定位该会话。
+    Sessions { platform: String, session_id: String },
+    /// 灵动岛「查看用量」（4.2）：打开用量统计，按今天与本岛的平台 / 连接预筛。
+    Usage { platform: Option<String>, connection_id: Option<String> },
 }
 
 static MAIN_INTENT: LazyLock<Mutex<Option<MainIntent>>> = LazyLock::new(|| Mutex::new(None));
@@ -1234,6 +1238,21 @@ async fn live_usage(
 
 /// 用量统计页（模块 C）：概览与用量分析共用的跨供应商聚合
 #[tauri::command]
+async fn island_source_breakdown(db: State<'_, DbRead>, platform: Option<String>) -> Result<usage_stats::SourceBreakdown, String> {
+    // 本地时区的今天 [00:00, 明天 00:00)
+    let today = chrono::Local::now().date_naive();
+    let bound = |day: chrono::NaiveDate| {
+        day.and_hms_opt(0, 0, 0)
+            .and_then(|time| time.and_local_timezone(chrono::Local).earliest())
+            .map(|time| time.timestamp_millis())
+    };
+    let (Some(start), Some(end)) = (bound(today), today.succ_opt().and_then(bound)) else {
+        return Err("无法确定今天的时间范围".into());
+    };
+    with_reader(db.0.clone(), move |conn| usage_stats::source_breakdown(conn, platform.as_deref(), start, end).map_err(|e| e.to_string())).await
+}
+
+#[tauri::command]
 async fn stats_overview(db: State<'_, DbRead>, filter: usage_stats::StatsFilter) -> Result<usage_stats::Overview, String> {
     filter.validate()?;
     with_reader(db.0.clone(), move |conn| usage_stats::overview(conn, &filter).map_err(|e| e.to_string())).await
@@ -1567,6 +1586,25 @@ fn open_main_section(app: tauri::AppHandle, section: String) -> Result<(), Strin
         return Err(format!("未知的主窗口页面：{section}"));
     }
     show_main_with_intent(&app, MainIntent::Settings { section });
+    Ok(())
+}
+
+/// 灵动岛点会话：主窗口打开会话线程并定位（会话已删时会话页自己回到列表）。
+#[tauri::command]
+fn open_main_session(app: tauri::AppHandle, platform: String, session_id: String) -> Result<(), String> {
+    let (platform, session_id) = (platform.trim().to_string(), session_id.trim().to_string());
+    if platform.is_empty() || session_id.is_empty() {
+        return Err("缺少要打开的会话".into());
+    }
+    show_main_with_intent(&app, MainIntent::Sessions { platform, session_id });
+    Ok(())
+}
+
+/// 灵动岛「查看用量」：主窗口打开用量统计，按今天与给定的平台 / 连接预筛（连接已删时只带平台）。
+#[tauri::command]
+fn open_main_usage(app: tauri::AppHandle, platform: Option<String>, connection_id: Option<String>) -> Result<(), String> {
+    let clean = |value: Option<String>| value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    show_main_with_intent(&app, MainIntent::Usage { platform: clean(platform), connection_id: clean(connection_id) });
     Ok(())
 }
 
@@ -4543,6 +4581,7 @@ pub fn run() {
             data_files::export_data_file,
             data_files::export_calls_csv,
             stats_overview,
+            island_source_breakdown,
             stats_activity,
             stats_calls,
             sessions_list,
@@ -4551,6 +4590,7 @@ pub fn run() {
             session_continue,
             // 模块 E · 自动化（命令登记在此行下方）
             automation::automation_overview,
+            automation::automation_waiting_connections,
             automation::automation_task,
             automation::automation_create,
             automation::automation_update,
@@ -4657,6 +4697,8 @@ pub fn run() {
             set_display_preferences,
             set_island_style,
             open_main_section,
+            open_main_session,
+            open_main_usage,
             set_balance_alert,
             notify::take_app_notices,
             set_retention_days,

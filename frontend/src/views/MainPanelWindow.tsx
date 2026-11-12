@@ -22,6 +22,7 @@ import { createLazyPage } from "@/components/panel/lazyPage"
 import type { SessionTarget } from "./SessionsView"
 import type { AutomationPrefill, AutomationTarget } from "./AutomationView"
 import type { UsageRequest } from "./UsageView"
+import type { PlatformId } from "@/types"
 
 const IslandView = createLazyPage(() => import("./IslandView").then((m) => ({ default: m.IslandView })), "灵动岛", "island")
 const ProvidersView = createLazyPage(() => import("./ProvidersView").then((m) => ({ default: m.ProvidersView })), "供应商", "providers", true)
@@ -160,6 +161,15 @@ export function MainPanelWindow({
       if (intent.kind === "settings") setSettingsSection(intent.section)
       if (intent.kind === "automation") setAutomationTarget({ taskId: intent.task_id, nonce: Date.now() })
       if (intent.kind === "providers") setAccountTarget({ connectionId: intent.connection_id, nonce: Date.now() })
+      if (intent.kind === "sessions") setSessionTarget({ platform: intent.platform, sessionId: intent.session_id, nonce: Date.now() })
+      if (intent.kind === "usage") {
+        const today = dateKey(new Date())
+        setUsageRequest({
+          search: "", range: { start: today, end: today }, nonce: Date.now(), tab: "overview",
+          platform: (intent.platform as PlatformId | null) ?? null,
+          accounts: intent.connection_id ? [intent.connection_id] : [],
+        })
+      }
       if (intent.kind !== "overview") setNavigationRequest((value) => value + 1)
     }
     const consumeIntent = () => void api.takeMainIntent().then(applyIntent).catch(() => {})

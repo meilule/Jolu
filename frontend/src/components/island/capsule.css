@@ -143,6 +143,13 @@
 .cap-met b { font-size: 22px; letter-spacing: -.5px; font-weight: 700; }
 .cap-note { margin: 0; font-size: 11px; color: var(--pn-capsule-text-3); line-height: 1.45; }
 .cap-sec.cap-col { display: flex; flex-direction: column; gap: 10px; }
+/* 4.2 今日按来源（待确认：无画板，沿用卡片现有字号与颜色） */
+.cap-src { display: flex; flex-direction: column; gap: 4px; }
+.cap-src-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 11px; color: var(--pn-capsule-text-2); }
+.cap-src-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cap-src-row b { flex-shrink: 0; font-weight: 600; color: var(--pn-capsule-text); }
+.cap-src-more { color: var(--pn-capsule-text-3); }
+.cap-sh em.cap-src-cov { color: var(--pn-capsule-text-3); font-weight: 500; }
 .cap-sh { display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: 600; color: var(--pn-capsule-text-3); letter-spacing: .4px; }
 .cap-sh em { font-style: normal; color: var(--pn-capsule-green); }
 .cap-foot { border-top: 1px solid var(--pn-capsule-fill-2); padding-top: 12px; display: flex; flex-direction: column; gap: 4px; }
@@ -173,6 +180,9 @@
    fill 走 CSS 声明覆盖 SVG 的 fill 属性；.cbot-eyes-slide 的位移与 .cbot-blink / .cbot-scan 的
    keyframes 都写在别的节点 / 别的属性上，不受这条影响。其他表达式不命中，保持原色。 */
 .cbot[data-expr="work"] .cbot-eyes-inner > * { fill: var(--pn-capsule-green); }
+/* 4.2「正在写」三档（待确认：A3 表情库只有绿色工作眼）：推测为青色，来源出错且无证据时空闲眼睛为灰色 */
+.cbot[data-expr="work"][data-certainty="inferred"] .cbot-eyes-inner > * { fill: var(--pn-capsule-cyan); }
+.cbot[data-certainty="unknown"]:is([data-expr="idle"], [data-expr="look"], [data-expr="peek"]) .cbot-eyes-inner > * { fill: var(--pn-capsule-text-3); }
 /* 运行中轮播：眼睛向上滑出，Token 数从下方滑入 */
 .cbot .cbot-eyes-slide, .cbot .cbot-tick { transition: transform .45s var(--cap-spring), opacity .25s; }
 .cbot .cbot-tick { opacity: 0; transform: translateY(calc(var(--F) * .32px)); }

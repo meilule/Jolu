@@ -45,7 +45,18 @@ export interface IslandWritingInput {
   inFlight: number
   /** 当前时刻 */
   now: number
+  /** 采集源出错：没有任何证据时状态是「不知道」，不是「空闲」 */
+  sourceFailed?: boolean
 }
+
+/**
+ * 「正在写」的可信度（4.2，调研 §5 三档）：
+ * - confirmed：有运行中的会话（生命周期来源）或网关请求在途——确证；
+ * - inferred：只有「最近活跃窗口内写过」——推测（单步超过窗口会灭，翻历史也可能误亮）；
+ * - unknown：采集源出错且没有确证与推测——不知道；
+ * - idle：来源正常、没有任何写入迹象。
+ */
+export type WritingLevel = "confirmed" | "inferred" | "unknown" | "idle"
 
 export interface IslandWriting {
   /** 三个信号任一为真 */
@@ -58,6 +69,8 @@ export interface IslandWriting {
   gatewayInFlight: boolean
   /** 最近一次写入时刻；没有可读的会话时刻时为 null */
   lastWriteMs: number | null
+  /** 可信度三档（另加空闲） */
+  level: WritingLevel
 }
 
 /** 会话列表里最新一次写入的时刻（`updatedAtMs` 未知的会话不参与） */
@@ -79,11 +92,14 @@ export function islandWriting(input: IslandWritingInput): IslandWriting {
   // 未来时间戳只在容差内算数：来源时钟跑飞时不能一直显示「正在写入」
   const recentWrite = input.recentWindow && age != null && age <= windowSeconds * 1_000 && age >= -FUTURE_TOLERANCE_MS
   const gatewayInFlight = input.inFlight > 0
+  const confirmed = running > 0 || gatewayInFlight
+  const level: WritingLevel = confirmed ? "confirmed" : recentWrite ? "inferred" : input.sourceFailed ? "unknown" : "idle"
   return {
-    working: running > 0 || gatewayInFlight || recentWrite,
+    working: confirmed || recentWrite,
     running,
     recentWrite,
     gatewayInFlight,
     lastWriteMs,
+    level,
   }
 }
