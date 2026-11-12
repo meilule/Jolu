@@ -77,6 +77,15 @@ export function CompressDialog({session,onClose,onResult}: {session:SessionItemD
       buffer.current=[]
     }catch(e){starting.current=false;setError(String(e));setBusy(false);setItems(value=>[...value,{kind:'error',text:String(e),retryable:true}])}
   }
+  // 4.7 待确认（无画板）：没有可用模型时也能交接——不调用模型，version 0 表示本地导出
+  const localExport=async()=>{
+    if(!state||!isTauri)return
+    setBusy(true);setError('')
+    try{
+      const markdown=await handoffApi.localExport(session.platform,session.session_id,project,focus,target)
+      onResult({version:0,markdown,file_name:name,path_warnings:[],covered_range:state.total?[1,state.total]:null},name,target)
+    }catch(e){setError(String(e));setBusy(false)}
+  }
   const refine=async(text:string)=>{if(!job.current)return;instruction.current=text;setBusy(true);setItems(v=>[...v,{kind:'user',text}]);try{await handoffApi.refine(job.current,text)}catch(e){setBusy(false);setItems(v=>[...v,{kind:'error',text:String(e),retryable:true}])}}
   const finish=async()=>{if(!job.current)return;setBusy(true);try{const result=await handoffApi.finish(job.current,round,project);job.current=null;onResult(result,name,target)}catch(e){setError(String(e));setBusy(false)}}
   const estimateInput=(text:string)=>{const revision=++estimateRevision.current;setEstimate(null);if(job.current&&text.trim())void handoffApi.estimate(job.current,text).then(n=>{if(alive.current&&revision===estimateRevision.current)setEstimate(n)}).catch(()=>{})}
@@ -98,7 +107,7 @@ export function CompressDialog({session,onClose,onResult}: {session:SessionItemD
       <div className="rounded-lg border border-jolu-border p-4 text-xs leading-6 text-jolu-muted"><p className="font-medium text-jolu-text">这份 MD 会包含</p>项目目标与约束 · 当前开发进度 · 已完成改动<br/>关键文件与决策 · 验证结果 · 待办与下一步执行建议</div>
       <p className="text-xs text-jolu-muted">原始会话保持完整；交接文档按当前目标整理，过时结论以新消息为准。</p>
       {!isTauri&&<HandoffNotice>浏览器预览不调用模型；请在桌面应用中执行压缩。</HandoffNotice>}
-      <div className="flex justify-end gap-2">{(mode==='unreadable'||!!error)&&<button className={handoffButton} onClick={()=>void reload()}>重新读取会话</button>}<button className={handoffButton} onClick={onClose}>取消</button><button className={handoffPrimary} disabled={busy||!isTauri||!state||mode==='unreadable'||!!fileNameError(name)||(mode!=='reuse'&&(!selected?.current||selected.status!=='connected'))} onClick={()=>void start()}>{mode==='reuse'?'直接生成 MD':'压缩并生成 MD'}</button></div>
+      <div className="flex justify-end gap-2">{(mode==='unreadable'||!!error)&&<button className={handoffButton} onClick={()=>void reload()}>重新读取会话</button>}<button className={handoffButton} onClick={onClose}>取消</button>{mode!=='unreadable'&&mode!=='reuse'&&<button className={handoffButton} disabled={busy||!isTauri||!state||!!fileNameError(name)} title="不调用任何模型，直接摘出原文与结构化事实；不是模型压缩" onClick={()=>void localExport()}>本地交接导出（不调用模型）</button>}<button className={handoffPrimary} disabled={busy||!isTauri||!state||mode==='unreadable'||!!fileNameError(name)||(mode!=='reuse'&&(!selected?.current||selected.status!=='connected'))} onClick={()=>void start()}>{mode==='reuse'?'直接生成 MD':'压缩并生成 MD'}</button></div>
     </>}
     {error&&<HandoffNotice danger>{error}</HandoffNotice>}
   </HandoffShell>

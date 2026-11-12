@@ -1045,6 +1045,56 @@ pub fn render_markdown(narrative: &str, facts: &Facts, meta: &RenderMeta) -> Str
     format!("{}{}{}", redact(&out), render_facts(facts), redact(&tail))
 }
 
+/// 本地交接导出里「最近的对话」取几条、每条最多多少字。
+const LOCAL_RECENT: usize = 6;
+const LOCAL_CLIP: usize = 1200;
+
+/// 本地交接导出（4.7）：没有可用模型时，不调用任何模型，直接把会话整理成可交给另一个 AI 的文档——
+/// 最初的需求、最近几条对话的原文摘录、以及抽取出的结构化事实（文件、命令、验证、Git 快照）。
+/// 文档开头写明这不是模型压缩；所有正文都过同一套脱敏。
+pub fn render_local_export(messages: &[crate::session_threads::Message], facts: &Facts, meta: &RenderMeta) -> String {
+    let title = if meta.topic.trim().is_empty() { meta.project.trim() } else { meta.topic.trim() };
+    let mut out = format!("# 本地交接导出 · {}\n\n", if title.is_empty() { "未命名项目" } else { title });
+    out.push_str("> **这不是模型压缩。** Jolu 没有调用任何模型，下面是从会话记录里直接摘出的原文与结构化事实，未经归纳；\n");
+    out.push_str("> 接手的 AI 请先通读「最初的需求」与「最近的对话」，再按事实核对当前状态。\n");
+    out.push_str(&format!(
+        "> 项目：{} · 来源：{} 会话 {} · 共 {} 条消息 · 交接给：{} · 导出于 {}\n\n",
+        if meta.project.trim().is_empty() { "未识别项目" } else { meta.project.trim() },
+        platform_name(&meta.platform),
+        inline_code(&meta.session_id),
+        meta.total,
+        target_text(&meta.target),
+        format_ms(meta.created_ms)
+    ));
+    let speaker = |role: &str| if role == "user" { "用户" } else { "AI" };
+    let excerpt = |text: &str| {
+        let text = text.trim();
+        let clipped: String = text.chars().take(LOCAL_CLIP).collect();
+        if clipped.chars().count() < text.chars().count() { format!("{clipped}…（已截断）") } else { clipped }
+    };
+    out.push_str("## 最初的需求\n\n");
+    match messages.iter().find(|m| m.role == "user" && !m.text.trim().is_empty()) {
+        Some(first) => out.push_str(&format!("{}\n\n", quote_block(&excerpt(&first.text)))),
+        None => out.push_str("（会话里没有可读的用户消息）\n\n"),
+    }
+    out.push_str("## 最近的对话\n\n");
+    let recent: Vec<_> = messages.iter().filter(|m| !m.text.trim().is_empty()).collect();
+    let start = recent.len().saturating_sub(LOCAL_RECENT);
+    if recent.is_empty() {
+        out.push_str("（无）\n\n");
+    }
+    for message in &recent[start..] {
+        out.push_str(&format!("**{}**\n\n{}\n\n", speaker(&message.role), quote_block(&excerpt(&message.text))));
+    }
+    let tail = "\n## 接手第一步\n\n- 先核对 Git 快照，运行「最后一次验证」里的命令确认状态。\n- 原文摘录可能已过时，以仓库当前内容为准。\n";
+    format!("{}{}{}", redact(&out), render_facts(facts), redact(tail))
+}
+
+/// 每行加 `> `，让摘录和导出说明分得开，也避免原文里的 `#` 标题打乱文档结构。
+fn quote_block(text: &str) -> String {
+    text.lines().map(|line| if line.trim().is_empty() { ">".to_string() } else { format!("> {line}") }).collect::<Vec<_>>().join("\n")
+}
+
 /* ─────────────────────────── 文件名 ─────────────────────────── */
 
 /// 文件名规则（画板 54-09，待确认：本线无法用 Pencil 读取画板，按 Windows 文件名限制实现）：
@@ -1552,10 +1602,12 @@ impl Executor for CliExecutor {
         match crate::automation::classify(&progress, exit_ok, &stderr_tail, stopped) {
             Outcome::Completed => Ok(output),
             Outcome::Cancelled => Err("已取消压缩".into()),
-            Outcome::Limit { message, .. } | Outcome::Failed(message) | Outcome::Reauth(message) | Outcome::UntrustedDir(message) if is_context_exceeded(&message) => {
+            Outcome::Limit { message, .. } | Outcome::RateLimited { message, .. } | Outcome::Balance(message) | Outcome::Failed(message) | Outcome::Reauth(message) | Outcome::UntrustedDir(message) if is_context_exceeded(&message) => {
                 Ok(ExecOutput { context_exceeded: true, ..output })
             }
             Outcome::Limit { message, .. } => Err(format!("额度不足：{}", clip(&message, 300))),
+            Outcome::RateLimited { message, .. } => Err(format!("短时限流，请稍后再试：{}", clip(&message, 300))),
+            Outcome::Balance(message) => Err(format!("余额不足：{}", clip(&message, 300))),
             Outcome::Reauth(message) => Err(format!("需要重新登录：{}", clip(&message, 300))),
             Outcome::UntrustedDir(message) | Outcome::Failed(message) => Err(clip(&message, 500)),
         }
@@ -2064,6 +2116,35 @@ pub async fn handoff_cancel(job_id: String) -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
+/// 本地交接导出（4.7）：没有可用模型时不调用模型，直接从会话记录生成交接文档。
+/// 不写交接版本、不推进检查点——它不是压缩。
+#[tauri::command]
+pub async fn handoff_local_export(app: AppHandle, platform: String, session_id: String, project: String, topic: String, target: String) -> Result<String, String> {
+    let db = shared(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        let loaded = load_session(&db, &platform, &session_id)?.ok_or("会话源文件不可读，无法导出")?;
+        if loaded.messages.is_empty() {
+            return Err("会话没有可读的消息，无法导出".into());
+        }
+        let facts = extract_facts(&loaded.messages, loaded.cwd.as_deref().map(Path::new), Some(&loaded.path));
+        let meta = RenderMeta {
+            project,
+            topic,
+            target,
+            platform: platform.clone(),
+            session_id,
+            total: loaded.messages.len(),
+            covered_to: loaded.messages.len(),
+            created_ms: now_ms(),
+            version: None,
+            native_note: false,
+        };
+        Ok(render_local_export(&loaded.messages, &facts, &meta))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// 不调用模型（画板 52）：用最新的交接版本重新排版
 #[tauri::command]
 pub async fn handoff_render(app: AppHandle, platform: String, session_id: String, project: String, topic: String, target: String) -> Result<String, String> {
@@ -2517,6 +2598,29 @@ mod tests {
         assert_eq!(current.round, 11);
         assert_eq!(refine(&exec, &current, &Facts::default(), "再写细一点", &[], &emit), Err("已达到修改上限".into()));
         assert_eq!(exec.prompts().len(), 10);
+    }
+
+    #[test]
+    fn local_export_says_it_is_not_model_compression_and_quotes_source() {
+        let messages: Vec<Message> = vec![
+            Message { role: "user".into(), ts: None, text: "# 目标\n修复登录页，密钥 sk-abcdefghijklmnopqrstuvwxyz123456".into(), tools: vec![], ..Message::default() },
+            Message { role: "assistant".into(), ts: None, text: "好的".into(), tools: vec![], ..Message::default() },
+        ]
+        .into_iter()
+        .chain((0..8).map(|i| Message { role: "user".into(), ts: None, text: format!("第{i}条{}", "长".repeat(if i == 7 { 2000 } else { 1 })), tools: vec![], ..Message::default() }))
+        .collect();
+        let mut facts = Facts::default();
+        facts.files_modified = vec![("src/login.ts".into(), 3)];
+        let meta = RenderMeta { project: "jolu".into(), target: "Codex".into(), platform: "claude".into(), session_id: "abc".into(), total: messages.len(), covered_to: messages.len(), ..RenderMeta::default() };
+        let md = render_local_export(&messages, &facts, &meta);
+        assert!(md.starts_with("# 本地交接导出 · jolu"));
+        assert!(md.contains("这不是模型压缩"));
+        assert!(md.contains("> # 目标"), "原文标题被引用，不打乱文档结构");
+        assert!(!md.contains("sk-abcdefghijklmnopqrstuvwxyz123456"), "摘录也要脱敏");
+        assert!(!md.contains("第1条"), "最近只取 6 条");
+        assert!(md.contains("第2条") && md.contains("第7条"));
+        assert!(md.contains("（已截断）"));
+        assert!(md.contains("src/login.ts"), "事实区照常输出");
     }
 
     #[test]

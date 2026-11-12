@@ -72,7 +72,7 @@ export interface RunDto {
   connection_id: string
   source: RunSource
   status: RunStatus
-  /** quota / quota_unknown / check_failed / reauth / unsupported / timeout / account_mismatch / tool_missing / cwd_missing / resume_unsupported / interrupted / skill_missing */
+  /** quota / quota_unknown / check_failed / rate_limit / balance / reauth / unsupported / timeout / account_mismatch / tool_missing / cwd_missing / resume_unsupported / interrupted / skill_missing */
   block_kind: string | null
   reason: string | null
   resets_at: number | null

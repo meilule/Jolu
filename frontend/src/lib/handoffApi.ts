@@ -8,5 +8,7 @@ export const handoffApi = {
   finish: (jobId: string, round: number, project: string) => invoke<HandoffResult>('handoff_finish', {jobId, round, project}),
   cancel: (jobId: string) => invoke<void>('handoff_cancel', {jobId}),
   render: (platform: string, sessionId: string, project: string, topic: string, target: string) => invoke<string>('handoff_render', {platform, sessionId, project, topic, target}),
+  /** 本地交接导出（4.7）：不调用模型，直接从会话记录整理；不写交接版本 */
+  localExport: (platform: string, sessionId: string, project: string, topic: string, target: string) => invoke<string>('handoff_local_export', {platform, sessionId, project, topic, target}),
   save: (markdown: string, fileName: string, preferProjectDir: string | null) => invoke<string | null>('handoff_save', {markdown, fileName, preferProjectDir}),
 }

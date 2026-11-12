@@ -436,7 +436,13 @@ pub fn validate(input: &TaskInput, now: i64) -> Result<(), String> {
             NaiveTime::parse_from_str(&s.time, "%H:%M").map_err(|_| "执行时间格式应为 HH:MM")?;
             match s.freq.as_str() {
                 "once" => {
-                    if next_fire(&Local, s, now).is_none() { return Err("单次执行时间已经过去".into()); }
+                    if next_fire(&Local, s, now).is_none() {
+                        // 区分「已经过去」与「夏令时跳过、本地根本没有这个时刻」，后者提示换时间而不是说过期
+                        let skipped = NaiveDate::parse_from_str(s.date.as_deref().unwrap_or_default(), "%Y-%m-%d").ok()
+                            .zip(NaiveTime::parse_from_str(&s.time, "%H:%M").ok())
+                            .is_some_and(|(date, time)| Local.from_local_datetime(&date.and_time(time)).earliest().is_none());
+                        return Err(if skipped { "这个时刻因夏令时调整在本地不存在，请换一个时间".into() } else { "单次执行时间已经过去".into() });
+                    }
                 }
                 "daily" => {}
                 "weekly" => {
@@ -1045,7 +1051,12 @@ impl Progress {
 pub enum Outcome {
     Completed,
     Cancelled,
+    /// 额度耗尽（5 小时 / 周额度用完）：等额度恢复后续跑
     Limit { resets_at: Option<i64>, message: String },
+    /// 短时限流（429 / too many requests，额度并没用完）：一两分钟后重试，不等额度重置（4.7）
+    RateLimited { retry_at: Option<i64>, message: String },
+    /// 余额不足（按量计费的 Key 欠费 / 402）：等多久都不会好，转「需要处理」（4.7）
+    Balance(String),
     Reauth(String),
     /// Codex 拒绝在非 Git、未信任的目录执行；保留目录保护，不加 `--skip-git-repo-check`
     UntrustedDir(String),
@@ -1069,6 +1080,20 @@ fn has_any(text: &str, words: &[&str]) -> bool {
 pub fn is_limit(text: &str) -> bool {
     has_any(text, &["usage limit", "usage_limit", "rate limit", "rate_limit", "ratelimit", "limit reached", "hit your limit", "ve hit your", "quota", "too many requests", "429", "额度"])
 }
+
+/// 余额不足：按量计费的账户没钱了。只认明确的说法，`insufficient_quota` 之类可能指订阅额度的词不算。
+pub fn is_balance(text: &str) -> bool {
+    has_any(text, &["insufficient balance", "insufficient_balance", "credit balance is too low", "payment required", "402", "余额不足", "欠费", "billing"])
+}
+
+/// 短时限流：服务端按频率拒绝，额度本身没用完。用量 / 会话 / 周额度用完的说法优先算额度耗尽。
+pub fn is_rate_limit(text: &str) -> bool {
+    let exhausted = has_any(text, &["usage limit", "usage_limit", "limit reached", "hit your limit", "ve hit your", "session limit", "weekly limit", "quota", "额度"]);
+    !exhausted && has_any(text, &["rate limit", "rate_limit", "ratelimit", "too many requests", "429", "overloaded", "请求过于频繁"])
+}
+
+/// 短时限流没给重试时间时等多久再试
+pub const RATE_LIMIT_RETRY_MS: i64 = 60_000;
 
 pub fn is_auth(text: &str) -> bool {
     has_any(text, &["401", "unauthorized", "authentication", "invalid api key", "/login", "not logged in", "log in again", "token expired", "expired token", "invalid_grant", "重新登录"])
@@ -1121,6 +1146,11 @@ pub fn classify(p: &Progress, exit_ok: bool, stderr_tail: &str, stopped: bool) -
     };
     if is_untrusted_dir(&message) {
         Outcome::UntrustedDir(message)
+    } else if is_balance(&message) {
+        Outcome::Balance(message)
+    } else if is_rate_limit(&message) {
+        let retry_at = limit_reset(&message).or_else(|| codex_retry_at(&Local, &message, now_ms()));
+        Outcome::RateLimited { retry_at, message }
     } else if is_limit(&message) {
         limit(message)
     } else if is_auth(&message) {
@@ -1219,7 +1249,8 @@ pub fn finish(conn: &Connection, run_id: i64, outcome: &Outcome, p: &Progress, n
     // 不留下等待 / 排队的孤儿运行；完成与失败是真实结果，照常记录
     let inactive = task.as_ref().is_none_or(|t| t.state != "active");
     let lingering = match outcome {
-        Outcome::Limit { .. } => auto_resume,
+        Outcome::Limit { .. } | Outcome::RateLimited { .. } => auto_resume,
+        Outcome::Balance(_) => true,
         Outcome::Reauth(_) | Outcome::UntrustedDir(_) => true,
         _ => false,
     };
@@ -1261,6 +1292,33 @@ pub fn finish(conn: &Connection, run_id: i64, outcome: &Outcome, p: &Progress, n
         Outcome::Limit { message, .. } => {
             conn.execute("UPDATE automation_runs SET status='failed', ended_at=?2, error=?3 WHERE id=?1", params![run_id, now, format!("额度耗尽：{}", clip(message, 1000))])?;
             add_event(conn, run_id, now, "fail", "额度耗尽，运行结束", Some("未开启「等待恢复后自动继续」"))?;
+        }
+        Outcome::RateLimited { retry_at, message } if auto_resume && session.is_some() => {
+            // 不是额度用完：到点后照常检查一次额度，可用就续跑（apply_check 的 available 分支）
+            let at = retry_at.filter(|at| *at > now).unwrap_or(now + RATE_LIMIT_RETRY_MS);
+            conn.execute(
+                "UPDATE automation_runs SET status='waiting', block_kind='rate_limit', reason='短时限流，稍后重试', resets_at=?2, next_check_at=?3, check_failures=0, wait_started_at=?4, waits=waits+1, resume_pending=1 WHERE id=?1",
+                params![run_id, at, at + 5_000, now],
+            )?;
+            add_event(conn, run_id, now, "pause", "短时限流，稍后重试", Some(&clip(message, 200)))?;
+        }
+        Outcome::RateLimited { message, .. } if auto_resume => {
+            conn.execute(
+                "UPDATE automation_runs SET status='attention', block_kind='resume_unsupported', reason='无法自动续跑 · 需要手动继续：执行器没有返回可续跑的会话' WHERE id=?1",
+                params![run_id],
+            )?;
+            add_event(conn, run_id, now, "attention", "短时限流，无法自动续跑", Some(&clip(message, 200)))?;
+        }
+        Outcome::RateLimited { message, .. } => {
+            conn.execute("UPDATE automation_runs SET status='failed', ended_at=?2, error=?3 WHERE id=?1", params![run_id, now, format!("短时限流：{}", clip(message, 1000))])?;
+            add_event(conn, run_id, now, "fail", "短时限流，运行结束", Some("未开启「等待恢复后自动继续」"))?;
+        }
+        Outcome::Balance(message) => {
+            conn.execute(
+                "UPDATE automation_runs SET status='attention', block_kind='balance', reason='余额不足：充值后手动继续；等待额度重置不会恢复', error=?2 WHERE id=?1",
+                params![run_id, clip(message, 1000)],
+            )?;
+            add_event(conn, run_id, now, "attention", "余额不足", Some(&clip(message, 200)))?;
         }
         Outcome::Reauth(message) => {
             conn.execute(
@@ -2172,6 +2230,56 @@ mod tests {
         Schedule { freq: freq.into(), time: time.into(), weekday, date: date.map(str::to_string), timezone: "Asia/Shanghai".into() }
     }
 
+    /// 测试用的夏令时时区（2026 年纽约规则）：3 月 8 日 02:00–03:00 本地时间不存在，
+    /// 11 月 1 日 01:00–02:00 出现两次。项目不依赖 chrono-tz，这里只实现 next_fire 用到的换算。
+    #[derive(Clone, Copy, Debug)]
+    struct NewYork2026;
+
+    impl TimeZone for NewYork2026 {
+        type Offset = FixedOffset;
+        fn from_offset(_: &FixedOffset) -> Self { NewYork2026 }
+        fn offset_from_local_date(&self, local: &NaiveDate) -> chrono::LocalResult<FixedOffset> {
+            self.offset_from_local_datetime(&local.and_hms_opt(12, 0, 0).unwrap())
+        }
+        fn offset_from_local_datetime(&self, local: &chrono::NaiveDateTime) -> chrono::LocalResult<FixedOffset> {
+            let (est, edt) = (FixedOffset::west_opt(5 * 3600).unwrap(), FixedOffset::west_opt(4 * 3600).unwrap());
+            let gap = NaiveDate::from_ymd_opt(2026, 3, 8).unwrap().and_hms_opt(2, 0, 0).unwrap();
+            let fold = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap().and_hms_opt(1, 0, 0).unwrap();
+            let hour = chrono::Duration::hours(1);
+            if *local >= gap && *local < gap + hour { return chrono::LocalResult::None; }
+            if *local >= fold && *local < fold + hour { return chrono::LocalResult::Ambiguous(edt, est); }
+            chrono::LocalResult::Single(if *local >= gap && *local < fold { edt } else { est })
+        }
+        fn offset_from_utc_date(&self, utc: &NaiveDate) -> FixedOffset {
+            self.offset_from_utc_datetime(&utc.and_hms_opt(12, 0, 0).unwrap())
+        }
+        fn offset_from_utc_datetime(&self, utc: &chrono::NaiveDateTime) -> FixedOffset {
+            let start = NaiveDate::from_ymd_opt(2026, 3, 8).unwrap().and_hms_opt(7, 0, 0).unwrap();
+            let end = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap().and_hms_opt(6, 0, 0).unwrap();
+            if *utc >= start && *utc < end { FixedOffset::west_opt(4 * 3600).unwrap() } else { FixedOffset::west_opt(5 * 3600).unwrap() }
+        }
+    }
+
+    /// 4.7：夏令时跳过的时刻不补跑，重复的时刻只运行一次（路线图 P9 的约定）。
+    #[test]
+    fn next_fire_skips_the_spring_gap_and_runs_once_in_the_fall_repeat() {
+        let tz = NewYork2026;
+        let utc = |y, mo, d, h, mi| chrono::Utc.with_ymd_and_hms(y, mo, d, h, mi, 0).unwrap().timestamp_millis();
+        // 3 月 8 日 02:30 不存在：不在 03:30 补跑，直接到 3 月 9 日 02:30（EDT，UTC 06:30）
+        let before_gap = utc(2026, 3, 7, 20, 0);
+        assert_eq!(next_fire(&tz, &sched("daily", "02:30", None, None), before_gap), Some(utc(2026, 3, 9, 6, 30)));
+        // 11 月 1 日 01:30 出现两次：先跑第一次（EDT，UTC 05:30）……
+        let before_fold = utc(2026, 10, 31, 16, 0);
+        let first = next_fire(&tz, &sched("daily", "01:30", None, None), before_fold).unwrap();
+        assert_eq!(first, utc(2026, 11, 1, 5, 30));
+        // ……第一次之后不再按第二个 01:30（EST，UTC 06:30）再跑，下一次是 11 月 2 日
+        assert_eq!(next_fire(&tz, &sched("daily", "01:30", None, None), first), Some(utc(2026, 11, 2, 6, 30)));
+        // 每周任务落在跳过的时刻上：那一周不补，顺延到下一周
+        assert_eq!(next_fire(&tz, &sched("weekly", "02:30", Some(7), None), before_gap), Some(utc(2026, 3, 15, 6, 30)));
+        // 单次任务定在不存在的时刻：如实给不出时间（保存时 validate 拒绝并提示换时间），不悄悄挪到别的时刻
+        assert_eq!(next_fire(&tz, &sched("once", "02:30", None, Some("2026-03-08")), before_gap), None);
+    }
+
     #[test]
     fn next_fire_handles_daily_weekly_and_once() {
         let tz = shanghai();
@@ -2657,6 +2765,44 @@ mod tests {
     /// - Codex：提示文本 `You’ve hit your usage limit. Upgrade to Pro (…), visit … to purchase more credits or try again at <时间>.`
     ///   与跨天时间格式 `%b %-d{st|nd|rd|th}, %Y %-I:%M %p`（本机时区）取自 codex.exe 内置字符串；
     ///   JSONL 外壳（`error`、`turn.failed`）按 `Progress::feed` 现有的解析规则构造。
+    #[test]
+    fn classify_tells_quota_rate_limit_and_balance_apart() {
+        let p = Progress::default();
+        let rate = classify(&p, false, "API Error: 429 Too Many Requests", false);
+        assert!(matches!(rate, Outcome::RateLimited { .. }), "{rate:?}");
+        let quota = classify(&p, false, "Claude AI usage limit reached|1761300000", false);
+        assert!(matches!(quota, Outcome::Limit { .. }), "额度用完的说法优先：{quota:?}");
+        let weekly = classify(&p, false, "You've hit your weekly limit. 429", false);
+        assert!(matches!(weekly, Outcome::Limit { .. }), "{weekly:?}");
+        let balance = classify(&p, false, "Your credit balance is too low to access the Anthropic API.", false);
+        assert_eq!(balance, Outcome::Balance("Your credit balance is too low to access the Anthropic API.".into()));
+        assert!(matches!(classify(&p, false, "余额不足，请充值", false), Outcome::Balance(_)));
+    }
+
+    #[test]
+    fn rate_limited_runs_retry_soon_and_balance_needs_attention() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        let now = 1_000_000;
+        create_task(&conn, &input("now"), now).unwrap();
+        let run_id = startable(&conn).unwrap()[0];
+        conn.execute("UPDATE automation_runs SET status='running', exec_started_at=?2 WHERE id=?1", params![run_id, now]).unwrap();
+        let p = Progress { session_id: Some("s-1".into()), ..Default::default() };
+        finish(&conn, run_id, &Outcome::RateLimited { retry_at: None, message: "429".into() }, &p, now + 10).unwrap();
+        let run = load_run(&conn, run_id).unwrap().unwrap();
+        assert_eq!((run.status.as_str(), run.block_kind.as_deref()), ("waiting", Some("rate_limit")));
+        assert_eq!(run.resets_at, Some(now + 10 + RATE_LIMIT_RETRY_MS), "没给重试时间时一分钟后再试，不等额度重置");
+
+        let mut other = input("now");
+        other.connection_id = "c2".into();
+        create_task(&conn, &other, now + 1).unwrap();
+        let second = startable(&conn).unwrap().into_iter().find(|id| *id != run_id).unwrap();
+        conn.execute("UPDATE automation_runs SET status='running', exec_started_at=?2 WHERE id=?1", params![second, now]).unwrap();
+        finish(&conn, second, &Outcome::Balance("insufficient balance".into()), &p, now + 20).unwrap();
+        let run = load_run(&conn, second).unwrap().unwrap();
+        assert_eq!((run.status.as_str(), run.block_kind.as_deref()), ("attention", Some("balance")));
+    }
+
     #[test]
     fn classify_quota_exhausted_enters_waiting() {
         let conn = Connection::open_in_memory().unwrap();

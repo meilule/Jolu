@@ -4827,6 +4827,7 @@ pub fn run() {
             session_handoff::handoff_finish,
             session_handoff::handoff_cancel,
             session_handoff::handoff_render,
+            session_handoff::handoff_local_export,
             session_handoff::handoff_save,
             session_handoff::validate_file_name,
             // 任务 3.1 结束

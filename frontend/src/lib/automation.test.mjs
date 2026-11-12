@@ -93,6 +93,13 @@ test("等待提示与额度提示", () => {
   const banner = blockBanner(run({ status: "waiting", block_kind: "quota", resume_pending: true, resets_at: at(22, 18, 30) }), now)
   assert.equal(banner.title, "等待额度 · 已保留任务与进度")
   assert.equal(blockBanner(run({ status: "attention", block_kind: "reauth" }), now).danger, true)
+  // 4.7：短时限流不算额度用完、不标红；余额不足标红且说明等待无用
+  const rate = blockBanner(run({ status: "waiting", block_kind: "rate_limit", resets_at: at(22, 18, 30) }), now)
+  assert.equal(rate.title, "短时限流 · 稍后重试")
+  assert.equal(rate.danger, false)
+  const balance = blockBanner(run({ status: "attention", block_kind: "balance" }), now)
+  assert.equal(balance.danger, true)
+  assert.match(balance.body, /等待额度重置不会恢复/)
   const tip = quotaTip({
     state: "blocked", reason: null, resets_at: at(22, 18, 30),
     windows: [{ key: "5h", name: "5 小时窗口", used_percent: 100, resets_at: at(22, 18, 30), blocking: true }, { key: "7d", name: "7 天窗口", used_percent: 58, resets_at: null, blocking: false }],

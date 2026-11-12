@@ -175,6 +175,7 @@ function firstClause(text: string | null | undefined, fallback: string): string 
 export function waitNext(run: RunDto, now: number): string {
   if (run.block_kind === "quota_unknown") return run.resets_at ? `预计${dayTime(run.resets_at, now)} 尝试继续` : "恢复时间未知"
   if (run.block_kind === "check_failed") return "检查失败 · 稍后重试"
+  if (run.block_kind === "rate_limit") return run.resets_at ? `短时限流 · ${dayTime(run.resets_at, now)} 重试` : "短时限流 · 稍后重试"
   if (run.resets_at) {
     const weekly = run.reason?.includes("周") || run.reason?.includes("7 天")
     return weekly ? `周额度 · ${dayTime(run.resets_at, now).replace("今天 ", "")}` : `预计${dayTime(run.resets_at, now)}`
@@ -264,6 +265,11 @@ export function blockBanner(run: RunDto, now: number): { title: string; body: st
       return { title: reason || "检查失败", body: "保留上次额度并标记过期；逐步延长重试间隔。检查失败不当作额度耗尽。", danger: false }
     case "reauth":
       return { title: "需要重新登录", body: "停止额度检查，保留任务；重新认证并检查账号后才能继续。", danger: true }
+    // 4.7：短时限流不是额度用完，一两分钟后检查一次就继续；余额不足等多久都不会恢复
+    case "rate_limit":
+      return { title: "短时限流 · 稍后重试", body: `服务端暂时拒绝了过于频繁的请求，额度并没有用完${run.resets_at ? `；预计${dayTime(run.resets_at, now)} 检查后继续` : ""}。`, danger: false }
+    case "balance":
+      return { title: "余额不足", body: "按量计费的账户余额不足，等待额度重置不会恢复；充值后手动继续。", danger: true }
     case "resume_unsupported":
     case "interrupted":
       return { title: "无法自动续跑 · 需要手动继续", body: reason || "原会话失效、工具未安装或需要交互确认时保留进度，不自动从头重跑。", danger: true }
