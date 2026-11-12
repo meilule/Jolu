@@ -18,7 +18,7 @@ export function SectionTitle({ title, note, children }: { title: string; note?: 
   return (
     <div className="flex min-h-5 items-center justify-between gap-3">
       <h3 className="truncate text-sm font-semibold text-jolu-text">{title}</h3>
-      {children ?? (note && <span className="shrink-0 text-[10px] text-jolu-muted">{note}</span>)}
+      {children ?? (note && <span className="shrink-0 text-[11px] text-jolu-muted">{note}</span>)}
     </div>
   )
 }
@@ -26,7 +26,7 @@ export function SectionTitle({ title, note, children }: { title: string; note?: 
 /** 键值行：标签在左，值在右 */
 export function KeyValue({ label, value, title }: { label: string; value: ReactNode; title?: string }) {
   return (
-    <div className="flex items-center gap-2.5 text-[11px]">
+    <div className="flex items-center gap-2.5 text-[12px]">
       <span className="shrink-0 text-jolu-muted">{label}</span>
       <span className="flex-1" />
       <span className="min-w-0 truncate text-right text-jolu-text" title={title}>{value}</span>
@@ -56,7 +56,7 @@ export function Notice({ icon: Icon = Info, title, children, tone = "side", clas
         <Icon aria-hidden className={cn("size-4 shrink-0", tone === "danger" ? "text-jolu-danger" : tone === "selected" ? "text-jolu-on" : "text-jolu-muted")} />
         <span className={cn("text-xs font-semibold", tone === "danger" ? "text-jolu-danger" : tone === "selected" ? "text-jolu-on" : "text-jolu-text")}>{title}</span>
       </div>
-      {children && <div className={cn("whitespace-pre-line text-[11px] leading-[1.6]", tone === "selected" ? "text-jolu-on" : tone === "danger" ? "text-jolu-danger" : "text-jolu-muted")}>{children}</div>}
+      {children && <div className={cn("whitespace-pre-line text-[12px] leading-[1.6]", tone === "selected" ? "text-jolu-on" : tone === "danger" ? "text-jolu-danger" : "text-jolu-muted")}>{children}</div>}
     </div>
   )
 }
@@ -88,20 +88,20 @@ export function AutomationTabs({ value, onChange }: { value: "tasks" | "runs"; o
 export function QuotaBar({ label, value, note, percent, blocking }: { label: string; value: string; note?: string; percent: number | null; blocking: boolean }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex justify-between gap-2 text-[11px]">
+      <div className="flex justify-between gap-2 text-[12px]">
         <span className="text-jolu-text">{label}</span>
         <span className="tnum text-jolu-muted">{value}</span>
       </div>
       <span className="h-1.5 rounded-[3px] bg-jolu-track">
         <span className={cn("block h-full rounded-[3px]", blocking ? "bg-jolu-on" : "bg-jolu-accent")} style={{ width: `${Math.min(100, Math.max(percent === null ? 0 : 2, percent ?? 0))}%` }} />
       </span>
-      {note && <span className="text-[10px] text-jolu-muted">{note}</span>}
+      {note && <span className="text-[11px] text-jolu-muted">{note}</span>}
     </div>
   )
 }
 
 const MENU_CLASS = "motion-popover z-[100] min-w-[168px] rounded-xl border border-jolu-border bg-jolu-cc-surface p-1.5 shadow-popover"
-const ITEM_CLASS = "flex h-8 cursor-default select-none items-center gap-2 rounded-md px-2 text-[11px] text-jolu-text outline-none data-[highlighted]:bg-jolu-side data-[disabled]:opacity-40 [&_svg]:size-3.5 [&_svg]:text-jolu-muted"
+const ITEM_CLASS = "flex h-8 cursor-default select-none items-center gap-2 rounded-md px-2 text-[12px] text-jolu-text outline-none data-[highlighted]:bg-jolu-side data-[disabled]:opacity-40 [&_svg]:size-3.5 [&_svg]:text-jolu-muted"
 /** 危险项（删除任务）：文字与图标都用危险色 */
 const DANGER_ITEM_CLASS = ITEM_CLASS.replace("text-jolu-text", "text-jolu-danger").replace("[&_svg]:text-jolu-muted", "[&_svg]:text-jolu-danger")
 
@@ -157,7 +157,7 @@ export function TaskMenu({ item, now, onAction, onEdit, onQueue, onCancel, onDel
                 <Menu.Item className={cn(DANGER_ITEM_CLASS, "opacity-40 data-[highlighted]:bg-transparent")} aria-disabled onSelect={(e) => e.preventDefault()}><Trash2 aria-hidden />删除任务</Menu.Item>
               </Tooltip.Trigger>
               <Tooltip.Portal>
-                <Tooltip.Content side="bottom" align="start" sideOffset={6} collisionPadding={8} className="motion-popover z-[120] rounded-md bg-jolu-text px-2.5 py-[7px] text-[11px] text-jolu-bg">
+                <Tooltip.Content side="bottom" align="start" sideOffset={6} collisionPadding={8} className="motion-popover z-[120] rounded-md bg-jolu-text px-2.5 py-[7px] text-[12px] text-jolu-bg">
                   {DELETE_BLOCKED_TIP}
                 </Tooltip.Content>
               </Tooltip.Portal>

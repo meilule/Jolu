@@ -280,7 +280,7 @@ export function SessionGraph({ sources, views, sourceLive, modelCount, loading, 
       <header className="grid grid-cols-[minmax(240px,330px)_minmax(80px,1fr)_minmax(300px,494px)] px-8 pb-3 pt-[22px] pr-[46px]">
         <div className="flex flex-col gap-[7px]">
           <h2 className="text-[16px] font-semibold text-jolu-text">模型来源</h2>
-          <p className="flex items-center gap-1.5 text-[11px] text-jolu-muted">
+          <p className="flex items-center gap-1.5 text-[12px] text-jolu-muted">
             <span>{sources.length} 个来源 · {modelCount} 个模型</span>
             {/* 订阅类来源的清单只能实时拉，界面不会自己去打上游；0 模型时给一个明确的动作 */}
             {modelCount === 0 && sources.length > 0 && onRefreshModels && (
@@ -296,7 +296,7 @@ export function SessionGraph({ sources, views, sourceLive, modelCount, loading, 
         <span />
         <div className="flex flex-col gap-[7px]">
           <h2 className="text-[16px] font-semibold text-jolu-text">最近会话</h2>
-          <p className="text-[11px] text-jolu-muted">{expanded ? "运行中优先 · 已展开更多最近会话" : "运行中优先 · 其余按最近活动排序"}</p>
+          <p className="text-[12px] text-jolu-muted">{expanded ? "运行中优先 · 已展开更多最近会话" : "运行中优先 · 其余按最近活动排序"}</p>
         </div>
       </header>
 
@@ -337,7 +337,7 @@ export function SessionGraph({ sources, views, sourceLive, modelCount, loading, 
                 onHover={(on) => setHover(on ? { kind: "source", id: source.connection.id } : null)} />
             })}
             {sources.length === 0 && !loading && (
-              <p className="rounded-xl border border-dashed border-jolu-border px-4 py-6 text-center text-[11px] text-jolu-muted">
+              <p className="rounded-xl border border-dashed border-jolu-border px-4 py-6 text-center text-[12px] text-jolu-muted">
                 还没有来源加入模型池。可在「管理来源」里把订阅或 API Key 加入。
               </p>
             )}
@@ -351,7 +351,7 @@ export function SessionGraph({ sources, views, sourceLive, modelCount, loading, 
             ) : error ? (
               <Placeholder>
                 <span className="text-jolu-danger">最近会话读取失败：{error}</span>
-                <button type="button" onClick={onRetry} className="motion-button mt-2 inline-flex h-8 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-[11px] text-jolu-text outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent">
+                <button type="button" onClick={onRetry} className="motion-button mt-2 inline-flex h-8 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-[12px] text-jolu-text outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent">
                   <RotateCw aria-hidden className="size-3.5" />重试
                 </button>
               </Placeholder>
@@ -385,7 +385,7 @@ export function SessionGraph({ sources, views, sourceLive, modelCount, loading, 
         </div>
       </div>
 
-      <footer className="grid grid-cols-[minmax(240px,330px)_minmax(80px,1fr)_minmax(300px,494px)] px-8 pb-[22px] pt-3 pr-[46px] text-[11px] text-jolu-muted">
+      <footer className="grid grid-cols-[minmax(240px,330px)_minmax(80px,1fr)_minmax(300px,494px)] px-8 pb-[22px] pt-3 pr-[46px] text-[12px] text-jolu-muted">
         <span>{expanded ? "两栏共用滚动区域 · 展开后保持当前阅读位置" : "模型来源与最近会话一起滚动"}</span>
         <span />
         <span className="flex gap-5">
@@ -398,7 +398,7 @@ export function SessionGraph({ sources, views, sourceLive, modelCount, loading, 
 }
 
 function Placeholder({ children }: { children: React.ReactNode }) {
-  return <div className="flex flex-col items-center rounded-[14px] border border-dashed border-jolu-border px-5 py-8 text-center text-[11px] text-jolu-muted">{children}</div>
+  return <div className="flex flex-col items-center rounded-[14px] border border-dashed border-jolu-border px-5 py-8 text-center text-[12px] text-jolu-muted">{children}</div>
 }
 
 function SourceCard({ innerRef, source, summary, live, highlighted, toggleDisabled, onToggleServe, onHover }: {
@@ -424,7 +424,7 @@ function SourceCard({ innerRef, source, summary, live, highlighted, toggleDisabl
         </span>
         <div className="flex min-w-0 flex-1 flex-col gap-[6px]">
           <span className="truncate text-[13px] font-semibold text-jolu-text" title={connection.baseName}>{connection.baseName}</span>
-          <span className="truncate text-[10px] text-jolu-muted">{credentialLabel(connection.kind, connection.platformId)}</span>
+          <span className="truncate text-[11px] text-jolu-muted">{credentialLabel(connection.kind, connection.platformId)}</span>
         </div>
         <StatusCapsule size="sm" tone={connection.serve_enabled ? "on" : "off"} label={connection.serve_enabled ? "已接入" : "未接入"}
           title={connection.serve_enabled ? "在模型池中，点击移出" : "不在模型池中，点击加入"} disabled={toggleDisabled} onClick={onToggleServe} />
@@ -432,16 +432,16 @@ function SourceCard({ innerRef, source, summary, live, highlighted, toggleDisabl
       <div className="flex min-w-0 items-baseline justify-between gap-3">
         {summary.model
           ? <span className="truncate text-[12px] font-semibold" style={{ color: tone.color }} title={summary.model}>{summary.model}</span>
-          : <span className="truncate text-[11px] text-jolu-muted">暂无经网关的请求</span>}
+          : <span className="truncate text-[12px] text-jolu-muted">暂无经网关的请求</span>}
         {live ? (
           // 没有会话标识的请求（如 Gemini CLI）：只在来源卡上显示运行中，不连到会话（J6-04 05）
-          <span className="flex shrink-0 items-center gap-[5px] text-[10px] font-semibold" style={{ color: tone.color }}
+          <span className="flex shrink-0 items-center gap-[5px] text-[11px] font-semibold" style={{ color: tone.color }}
             title="这些请求没有带会话标识，无法关联到具体会话" aria-live="polite">
             <span className="size-1.5 rounded-full" style={{ backgroundColor: tone.color }} />
             运行中 · {live.agents.length ? live.agents.map(agentLabel).join("、") : "未识别工具"}{live.count > 1 ? ` × ${live.count}` : ""}
           </span>
         ) : (
-          <span className="shrink-0 text-[10px] text-jolu-muted">{summary.sessions} 条最近会话</span>
+          <span className="shrink-0 text-[11px] text-jolu-muted">{summary.sessions} 条最近会话</span>
         )}
       </div>
       <span aria-hidden className="absolute -right-1 top-12 size-2 rounded-full border-[1.5px] bg-jolu-bg" style={{ borderColor: tone.color }} />
@@ -474,13 +474,13 @@ function SessionCard({ innerRef, view, rest, tone, now, freshness, highlighted, 
       }}>
       <div className="flex min-w-0 flex-col justify-between">
         <span className="truncate text-[14px] font-semibold text-jolu-text" title={session.title ?? session.session_id}>{sessionTitle(session)}</span>
-        <span className="truncate text-[11px] text-jolu-muted">{toolLabel(session.platform)} · {project ?? "未识别项目"}</span>
-        <span className="truncate text-[10px] text-jolu-muted">{relativeTime(view.activity, now)}</span>
+        <span className="truncate text-[12px] text-jolu-muted">{toolLabel(session.platform)} · {project ?? "未识别项目"}</span>
+        <span className="truncate text-[11px] text-jolu-muted">{relativeTime(view.activity, now)}</span>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-[9px]">
         <span className="flex items-center gap-[7px]" aria-live="polite">
           <span className="size-1.5 rounded-full" style={{ backgroundColor: accent ? accent.color : "var(--jolu-muted)" }} />
-          <span className={cn("text-[10.5px]", accent ? "font-semibold" : status.tone === "failed" ? "text-jolu-danger" : "text-jolu-muted")}
+          <span className={cn("text-[11.5px]", accent ? "font-semibold" : status.tone === "failed" ? "text-jolu-danger" : "text-jolu-muted")}
             style={accent ? { color: accent.color } : undefined}>{status.label}</span>
         </span>
         <span title={token.title}
@@ -489,7 +489,7 @@ function SessionCard({ innerRef, view, rest, tone, now, freshness, highlighted, 
           {token.badge && <TokenBadge kind={token.badge.kind} label={token.badge.label} />}
           <span className={cn("font-mono text-[12px] font-semibold tabular-nums", !token.known || token.flag ? "text-jolu-muted" : !accent && "text-jolu-text")}
             style={accent && token.known && !token.flag ? { color: accent.color } : undefined}>{token.text}</span>
-          <span className="text-[10.5px] text-jolu-muted">Tokens</span>
+          <span className="text-[11.5px] text-jolu-muted">Tokens</span>
           {token.flag && <span className="sr-only">（{token.flag}）</span>}
         </span>
       </div>

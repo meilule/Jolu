@@ -45,7 +45,7 @@ export function Button({ label, primary, danger, disabled, onClick }: { label: s
 }
 
 export function Warning({ children, tone = "danger" }: { children: React.ReactNode; tone?: "danger" | "muted" }) {
-  return <div className={cn("flex items-start gap-2 rounded-lg px-3 py-2.5 text-[10px]", tone === "danger" ? "bg-jolu-danger-soft text-jolu-danger" : "bg-jolu-side text-jolu-muted")}><TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span>{children}</span></div>
+  return <div className={cn("flex items-start gap-2 rounded-lg px-3 py-2.5 text-[11px]", tone === "danger" ? "bg-jolu-danger-soft text-jolu-danger" : "bg-jolu-side text-jolu-muted")}><TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span>{children}</span></div>
 }
 
 export function MessageDialog({ title, tone, message, action, onClose }: { title: string; tone?: "danger"; message: string; action?: { label: string; onClick: () => void }; onClose: () => void }) {
@@ -65,12 +65,12 @@ export function RenameDialog({ connection, busy, onClose, onSave }: { connection
     <Modal busy={busy} title="重命名来源" onClose={onClose} footer={<><Button label="取消" disabled={busy} onClick={onClose} /><Button label="保存" primary disabled={busy || invalid || !name.trim()} onClick={() => onSave(name.trim(), slug.trim())} /></>}>
       <div className="flex flex-col gap-1">
         <span className="text-[9.5px] text-jolu-muted">显示名称</span>
-        <input value={name} onChange={(event) => setName(event.target.value)} className="jolu-control h-9 rounded-lg border border-jolu-border bg-jolu-side px-3 text-[11px] text-jolu-text outline-none focus:border-jolu-accent" />
+        <input value={name} onChange={(event) => setName(event.target.value)} className="jolu-control h-9 rounded-lg border border-jolu-border bg-jolu-side px-3 text-[12px] text-jolu-text outline-none focus:border-jolu-accent" />
         <span className="text-[8.5px] text-jolu-muted">只改显示名；已接入的工具不受影响。</span>
       </div>
       <div className="flex flex-col gap-1">
         <span className="text-[9.5px] text-jolu-muted">菜单 id</span>
-        <input value={slug} onChange={(event) => setSlug(event.target.value)} className={cn("h-9 rounded-lg border bg-jolu-side px-3 text-[11px] text-jolu-text outline-none", invalid ? "border-jolu-danger" : "border-jolu-border focus:border-jolu-accent")} />
+        <input value={slug} onChange={(event) => setSlug(event.target.value)} className={cn("h-9 rounded-lg border bg-jolu-side px-3 text-[12px] text-jolu-text outline-none", invalid ? "border-jolu-danger" : "border-jolu-border focus:border-jolu-accent")} />
         {invalid ? <span className="text-[8.5px] text-jolu-danger">{reserved ? `「${slug}」是保留字，建议改用 ${slug}-src` : "只能使用小写字母、数字和连字符，不能以连字符开头。"}</span> : <span className="text-[8.5px] text-jolu-muted">Agent 配置里存的是这个 id；改名不会改它，改 id 后旧 id 会返回 404 并说明新名字。</span>}
       </div>
     </Modal>
@@ -162,7 +162,7 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, subag
               value={modelChoice}
               disabled={busy}
               onChange={(event) => onModelChoice(event.target.value)}
-              className="h-8 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent"
+              className="h-8 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[12px] text-jolu-text outline-none focus:border-jolu-accent"
             >
               {models.map((model) => (
                 <option key={model.id} value={model.id}>
@@ -182,7 +182,7 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, subag
             value={subagentChoice}
             disabled={busy}
             onChange={(event) => onSubagentChoice(event.target.value)}
-            className="h-8 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent"
+            className="h-8 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[12px] text-jolu-text outline-none focus:border-jolu-accent"
           >
             <option value="">跟随主模型</option>
             {models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
@@ -201,7 +201,7 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, subag
         {agents.map((entry) => (
           <div key={entry.agent} className="flex items-center gap-2 rounded-lg border border-jolu-border bg-jolu-bg px-2.5 py-2">
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="text-[10.5px] text-jolu-text">{agentLabel(entry.agent)}</span>
+              <span className="text-[11.5px] text-jolu-text">{agentLabel(entry.agent)}</span>
               <span className={cn("truncate text-[8.5px]", entry.drift === "unreachable" ? "text-jolu-danger" : entry.wired ? "text-jolu-on" : entry.drift ? "text-jolu-danger" : "text-jolu-muted")}>
                 {entry.drift === "unreachable" ? "已接入，但网关没在运行：请求会失败" : entry.wired ? "已接入" : entry.drift === "foreign" ? "已被另一个 Jolu 接管" : entry.drift === "removed" ? "配置里已移除" : entry.drift === "changed" ? "配置被改写" : entry.drift === "pending" ? "上次接线未完成" : entry.reason ?? "未接入"}
               </span>
@@ -222,7 +222,7 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, subag
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-1.5">
               <input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="Profile 名称（保存当前接线）"
-                className="h-8 min-w-0 flex-1 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent" />
+                className="h-8 min-w-0 flex-1 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[12px] text-jolu-text outline-none focus:border-jolu-accent" />
               <Button label="保存当前" disabled={busy || profileName.trim() === ""} onClick={() => { onProfileSave(profileName.trim()); setProfileName("") }} />
             </div>
             {profiles.length === 0 ? (
@@ -230,7 +230,7 @@ export function WiringDialog({ agents, models, modelChoice, onModelChoice, subag
             ) : (
               profiles.map((profile) => (
                 <div key={profile.name} className="flex items-center gap-2 rounded-lg bg-jolu-bg px-2 py-1.5">
-                  <span className="min-w-0 flex-1 truncate text-[10.5px] text-jolu-text">{profile.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-[11.5px] text-jolu-text">{profile.name}</span>
                   <span className="shrink-0 text-[8.5px] text-jolu-muted" title={profile.extras?.favorites?.length ? `常用：${profile.extras.favorites.join("、")}` : undefined}>
                     {Object.keys(profile.agents).length} 个工具
                     {profile.extras?.agents && Object.keys(profile.extras.agents).length > 0 ? " · 含档位" : ""}
@@ -253,9 +253,9 @@ export function CodexDialog({ mode, returnFocusTo, onClose, onConfirm }: { mode:
   const oauth = mode === "oauth"
   return (
     <ActionConfirmDialog returnFocusTo={returnFocusTo} title="接入 Codex" description="确认下方接线方式后更新 Codex 本机配置。" confirmLabel="接入" onClose={onClose} onConfirm={onConfirm}>
-      <p className="text-[10px] text-jolu-muted">Jolu 会把 Codex 的请求转到本机模型入口；只写入 config.toml。</p>
+      <p className="text-[11px] text-jolu-muted">Jolu 会把 Codex 的请求转到本机模型入口；只写入 config.toml。</p>
       <div className={cn("flex flex-col gap-1.5 rounded-lg border p-3", oauth ? "border-jolu-on bg-jolu-status-success-bg" : "border-jolu-border bg-jolu-side")}>
-        <span className="text-[11px] font-semibold text-jolu-text">{oauth ? "保留 ChatGPT 登录" : "使用网关 Key"}</span>
+        <span className="text-[12px] font-semibold text-jolu-text">{oauth ? "保留 ChatGPT 登录" : "使用网关 Key"}</span>
         <span className="text-[9px] text-jolu-muted">{oauth ? "检测到 ChatGPT 登录：只改请求地址（openai_base_url），不写 Key、不动 auth.json。" : "没有检测到 ChatGPT 登录：写自定义 provider 和 jolu-codex 令牌，不改其他 provider。"}</span>
       </div>
       {!oauth && <Warning tone="muted">如果以后登录 ChatGPT，重新接线即可切回保留登录的接法。</Warning>}
@@ -286,7 +286,7 @@ export function CatalogDialog({ models, onClose }: { models: CatalogModelDto[]; 
       <div className="flex max-h-[50vh] flex-col gap-1 overflow-y-auto">
         {models.map((model) => (
           <div key={model.id} className="flex items-center gap-2 rounded-lg bg-jolu-side px-2.5 py-1.5">
-            <span className="truncate text-[10px] text-jolu-text">{model.id}</span>
+            <span className="truncate text-[11px] text-jolu-text">{model.id}</span>
             <button type="button" className="shrink-0 text-[9px] text-jolu-on" onClick={() => { void navigator.clipboard.writeText(model.id).then(() => toast.success("模型名已复制"), () => toast.danger("复制失败，请重试")) }}>复制模型名</button>
             <div className="flex-1" />
             <span className={cn("text-[8.5px]", model.status === "connected" ? "text-jolu-muted" : "text-jolu-danger")}>{model.status === "connected" ? model.source : "未连接"}</span>

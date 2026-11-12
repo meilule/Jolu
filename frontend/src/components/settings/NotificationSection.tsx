@@ -75,7 +75,7 @@ export function NotificationSection({ cfg, setDirty }: { cfg: Cfg; setDirty: Set
           <div className="flex items-center gap-5">
             <div className="flex min-w-0 flex-1 flex-col gap-1.5">
               <span className="text-[13px] font-medium text-jolu-text">提醒阈值</span>
-              <span className="text-[11px] text-jolu-muted">按账户原币种比较，不自动换算汇率。</span>
+              <span className="text-[12px] text-jolu-muted">按账户原币种比较，不自动换算汇率。</span>
             </div>
             <span className={cn("inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-lg border bg-jolu-bg px-3 focus-within:border-jolu-accent", message ? "border-jolu-danger" : "border-jolu-border")}>
               <input aria-label="提醒阈值" inputMode="decimal" value={amount} disabled={disabled || busy}
@@ -86,8 +86,8 @@ export function NotificationSection({ cfg, setDirty }: { cfg: Cfg; setDirty: Set
             </span>
             <ActionButton tone="soft" busy={busy} disabled={disabled || value === null || (saved != null && !dirty)} onClick={() => value !== null && save(value)}>保存阈值</ActionButton>
           </div>
-          {message && <span role="alert" className="text-right text-[11px] text-jolu-danger">{message}</span>}
-          {saved == null && !message && <span className="text-right text-[11px] text-jolu-muted">当前未开启；保存阈值即开启提醒</span>}
+          {message && <span role="alert" className="text-right text-[12px] text-jolu-danger">{message}</span>}
+          {saved == null && !message && <span className="text-right text-[12px] text-jolu-muted">当前未开启；保存阈值即开启提醒</span>}
         </div>
       </SettingsGroup>
 
@@ -115,10 +115,10 @@ export function NotificationSection({ cfg, setDirty }: { cfg: Cfg; setDirty: Set
         <span aria-hidden className="inline-flex h-[34px] w-28 items-center justify-center gap-1.5 rounded-lg bg-jolu-selected text-xs font-medium text-jolu-on">
           查看任务<ChevronRight className="size-3.5" />
         </span>
-        <span className="text-[10px] text-jolu-muted">通知样式预览 · 示例</span>
+        <span className="text-[11px] text-jolu-muted">通知样式预览 · 示例</span>
       </div>
 
-      <div className="flex items-start gap-2.5 rounded-[9px] bg-jolu-side p-3.5 text-[11px] text-jolu-muted">
+      <div className="flex items-start gap-2.5 rounded-[9px] bg-jolu-side p-3.5 text-[12px] text-jolu-muted">
         <Info aria-hidden className="size-4 shrink-0" />
         余额提醒仅比较相同币种；免打扰期间不弹出通知，结束后不补弹。
       </div>

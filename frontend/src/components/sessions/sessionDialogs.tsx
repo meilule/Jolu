@@ -69,7 +69,7 @@ export function ContinueDialog({ session, accountKnown, onClose: onDismiss, onDo
   }
 
   const item = (ok: boolean | null, label: string) => (
-    <span className="flex items-center gap-1.5 text-[11px] text-jolu-muted">
+    <span className="flex items-center gap-1.5 text-[12px] text-jolu-muted">
       {ok === null ? <LoaderCircle aria-hidden className="size-3.5 animate-spin" /> : ok ? <CircleCheck aria-hidden className="size-3.5 text-jolu-on" /> : <CircleAlert aria-hidden className="size-3.5 text-jolu-danger" />}
       {label}
     </span>
@@ -88,7 +88,7 @@ export function ContinueDialog({ session, accountKnown, onClose: onDismiss, onDo
       <div className="flex flex-col gap-2.5 rounded-xl bg-jolu-side p-3.5">
         <span className="text-sm font-semibold text-jolu-text">{sessionTitle(session)}</span>
         {([["会话", middleEllipsis(session.session_id)], ["目录", check?.cwd ?? session.cwd ?? "未识别"], ["来源", `本机 ${name} 记录`]] as const).map(([label, value]) => (
-          <span key={label} className="flex gap-3 text-[11px]"><span className="w-6 shrink-0 text-jolu-muted">{label}</span><span className="min-w-0 truncate text-jolu-text" title={value}>{value}</span></span>
+          <span key={label} className="flex gap-3 text-[12px]"><span className="w-6 shrink-0 text-jolu-muted">{label}</span><span className="min-w-0 truncate text-jolu-text" title={value}>{value}</span></span>
         ))}
       </div>
       <div className="flex gap-[18px]">
@@ -97,10 +97,10 @@ export function ContinueDialog({ session, accountKnown, onClose: onDismiss, onDo
       </div>
       <div className="flex flex-col gap-1.5 rounded-lg bg-jolu-selected p-3">
         <span className="text-xs font-medium text-jolu-on">沿用原工具当前的登录状态</span>
-        <span className="text-[11px] text-jolu-on">{accountKnown ? "Jolu 不会据此自动切换原工具账号。" : "这条历史会话未归属账号。Jolu 不会据此自动切换原工具账号。"}</span>
+        <span className="text-[12px] text-jolu-on">{accountKnown ? "Jolu 不会据此自动切换原工具账号。" : "这条历史会话未归属账号。Jolu 不会据此自动切换原工具账号。"}</span>
       </div>
       {(error || (check && !ready)) && (
-        <p role="alert" className="text-[11px] text-jolu-danger">
+        <p role="alert" className="text-[12px] text-jolu-danger">
           {error ?? (check && !check.tool_found ? `请安装或配置 ${name} 后重试。当前仍可查看记录与复制会话 ID。` : "项目目录不可访问，无法在原目录打开。")}
         </p>
       )}
@@ -128,11 +128,11 @@ export function AutomationConfirmDialog({ session, onClose: onDismiss, onConfirm
       <div className="flex flex-col gap-1.5 rounded-xl bg-jolu-side p-3.5">
         <span className="text-sm font-semibold text-jolu-text">{sessionTitle(session)}</span>
         <span className="text-xs text-jolu-muted">{providerName(session.platform)} · {projectName(session.cwd)}</span>
-        <span className="text-[10px] text-jolu-muted" title={session.session_id}>{middleEllipsis(session.session_id)}</span>
+        <span className="text-[11px] text-jolu-muted" title={session.session_id}>{middleEllipsis(session.session_id)}</span>
       </div>
       <div className={cn("flex flex-col gap-1.5 rounded-lg bg-jolu-selected p-3")}>
         <span className="text-xs text-jolu-on">确认后仅打开任务配置，任务创建后才会执行。</span>
-        <span className="text-[11px] text-jolu-on">请在新建页面选择执行账号、填写任务内容与启动方式；已有会话内容不会被清空。</span>
+        <span className="text-[12px] text-jolu-on">请在新建页面选择执行账号、填写任务内容与启动方式；已有会话内容不会被清空。</span>
       </div>
       <div className="flex justify-end gap-2">
         <button type="button" className={secondary} onClick={onClose}>取消</button>

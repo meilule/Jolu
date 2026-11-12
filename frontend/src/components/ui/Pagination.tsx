@@ -37,7 +37,7 @@ export function Pagination({ page, pageCount, pageSize, busy = false, summary, o
   return (
     <div className="flex h-[60px] items-center gap-2 px-4" aria-busy={busy}>
       {/* 页码输入有误时，这里临时换成错误提示 */}
-      <span role={error ? "alert" : undefined} className={cn("text-[11px]", error ? "text-jolu-danger" : "text-jolu-muted")}>
+      <span role={error ? "alert" : undefined} className={cn("text-[12px]", error ? "text-jolu-danger" : "text-jolu-muted")}>
         {error ?? summary ?? `每页 ${pageSize} 条 · 共 ${pageCount} 页`}
       </span>
       <span className="flex-1" />

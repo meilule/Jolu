@@ -22,7 +22,7 @@ export function ActivityCalendar({ activity, error }: { error?: string | null; a
     <Card className="flex flex-col gap-2.5 p-4">
       <div className="flex items-center justify-between">
         <h3 className="text-[15px] font-semibold text-jolu-text">本机活跃趋势</h3>
-        <span className="text-[10px] text-jolu-muted">近一年 · 本机记录</span>
+        <span className="text-[11px] text-jolu-muted">近一年 · 本机记录</span>
       </div>
       <ContentTransition identity={view ? "ready" : error ? "error" : "loading"}>
       {view ? (
@@ -64,7 +64,7 @@ export function ActivityCalendar({ activity, error }: { error?: string | null; a
         error ? <span className="text-xs text-jolu-muted">活跃趋势暂不可用，请重试。</span> : <LoadingSurface layout="calendar" label="正在读取活跃趋势" />
       )}
       </ContentTransition>
-      <div className="flex h-[18px] items-center justify-end gap-[5px] text-[10px] text-jolu-muted">
+      <div className="flex h-[18px] items-center justify-end gap-[5px] text-[11px] text-jolu-muted">
         少
         {LEVEL_COLORS.map((color) => <span key={color} aria-hidden className="size-2.5 rounded-sm" style={{ background: color }} />)}
         多
@@ -84,7 +84,7 @@ export function ActivityCalendar({ activity, error }: { error?: string | null; a
 function Summary({ width, label, value }: { width: number; label: string; value: string }) {
   return (
     <div className="flex flex-col gap-1.5" style={{ width }}>
-      <span className="text-[11px] text-jolu-muted">{label}</span>
+      <span className="text-[12px] text-jolu-muted">{label}</span>
       <span className="tnum text-[17px] font-semibold text-jolu-text">{value}</span>
     </div>
   )

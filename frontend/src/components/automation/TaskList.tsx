@@ -64,7 +64,7 @@ export function TaskList({ data, now, accounts, onOpen, onCreate, onEdit, onActi
         <Card className="flex flex-col items-start gap-3 p-5">
           <Bot aria-hidden className="size-[26px] text-jolu-muted" />
           <span className="text-[13px] font-semibold text-jolu-text">还没有自动化任务</span>
-          <span className="text-[11px] text-jolu-muted">创建一个任务，让 AI 在指定时间或额度恢复后开始工作。</span>
+          <span className="text-[12px] text-jolu-muted">创建一个任务，让 AI 在指定时间或额度恢复后开始工作。</span>
           <JoluButton variant="primary" size="sm" onClick={onCreate}><Plus aria-hidden />新建任务</JoluButton>
         </Card>
       ) : (
@@ -113,7 +113,7 @@ export function TaskList({ data, now, accounts, onOpen, onCreate, onEdit, onActi
           </div>
 
           <Card className="overflow-hidden">
-            <div className="flex h-11 items-center bg-jolu-side px-4 text-[11px] font-medium text-jolu-muted">
+            <div className="flex h-11 items-center bg-jolu-side px-4 text-[12px] font-medium text-jolu-muted">
               <span className="w-[280px] shrink-0">任务 / 项目</span>
               <span className="w-[180px] shrink-0">执行工具 / 账号</span>
               <span className="min-w-0 flex-1">启动方式</span>
@@ -127,16 +127,16 @@ export function TaskList({ data, now, accounts, onOpen, onCreate, onEdit, onActi
                 <div key={item.id} className="flex h-[76px] items-center border-t border-jolu-border px-4 transition-colors hover:bg-jolu-stage">
                   <div className="flex w-[280px] shrink-0 flex-col gap-[7px] pr-4">
                     <span className="truncate text-[13px] font-medium text-jolu-text">{item.name}</span>
-                    <span className="truncate text-[10px] text-jolu-muted" title={item.cwd}>{projectOf(item.cwd)}</span>
+                    <span className="truncate text-[11px] text-jolu-muted" title={item.cwd}>{projectOf(item.cwd)}</span>
                   </div>
                   <div className="flex w-[180px] shrink-0 flex-col gap-[7px] pr-3">
-                    <span className="flex items-center gap-[7px] text-[11px] text-jolu-text"><PlatformLogo platform={item.platform as PlatformId} size={16} />{toolName(item.platform)}</span>
-                    <span className="truncate text-[10px] text-jolu-muted">{acc ? accountText(acc.name, acc.kind) : "账号已移除"}</span>
+                    <span className="flex items-center gap-[7px] text-[12px] text-jolu-text"><PlatformLogo platform={item.platform as PlatformId} size={16} />{toolName(item.platform)}</span>
+                    <span className="truncate text-[11px] text-jolu-muted">{acc ? accountText(acc.name, acc.kind) : "账号已移除"}</span>
                   </div>
-                  <span className="min-w-0 flex-1 truncate pr-3 text-[11px] text-jolu-text">{launchLabel(item)}</span>
+                  <span className="min-w-0 flex-1 truncate pr-3 text-[12px] text-jolu-text">{launchLabel(item)}</span>
                   <div className="flex w-[180px] shrink-0 flex-col gap-[7px] pr-3">
                     <span className={cn("text-xs font-medium", TONE[status.tone])}>{status.label}</span>
-                    <span className="truncate text-[10px] text-jolu-muted" title={status.next}>{status.next}</span>
+                    <span className="truncate text-[11px] text-jolu-muted" title={status.next}>{status.next}</span>
                   </div>
                   <div className="flex w-[176px] shrink-0 items-center gap-2">
                     <button
@@ -160,12 +160,12 @@ export function TaskList({ data, now, accounts, onOpen, onCreate, onEdit, onActi
                 </div>
               )
             }) : (
-              <div className="flex items-center gap-3 border-t border-jolu-border px-4 py-5 text-[11px] text-jolu-muted">
+              <div className="flex items-center gap-3 border-t border-jolu-border px-4 py-5 text-[12px] text-jolu-muted">
                 筛选无结果：没有匹配的任务
                 {filtered && <ToolButton icon={<RotateCcw />} onClick={clear}>清除筛选</ToolButton>}
               </div>
             )}
-            <div className="flex h-11 items-center gap-2.5 border-t border-jolu-border px-4 text-[11px] text-jolu-muted">
+            <div className="flex h-11 items-center gap-2.5 border-t border-jolu-border px-4 text-[12px] text-jolu-muted">
               <span>{filtered ? `匹配 ${rows.length} / 共 ${data.tasks.length} 个任务` : `共 ${data.tasks.length} 个任务`}</span>
               <span className="flex-1" />
               <span>按最近更新排序</span>

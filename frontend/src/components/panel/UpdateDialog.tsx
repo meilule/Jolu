@@ -61,7 +61,7 @@ export function UpdateDialog({ onViewTasks }: { onViewTasks: () => void }) {
             <span id={titleId} className="text-sm font-semibold text-text-primary">
               {ready ? "安装完成" : installing ? "正在安装" : downloaded ? `准备安装 v${info.availableVersion}` : downloadError ? "下载失败" : `正在下载 v${info.availableVersion}`}
             </span>
-            <span className="text-[11px] text-text-secondary">
+            <span className="text-[12px] text-text-secondary">
               {ready
                 ? isTauri ? `v${info.availableVersion} 已安装，应用即将自动重启` : "预览模式：安装流程已模拟完成"
                 : installing ? "安装器正在接管，完成后应用自动重启"
@@ -77,13 +77,13 @@ export function UpdateDialog({ onViewTasks }: { onViewTasks: () => void }) {
           <span aria-hidden className="text-text-tertiary">→</span>
           <span className="font-bold text-success-text">v{info.availableVersion}</span>
           <span className="flex-1" />
-          {info.pubDate && <span className="font-sans text-[10px] text-text-tertiary">{info.pubDate.slice(0, 10)} 发布</span>}
+          {info.pubDate && <span className="font-sans text-[11px] text-text-tertiary">{info.pubDate.slice(0, 10)} 发布</span>}
         </div>
 
         {info.notes && (
           <div className="flex flex-col gap-1.5 rounded-lg bg-surface-2 p-3">
-            <span className="text-[11px] font-semibold text-text-secondary">更新说明</span>
-            <p className="text-[11px] leading-[1.5] text-text-secondary">{info.notes}</p>
+            <span className="text-[12px] font-semibold text-text-secondary">更新说明</span>
+            <p className="text-[12px] leading-[1.5] text-text-secondary">{info.notes}</p>
           </div>
         )}
 
@@ -101,21 +101,21 @@ export function UpdateDialog({ onViewTasks }: { onViewTasks: () => void }) {
                 style={{ width: `${percent === null ? 40 : percent}%` }}
               />
             </div>
-            <div className="tnum flex justify-between font-mono text-[11px]">
+            <div className="tnum flex justify-between font-mono text-[12px]">
               <span className="text-text-secondary">{bytes}</span>
               <span className="font-bold text-success-text">{percent === null ? "…" : `${percent}%`}</span>
             </div>
           </div>
         )}
 
-        {downloaded && !error && <p className="rounded-lg bg-surface-2 p-3 text-[11px] text-text-secondary">
+        {downloaded && !error && <p className="rounded-lg bg-surface-2 p-3 text-[12px] text-text-secondary">
           {tasksRunning ? `还有 ${running} 个自动化任务正在运行，请先处理任务。`
             : taskCheckError ? "任务状态暂时无法读取，安装时将再次检查。"
               : running === null ? "正在检查运行中的任务…" : "没有运行中的自动化任务，可以安装更新。"}
         </p>}
-        {error && <p role="alert" className="text-[11px] text-danger">{error}</p>}
+        {error && <p role="alert" className="text-[12px] text-danger">{error}</p>}
 
-        <p className="text-center text-[11px] text-text-tertiary">
+        <p className="text-center text-[12px] text-text-tertiary">
           {ready
             ? "灵动岛与后台采集会一并恢复"
             : installing ? "请等待安装器完成，应用将自动重启"

@@ -36,7 +36,7 @@ type Confirm = { title: string; description: string; label: string; danger?: boo
 type NameDialog = { kind: GroupKind; group?: GatewayGroupDto }
 
 const MENU_CLASS = "motion-popover z-[100] min-w-[176px] rounded-xl border border-jolu-border bg-jolu-cc-surface p-1.5 shadow-popover"
-const ITEM_CLASS = "flex h-8 cursor-default select-none items-center gap-2 rounded-md px-2 text-[11px] text-jolu-text outline-none data-[highlighted]:bg-jolu-side data-[disabled]:opacity-40 [&_svg]:size-3.5 [&_svg]:text-jolu-muted"
+const ITEM_CLASS = "flex h-8 cursor-default select-none items-center gap-2 rounded-md px-2 text-[12px] text-jolu-text outline-none data-[highlighted]:bg-jolu-side data-[disabled]:opacity-40 [&_svg]:size-3.5 [&_svg]:text-jolu-muted"
 const ICON_BUTTON = "grid size-7 place-items-center rounded-md text-jolu-muted outline-none hover:bg-jolu-stage hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-35"
 
 export function SourceManageDialog({
@@ -167,16 +167,16 @@ export function SourceManageDialog({
   /* ── 左栏 ── */
   const nav = (key: string, active: boolean, label: string, count: number | null, onClick: () => void, extra?: React.ReactNode) => (
     <button key={key} type="button" aria-current={active ? "true" : undefined} onClick={onClick}
-      className={cn("flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[11.5px] outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent",
+      className={cn("flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12px] outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent",
         active ? "bg-jolu-selected font-semibold text-jolu-on" : "text-jolu-text hover:bg-jolu-stage")}>
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {extra}
-      {count !== null && <span className={cn("text-[10px] tabular-nums", active ? "text-jolu-on" : "text-jolu-muted")}>{count}</span>}
+      {count !== null && <span className={cn("text-[11px] tabular-nums", active ? "text-jolu-on" : "text-jolu-muted")}>{count}</span>}
     </button>
   )
   const addGroupButton = (kind: GroupKind) => (
     <button type="button" disabled={busy} onClick={() => setNameDialog({ kind })}
-      className="mt-1 flex h-8 w-full items-center gap-1.5 rounded-lg border border-dashed border-jolu-border px-2.5 text-[11px] text-jolu-muted outline-none hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
+      className="mt-1 flex h-8 w-full items-center gap-1.5 rounded-lg border border-dashed border-jolu-border px-2.5 text-[12px] text-jolu-muted outline-none hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
       <Plus aria-hidden className="size-3.5" />新建分组
     </button>
   )
@@ -185,18 +185,18 @@ export function SourceManageDialog({
     <>
       <Modal title="管理模型来源" busy={busy} width={880} onClose={onClose}
         footer={<>
-          <span className="mr-auto self-center text-[10.5px] text-jolu-muted">「已接入」= 在模型池中；分组与顺序只影响排列，不改变路由、接线和 Agent 菜单。</span>
+          <span className="mr-auto self-center text-[11.5px] text-jolu-muted">「已接入」= 在模型池中；分组与顺序只影响排列，不改变路由、接线和 Agent 菜单。</span>
           <Button label="完成" disabled={busy} onClick={onClose} />
         </>}>
         <div className="-mx-6 flex h-[min(540px,calc(100dvh-240px))] min-h-[320px] border-y border-jolu-border">
           <nav aria-label="分组" className="flex w-[208px] shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-jolu-border bg-jolu-side p-3">
-            <span className="px-2.5 pb-1 text-[10px] text-jolu-muted">来源分组</span>
+            <span className="px-2.5 pb-1 text-[11px] text-jolu-muted">来源分组</span>
             {nav("all", scope.kind === "all", "全部来源", connections.length, () => setScope({ kind: "all" }))}
             {sourceGroups.map((group) => nav(`s:${group.id}`, scope.kind === "group" && scope.id === group.id, group.name, group.members.length, () => setScope({ kind: "group", id: group.id }),
               pinned.includes(`source:${group.id}`) ? <Pin aria-label="已置顶" className="size-3 text-jolu-muted" /> : null))}
             {nav("ungrouped", scope.kind === "ungrouped", "未分组", inScope(connections, sourceGroups, { kind: "ungrouped" }).length, () => setScope({ kind: "ungrouped" }))}
             {addGroupButton("source")}
-            <span className="px-2.5 pb-1 pt-4 text-[10px] text-jolu-muted">Agent 分组</span>
+            <span className="px-2.5 pb-1 pt-4 text-[11px] text-jolu-muted">Agent 分组</span>
             {nav("agents", scope.kind === "agents" && scope.id === null, "全部 Agent", agents.length, () => setScope({ kind: "agents", id: null }))}
             {agentGroups.map((group) => nav(`a:${group.id}`, scope.kind === "agents" && scope.id === group.id, group.name, group.members.length, () => setScope({ kind: "agents", id: group.id }),
               pinned.includes(`agent:${group.id}`) ? <Pin aria-label="已置顶" className="size-3 text-jolu-muted" /> : null))}
@@ -207,7 +207,7 @@ export function SourceManageDialog({
             {currentGroup && (
               <div className="flex h-11 shrink-0 items-center gap-1 border-b border-jolu-border px-4">
                 <span className="truncate text-[12.5px] font-semibold text-jolu-text">{currentGroup.name}</span>
-                <span className="ml-1 text-[10.5px] text-jolu-muted">{currentGroup.members.length} 个成员</span>
+                <span className="ml-1 text-[11.5px] text-jolu-muted">{currentGroup.members.length} 个成员</span>
                 <span className="flex-1" />
                 <button type="button" className={ICON_BUTTON} title={pinned.includes(`${groupKind}:${currentGroup.id}`) ? "取消置顶" : "置顶"} aria-label="切换置顶"
                   onClick={() => onTogglePin(`${groupKind}:${currentGroup.id}`)}>
@@ -235,11 +235,11 @@ export function SourceManageDialog({
                     onWire={() => onWire(entry.agent)} onUnwire={() => onUnwire(entry.agent)} onAccept={() => onAccept(entry.agent)} />
                 ))}
                 {scope.id && agents.some((entry) => !groupedAgents.has(entry.agent)) && (
-                  <div className="flex flex-wrap items-center gap-1.5 px-4 py-3 text-[10.5px] text-jolu-muted">
+                  <div className="flex flex-wrap items-center gap-1.5 px-4 py-3 text-[11.5px] text-jolu-muted">
                     加入此分组：
                     {agents.filter((entry) => !groupedAgents.has(entry.agent)).map((entry) => (
                       <button key={entry.agent} type="button" disabled={busy} onClick={() => void run(() => gatewayApi.moveToGroup("agent", entry.agent, scope.id), "已移动")}
-                        className="rounded-full border border-jolu-border bg-jolu-bg px-2 py-0.5 text-[10.5px] text-jolu-text hover:bg-jolu-side disabled:opacity-45">+ {agentLabel(entry.agent)}</button>
+                        className="rounded-full border border-jolu-border bg-jolu-bg px-2 py-0.5 text-[11.5px] text-jolu-text hover:bg-jolu-side disabled:opacity-45">+ {agentLabel(entry.agent)}</button>
                     ))}
                   </div>
                 )}
@@ -251,12 +251,12 @@ export function SourceManageDialog({
                   <label className="flex h-8 w-[220px] items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-2.5 focus-within:border-jolu-accent">
                     <Search aria-hidden className="size-3.5 text-jolu-muted" />
                     <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称、菜单 id 或平台" aria-label="搜索来源"
-                      className="min-w-0 flex-1 bg-transparent text-[11px] text-jolu-text outline-none placeholder:text-jolu-muted" />
+                      className="min-w-0 flex-1 bg-transparent text-[12px] text-jolu-text outline-none placeholder:text-jolu-muted" />
                   </label>
                   <div className="flex items-center gap-0.5 rounded-lg bg-jolu-track p-0.5" role="group" aria-label="按接入状态筛选">
                     {([["all", "全部", counts.all], ["on", "已接入", counts.on], ["off", "未接入", counts.off]] as const).map(([value, label, count]) => (
                       <button key={value} type="button" aria-pressed={serve === value} onClick={() => setServe(value)}
-                        className={cn("h-7 rounded-md px-2.5 text-[11px] outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent", serve === value ? "bg-jolu-bg text-jolu-text shadow-sm" : "text-jolu-muted hover:text-jolu-text")}>
+                        className={cn("h-7 rounded-md px-2.5 text-[12px] outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent", serve === value ? "bg-jolu-bg text-jolu-text shadow-sm" : "text-jolu-muted hover:text-jolu-text")}>
                         {label} <span className="tabular-nums">{count}</span>
                       </button>
                     ))}
@@ -266,14 +266,14 @@ export function SourceManageDialog({
                 <div className={cn("flex h-10 shrink-0 items-center gap-2 border-y border-jolu-border px-4", selected.size > 0 ? "bg-jolu-selected" : "bg-jolu-side")}>
                   <input type="checkbox" checked={allChecked} disabled={visible.length === 0} aria-label="全选当前列表"
                     onChange={() => setSelected(allChecked ? new Set() : new Set(visible.map((source) => source.id)))} className="size-3.5 accent-[var(--jolu-accent)]" />
-                  <span className="text-[10.5px] text-jolu-muted">{selected.size > 0 ? `已选 ${selected.size} 个` : `${visible.length} 个来源`}</span>
+                  <span className="text-[11.5px] text-jolu-muted">{selected.size > 0 ? `已选 ${selected.size} 个` : `${visible.length} 个来源`}</span>
                   <span className="flex-1" />
                   {selected.size > 0 && <>
-                    <button type="button" disabled={busy} onClick={() => askBatch(true)} className="h-7 rounded-md bg-jolu-accent px-2.5 text-[11px] font-medium text-[#071B10] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent disabled:opacity-45">加入模型池</button>
-                    <button type="button" disabled={busy} onClick={() => askBatch(false)} className="h-7 rounded-md border border-jolu-border bg-jolu-bg px-2.5 text-[11px] text-jolu-danger outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">移出模型池</button>
+                    <button type="button" disabled={busy} onClick={() => askBatch(true)} className="h-7 rounded-md bg-jolu-accent px-2.5 text-[12px] font-medium text-[#071B10] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent disabled:opacity-45">加入模型池</button>
+                    <button type="button" disabled={busy} onClick={() => askBatch(false)} className="h-7 rounded-md border border-jolu-border bg-jolu-bg px-2.5 text-[12px] text-jolu-danger outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">移出模型池</button>
                     <Menu.Root>
                       <Menu.Trigger asChild>
-                        <button type="button" disabled={busy} className="flex h-7 items-center gap-1 rounded-md border border-jolu-border bg-jolu-bg px-2.5 text-[11px] text-jolu-text outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
+                        <button type="button" disabled={busy} className="flex h-7 items-center gap-1 rounded-md border border-jolu-border bg-jolu-bg px-2.5 text-[12px] text-jolu-text outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
                           <FolderInput aria-hidden className="size-3.5 text-jolu-muted" />移动到
                         </button>
                       </Menu.Trigger>
@@ -284,7 +284,7 @@ export function SourceManageDialog({
                         </Menu.Content>
                       </Menu.Portal>
                     </Menu.Root>
-                    <button type="button" onClick={() => setSelected(new Set())} className="h-7 rounded-md px-2 text-[11px] text-jolu-muted hover:text-jolu-text">取消</button>
+                    <button type="button" onClick={() => setSelected(new Set())} className="h-7 rounded-md px-2 text-[12px] text-jolu-muted hover:text-jolu-text">取消</button>
                   </>}
                 </div>
 
@@ -309,10 +309,10 @@ export function SourceManageDialog({
                         <div className="flex min-w-0 flex-1 flex-col gap-1">
                           <div className="flex min-w-0 items-baseline gap-2">
                             <span className="truncate text-[12.5px] font-semibold text-jolu-text" title={connection.baseName}>{connection.baseName}</span>
-                            <span className="shrink-0 text-[10px] text-jolu-muted">{credentialLabel(connection.kind, connection.platformId)}</span>
+                            <span className="shrink-0 text-[11px] text-jolu-muted">{credentialLabel(connection.kind, connection.platformId)}</span>
                             {group && scope.kind === "all" && <span className="shrink-0 rounded bg-jolu-track px-1.5 text-[9.5px] text-jolu-muted">{group.name}</span>}
                           </div>
-                          <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-[10px] text-jolu-muted">
+                          <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-[11px] text-jolu-muted">
                             <code className="font-mono">id: {connection.slug ?? "—"}</code>
                             <span>·</span>
                             <span>{models.length} 个模型</span>
@@ -370,7 +370,7 @@ export function SourceManageDialog({
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="px-6 py-10 text-center text-[11px] text-jolu-muted">{children}</p>
+  return <p className="px-6 py-10 text-center text-[12px] text-jolu-muted">{children}</p>
 }
 
 function AgentManageRow({ entry, groups, groupId, busy, onMove, onWire, onUnwire, onAccept }: {
@@ -379,17 +379,17 @@ function AgentManageRow({ entry, groups, groupId, busy, onMove, onWire, onUnwire
 }) {
   const line = wiringLine(entry)
   const drift = entry.drift
-  const action = "h-7 rounded-md px-2.5 text-[11px] outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45"
+  const action = "h-7 rounded-md px-2.5 text-[12px] outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45"
   return (
     <div className="flex min-h-14 items-center gap-3 border-b border-jolu-table-divider px-4 py-2">
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="truncate text-[12.5px] font-semibold text-jolu-text">{agentLabel(entry.agent)}</span>
-        <span className={cn("truncate text-[10px]", entry.wired ? "text-jolu-on" : drift ? "text-jolu-danger" : "text-jolu-muted")}>
+        <span className={cn("truncate text-[11px]", entry.wired ? "text-jolu-on" : drift ? "text-jolu-danger" : "text-jolu-muted")}>
           {drift && !entry.wired ? (drift === "pending" ? "上次接线未完成" : drift === "removed" ? "配置里已移除" : drift === "foreign" ? "已被另一个 Jolu 接管" : "配置被改写") : line.text}
         </span>
       </div>
       <select value={groupId ?? ""} disabled={busy} onChange={(event) => onMove(event.target.value || null)} aria-label={`${agentLabel(entry.agent)} 所在分组`}
-        className="h-7 rounded-md border border-jolu-border bg-jolu-bg px-1.5 text-[10.5px] text-jolu-text outline-none focus-visible:border-jolu-accent">
+        className="h-7 rounded-md border border-jolu-border bg-jolu-bg px-1.5 text-[11.5px] text-jolu-text outline-none focus-visible:border-jolu-accent">
         <option value="">未分组</option>
         {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
       </select>
@@ -413,10 +413,10 @@ function GroupNameDialog({ kind, initial, busy, onClose, onSave }: { kind: Group
   return (
     <Modal busy={busy} title={title} onClose={onClose} width={420}
       footer={<><Button label="取消" disabled={busy} onClick={onClose} /><Button label={initial ? "保存" : "创建"} primary disabled={busy || !name.trim()} onClick={() => onSave(name.trim())} /></>}>
-      <p className="text-[10.5px] text-jolu-muted">只影响排列，不改变路由、接线和 Agent 菜单。</p>
+      <p className="text-[11.5px] text-jolu-muted">只影响排列，不改变路由、接线和 Agent 菜单。</p>
       <input autoFocus value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && name.trim() && !busy) onSave(name.trim()) }}
         placeholder="分组名称" aria-label="分组名称"
-        className="jolu-control h-9 rounded-lg border border-jolu-border bg-jolu-side px-3 text-[11.5px] text-jolu-text outline-none focus:border-jolu-accent" />
+        className="jolu-control h-9 rounded-lg border border-jolu-border bg-jolu-side px-3 text-[12px] text-jolu-text outline-none focus:border-jolu-accent" />
     </Modal>
   )
 }

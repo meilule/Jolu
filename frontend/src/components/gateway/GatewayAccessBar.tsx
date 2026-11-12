@@ -74,8 +74,8 @@ export function GatewayAccessBar({ status, loading, busy, desktop, sources, mode
     />
 
     <div className="flex h-10 shrink-0 items-center gap-2.5 rounded-lg bg-jolu-bg pl-2.5">
-      <span className="whitespace-nowrap text-[11px] text-jolu-muted">Base URL</span>
-      <code className="select-all whitespace-nowrap font-mono text-[11px] text-jolu-text">{address ?? "暂不可用"}</code>
+      <span className="whitespace-nowrap text-[12px] text-jolu-muted">Base URL</span>
+      <code className="select-all whitespace-nowrap font-mono text-[12px] text-jolu-text">{address ?? "暂不可用"}</code>
       <button type="button" className={iconButton} aria-label="复制 Base URL" title="复制 Base URL" disabled={!address || working !== null}
         onClick={() => void act("url", () => navigator.clipboard.writeText(address!), "复制 Base URL 失败", "url")}>
         {copied === "url" ? <Check aria-hidden className="gw6-copied size-[15px] text-jolu-on" /> : <Copy aria-hidden className="size-[15px]" />}
@@ -83,8 +83,8 @@ export function GatewayAccessBar({ status, loading, busy, desktop, sources, mode
     </div>
 
     <div className="flex h-10 shrink-0 items-center gap-2 rounded-lg bg-jolu-bg pl-2.5">
-      <span className="whitespace-nowrap text-[11px] text-jolu-muted">API Key</span>
-      <code className="whitespace-nowrap font-mono text-[11px] text-jolu-text" aria-live="polite">
+      <span className="whitespace-nowrap text-[12px] text-jolu-muted">API Key</span>
+      <code className="whitespace-nowrap font-mono text-[12px] text-jolu-text" aria-live="polite">
         {mask ?? (keyError ? "读取失败" : desktop ? "读取中…" : "桌面端可用")}
       </code>
       <button type="button" className={iconButton} aria-label="复制 API Key" title="复制 API Key" disabled={!mask || working !== null || !desktop}
@@ -112,7 +112,7 @@ export function GatewayAccessBar({ status, loading, busy, desktop, sources, mode
 
     <span className="min-w-4 flex-1" />
 
-    <label className="flex shrink-0 items-center gap-2 whitespace-nowrap text-[11px] font-semibold text-jolu-text" title="关闭后，一键接入的工具恢复原来的连接方式">
+    <label className="flex shrink-0 items-center gap-2 whitespace-nowrap text-[12px] font-semibold text-jolu-text" title="关闭后，一键接入的工具恢复原来的连接方式">
       允许接入
       <JoluSwitch on={!!running} label="允许接入" disabled={busy || !desktop || loading || !status} onChange={onToggle} />
     </label>
@@ -144,6 +144,6 @@ export function GatewayAccessBar({ status, loading, busy, desktop, sources, mode
 function Stat({ value, label }: { value: number; label: string }) {
   return <span className="flex items-baseline gap-[5px] whitespace-nowrap">
     <span className="font-mono text-[12px] font-semibold tabular-nums text-jolu-text">{value}</span>
-    <span className="text-[11px] text-jolu-muted">{label}</span>
+    <span className="text-[12px] text-jolu-muted">{label}</span>
   </span>
 }

@@ -90,7 +90,7 @@ export function AppearanceSection({ cfg }: { cfg: Cfg }) {
           }
         />
         <div className="mb-4 flex flex-col rounded-lg bg-jolu-side px-3.5 py-3">
-          <div className="flex h-[26px] items-center justify-between text-[10px] text-jolu-muted">
+          <div className="flex h-[26px] items-center justify-between text-[11px] text-jolu-muted">
             <span>效果预览</span>
             <span>{appearancePreview(zoom, density)}</span>
           </div>
@@ -99,7 +99,7 @@ export function AppearanceSection({ cfg }: { cfg: Cfg }) {
             <div key={title} className="flex h-10 items-center gap-2 border-t border-jolu-border [.density-compact_&]:h-8">
               <MessageSquare aria-hidden className="size-3.5 text-jolu-muted" />
               <span className="flex-1 text-xs text-jolu-text">{title}</span>
-              <span className="text-[11px] text-jolu-on">{tokens}</span>
+              <span className="text-[12px] text-jolu-on">{tokens}</span>
             </div>
           ))}
         </div>

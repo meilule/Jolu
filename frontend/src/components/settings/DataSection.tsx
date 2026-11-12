@@ -50,7 +50,7 @@ export function DataSection({ cfg, onOpenSkills }: { cfg: Cfg; onOpenSkills: () 
 
   const tile = (label: string, loaded: Loaded<unknown>, text: string | null) => (
     <div className="flex min-w-0 flex-1 flex-col justify-center gap-1.5 rounded-[10px] bg-jolu-side px-4">
-      <span className="text-[11px] text-jolu-muted">{label}</span>
+      <span className="text-[12px] text-jolu-muted">{label}</span>
       <span className="tnum truncate text-[22px] font-semibold text-jolu-text" title={loaded.state === "failed" ? loaded.reason : undefined}>
         {loaded.state === "loading" ? "读取中…" : loaded.state === "failed" ? "—" : text ?? "—"}
       </span>
@@ -66,7 +66,7 @@ export function DataSection({ cfg, onOpenSkills }: { cfg: Cfg; onOpenSkills: () 
         {tile("请求记录", counts, counts.state === "ok" ? `${formatCount(counts.value.requests)} 条` : null)}
         {tile("会话索引", counts, counts.state === "ok" ? `${formatCount(counts.value.sessions)} 个` : null)}
       </div>
-      {failure && isTauri && <p role="alert" className="-mt-2 text-[11px] text-jolu-danger">本地数据概览读取失败：{failure}</p>}
+      {failure && isTauri && <p role="alert" className="-mt-2 text-[12px] text-jolu-danger">本地数据概览读取失败：{failure}</p>}
 
       <SettingsGroup title="导入与导出" desc="统计记录和会话标题可迁移，导入时自动去重。">
         <SettingsRow
@@ -93,7 +93,7 @@ export function DataSection({ cfg, onOpenSkills }: { cfg: Cfg; onOpenSkills: () 
             }}
           />
         )}
-        <div className="mb-4 flex items-center gap-2.5 rounded-[9px] bg-jolu-side p-3.5 text-[11px] text-jolu-muted">
+        <div className="mb-4 flex items-center gap-2.5 rounded-[9px] bg-jolu-side p-3.5 text-[12px] text-jolu-muted">
           <Info aria-hidden className="size-4 shrink-0" />
           导出文件不包含 API Key、登录凭证和原始会话正文。
         </div>
@@ -176,9 +176,9 @@ function ImportPreviewCard({ preview, onImported, onExpired, onClose }: {
   return (
     <section aria-label="导入预览" className="jolu-card mb-4 flex flex-col gap-3 rounded-xl border border-jolu-border bg-jolu-cc-surface p-4">
       <h4 className="text-sm font-semibold text-jolu-text">导入预览</h4>
-      <p className="break-all text-[11px] leading-normal text-jolu-muted">{preview.file_name || "备份文件"} · 校验完成后才能确认。</p>
+      <p className="break-all text-[12px] leading-normal text-jolu-muted">{preview.file_name || "备份文件"} · 校验完成后才能确认。</p>
       <p className="tnum text-xs text-jolu-text">{importCountsText(preview)}</p>
-      <p className="flex flex-wrap items-center gap-2 text-[11px] text-jolu-muted">
+      <p className="flex flex-wrap items-center gap-2 text-[12px] text-jolu-muted">
         重复项跳过；无效项可查看原因。
         {preview.invalid > 0 && (
           <button type="button" aria-expanded={showReasons} onClick={() => setShowReasons((v) => !v)}
@@ -188,14 +188,14 @@ function ImportPreviewCard({ preview, onImported, onExpired, onClose }: {
         )}
       </p>
       {showReasons && (
-        <ul className="flex flex-col gap-1 rounded-[9px] bg-jolu-side p-3 text-[11px] text-jolu-muted">
+        <ul className="flex flex-col gap-1 rounded-[9px] bg-jolu-side p-3 text-[12px] text-jolu-muted">
           {preview.invalid_reasons.map((reason, index) => <li key={index} className="break-all">{reason}</li>)}
           {preview.invalid > preview.invalid_reasons.length && <li>仅显示前 {preview.invalid_reasons.length} 条原因。</li>}
         </ul>
       )}
       {done ? (
         <div className="flex items-center gap-3">
-          <p role="status" className="flex-1 text-[11px] text-jolu-on">{importDoneText(done)}</p>
+          <p role="status" className="flex-1 text-[12px] text-jolu-on">{importDoneText(done)}</p>
           <ActionButton onClick={onClose}>关闭</ActionButton>
         </div>
       ) : (

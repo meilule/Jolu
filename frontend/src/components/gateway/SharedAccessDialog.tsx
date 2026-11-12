@@ -144,12 +144,12 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
 
       {/* 来源地址白名单（P2-9，待确认：无画板） */}
       <div className="flex flex-col gap-1.5 rounded-lg border border-jolu-border bg-jolu-side px-3 py-2.5">
-        <span className="text-[10.5px] font-medium text-jolu-text">允许连入的来源地址</span>
+        <span className="text-[11.5px] font-medium text-jolu-text">允许连入的来源地址</span>
         <span className="text-[8.5px] text-jolu-muted">每行一个 IP 或网段（如 192.168.1.20、192.168.1.0/24）；留空 = 局域网内都可连。不在列表里的地址在看 Key 之前就被拒绝，本机始终可连。</span>
         {allowFromEnv && <span className="text-[8.5px] text-jolu-warn">已由环境变量 JOLU_ALLOW_IPS 指定，这里保存的不会生效。</span>}
         <textarea aria-label="允许连入的来源地址" rows={3} value={allowText} disabled={busy} spellCheck={false}
           onChange={(event) => { setAllowDraft(event.target.value); setAllowError(null) }}
-          className="rounded-md border border-jolu-border bg-jolu-bg px-2 py-1.5 font-mono text-[10px] text-jolu-text outline-none focus:border-jolu-accent" />
+          className="rounded-md border border-jolu-border bg-jolu-bg px-2 py-1.5 font-mono text-[11px] text-jolu-text outline-none focus:border-jolu-accent" />
         {allowError && <span className="text-[8.5px] text-jolu-danger">{allowError}</span>}
         {allowDraft !== null && allowDraft !== savedAllow && (
           <div className="flex items-center gap-2">
@@ -173,7 +173,7 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
           <input type="checkbox" checked={shared} disabled={busy} onChange={(event) => onSharedChange(event.target.checked)}
             className="size-4 accent-jolu-accent" />
           <span className="min-w-0 flex-1">
-            <span className="block text-[10.5px] font-medium text-jolu-text">启用局域网共享</span>
+            <span className="block text-[11.5px] font-medium text-jolu-text">启用局域网共享</span>
             <span className="block text-[8.5px] text-jolu-muted">
               开启后鉴权切换为严格校验：只有下面的客户端 Key 能通过。绑定地址在下次开启接入时生效。
             </span>
@@ -191,32 +191,32 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
 
       {/* 签发表单 */}
       <div className="flex flex-col gap-1.5 rounded-lg border border-jolu-border px-3 py-2.5">
-        <span className="text-[10.5px] font-medium text-jolu-text">签发客户端 Key</span>
+        <span className="text-[11.5px] font-medium text-jolu-text">签发客户端 Key</span>
         <div className="flex flex-wrap items-center gap-1.5">
           <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })}
             placeholder="名称，例如 书房台式机"
-            className="h-8 min-w-[140px] flex-1 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent" />
+            className="h-8 min-w-[140px] flex-1 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[12px] text-jolu-text outline-none focus:border-jolu-accent" />
           <input value={form.requests} onChange={(event) => setForm({ ...form, requests: event.target.value })}
             inputMode="numeric" placeholder="每日请求上限"
-            className="h-8 w-[118px] rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent" />
+            className="h-8 w-[118px] rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[12px] text-jolu-text outline-none focus:border-jolu-accent" />
           <input value={form.tokens} onChange={(event) => setForm({ ...form, tokens: event.target.value })}
             inputMode="numeric" placeholder="每日 Token 上限"
-            className="h-8 w-[118px] rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent" />
+            className="h-8 w-[118px] rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[12px] text-jolu-text outline-none focus:border-jolu-accent" />
           <Button label={issuing ? "签发中…" : "签发"} primary disabled={busy || issuing || form.name.trim() === ""} onClick={() => void issue()} />
         </div>
         {/* 待确认：有效期 / 模型白名单 / 只读三项约束在 Jolu.pen 中同样没有画板 */}
         <div className="flex flex-wrap items-center gap-1.5">
           <select value={form.expiryDays ?? ""} aria-label="有效期"
             onChange={(event) => setForm({ ...form, expiryDays: event.target.value === "" ? null : Number(event.target.value) })}
-            className="h-8 w-[104px] rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent">
+            className="h-8 w-[104px] rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[12px] text-jolu-text outline-none focus:border-jolu-accent">
             {EXPIRY_CHOICES.map((choice) => (
               <option key={choice.label} value={choice.days ?? ""}>{choice.days === null ? choice.label : `有效 ${choice.label}`}</option>
             ))}
           </select>
           <input value={form.models} onChange={(event) => setForm({ ...form, models: event.target.value })}
             placeholder="模型白名单，逗号分隔，例如 zcode/GLM-5.2"
-            className="h-8 min-w-[180px] flex-1 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent" />
-          <label className="flex h-8 items-center gap-1.5 text-[10.5px] text-jolu-text">
+            className="h-8 min-w-[180px] flex-1 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[12px] text-jolu-text outline-none focus:border-jolu-accent" />
+          <label className="flex h-8 items-center gap-1.5 text-[11.5px] text-jolu-text">
             <input type="checkbox" checked={form.readOnly} onChange={(event) => setForm({ ...form, readOnly: event.target.checked })}
               className="size-3.5 accent-jolu-accent" />
             只读
@@ -230,8 +230,8 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
       {/* 签发成功：Key 原文只此一次 */}
       {issued && (
         <div className="flex flex-col gap-1.5 rounded-lg border border-jolu-on bg-jolu-status-success-bg px-3 py-2.5">
-          <span className="text-[10.5px] font-medium text-jolu-on">{issued.name} 的 Key</span>
-          <code className="break-all rounded-md bg-jolu-bg px-2 py-1.5 font-mono text-[10.5px] text-jolu-text">{issued.key}</code>
+          <span className="text-[11.5px] font-medium text-jolu-on">{issued.name} 的 Key</span>
+          <code className="break-all rounded-md bg-jolu-bg px-2 py-1.5 font-mono text-[11.5px] text-jolu-text">{issued.key}</code>
           <div className="flex items-center gap-1.5">
             <Button label={copied ? "已复制" : "复制 Key"} primary onClick={() => void copyKey(issued.key)} />
             <Button label="我已保存" onClick={() => setIssued(null)} />
@@ -243,7 +243,7 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
       {/* Key 列表 */}
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center justify-between">
-          <span className="text-[10.5px] font-medium text-jolu-text">客户端 Key</span>
+          <span className="text-[11.5px] font-medium text-jolu-text">客户端 Key</span>
           <button type="button" onClick={() => void load()} disabled={loading || busy}
             className="text-[9.5px] text-jolu-accent outline-none hover:underline focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-50">
             {loading ? "读取中…" : "刷新"}
@@ -267,7 +267,7 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
             {rows.map((row) => (
               <Fragment key={row.name}>
               <div
-                className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1.2fr)_72px_88px_96px_88px_56px] items-center gap-2 border-t border-jolu-border px-2.5 py-1.5 text-[10px]">
+                className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1.2fr)_72px_88px_96px_88px_56px] items-center gap-2 border-t border-jolu-border px-2.5 py-1.5 text-[11px]">
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate text-jolu-text" title={row.name}>{row.name}</span>
                   {constraintTags(row, Date.now()).length > 0 && (
@@ -335,7 +335,7 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
                           inputMode={field.money ? "decimal" : "numeric"}
                           value={editing.form[field.key]}
                           onChange={(event) => setEditing({ ...editing, form: { ...editing.form, [field.key]: event.target.value }, error: null })}
-                          className="h-7 rounded-md border border-jolu-border bg-jolu-bg px-2 text-[10px] text-jolu-text outline-none focus:border-jolu-accent"
+                          className="h-7 rounded-md border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent"
                         />
                       </label>
                     ))}

@@ -228,7 +228,7 @@ export function ToastViewport({ className }: { className?: string }) {
       )}
     >
       {visibleToasts(state.items).map(item => <ToastCard key={item.id} item={item} pause={state.pause} />)}
-      {state.items.length > 3 && <p className="px-2 text-right text-[11px] text-jolu-muted">另有 {state.items.length - 3} 条提示等待显示</p>}
+      {state.items.length > 3 && <p className="px-2 text-right text-[12px] text-jolu-muted">另有 {state.items.length - 3} 条提示等待显示</p>}
     </div>
   ) : null
   // 手动 Popover 只提升绘制层级，不抢焦点；避免表单 transform 裁切或挪动通知。
@@ -283,7 +283,7 @@ function ToastCard({ item, pause }: { item: ToastItem; pause: ToastState["pause"
       <div className="min-w-0 flex-1 py-0.5">
         <div className="flex min-w-0 items-center gap-2">
           <p className="min-w-0 truncate text-[13px] font-semibold leading-5" title={item.title}>{item.title}</p>
-          {item.count > 1 && <span className="shrink-0 rounded-md bg-jolu-stage px-1.5 text-[10px] leading-[18px] text-jolu-muted" aria-label={`重复 ${item.count} 次`}>×{item.count}</span>}
+          {item.count > 1 && <span className="shrink-0 rounded-md bg-jolu-stage px-1.5 text-[11px] leading-[18px] text-jolu-muted" aria-label={`重复 ${item.count} 次`}>×{item.count}</span>}
         </div>
         {item.balance && <p className="mt-1 truncate text-xs text-jolu-muted" title={item.balance.connectionName}>{item.balance.connectionName} · {PLATFORMS.find(platform => platform.id === item.balance?.platform)?.name ?? "API Key"}</p>}
         {item.detail && <p ref={detail} id={`toast-detail-${item.id}`} className={cn("mt-1 whitespace-pre-wrap text-xs leading-[1.6] text-jolu-muted [overflow-wrap:anywhere]", !expanded && "line-clamp-2")}>{item.detail}</p>}

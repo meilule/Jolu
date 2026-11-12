@@ -21,7 +21,7 @@ export function Tag({ tone = "muted", children, title }: { tone?: "muted" | "on"
     <span
       title={title}
       className={cn(
-        "inline-flex h-6 max-w-full shrink-0 items-center truncate rounded-md px-2 text-[10px]",
+        "inline-flex h-6 max-w-full shrink-0 items-center truncate rounded-md px-2 text-[11px]",
         tone === "on" && "bg-jolu-selected text-jolu-on",
         tone === "muted" && "bg-jolu-side text-jolu-muted",
         tone === "danger" && "bg-jolu-danger-soft text-jolu-danger",
@@ -75,7 +75,7 @@ export function ProviderMenu({ value, platforms, onChange }: { value: string; pl
     >
       <span aria-hidden className="grid size-[18px] shrink-0 place-items-center">{icon}</span>
       <span className="min-w-0 flex-1 truncate">{name}</span>
-      <span className="shrink-0 text-[10px] text-jolu-muted">{note}</span>
+      <span className="shrink-0 text-[11px] text-jolu-muted">{note}</span>
       {value === id && <Check aria-hidden className="size-3.5 shrink-0 text-jolu-on" />}
     </Menu.Item>
   )
@@ -116,7 +116,7 @@ export function ProviderMenu({ value, platforms, onChange }: { value: string; pl
               </span>
             ))}
           </div>
-          <span className="text-[10px] text-jolu-muted">安装项按供应商与实际目录区分；未核对目录规则的工具标「待接入」。</span>
+          <span className="text-[11px] text-jolu-muted">安装项按供应商与实际目录区分；未核对目录规则的工具标「待接入」。</span>
         </Menu.Content>
       </Menu.Portal>
     </Menu.Root>
@@ -158,7 +158,7 @@ export function FieldSelect({ value, options, onChange, label, disabled, placeho
             {options.map((o) => (
               <Menu.RadioItem key={o.value} value={o.value} disabled={o.disabled} className="relative flex h-8 cursor-default select-none items-center gap-2 rounded-md pl-2 pr-7 text-xs text-jolu-text outline-none data-[highlighted]:bg-jolu-side data-[state=checked]:text-jolu-on data-[disabled]:opacity-40">
                 <span className="min-w-0 flex-1 truncate">{o.label}</span>
-                {o.note && <span className="shrink-0 text-[10px] text-jolu-muted">{o.note}</span>}
+                {o.note && <span className="shrink-0 text-[11px] text-jolu-muted">{o.note}</span>}
                 <Menu.ItemIndicator className="absolute right-2"><Check aria-hidden className="size-3.5" /></Menu.ItemIndicator>
               </Menu.RadioItem>
             ))}
@@ -219,7 +219,7 @@ function Inline({ text }: { text: string }) {
   return (
     <>
       {inlineParts(text).map((part, i) =>
-        part.kind === "code" ? <code key={i} className="rounded bg-jolu-side px-1 font-mono text-[11px]">{part.text}</code>
+        part.kind === "code" ? <code key={i} className="rounded bg-jolu-side px-1 font-mono text-[12px]">{part.text}</code>
           : part.kind === "strong" ? <strong key={i} className="font-semibold">{part.text}</strong>
             : <span key={i}>{part.text}</span>,
       )}
@@ -255,7 +255,7 @@ export function MarkdownPreview({ source, stripFront = true }: { source: string;
             </List>
           )
         }
-        if (block.kind === "code") return <pre key={i} className="overflow-x-auto rounded-lg bg-jolu-side p-3 font-mono text-[11px] leading-5 text-jolu-text">{block.text}</pre>
+        if (block.kind === "code") return <pre key={i} className="overflow-x-auto rounded-lg bg-jolu-side p-3 font-mono text-[12px] leading-5 text-jolu-text">{block.text}</pre>
         return <hr key={i} className="border-jolu-border" />
       })}
     </div>

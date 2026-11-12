@@ -17,7 +17,7 @@ export function CardTitle({ title, note, children }: { title: string; note?: Rea
   return (
     <div className="flex min-h-5 items-center justify-between gap-3">
       <h3 className="truncate text-sm font-semibold text-jolu-text">{title}</h3>
-      {children ?? (note && <span className="shrink-0 text-[10px] text-jolu-muted">{note}</span>)}
+      {children ?? (note && <span className="shrink-0 text-[11px] text-jolu-muted">{note}</span>)}
     </div>
   )
 }
@@ -26,10 +26,10 @@ export function CardTitle({ title, note, children }: { title: string; note?: Rea
 export function MetricCard({ icon, label, value, note, noteTitle }: { icon?: ReactNode; label: string; value: string; note: ReactNode; noteTitle?: string }) {
   return (
     <Card className="flex min-h-[100px] flex-col gap-2 p-3.5">
-      <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-jolu-muted">{icon && <span aria-hidden className="grid size-3.5 shrink-0 place-items-center [&_svg]:size-3.5">{icon}</span>}<span className="truncate">{label}</span></span>
+      <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-jolu-muted">{icon && <span aria-hidden className="grid size-3.5 shrink-0 place-items-center [&_svg]:size-3.5">{icon}</span>}<span className="truncate">{label}</span></span>
       <span className="tnum truncate text-[25px] font-semibold leading-none text-jolu-text">{value}</span>
       {/* 费用说明带未收录模型名，单行放不下；两行后仍超出的部分交给 title 悬停 */}
-      <span className="line-clamp-2 text-[10px] text-jolu-muted" title={noteTitle}>{note}</span>
+      <span className="line-clamp-2 text-[11px] text-jolu-muted" title={noteTitle}>{note}</span>
     </Card>
   )
 }

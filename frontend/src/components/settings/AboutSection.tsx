@@ -33,7 +33,7 @@ export function AboutSection() {
         <div className="flex min-w-0 flex-col gap-2">
           <Wordmark width={81} height={33} />
           <span className="text-[13px] text-jolu-muted">起名寓意：Join + Loop，把 AI 工具连接成环</span>
-          <span className="text-[11px] text-jolu-muted">{versionText} · Windows</span>
+          <span className="text-[12px] text-jolu-muted">{versionText} · Windows</span>
         </div>
       </div>
 
@@ -89,7 +89,7 @@ export function AboutSection() {
         />
       </SettingsGroup>
 
-      <div className="flex items-start gap-2.5 rounded-[9px] bg-jolu-side p-3.5 text-[11px] text-jolu-muted">
+      <div className="flex items-start gap-2.5 rounded-[9px] bg-jolu-side p-3.5 text-[12px] text-jolu-muted">
         <Info aria-hidden className="size-4 shrink-0" />
         下载完成后再选择安装。存在运行中的自动化任务时，会先提示处理任务再重启。
       </div>

@@ -191,7 +191,7 @@ export function SessionsView({ active, target, onDrillUsage, onCreateAutomation 
           />
         </label>
         <span className="flex-1" />
-        <span className="text-[11px] text-jolu-muted">{minutes < 1 ? "刚刚同步" : `${minutes} 分钟前同步`}</span>
+        <span className="text-[12px] text-jolu-muted">{minutes < 1 ? "刚刚同步" : `${minutes} 分钟前同步`}</span>
         <ToolButton icon={<RefreshCw />} busy={scanning || query.refreshing} disabled={scanning || query.refreshing} onClick={() => void rescan()}>刷新</ToolButton>
       </div>
 
@@ -253,7 +253,7 @@ export function SessionsView({ active, target, onDrillUsage, onCreateAutomation 
           </>
         )}
       </div>
-      <p className="text-[10px] text-jolu-muted">顶部统计跟随当前筛选；消耗 = 输入 + 输出，缓存输入已计入输入；无法确认的账号仍标为“未归属账号”。</p>
+      <p className="text-[11px] text-jolu-muted">顶部统计跟随当前筛选；消耗 = 输入 + 输出，缓存输入已计入输入；无法确认的账号仍标为“未归属账号”。</p>
 
       {compressing && <CompressDialog session={compressing} onClose={()=>setCompressing(null)} onResult={(result,name,target)=>{setHandoff({result,name,target,session:compressing});setCompressing(null);setHandoffState(null);if(isTauri)void handoffApi.state(compressing.platform,compressing.session_id).then(setHandoffState).catch(()=>{})}}/>}
       {handoff && <HandoffPreview {...handoff} fileName={handoff.name} state={handoffState} onClose={()=>setHandoff(null)} onUpdate={()=>{setCompressing(handoff.session);setHandoff(null)}}/>}
@@ -289,7 +289,7 @@ function Stat({ icon, label, value, note, selected, bare }: { icon: React.ReactN
       bare ? "flex-1" : "w-[136px] shrink-0 rounded-[10px] border",
       !bare && (selected ? "border-transparent bg-jolu-selected" : "border-jolu-border bg-jolu-bg"),
     )}>
-      <span className={cn("flex h-3.5 items-center gap-[5px] text-[11px] [&_svg]:size-3.5", selected ? "text-jolu-on" : "text-jolu-muted")}>{icon}{label}</span>
+      <span className={cn("flex h-3.5 items-center gap-[5px] text-[12px] [&_svg]:size-3.5", selected ? "text-jolu-on" : "text-jolu-muted")}>{icon}{label}</span>
       <span className={cn("tnum truncate text-[22px] font-semibold leading-none", selected ? "text-jolu-on" : "text-jolu-text")}>{value}</span>
       <span className="truncate text-[9px] text-jolu-muted">{note}</span>
     </div>

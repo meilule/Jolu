@@ -74,7 +74,7 @@ function AppContent() {
       <header className="sticky top-0 z-20 flex w-full items-center gap-3 border-b bg-surface px-5 py-2.5">
         <AppIcon size={18} />
         <span className="text-sm font-semibold text-text-primary">Jolu</span>
-        <span className="text-[11px] text-text-tertiary">前端预览 · 数据均为设计示例</span>
+        <span className="text-[12px] text-text-tertiary">前端预览 · 数据均为设计示例</span>
         <span className="flex-1" />
         {(
           [

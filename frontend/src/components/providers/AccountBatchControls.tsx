@@ -77,14 +77,14 @@ export function BatchAccountDeleteDialog({ targets, hidden = false, onClose, onC
           <Dialog.Close asChild><button type="button" aria-label="关闭删除确认" disabled={busy} className="grid size-7 shrink-0 place-items-center rounded-md text-jolu-muted outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-40"><X aria-hidden className="size-4" /></button></Dialog.Close>
         </div>
         <p className="shrink-0 text-xs leading-relaxed text-jolu-text">仅从 Jolu 移除所选连接及保存的凭据，签到与用量历史保留。远端账号、API Key 和原工具登录不受影响。</p>
-        {snapshot.some(target => target.current) && <p className="shrink-0 rounded-lg bg-jolu-side px-3 py-2 text-[11px] leading-relaxed text-jolu-muted">所选连接包含当前使用账号。删除后不会自动切换原工具或选择替代账号。</p>}
+        {snapshot.some(target => target.current) && <p className="shrink-0 rounded-lg bg-jolu-side px-3 py-2 text-[12px] leading-relaxed text-jolu-muted">所选连接包含当前使用账号。删除后不会自动切换原工具或选择替代账号。</p>}
         <ul className="min-h-0 overflow-y-auto rounded-lg border border-jolu-border" aria-label="待删除的账号连接">
           {snapshot.map((target, index) => <li key={target.id} className="flex items-start gap-2 border-b border-jolu-border px-3 py-2.5 last:border-b-0">
             {deleted.has(target.id) && <Check aria-hidden className="mt-0.5 size-3.5 shrink-0 text-jolu-on" />}
             <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"><span className="break-all font-medium text-jolu-text">{hidden ? `账号 ${index + 1}` : target.label}</span>{target.current && <span className="text-[10px] text-jolu-muted">当前使用</span>}</div>
-              <p className="mt-1 text-[11px] text-jolu-muted">{target.provider}{deleted.has(target.id) && " · 已删除"}</p>
-              {failures.has(target.id) && <p role="alert" className="mt-1 break-words text-[11px] leading-relaxed text-jolu-danger">{hidden ? "删除失败，请显示账号信息后查看原因。" : failures.get(target.id)}</p>}
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"><span className="break-all font-medium text-jolu-text">{hidden ? `账号 ${index + 1}` : target.label}</span>{target.current && <span className="text-[11px] text-jolu-muted">当前使用</span>}</div>
+              <p className="mt-1 text-[12px] text-jolu-muted">{target.provider}{deleted.has(target.id) && " · 已删除"}</p>
+              {failures.has(target.id) && <p role="alert" className="mt-1 break-words text-[12px] leading-relaxed text-jolu-danger">{hidden ? "删除失败，请显示账号信息后查看原因。" : failures.get(target.id)}</p>}
             </div>
           </li>)}
         </ul>

@@ -176,9 +176,9 @@ export function OpsSection() {
                 onChange={(event) => setHourDraft(event.target.value)}
                 inputMode="numeric"
                 aria-label="warm-up 触发小时"
-                className="h-8 w-[64px] rounded-lg border border-jolu-border bg-jolu-bg px-2 text-center text-[11px] text-jolu-text outline-none focus:border-jolu-accent"
+                className="h-8 w-[64px] rounded-lg border border-jolu-border bg-jolu-bg px-2 text-center text-[12px] text-jolu-text outline-none focus:border-jolu-accent"
               />
-              <span className="text-[10px] text-jolu-muted">点</span>
+              <span className="text-[11px] text-jolu-muted">点</span>
               <ActionButton disabled={disabled || busy === "hour"} onClick={() => void saveHour()}>保存</ActionButton>
             </div>
           }
@@ -201,7 +201,7 @@ export function OpsSection() {
                 onChange={(event) => setEndpointDraft(event.target.value)}
                 placeholder="http://localhost:4318"
                 aria-label="OTLP 端点"
-                className="h-8 w-[220px] rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent"
+                className="h-8 w-[220px] rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[12px] text-jolu-text outline-none focus:border-jolu-accent"
               />
               <ActionButton disabled={disabled || busy === "endpoint"} onClick={() => void saveEndpoint()}>保存</ActionButton>
             </div>
@@ -228,7 +228,7 @@ export function OpsSection() {
       >
         <div className="flex flex-col gap-2 border-t border-jolu-border py-3.5">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] text-jolu-muted">
+            <span className="text-[11px] text-jolu-muted">
               {versions === null ? "尚未检测" : `已检测 ${versions.length} 个命令`}
             </span>
             <ActionButton disabled={disabled} onClick={loadVersions}>{versions === null ? "检测版本" : "重新检测"}</ActionButton>
@@ -246,7 +246,7 @@ export function OpsSection() {
               {versions.map((row) => (
                 <div
                   key={row.agent}
-                  className="grid grid-cols-[minmax(0,1fr)_110px_minmax(0,1.6fr)] items-center gap-2 border-t border-jolu-border px-2.5 py-1.5 text-[10px]"
+                  className="grid grid-cols-[minmax(0,1fr)_110px_minmax(0,1.6fr)] items-center gap-2 border-t border-jolu-border px-2.5 py-1.5 text-[11px]"
                 >
                   <span className="truncate text-jolu-text" title={row.name}>{row.name}</span>
                   <span className={row.found ? "text-jolu-text" : "text-jolu-muted"}>{versionLabel(row)}</span>

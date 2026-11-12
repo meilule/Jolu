@@ -443,10 +443,10 @@
   --radius-island: 18px;
   --radius-sm2: 8px;
 
-  /* 辅助字号语义名。取值与设计稿一致：note = 原 10px、meta = 原 11px，
-     仅用于新代码避免散落魔法数字，不代表对设计稿字号的改动。 */
-  --text-note: 10px;
-  --text-meta: 11px;
+  /* 辅助字号语义名（4.1 起放大一档，Jolu.pen 同步）：note = 原 10px → 11px、meta = 原 11px → 12px。
+     新代码用 text-note / text-meta，不要再写 text-[10px] / text-[11px]。 */
+  --text-note: 11px;
+  --text-meta: 12px;
 
   --font-ui: "Inter", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;

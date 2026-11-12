@@ -31,7 +31,7 @@ export function Chip({
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center rounded-[6px] px-1.5 py-0.5 text-[10px] font-medium leading-normal",
+        "inline-flex shrink-0 items-center rounded-[6px] px-1.5 py-0.5 text-[11px] font-medium leading-normal",
         mono && "font-mono tnum",
         tones[tone],
         className,

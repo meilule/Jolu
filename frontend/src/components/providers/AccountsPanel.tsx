@@ -34,7 +34,7 @@ function PrivacyMosaic({ label, length }: { label: string; length: number }) {
 /** 显隐保留字段图标和行高，隐藏态没有可复制或悬浮显示的原文。 */
 function SensitiveValue({ value, label, icon: Icon = Mail,compact=false }: { value: string | null | undefined; label: string; icon?: typeof Mail;compact?:boolean }) {
   const hidden = useContext(PrivacyContext)
-  return <span className={cn("flex min-w-0 shrink-0 items-center gap-2 rounded-md bg-jolu-side px-2 text-[11px] text-jolu-muted",compact?"h-5":"h-7")}>
+  return <span className={cn("flex min-w-0 shrink-0 items-center gap-2 rounded-md bg-jolu-side px-2 text-[12px] text-jolu-muted",compact?"h-5":"h-7")}>
     <Icon aria-hidden className="size-3.5 shrink-0" />
     {hidden && value ? <PrivacyMosaic label={label} length={value.length} />
       : <span className="min-w-0 truncate" title={value || undefined}>{value || `${label}未获取`}</span>}
@@ -212,7 +212,7 @@ export function AccountsPanel({ conn, onConnect, target, onTargetHandled }: {
           </>}
         />
       )}
-      <p className="flex shrink-0 items-center justify-between gap-3 text-[10px] text-jolu-muted"><span>仅显示供应商实际提供的信息；完整额度与服务信息见详情。</span><span className="shrink-0">共 {visible.length} 个{visible.length > 8 ? " · 滚轮查看更多" : ""}</span></p>
+      <p className="flex shrink-0 items-center justify-between gap-3 text-[11px] text-jolu-muted"><span>仅显示供应商实际提供的信息；完整额度与服务信息见详情。</span><span className="shrink-0">共 {visible.length} 个{visible.length > 8 ? " · 滚轮查看更多" : ""}</span></p>
 
       {batchTargets && <BatchAccountDeleteDialog targets={batchTargets} hidden={hidden} onClose={() => { if (!batchRunning.current) setBatchTargets(null) }} onConfirm={async ids => {
         if (batchRunning.current) throw new Error("正在删除账号，请稍候")
@@ -414,7 +414,7 @@ function AccountCard({ account, current, located, selecting = false, selected = 
         <span className="grid size-6 shrink-0 place-items-center"><PlatformLogo platform={connectionLogoId(account)} size={22} /></span>
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="truncate text-[13px] font-semibold text-jolu-text" title={hidden ? undefined : account.baseName}>{name !== account.baseName ? <PrivacyMosaic label="账号名称" length={account.baseName.length} /> : name}</span>
-          <span className="truncate text-[10px] text-jolu-muted">{entry.name} · {isApi ? `ApiKey${account.protocol ? ` · ${protocolLabel(account.protocol)}` : ""}` : "Auth 官方订阅"}</span>
+          <span className="truncate text-[11px] text-jolu-muted">{entry.name} · {isApi ? `ApiKey${account.protocol ? ` · ${protocolLabel(account.protocol)}` : ""}` : "Auth 官方订阅"}</span>
         </div>
         {current && <Badge tone="on">当前使用</Badge>}
       </div>
@@ -422,11 +422,11 @@ function AccountCard({ account, current, located, selecting = false, selected = 
       {isApi && account.baseUrl && <SensitiveValue label="服务地址" icon={Globe} value={account.baseUrl} compact />}
       <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-hidden" data-account-summary>
         {(!isApi || policy.expiresAt) && <SubscriptionExpiry account={account} quota={quota} compact />}
-        {paused ? <div className="flex flex-col items-start gap-2 rounded-lg bg-jolu-side p-2.5 text-[11px] text-jolu-muted"><span>已暂停查询，配置与历史保留。</span><JoluButton size="sm" variant="soft" disabled={!isTauri || selecting || disabled} onClick={onResume}>恢复查询</JoluButton></div> : <>
+        {paused ? <div className="flex flex-col items-start gap-2 rounded-lg bg-jolu-side p-2.5 text-[12px] text-jolu-muted"><span>已暂停查询，配置与历史保留。</span><JoluButton size="sm" variant="soft" disabled={!isTauri || selecting || disabled} onClick={onResume}>恢复查询</JoluButton></div> : <>
           {policy.showBalance && <ApiMetrics account={account} balance={balance} compact />}
           {policy.showQuota && (!isApi || !policy.showBalance) && <SubscriptionMetrics account={account} quota={quota} compact limit={isApi ? 1 : 2} />}
           {!isApi && policy.resetCredits && <ResetCreditsMetrics quota={quota} compact disabled={disabled} />}
-          {!policy.showQuota && !policy.showBalance && !policy.resetCredits && <p className="line-clamp-3 text-[11px] leading-relaxed text-jolu-muted">{hidden ? redactAccountMessage(emptyReason) : emptyReason}</p>}
+          {!policy.showQuota && !policy.showBalance && !policy.resetCredits && <p className="line-clamp-3 text-[12px] leading-relaxed text-jolu-muted">{hidden ? redactAccountMessage(emptyReason) : emptyReason}</p>}
         </>}
         {isApi && <div className="mt-auto flex min-w-0 shrink-0 flex-col gap-1.5">
           {account.model && <Stat label="模型" value={account.model} />}
@@ -456,7 +456,7 @@ function AccountCard({ account, current, located, selecting = false, selected = 
 function Badge({ tone, children }: { tone: "on" | "muted" | "danger"; children: ReactNode }) {
   return (
     <span className={cn(
-      "shrink-0 rounded-[5px] px-2 py-[5px] text-[11px] leading-none",
+      "shrink-0 rounded-[5px] px-2 py-[5px] text-[12px] leading-none",
       tone === "on" ? "bg-jolu-selected text-jolu-on" : tone === "danger" ? "bg-jolu-danger-soft text-jolu-danger" : "bg-jolu-stage text-jolu-muted",
     )}>{children}</span>
   )
@@ -465,7 +465,7 @@ function Badge({ tone, children }: { tone: "on" | "muted" | "danger"; children: 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: "danger" | "muted" }) {
   return (
     <div className="flex min-w-0 items-center justify-between gap-2">
-      <span className="text-[10px] text-jolu-muted">{label}</span>
+      <span className="text-[11px] text-jolu-muted">{label}</span>
       <span title={value} className={cn("truncate text-xs font-medium", tone === "danger" ? "text-jolu-danger" : tone === "muted" ? "text-jolu-muted" : "text-jolu-text")}>{value}</span>
     </div>
   )
@@ -486,7 +486,7 @@ function SubscriptionExpiry({ account, quota, compact=false }: { account: Connec
     : quota.loading ? "查询中…" : "尚未查询"
   return <>
     <Stat label={account.kind === "api" ? "套餐到期" : "订阅到期"} value={value} tone={state==="unauthorized" || state==="failed" || state==="forbidden" || state==="rate_limited" || quota.stale ? "danger" : "muted"} />
-    {!compact && subscription.note && <p className="text-[11px] leading-relaxed text-jolu-muted">{subscription.note}</p>}
+    {!compact && subscription.note && <p className="text-[12px] leading-relaxed text-jolu-muted">{subscription.note}</p>}
   </>
 }
 
@@ -502,14 +502,14 @@ function SubscriptionMetrics({ account, quota, compact=false, limit=2 }: { accou
   const hasBuckets=account.platformId === "zcode" && policy.windows.some(window=>!isPlanWindowKey(window.key))
   const restWindows=hasBuckets ? policy.windows.filter(window=>isPlanWindowKey(window.key)) : windows
   return <>
-    {policy.plan && !hasBuckets && (compact ? <span className="truncate text-[10px] font-medium leading-4 text-jolu-text" title={policy.plan}>{policy.plan}</span> : <Stat label="等级 / 套餐" value={policy.plan} />)}
+    {policy.plan && !hasBuckets && (compact ? <span className="truncate text-[11px] font-medium leading-4 text-jolu-text" title={policy.plan}>{policy.plan}</span> : <Stat label="等级 / 套餐" value={policy.plan} />)}
     {hasBuckets && <ZcodeBucketQuota windows={policy.windows} plan={policy.plan} />}
     {restWindows.length > 0 && <div className="grid grid-cols-1 gap-2">{restWindows.map(window=><QuotaBar key={window.key} window={window} compact={compact} showReset={!compact} />)}</div>}
-    {!hasBuckets && compact && policy.windows.length > windows.length && <span className="text-[10px] text-jolu-muted">共 {policy.windows.length} 项额度，完整内容见详情</span>}
-    {state?.state !== "ok" && <div className={cn("rounded-lg bg-jolu-side px-2 py-1.5 text-[11px] text-jolu-muted",compact&&"line-clamp-2")}>
+    {!hasBuckets && compact && policy.windows.length > windows.length && <span className="text-[11px] text-jolu-muted">共 {policy.windows.length} 项额度，完整内容见详情</span>}
+    {state?.state !== "ok" && <div className={cn("rounded-lg bg-jolu-side px-2 py-1.5 text-[12px] text-jolu-muted",compact&&"line-clamp-2")}>
       {quota.loading && !state ? "正在读取额度…" : state ? `额度 · ${unauthorized ? "账号认证已失效，重新登录后同步" : hidden ? redactAccountMessage(state.reason) : state.reason}` : "额度尚未查询"}
     </div>}
-    {!compact && quota.stale && quota.failure && <p role="status" className="flex items-center gap-1.5 text-[11px] text-jolu-danger"><AlertTriangle aria-hidden className="size-3.5" />刷新失败 · {formatSyncedAt(quota.fetchedAt).replace("同步", "数据")}</p>}
+    {!compact && quota.stale && quota.failure && <p role="status" className="flex items-center gap-1.5 text-[12px] text-jolu-danger"><AlertTriangle aria-hidden className="size-3.5" />刷新失败 · {formatSyncedAt(quota.fetchedAt).replace("同步", "数据")}</p>}
   </>
 }
 
@@ -519,7 +519,7 @@ function ResetCreditsMetrics({ quota,compact=false,disabled=false }: { quota: Qu
   const credits = quota.state?.state === "ok" ? quota.state.account?.reset_credits : null
   if(!credits) return null
   const text=resetCreditsText(credits,compact)
-  return <div className="flex shrink-0 items-center gap-1.5 rounded-[7px] bg-jolu-side px-2 py-1 text-[10px] text-jolu-muted">
+  return <div className="flex shrink-0 items-center gap-1.5 rounded-[7px] bg-jolu-side px-2 py-1 text-[11px] text-jolu-muted">
     <Ticket aria-hidden className="size-3.5 shrink-0" /><span className="shrink-0">重置卡</span><span className="min-w-0 flex-1 truncate" title={resetCreditsText(credits)}>{text}</span>
     <JoluButton size="sm" variant="soft" className={compact?"!size-6 !p-0":undefined} aria-label="查询重置卡" disabled={disabled || !isTauri || checkingCards || quota.loading} onClick={()=>{setCheckingCards(true);void quota.refresh().finally(()=>setCheckingCards(false))}}>{checkingCards ? <LoaderCircle aria-hidden className="animate-spin" /> : <RefreshCw aria-hidden />}{!compact&&"查询"}</JoluButton>
   </div>
@@ -531,7 +531,7 @@ function QuotaBar({ window,compact=false,showReset=true }: { window: QuotaWindow
   const reset = formatResetAt(window.resets_at)
   return (
     <div className="flex min-w-0 flex-col gap-[3px]">
-      <div className="flex items-center justify-between text-[11px]">
+      <div className="flex items-center justify-between text-[12px]">
         <span className={cn("min-w-0 text-jolu-muted",compact?"truncate":"break-all")} title={window.window_name}>{quotaTitle(window.key, window.window_name)}</span>
         <span className="text-right font-semibold text-jolu-text">{quotaValue(window)}</span>
       </div>
@@ -541,7 +541,7 @@ function QuotaBar({ window,compact=false,showReset=true }: { window: QuotaWindow
           <div className="motion-quota-bar h-full rounded-[3px] bg-jolu-accent" style={{ width: `${remaining}%` }} />
         </div>
       )}
-      {showReset && (reset || !compact) && <span className="text-[10px] text-jolu-muted">{reset ?? "重置时间未提供"}</span>}
+      {showReset && (reset || !compact) && <span className="text-[11px] text-jolu-muted">{reset ?? "重置时间未提供"}</span>}
     </div>
   )
 }
@@ -553,10 +553,10 @@ function ApiMetrics({ account, balance,compact=false }: { account: Connection; b
   const policy=accountCardPolicy(account,null,state)
   return <>
     {policy.showBalance ? <div className={cn("flex flex-col gap-1 rounded-lg bg-jolu-selected px-2.5 py-2",compact&&"py-1.5")}>
-      <div className="flex items-center justify-between text-[10px]"><span className="text-jolu-on">可用余额</span>{balance.stale&&<span className="text-jolu-danger">刷新失败 · 上次金额</span>}</div>
-      {policy.balanceAmount!==null ? <div className="flex items-baseline gap-1"><span className={cn("tnum font-semibold text-jolu-text",compact?"text-lg":"text-[22px]")}>{formatMoney(policy.balanceAmount,policy.balanceCurrency??"")}</span><span className="text-[10px] text-jolu-muted">{policy.balanceCurrency}</span></div>
-        : <span className={cn("text-[11px] text-jolu-muted",compact&&"line-clamp-2")}>{balance.loading&&!state ? "正在获取余额…" : state&&state.state!=="ok" ? `${state.state==="unauthorized"?"凭证失效":state.state==="forbidden"?"查询权限不足":"余额查询失败"}：${hidden?redactAccountMessage(state.reason):state.reason}` : "余额尚未查询"}</span>}
-    </div> : !compact && state?.state==="unsupported" && <p className="text-[11px] text-jolu-muted">余额 · {hidden?redactAccountMessage(state.reason):state.reason}</p>}
+      <div className="flex items-center justify-between text-[11px]"><span className="text-jolu-on">可用余额</span>{balance.stale&&<span className="text-jolu-danger">刷新失败 · 上次金额</span>}</div>
+      {policy.balanceAmount!==null ? <div className="flex items-baseline gap-1"><span className={cn("tnum font-semibold text-jolu-text",compact?"text-lg":"text-[22px]")}>{formatMoney(policy.balanceAmount,policy.balanceCurrency??"")}</span><span className="text-[11px] text-jolu-muted">{policy.balanceCurrency}</span></div>
+        : <span className={cn("text-[12px] text-jolu-muted",compact&&"line-clamp-2")}>{balance.loading&&!state ? "正在获取余额…" : state&&state.state!=="ok" ? `${state.state==="unauthorized"?"凭证失效":state.state==="forbidden"?"查询权限不足":"余额查询失败"}：${hidden?redactAccountMessage(state.reason):state.reason}` : "余额尚未查询"}</span>}
+    </div> : !compact && state?.state==="unsupported" && <p className="text-[12px] text-jolu-muted">余额 · {hidden?redactAccountMessage(state.reason):state.reason}</p>}
     {policy.used!==null&&<Stat label="累计消费" value={`${formatMoney(policy.used,policy.balanceCurrency??"")} ${policy.balanceCurrency??""}`} />}
   </>
 }
@@ -575,7 +575,7 @@ function CardActions({ account, paused, refresh, hasQuota, canPromote, readOnly 
 }) {
   return (
     <div className="flex shrink-0 items-center justify-end gap-1 border-t border-jolu-border pt-2">
-      <span className={cn("min-w-0 flex-1 truncate text-[10px]",refresh?.stale?"text-jolu-danger":"text-jolu-muted")}>
+      <span className={cn("min-w-0 flex-1 truncate text-[11px]",refresh?.stale?"text-jolu-danger":"text-jolu-muted")}>
         {paused ? "暂停查询" : refresh?.stale ? "刷新失败 · 上次结果" : refresh?.fetchedAt ? formatSyncedAt(refresh.fetchedAt, new Date(), hasQuota ? "" : "余额") : account.lastSyncText}
       </span>
       <JoluButton size="sm" variant="neutral" className="!px-2" aria-label="查看账号详情" onClick={onDetails}>详情</JoluButton>
@@ -723,11 +723,11 @@ function RemoveDialog({ account, current, alternatives, islandUsers, onClose, on
               { value: NONE, label: `暂不使用 ${entry.name}` },
             ]}
           />
-          <span className="text-[11px] text-jolu-muted">也可选择「暂不使用 {entry.name}」。不会注销远端账号。</span>
+          <span className="text-[12px] text-jolu-muted">也可选择「暂不使用 {entry.name}」。不会注销远端账号。</span>
         </div>
       )}
       {islandUsers.length > 0 && (
-        <p className="rounded-lg bg-jolu-side px-3 py-2 text-[11px] text-jolu-muted">受影响：{islandUsers.join("、")}正在显示此账号，删除后需重新选择连接。</p>
+        <p className="rounded-lg bg-jolu-side px-3 py-2 text-[12px] text-jolu-muted">受影响：{islandUsers.join("、")}正在显示此账号，删除后需重新选择连接。</p>
       )}
       {confirm.error && <p role="alert" className="text-xs text-jolu-danger">{confirm.error}</p>}
     </ConfirmShell>
@@ -775,7 +775,7 @@ function EditDialog({ account, others, onClose, onSave }: {
       <label className="flex flex-col gap-[7px]">
         <span className="text-xs font-medium text-jolu-text">连接名称 *</span>
         <input value={name} onChange={(event) => setName(event.target.value)} spellCheck={false} autoComplete="off" className="jolu-control h-10 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-[13px] text-jolu-text outline-none focus:border-jolu-accent" />
-        {nameError && name !== account.baseName && <span className="text-[11px] text-jolu-danger">{nameError}</span>}
+        {nameError && name !== account.baseName && <span className="text-[12px] text-jolu-danger">{nameError}</span>}
       </label>
       {account.kind === "api" && (
         <div className="flex flex-col gap-[7px]">
@@ -788,7 +788,7 @@ function EditDialog({ account, others, onClose, onSave }: {
               <JoluButton size="sm" variant="neutral" className="h-7" onClick={() => setReplacing(true)}>更换密钥</JoluButton>
             </div>
           )}
-          <span className="text-[11px] text-jolu-muted">{save.needsModel || account.platformId === "custom" ? "留空不覆盖已保存密钥；更换后重新获取模型。仅改名称无需重新验证。" : "留空不覆盖已保存密钥；仅改名称无需重新验证。"}</span>
+          <span className="text-[12px] text-jolu-muted">{save.needsModel || account.platformId === "custom" ? "留空不覆盖已保存密钥；更换后重新获取模型。仅改名称无需重新验证。" : "留空不覆盖已保存密钥；仅改名称无需重新验证。"}</span>
         </div>
       )}
       {save.needsModel && account.baseUrl && (
@@ -802,7 +802,7 @@ function EditDialog({ account, others, onClose, onSave }: {
           onModel={(next, ready) => { setModel(next); setModelReady(ready) }}
         />
       )}
-      {save.reason && <p className="text-[11px] text-jolu-muted">{save.reason}</p>}
+      {save.reason && <p className="text-[12px] text-jolu-muted">{save.reason}</p>}
       {confirm.error && <p role="alert" className="text-xs text-jolu-danger">{confirm.error}</p>}
     </ConfirmShell>
   )
@@ -885,7 +885,7 @@ function CustomModelSection({ baseUrl, secret, protocol, model, onModel }: {
   return (
     <div className="flex flex-col gap-2">
       {manual && fetchError && (
-        <div role="alert" className="flex items-center gap-2.5 rounded-lg bg-jolu-danger-soft px-2.5 py-2 text-[11px] text-jolu-danger">
+        <div role="alert" className="flex items-center gap-2.5 rounded-lg bg-jolu-danger-soft px-2.5 py-2 text-[12px] text-jolu-danger">
           <CircleAlert aria-hidden className="size-3.5 shrink-0" />
           <span className="min-w-0 flex-1 break-all">{modelFetchErrorText(fetchError)}</span>
         </div>
@@ -926,15 +926,15 @@ function CustomModelSection({ baseUrl, secret, protocol, model, onModel }: {
         </div>
       )}
       {fetching ? (
-        <span role="status" className="flex items-center gap-1.5 text-[11px] text-jolu-muted">
+        <span role="status" className="flex items-center gap-1.5 text-[12px] text-jolu-muted">
           <LoaderCircle aria-hidden className="size-3 animate-spin" />正在获取可用模型…
         </span>
       ) : verifyResult ? (
-        <span role={verifyResult.ok ? "status" : "alert"} className={cn("text-[11px]", verifyResult.ok ? "text-jolu-on" : "text-jolu-danger")}>{verifyResult.text}</span>
+        <span role={verifyResult.ok ? "status" : "alert"} className={cn("text-[12px]", verifyResult.ok ? "text-jolu-on" : "text-jolu-danger")}>{verifyResult.text}</span>
       ) : fetchError && !manual ? (
-        <span role="alert" className="text-[11px] text-jolu-danger">{modelFetchErrorText(fetchError)}</span>
+        <span role="alert" className="text-[12px] text-jolu-danger">{modelFetchErrorText(fetchError)}</span>
       ) : (
-        <span className="text-[11px] text-jolu-muted">
+        <span className="text-[12px] text-jolu-muted">
           {manual ? "模型接口不支持枚举时才展示。验证可能产生少量 API 用量，先提示再执行。" : "旧模型列表标记失效；重新获取后再选择默认模型。"}
         </span>
       )}

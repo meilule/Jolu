@@ -65,13 +65,13 @@ export function PrivacyRecordsDialog({ onClose }: { onClose: () => void }) {
                       className={`flex w-full flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent ${record.id === current.id ? "bg-jolu-stage" : "hover:bg-jolu-side"}`}
                     >
                       <span className="text-xs font-medium text-jolu-text">{new Date(record.at_ms).toLocaleTimeString()} · {record.entry}</span>
-                      <span className={`text-[11px] ${record.blocked ? "text-jolu-danger" : "text-jolu-muted"}`}>{recordSummary(record)}</span>
+                      <span className={`text-[12px] ${record.blocked ? "text-jolu-danger" : "text-jolu-muted"}`}>{recordSummary(record)}</span>
                     </button>
                   </li>
                 ))}
               </ul>
               <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
-                <div className="grid grid-cols-2 gap-2 px-3 text-[11px] text-jolu-muted">
+                <div className="grid grid-cols-2 gap-2 px-3 text-[12px] text-jolu-muted">
                   <span>发出前</span>
                   <span>发给厂商的</span>
                 </div>
@@ -84,8 +84,8 @@ export function PrivacyRecordsDialog({ onClose }: { onClose: () => void }) {
                         <span className="text-jolu-muted">{MASK_ACTIONS.find((a) => a.value === hit.action)?.label}</span>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                        <code className="break-all rounded bg-jolu-side px-2 py-1.5 font-mono text-[11px] text-jolu-text">{sides.before}</code>
-                        <code className="break-all rounded bg-jolu-side px-2 py-1.5 font-mono text-[11px] text-jolu-text">{sides.after}</code>
+                        <code className="break-all rounded bg-jolu-side px-2 py-1.5 font-mono text-[12px] text-jolu-text">{sides.before}</code>
+                        <code className="break-all rounded bg-jolu-side px-2 py-1.5 font-mono text-[12px] text-jolu-text">{sides.after}</code>
                       </div>
                     </div>
                   )

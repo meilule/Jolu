@@ -58,7 +58,7 @@ export function RunList({ data, filter, page, now, loading, accounts, onFilter, 
       </div>
 
       <Card className="overflow-hidden">
-        <div className="flex h-11 items-center bg-jolu-side px-4 text-[11px] font-medium text-jolu-muted">
+        <div className="flex h-11 items-center bg-jolu-side px-4 text-[12px] font-medium text-jolu-muted">
           <span className="w-[240px] shrink-0">任务 / 运行编号</span>
           <span className="w-[184px] shrink-0">账号 / 启动方式</span>
           <span className="min-w-0 flex-1">开始时间</span>
@@ -73,25 +73,25 @@ export function RunList({ data, filter, page, now, loading, accounts, onFilter, 
             <div key={run.id} className="flex h-[72px] items-center border-t border-jolu-border px-4 transition-colors hover:bg-jolu-stage">
               <div className="flex w-[240px] shrink-0 flex-col gap-1.5 pr-3">
                 <span className="truncate text-xs font-medium text-jolu-text">{run.task_name}</span>
-                <span className="text-[10px] text-jolu-muted">{runCode(run.id)}</span>
+                <span className="text-[11px] text-jolu-muted">{runCode(run.id)}</span>
               </div>
               <div className="flex w-[184px] shrink-0 flex-col gap-1.5 pr-3">
-                <span className="truncate text-[11px] text-jolu-text">{shortTool(run.platform)} · {account}</span>
-                <span className="text-[10px] text-jolu-muted">{sourceLabel(run.source)}</span>
+                <span className="truncate text-[12px] text-jolu-text">{shortTool(run.platform)} · {account}</span>
+                <span className="text-[11px] text-jolu-muted">{sourceLabel(run.source)}</span>
               </div>
-              <span className="tnum min-w-0 flex-1 text-[11px] text-jolu-text">{hhmmss(run.started_at ?? run.created_at)}</span>
-              <span className="tnum w-[140px] shrink-0 text-[11px] text-jolu-text">{clock(runningMs(run, now))} / {clock(waitingMs(run, now))}</span>
-              <span className="tnum w-[90px] shrink-0 text-[11px] text-jolu-text">{formatTokens(runTokens(run)).replace(" ", "")}</span>
+              <span className="tnum min-w-0 flex-1 text-[12px] text-jolu-text">{hhmmss(run.started_at ?? run.created_at)}</span>
+              <span className="tnum w-[140px] shrink-0 text-[12px] text-jolu-text">{clock(runningMs(run, now))} / {clock(waitingMs(run, now))}</span>
+              <span className="tnum w-[90px] shrink-0 text-[12px] text-jolu-text">{formatTokens(runTokens(run)).replace(" ", "")}</span>
               <div className="flex w-[172px] shrink-0 items-center gap-2.5">
-                <span className={cn("min-w-[52px] text-[11px]", TONE[status.tone])}>{status.label}</span>
+                <span className={cn("min-w-[52px] text-[12px]", TONE[status.tone])}>{status.label}</span>
                 <JoluButton size="sm" variant="soft" className="w-20" onClick={() => onOpen(run.id)}>详情<ChevronRight aria-hidden /></JoluButton>
               </div>
             </div>
           )
         }) : (
-          <div className="border-t border-jolu-border px-4 py-5 text-[11px] text-jolu-muted">{rangeLabel}没有符合条件的运行记录</div>
+          <div className="border-t border-jolu-border px-4 py-5 text-[12px] text-jolu-muted">{rangeLabel}没有符合条件的运行记录</div>
         )}
-        <div className="flex h-11 items-center gap-2.5 border-t border-jolu-border px-4 text-[11px] text-jolu-muted">
+        <div className="flex h-11 items-center gap-2.5 border-t border-jolu-border px-4 text-[12px] text-jolu-muted">
           <span>{rangeLabel}共 {data.total} 次运行 · 当前显示 {data.rows.length} 条</span>
           <span className="flex-1" />
           <JoluButton size="sm" variant="neutral" disabled={page <= 1} onClick={() => onPage(page - 1)}><ChevronLeft aria-hidden />上一页</JoluButton>
@@ -101,7 +101,7 @@ export function RunList({ data, filter, page, now, loading, accounts, onFilter, 
       </Card>
 
       <Notice icon={Info} title="执行耗时与等待时长分开记录">额度不足期间不计入执行耗时；同一次运行可多次等待和恢复，重试会生成新的运行记录。</Notice>
-      <p className="text-[10px] text-jolu-muted">时间按 {localZone()} 展示；Token 缺失显示 —，不以 0 代替。</p>
+      <p className="text-[11px] text-jolu-muted">时间按 {localZone()} 展示；Token 缺失显示 —，不以 0 代替。</p>
     </>
   )
 }

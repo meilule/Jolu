@@ -272,10 +272,10 @@ export function SkillsView({ active }: { active: boolean }) {
 
       <div className="flex h-9 items-center gap-2 rounded-lg bg-jolu-side px-3">
         <FolderOpen aria-hidden className="size-4 shrink-0 text-jolu-muted" />
-        <span className="min-w-0 truncate text-[11px] text-jolu-text">{data ? scanLocation(scanned) : "正在读取目录…"}</span>
-        {!!data?.errors.length && <span className="shrink-0 text-[11px] text-jolu-danger" title={data.errors.map((e) => `${e.path}：${e.reason}`).join("\n")}>· {data.errors.length} 个目录扫描失败</span>}
+        <span className="min-w-0 truncate text-[12px] text-jolu-text">{data ? scanLocation(scanned) : "正在读取目录…"}</span>
+        {!!data?.errors.length && <span className="shrink-0 text-[12px] text-jolu-danger" title={data.errors.map((e) => `${e.path}：${e.reason}`).join("\n")}>· {data.errors.length} 个目录扫描失败</span>}
         <span className="flex-1" />
-        <span className="shrink-0 text-[10px] text-jolu-muted">{data ? scannedLabel(data.scanned_at, now) : ""}{!isTauri && " · 示例数据"}</span>
+        <span className="shrink-0 text-[11px] text-jolu-muted">{data ? scannedLabel(data.scanned_at, now) : ""}{!isTauri && " · 示例数据"}</span>
       </div>
 
       {error && (
@@ -301,7 +301,7 @@ export function SkillsView({ active }: { active: boolean }) {
       ) : nothingDetected ? (
         <section className="jolu-card flex flex-col items-start gap-3 rounded-xl border border-jolu-border bg-jolu-cc-surface p-5">
           <span className="text-[13px] font-semibold text-jolu-text">没有检测到 Skills 目录</span>
-          <span className="text-[11px] text-jolu-muted">可以添加项目目录，或新建 / 导入一个 Skill；未检测到目录不代表工具不支持 Skills。</span>
+          <span className="text-[12px] text-jolu-muted">可以添加项目目录，或新建 / 导入一个 Skill；未检测到目录不代表工具不支持 Skills。</span>
           <div className="flex gap-2">
             <JoluButton variant="soft" size="sm" onClick={() => setDialog({ kind: "dirs" })}><FolderOpen aria-hidden />选择目录</JoluButton>
             <JoluButton variant="neutral" size="sm" onClick={refresh}><RefreshCw aria-hidden />重新扫描</JoluButton>
@@ -310,7 +310,7 @@ export function SkillsView({ active }: { active: boolean }) {
       ) : visible.length === 0 && data ? (
         <section className="jolu-card flex flex-col items-start gap-3 rounded-xl border border-jolu-border bg-jolu-cc-surface p-5">
           <span className="text-[13px] font-semibold text-jolu-text">{filtered ? "没有匹配的 Skill" : "这个供应商还没有 Skill"}</span>
-          <span className="text-[11px] text-jolu-muted">{filtered ? "调整范围、状态或搜索条件后再试。" : "新建或导入一个 Skill 开始使用。"}</span>
+          <span className="text-[12px] text-jolu-muted">{filtered ? "调整范围、状态或搜索条件后再试。" : "新建或导入一个 Skill 开始使用。"}</span>
           {filtered && <JoluButton variant="neutral" size="sm" onClick={clearFilters}><RotateCcw aria-hidden />清空筛选</JoluButton>}
         </section>
       ) : (
@@ -337,7 +337,7 @@ export function SkillsView({ active }: { active: boolean }) {
         />
       )}
 
-      <p className="text-[11px] text-jolu-muted">启用仅控制工具是否加载 Skill，不会立即执行；操作能力以所选工具适配结果为准。</p>
+      <p className="text-[12px] text-jolu-muted">启用仅控制工具是否加载 Skill，不会立即执行；操作能力以所选工具适配结果为准。</p>
       {dialogs}
     </div>
   )
@@ -353,7 +353,7 @@ function Stat({ icon, value, label, note }: { icon: React.ReactNode; value: numb
           <span className="tnum text-2xl font-semibold leading-none text-jolu-text">{value ?? "—"}</span>
           <span className="text-xs text-jolu-muted">{label}</span>
         </span>
-        <span className="truncate text-[10px] text-jolu-muted">{note}</span>
+        <span className="truncate text-[11px] text-jolu-muted">{note}</span>
       </span>
     </section>
   )

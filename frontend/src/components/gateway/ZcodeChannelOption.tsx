@@ -35,7 +35,7 @@ export function ZcodeChannelOption({ busy, run }: {
           void run(() => settingsApi.zcodeFreeFirstSet(next), next ? "ZCode 改为先试免费 Start Plan" : "ZCode 改为先走 Coding Plan").then((ok) => { if (!ok) setOn(!next) })
         }} />
       <span className="min-w-0 flex-1">
-        <span className="block text-[10.5px] font-medium text-jolu-text">ZCode 先用免费 Start Plan</span>
+        <span className="block text-[11.5px] font-medium text-jolu-text">ZCode 先用免费 Start Plan</span>
         <span className="block text-[8.5px] text-jolu-muted">
           开启后 ZCode 来源先试免费额度，用完或失败再走 Coding Plan；关闭则先走 Coding Plan。需要本机已登录 ZCode。
         </span>

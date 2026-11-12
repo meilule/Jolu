@@ -54,7 +54,7 @@ export function SelectField({ value, options, onValueChange, label, disabled,
                 {option.icon && <span aria-hidden className="grid size-4 shrink-0 place-items-center">{option.icon}</span>}
                 <span className="min-w-0">
                   <span className="block break-words">{option.label}</span>
-                  {option.description && <span className="mt-0.5 block max-w-[290px] whitespace-normal text-[11px] text-text-secondary" title={option.description}>{option.description}</span>}
+                  {option.description && <span className="mt-0.5 block max-w-[290px] whitespace-normal text-[12px] text-text-secondary" title={option.description}>{option.description}</span>}
                 </span>
               </Menu.RadioItem>
             ))}

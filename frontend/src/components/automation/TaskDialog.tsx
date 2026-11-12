@@ -68,9 +68,9 @@ function initialForm(req: TaskDialogRequest): TaskForm {
 function Field({ label, error, note, children }: { label: string; error?: string; note?: ReactNode; children: ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-[7px]">
-      <span className="text-[11px] text-jolu-muted">{label}</span>
+      <span className="text-[12px] text-jolu-muted">{label}</span>
       {children}
-      {error ? <span role="alert" className="text-[10px] text-jolu-danger">{error}</span> : note && <span className="text-[10px] text-jolu-muted">{note}</span>}
+      {error ? <span role="alert" className="text-[11px] text-jolu-danger">{error}</span> : note && <span className="text-[11px] text-jolu-muted">{note}</span>}
     </div>
   )
 }
@@ -104,9 +104,9 @@ function FieldSelect({ value, options, onChange, placeholder, label, disabled, i
                   <span className="flex min-w-0 flex-col">
                     <span className="flex items-center gap-1.5">
                       <span className="truncate">{o.label}</span>
-                      {o.tag && <span className="rounded-[4px] bg-jolu-selected px-1.5 text-[10px] text-jolu-on">{o.tag}</span>}
+                      {o.tag && <span className="rounded-[4px] bg-jolu-selected px-1.5 text-[11px] text-jolu-on">{o.tag}</span>}
                     </span>
-                    {o.note && <span className="truncate text-[10px] text-jolu-muted">{o.note}</span>}
+                    {o.note && <span className="truncate text-[11px] text-jolu-muted">{o.note}</span>}
                   </span>
                   <Menu.ItemIndicator className="absolute right-2"><Check aria-hidden className="size-3.5" /></Menu.ItemIndicator>
                 </Menu.RadioItem>
@@ -127,7 +127,7 @@ function Checkbox({ checked, disabled, onChange, title, note }: { checked: boole
       </span>
       <span className="flex min-w-0 flex-col gap-1">
         <span className="text-xs text-jolu-text">{title}</span>
-        {note && <span className="text-[10px] text-jolu-muted">{note}</span>}
+        {note && <span className="text-[11px] text-jolu-muted">{note}</span>}
       </span>
     </button>
   )
@@ -400,8 +400,8 @@ export function TaskDialog({ request, onClose: onDismiss, onSaved, onBackToSessi
                 <Field label="时区" note="其他时区待确认：目前按本机时区调度">
                   <FieldSelect label="时区" value={form.timezone} placeholder="本机时区" onChange={(v) => set("timezone", v)} options={[{ value: localZone(), label: localZone(), note: "本机时区" }]} />
                 </Field>
-                {next && <span className="text-[11px] text-jolu-on">下次运行：{dayTime(next, now)}（{zoneName(form.timezone)}时间）</span>}
-                <span className="text-[10px] text-jolu-muted">支持单次 / 每天 / 每周；每周选择星期。当前仍在执行时跳过本次触发，不叠加新运行。</span>
+                {next && <span className="text-[12px] text-jolu-on">下次运行：{dayTime(next, now)}（{zoneName(form.timezone)}时间）</span>}
+                <span className="text-[11px] text-jolu-muted">支持单次 / 每天 / 每周；每周选择星期。当前仍在执行时跳过本次触发，不叠加新运行。</span>
               </div>
             )}
 
@@ -428,7 +428,7 @@ export function TaskDialog({ request, onClose: onDismiss, onSaved, onBackToSessi
             <button type="button" aria-expanded={advanced} onClick={() => setAdvanced((v) => !v)} className="flex h-7 items-center gap-2.5 rounded-md text-left outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent">
               <ChevronRight aria-hidden className={cn("size-[15px] text-jolu-muted transition-transform", advanced && "rotate-90")} />
               <span className="text-xs text-jolu-text">高级设置</span>
-              <span className="text-[10px] text-jolu-muted">{form.deadline ? `等待至 ${dayTime(new Date(form.deadline).getTime(), now)}` : "不限等待时间"}{form.serialQueue ? " · 同账号顺序执行" : " · 同账号可并行"}</span>
+              <span className="text-[11px] text-jolu-muted">{form.deadline ? `等待至 ${dayTime(new Date(form.deadline).getTime(), now)}` : "不限等待时间"}{form.serialQueue ? " · 同账号顺序执行" : " · 同账号可并行"}</span>
             </button>
             {advanced && (
               <div className="flex flex-col gap-3 rounded-xl border border-jolu-border p-3.5">
@@ -451,11 +451,11 @@ export function TaskDialog({ request, onClose: onDismiss, onSaved, onBackToSessi
                   title="同一账号按队列顺序执行"
                   note={form.serialQueue ? "默认开启，暂停当前任务后再处理后续任务。" : "同账号任务可能同时运行并争用额度；同一工作目录仍按顺序执行。"}
                 />
-                <span className="text-[10px] text-jolu-muted">到期仍不可用则标记「等待超时」，保留记录，由用户重新排队。恢复时间已知：到点检查；时间未知或检查失败：间隔重试，逐步延长。</span>
+                <span className="text-[11px] text-jolu-muted">到期仍不可用则标记「等待超时」，保留记录，由用户重新排队。恢复时间已知：到点检查；时间未知或检查失败：间隔重试，逐步延长。</span>
               </div>
             )}
 
-            <span className="text-[10px] text-jolu-muted">
+            <span className="text-[11px] text-jolu-muted">
               {fromSession
                 ? "来源会话不会被替换为新会话。账号或项目发生变化时重新校验；需要用户重新选择时明确提示。"
                 : form.launch === "quota"
@@ -464,7 +464,7 @@ export function TaskDialog({ request, onClose: onDismiss, onSaved, onBackToSessi
             </span>
           </div>
 
-          {saveError && <p role="alert" className="text-[11px] text-jolu-danger">{saveError}</p>}
+          {saveError && <p role="alert" className="text-[12px] text-jolu-danger">{saveError}</p>}
           <div className="flex h-[42px] items-end justify-end gap-2.5 border-t border-jolu-border pt-2">
             {fromSession && request.session ? (
               <JoluButton size="sm" variant="outline" disabled={saving} onClick={() => finish(() => onBackToSession(request.session!))}>返回会话</JoluButton>
@@ -552,7 +552,7 @@ function SessionPicker({ form, open, onOpenChange, accountName, fromSession, onP
 
   return (
     <div ref={ref} className="relative flex flex-col gap-[7px]">
-      <span className="text-[11px] text-jolu-muted">执行会话</span>
+      <span className="text-[12px] text-jolu-muted">执行会话</span>
       <button
         ref={triggerRef}
         type="button"
@@ -563,7 +563,7 @@ function SessionPicker({ form, open, onOpenChange, accountName, fromSession, onP
         <MessagesSquare aria-hidden className="size-[18px] shrink-0 text-jolu-on" />
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="truncate text-xs font-medium text-jolu-text">{form.sessionId ? (selected ? sessionTitle(selected) : `会话 ${shortId(form.sessionId)}`) : "新建会话"}</span>
-          <span className="truncate text-[10px] text-jolu-muted">
+          <span className="truncate text-[11px] text-jolu-muted">
             {form.sessionId
               ? `${project} · ${selected ? dayTime(selected.last_ts, Date.now()) : toolName(form.platform)} · ${shortId(form.sessionId)}`
               : "从新的上下文开始"}
@@ -571,7 +571,7 @@ function SessionPicker({ form, open, onOpenChange, accountName, fromSession, onP
         </span>
         {open ? <ChevronUp aria-hidden className="size-[15px] text-jolu-muted" /> : <ChevronDown aria-hidden className="size-[15px] text-jolu-muted" />}
       </button>
-      <span className="text-[10px] text-jolu-muted">
+      <span className="text-[11px] text-jolu-muted">
         {form.sessionId ? (fromSession ? "已从会话线程带入；执行时验证是否可在此会话继续。" : "将在此会话追加任务指令，保留已有上下文。") : "将新建会话执行任务。"}
       </span>
 
@@ -589,10 +589,10 @@ function SessionPicker({ form, open, onOpenChange, accountName, fromSession, onP
           <button type="button" onClick={() => onPick(null)} className={cn("flex h-[38px] items-center gap-2.5 rounded-lg px-2.5 text-left outline-none hover:bg-jolu-side focus-visible:bg-jolu-side", !form.sessionId && "bg-jolu-selected")}>
             <Plus aria-hidden className="size-4 text-jolu-on" />
             <span className="text-xs text-jolu-on">新建会话</span>
-            <span className="text-[10px] text-jolu-muted">从新的上下文开始</span>
+            <span className="text-[11px] text-jolu-muted">从新的上下文开始</span>
           </button>
-          <span className="px-2.5 text-[10px] text-jolu-muted">{form.cwd ? `${project} · ` : ""}{sessions === null && !error ? "正在读取会话…" : `匹配 ${matches.length} 条会话`}</span>
-          {error && <span role="alert" className="px-2.5 text-[11px] text-jolu-danger">会话读取失败：{error}</span>}
+          <span className="px-2.5 text-[11px] text-jolu-muted">{form.cwd ? `${project} · ` : ""}{sessions === null && !error ? "正在读取会话…" : `匹配 ${matches.length} 条会话`}</span>
+          {error && <span role="alert" className="px-2.5 text-[12px] text-jolu-danger">会话读取失败：{error}</span>}
           <div className="flex max-h-[240px] min-h-0 shrink flex-col gap-0.5 overflow-y-auto">
             {matches.map((s) => {
               const usable = s.has_source
@@ -608,7 +608,7 @@ function SessionPicker({ form, open, onOpenChange, accountName, fromSession, onP
                   {usable ? <MessageSquareText aria-hidden className="size-4 shrink-0 text-jolu-muted" /> : <FileText aria-hidden className="size-4 shrink-0 text-jolu-muted" />}
                   <span className="flex min-w-0 flex-1 flex-col gap-1">
                     <span className={cn("truncate text-xs", checked ? "text-jolu-on" : usable ? "text-jolu-text" : "text-jolu-muted")}>{sessionTitle(s)}</span>
-                    <span className="truncate text-[10px] text-jolu-muted">{usable ? `${dayTime(s.last_ts, Date.now())} · ${shortId(s.session_id)}` : "仅用量记录 · 无法继续此会话"}</span>
+                    <span className="truncate text-[11px] text-jolu-muted">{usable ? `${dayTime(s.last_ts, Date.now())} · ${shortId(s.session_id)}` : "仅用量记录 · 无法继续此会话"}</span>
                   </span>
                   {checked && <Check aria-hidden className="size-4 text-jolu-on" />}
                   {!usable && <Info aria-hidden className="size-4 text-jolu-muted" />}
@@ -616,7 +616,7 @@ function SessionPicker({ form, open, onOpenChange, accountName, fromSession, onP
               )
             })}
           </div>
-          <span className="border-t border-jolu-border px-2.5 pt-2 text-[10px] text-jolu-muted">{toolName(form.platform)}{accountName ? ` · ${accountName}` : ""}{form.cwd ? ` · ${project}` : ""}</span>
+          <span className="border-t border-jolu-border px-2.5 pt-2 text-[11px] text-jolu-muted">{toolName(form.platform)}{accountName ? ` · ${accountName}` : ""}{form.cwd ? ` · ${project}` : ""}</span>
         </div>,
         root,
       )}

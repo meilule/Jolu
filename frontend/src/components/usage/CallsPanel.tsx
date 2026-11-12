@@ -10,8 +10,8 @@ import { Pagination } from "@/components/ui/Pagination"
 
 /** 画板 34 表头列宽 */
 const COLUMNS = [
-  ["时间 ↓", "w-[76px]"], ["模型", "w-[196px]"], ["输入", "w-[72px]"], ["缓存", "w-[72px]"], ["输出", "w-[72px]"],
-  ["总 Token", "w-[80px]"], ["总成本", "w-[84px]"], ["延迟", "w-[124px]"], ["思考强度", "w-[72px]"], ["状态", "w-[74px]"],
+  ["时间 ↓", "w-[76px]"], ["模型", "w-[188px]"], ["输入", "w-[72px]"], ["缓存", "w-[72px]"], ["输出", "w-[72px]"],
+  ["总 Token", "w-[80px]"], ["总成本", "w-[84px]"], ["延迟", "w-[132px]"], ["思考强度", "w-[72px]"], ["状态", "w-[74px]"],
 ] as const
 
 const sumKnown = (a: number | null, b: number | null) => (a === null && b === null ? null : (a ?? 0) + (b ?? 0))
@@ -41,13 +41,13 @@ export function CallsPanel({ data, selectedId, fx, onSelect, onPage, onOpenSessi
       <Card className="flex flex-col overflow-hidden">
         <div className="flex h-[42px] items-center justify-between px-4">
           <span className="text-[13px] font-semibold text-jolu-text">{data.total_count} 条调用记录</span>
-          <span className="text-[11px] text-jolu-muted">总成本为估算 · {fx.currency} · {data.unpriced_count} 条未计价</span>
+          <span className="text-[12px] text-jolu-muted">总成本为估算 · {fx.currency} · {data.unpriced_count} 条未计价</span>
         </div>
         {/* 列宽固定且总宽超过容器时横向滚动：内容不再被右侧裁掉 */}
         <div className="overflow-x-auto">
           <div className="min-w-[1000px]">
             <div className="flex h-9 items-center gap-1.5 border-y border-jolu-border bg-jolu-side px-4">
-              {COLUMNS.map(([label, width]) => <span key={label} className={cn("shrink-0 text-[11px] font-medium text-jolu-muted", width)}>{label}</span>)}
+              {COLUMNS.map(([label, width]) => <span key={label} className={cn("shrink-0 text-[12px] font-medium text-jolu-muted", width)}>{label}</span>)}
             </div>
             {data.rows.map((row) => <CallRow key={row.id} row={row} active={row.id === selectedId} fx={fx} onSelect={() => onSelect(row.id)} />)}
             {!data.rows.length && <div className="px-4 py-8 text-center text-xs text-jolu-muted">没有符合筛选条件的调用</div>}
@@ -56,13 +56,13 @@ export function CallsPanel({ data, selectedId, fx, onSelect, onPage, onOpenSessi
         <Pagination page={data.page} pageCount={data.page_count} pageSize={data.page_size} onPage={onPage} />
       </Card>
       {selected && <CallDetail row={selected} fx={fx} onOpenSession={onOpenSession} />}
-      <p className="text-[10px] text-jolu-muted">— 表示未取得或未计价，失败请求不默认免费。导出遵循当前筛选，不包含 API Key 或对话正文。</p>
+      <p className="text-[11px] text-jolu-muted">— 表示未取得或未计价，失败请求不默认免费。导出遵循当前筛选，不包含 API Key 或对话正文。</p>
     </>
   )
 }
 
 function Num({ value, className }: { value: number | null; className?: string }) {
-  return <span className={cn("tnum text-[11px]", value === null ? "text-jolu-muted" : "text-jolu-text", className)}>{formatTokens(value)}</span>
+  return <span className={cn("tnum text-[12px]", value === null ? "text-jolu-muted" : "text-jolu-text", className)}>{formatTokens(value)}</span>
 }
 
 function CallRow({ row, active, fx, onSelect }: { row: StatsCallRowDto; active: boolean; fx: FxState; onSelect: () => void }) {
@@ -70,8 +70,8 @@ function CallRow({ row, active, fx, onSelect }: { row: StatsCallRowDto; active: 
   const tps = outputTps(row)
   const metric = (label: string, value: string, known: boolean) => (
     <span className="flex h-3.5 items-center gap-1.5">
-      <span className="text-[10px] text-jolu-muted">{label}</span>
-      <span className={cn("tnum text-[10.5px] font-medium", known ? "text-jolu-on" : "text-jolu-muted")}>{value}</span>
+      <span className="text-[11px] text-jolu-muted">{label}</span>
+      <span className={cn("tnum text-[11.5px] font-medium", known ? "text-jolu-on" : "text-jolu-muted")}>{value}</span>
     </span>
   )
   return (
@@ -84,8 +84,8 @@ function CallRow({ row, active, fx, onSelect }: { row: StatsCallRowDto; active: 
         active ? "bg-jolu-table-active" : "bg-jolu-bg hover:bg-jolu-side",
       )}
     >
-      <span className="tnum w-[76px] shrink-0 text-[10px] text-jolu-muted">{time(row.ts)}</span>
-      <span className="flex w-[196px] shrink-0 items-center gap-2" title={row.model ?? undefined}>
+      <span className="tnum w-[76px] shrink-0 text-[11px] text-jolu-muted">{time(row.ts)}</span>
+      <span className="flex w-[188px] shrink-0 items-center gap-2" title={row.model ?? undefined}>
         <span className="grid size-5 place-items-center"><PlatformLogo platform={row.platform as PlatformId} size={16} /></span>
         <span className="truncate text-xs font-medium text-jolu-text">{modelDisplayName(row.model)}</span>
       </span>
@@ -94,7 +94,7 @@ function CallRow({ row, active, fx, onSelect }: { row: StatsCallRowDto; active: 
       <Num value={row.output} className="w-[72px] shrink-0" />
       <Num value={row.total} className="w-[80px] shrink-0 font-semibold" />
       <span className={cn("tnum w-[84px] shrink-0 text-xs", row.cost === null ? "text-jolu-muted" : "font-semibold text-jolu-on")}>{formatMoney(convertFromUsd(row.cost, fx), fx.currency)}</span>
-      <span className="flex w-[124px] shrink-0 items-center gap-[7px]">
+      <span className="flex w-[132px] shrink-0 items-center gap-[7px]">
         <span className="h-11 w-[3px] rounded-sm bg-jolu-accent" />
         <span className="flex flex-col gap-px">
           {metric("首字", formatSeconds(row.first_token_ms), row.first_token_ms !== null)}
@@ -102,9 +102,9 @@ function CallRow({ row, active, fx, onSelect }: { row: StatsCallRowDto; active: 
           {metric("输出 TPS", tps === null ? DASH : `${tps.toFixed(1)} tok/s`, false)}
         </span>
       </span>
-      <span className={cn("w-[72px] shrink-0 text-[11px]", row.effort ? "text-jolu-text" : "text-jolu-muted")}>{effortLabel(row.effort)}</span>
+      <span className={cn("w-[72px] shrink-0 text-[12px]", row.effort ? "text-jolu-text" : "text-jolu-muted")}>{effortLabel(row.effort)}</span>
       <span className="w-[74px] shrink-0">
-        <span className={cn("inline-flex h-6 items-center rounded-full px-3 text-[11px] font-medium", status.ok ? "bg-jolu-status-success-bg text-jolu-on" : "bg-jolu-status-error-bg text-jolu-danger")}>
+        <span className={cn("inline-flex h-6 items-center rounded-full px-3 text-[12px] font-medium", status.ok ? "bg-jolu-status-success-bg text-jolu-on" : "bg-jolu-status-error-bg text-jolu-danger")}>
           {status.label}
         </span>
       </span>
@@ -120,19 +120,19 @@ function CallDetail({ row, fx, onOpenSession }: { row: StatsCallRowDto; fx: FxSt
     <Card className="flex flex-col gap-2 p-3">
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-sm font-semibold text-jolu-text">调用详情 · {time(row.ts)}</h3>
-        <span className="truncate text-[10px] text-jolu-muted" title={row.call_id}>{monthDay(row.ts)} · {row.call_id}</span>
+        <span className="truncate text-[11px] text-jolu-muted" title={row.call_id}>{monthDay(row.ts)} · {row.call_id}</span>
       </div>
       <div className="flex gap-6">
         {items.map(([label, value]) => (
           <div key={label} className="flex min-w-0 flex-1 flex-col gap-[5px]">
-            <span className="text-[10px] text-jolu-muted">{label}</span>
+            <span className="text-[11px] text-jolu-muted">{label}</span>
             <span className={cn("tnum text-lg font-semibold", value === null ? "text-jolu-muted" : "text-jolu-text")}>{formatTokens(value)}</span>
           </div>
         ))}
       </div>
       <CostBreakdown row={row} fx={fx} />
       <div className="flex items-center gap-4">
-        <span className="min-w-0 truncate text-[11px] text-jolu-muted">
+        <span className="min-w-0 truncate text-[12px] text-jolu-muted">
           来源：本机日志 · {row.cost === null ? "未计价" : `估算 ${formatMoney(convertFromUsd(row.cost, fx), fx.currency)}`}
         </span>
         <span className="flex-1" />

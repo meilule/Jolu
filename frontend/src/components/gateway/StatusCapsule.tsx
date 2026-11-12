@@ -18,7 +18,7 @@ export function StatusCapsule({ tone, label, size = "md", title, disabled, busy,
 }) {
   const className = cn(
     "inline-flex shrink-0 items-center whitespace-nowrap rounded-full border bg-jolu-bg font-semibold outline-none",
-    size === "md" ? "h-7 gap-[7px] px-3 text-[12px]" : "h-[22px] gap-[5px] px-2 text-[10.5px]",
+    size === "md" ? "h-7 gap-[7px] px-3 text-[12px]" : "h-[22px] gap-[5px] px-2 text-[11.5px]",
     tone === "on" ? "border-jolu-accent/45 text-jolu-on" : tone === "danger" ? "border-jolu-danger/40 text-jolu-danger" : "border-jolu-border text-jolu-muted",
     onClick && "motion-button cursor-pointer transition-colors hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-50",
     busy && "opacity-60",

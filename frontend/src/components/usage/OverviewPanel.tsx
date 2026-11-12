@@ -68,7 +68,7 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
           <div className="flex h-7 items-center justify-between">
             <div className="flex items-baseline gap-2">
               <h3 className="text-sm font-semibold text-jolu-text">{isToday ? "今日用量" : "用量趋势"}</h3>
-              <span className="text-[10px] text-jolu-muted">{bucketLabel(data.trend.bucket)}</span>
+              <span className="text-[11px] text-jolu-muted">{bucketLabel(data.trend.bucket)}</span>
             </div>
             <div role="radiogroup" aria-label="趋势指标" className="flex h-7 gap-0.5 rounded-[7px] bg-jolu-side p-[3px]">
               {MODES.map((m) => (
@@ -79,7 +79,7 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
                   aria-checked={mode === m.value}
                   onClick={() => setMode(m.value)}
                   className={cn(
-                    "h-[22px] rounded-[5px] px-2.5 text-[10px] outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent",
+                    "h-[22px] rounded-[5px] px-2.5 text-[11px] outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent",
                     mode === m.value ? "bg-jolu-selected font-semibold text-jolu-on" : "text-jolu-muted hover:text-jolu-text",
                   )}
                 >
@@ -104,7 +104,7 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
                 onClick={() => onDrillModel(m)}
                 className="-mx-1 -my-0.5 flex flex-col gap-1.5 rounded-md px-1 py-0.5 text-left outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent"
               >
-                <span className="flex w-full justify-between gap-2 text-[11px] leading-[13px]">
+                <span className="flex w-full justify-between gap-2 text-[12px] leading-[13px]">
                   <span className="truncate text-jolu-text">{modelDisplayName(m.model)}</span>
                   <span className="tnum shrink-0 text-jolu-muted">{formatTokens(m.tokens)} · {formatPercent(ratio)}</span>
                 </span>
@@ -114,7 +114,7 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
               </button>
             )
           }) : <span className="text-xs text-jolu-muted">范围内没有带模型名的记录</span>}
-          <span className="mt-auto text-[10px] leading-3 text-jolu-muted">点击模型查看对应调用明细</span>
+          <span className="mt-auto text-[11px] leading-3 text-jolu-muted">点击模型查看对应调用明细</span>
         </Card>
       </div>
 
@@ -125,11 +125,11 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
             <div key={p.platform} className="flex h-7 items-center gap-2.5 text-xs">
               <span className="min-w-0 flex-1 truncate text-jolu-text">{providerName(p.platform)}</span>
               <span className="tnum text-jolu-text">{formatTokens(p.tokens)}</span>
-              <span className="tnum w-16 text-right text-[11px] text-jolu-muted">{p.requests} 次</span>
+              <span className="tnum w-16 text-right text-[12px] text-jolu-muted">{p.requests} 次</span>
             </div>
           ))}
           <span className="flex-1" />
-          <span className="text-[10px] text-jolu-muted">{data.attributed} / {data.requests} 次可归属账号 · {unattributed} 次未归属</span>
+          <span className="text-[11px] text-jolu-muted">{data.attributed} / {data.requests} 次可归属账号 · {unattributed} 次未归属</span>
         </Card>
 
         <Card className="flex min-h-[268px] flex-col gap-1.5 p-4">
@@ -140,7 +140,7 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
               <ChevronRight aria-hidden className="size-3.5" />
             </button>
           </div>
-          <span className="text-[10px] text-jolu-muted">当前筛选范围 · 按 Token 排序</span>
+          <span className="text-[11px] text-jolu-muted">当前筛选范围 · 按 Token 排序</span>
           <div className="flex flex-col gap-0.5">
             {data.sessions.length ? data.sessions.map((s, index) => (
               <button
@@ -149,11 +149,11 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
                 onClick={() => onOpenSession({ platform: s.platform, sessionId: s.session_id })}
                 className="flex h-[34px] items-center gap-2.5 rounded-lg px-1.5 text-left outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent"
               >
-                <span className={cn("tnum w-4 text-[11px] font-semibold", index === 0 ? "text-jolu-on" : "text-jolu-muted")}>{String(index + 1).padStart(2, "0")}</span>
+                <span className={cn("tnum w-4 text-[12px] font-semibold", index === 0 ? "text-jolu-on" : "text-jolu-muted")}>{String(index + 1).padStart(2, "0")}</span>
                 <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
                   <span className="truncate text-xs font-medium text-jolu-text">{s.title ?? `会话 ${s.session_id.slice(0, 8)}`}</span>
                   {/* 画板 30：「项目 · 供应商」；读不到项目目录时只显示供应商，不猜项目 */}
-                  <span className="truncate text-[10px] text-jolu-muted">{s.cwd ? `${projectName(s.cwd)} · ${providerName(s.platform)}` : providerName(s.platform)}</span>
+                  <span className="truncate text-[11px] text-jolu-muted">{s.cwd ? `${projectName(s.cwd)} · ${providerName(s.platform)}` : providerName(s.platform)}</span>
                 </span>
                 <span className="tnum text-xs font-semibold text-jolu-text">{formatTokens(s.tokens)}</span>
                 <ChevronRight aria-hidden className="size-3.5 text-jolu-muted" />
@@ -162,7 +162,7 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
           </div>
         </Card>
       </div>
-      <p className="text-[11px] text-jolu-muted">本机统计不等于服务方账单；费用仅汇总已计价记录；缓存四项按互斥口径统计。</p>
+      <p className="text-[12px] text-jolu-muted">本机统计不等于服务方账单；费用仅汇总已计价记录；缓存四项按互斥口径统计。</p>
     </>
   )
 }

@@ -65,7 +65,7 @@ export function SettingsPage({ section, navigationRequest, onOpenSkills }: {
       </header>
 
       {cfg.error && (
-        <div role="alert" className="-mt-2 flex items-center justify-between gap-3 rounded-[9px] bg-jolu-danger-soft px-3.5 py-2.5 text-[11px] text-jolu-danger">
+        <div role="alert" className="-mt-2 flex items-center justify-between gap-3 rounded-[9px] bg-jolu-danger-soft px-3.5 py-2.5 text-[12px] text-jolu-danger">
           <span className="flex items-center gap-2"><CircleAlert aria-hidden className="size-4 shrink-0" />{cfg.error}。已保留原值。</span>
           <button type="button" disabled={cfg.loading || cfg.saving} onClick={() => void cfg.reload()} className="shrink-0 rounded-md px-2 py-1 font-medium outline-none hover:bg-jolu-danger-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent">
             重新读取
@@ -138,7 +138,7 @@ function SaveStatus({ state }: { state: ReturnType<typeof saveState> }) {
   const Icon = state === "saving" ? LoaderCircle : state === "dirty" ? CircleDot : CircleAlert
   return (
     <span role="status" className={cn(
-      "flex items-center gap-1.5 text-[11px]",
+      "flex items-center gap-1.5 text-[12px]",
       state === "failed" ? "text-jolu-danger" : "text-jolu-muted",
     )}>
       <Icon aria-hidden className={cn("size-3.5", state === "saving" && "animate-spin")} />

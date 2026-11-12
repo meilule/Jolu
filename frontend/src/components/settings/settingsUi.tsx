@@ -21,7 +21,7 @@ export function SettingsGroup({ icon: Icon, title, desc, children, className }: 
         )}
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <h3 className="text-sm font-semibold text-jolu-text">{title}</h3>
-          {desc && <span className="text-[11px] text-jolu-muted">{desc}</span>}
+          {desc && <span className="text-[12px] text-jolu-muted">{desc}</span>}
         </span>
       </header>
       {children}
@@ -41,7 +41,7 @@ export function SettingsRow({ title, desc, control, className, descClassName }: 
     <div className={cn("flex min-h-[66px] items-center gap-5 border-t border-jolu-border py-3", className)}>
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <span className="text-[13px] font-medium text-jolu-text">{title}</span>
-        {desc && <span className={cn("text-[11px] text-jolu-muted", descClassName)}>{desc}</span>}
+        {desc && <span className={cn("text-[12px] text-jolu-muted", descClassName)}>{desc}</span>}
       </div>
       {control && <div className="flex shrink-0 items-center gap-2">{control}</div>}
     </div>
@@ -142,13 +142,13 @@ export function Segmented<T extends string>({ items, value, onChange, label, dis
 
 /** 画了但暂未接入的能力：入口旁标注「待接入」 */
 export function PendingBadge({ children = "待接入" }: { children?: ReactNode }) {
-  return <span className="inline-flex h-5 shrink-0 items-center rounded-[5px] bg-jolu-side px-1.5 text-[10px] font-normal text-jolu-muted">{children}</span>
+  return <span className="inline-flex h-5 shrink-0 items-center rounded-[5px] bg-jolu-side px-1.5 text-[11px] font-normal text-jolu-muted">{children}</span>
 }
 
 /** 说明提示：side 底、圆角 9、内边距 14 */
 export function Notice({ children, tone = "info", className }: { children: ReactNode; tone?: "info" | "danger"; className?: string }) {
   return (
-    <div className={cn("flex items-start gap-2.5 rounded-[9px] p-3.5 text-[11px]", tone === "danger" ? "bg-jolu-danger-soft text-jolu-danger" : "bg-jolu-side text-jolu-muted", className)}>
+    <div className={cn("flex items-start gap-2.5 rounded-[9px] p-3.5 text-[12px]", tone === "danger" ? "bg-jolu-danger-soft text-jolu-danger" : "bg-jolu-side text-jolu-muted", className)}>
       <Info aria-hidden className="mt-px size-4 shrink-0" />
       <div className="min-w-0 flex-1">{children}</div>
     </div>

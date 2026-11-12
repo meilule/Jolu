@@ -73,7 +73,7 @@ export function ExportDialog({ onClose: onDismiss }: { onClose: () => void }) {
           {range ? rangeLabel(range) : "全部日期"}
         </ActionButton>
       </div>
-      <p className="rounded-[9px] bg-jolu-side p-3.5 text-[11px] text-jolu-muted">导出文件不包含 API Key、登录凭证和原始会话正文。</p>
+      <p className="rounded-[9px] bg-jolu-side p-3.5 text-[12px] text-jolu-muted">导出文件不包含 API Key、登录凭证和原始会话正文。</p>
       <div className="flex justify-end gap-2">
         <ActionButton disabled={busy} onClick={onClose}>取消</ActionButton>
         <ActionButton tone="accent" icon={<Download aria-hidden className="size-3.5" />} busy={busy} disabled={!isTauri} onClick={run}>导出数据</ActionButton>
@@ -137,7 +137,7 @@ export function CleanupDialog({ initialDays, onClose: onDismiss, onExport, onDon
         <div className="flex min-h-[72px] items-center gap-5 border-t border-jolu-border">
           <span className="flex flex-1 flex-col gap-1.5">
             <span className="text-[13px] font-medium text-jolu-text">保留最近</span>
-            <span className="text-[11px] text-jolu-muted">此日期之前的数据将被清理。</span>
+            <span className="text-[12px] text-jolu-muted">此日期之前的数据将被清理。</span>
           </span>
           <SelectButton label="保留最近" value={String(days)} disabled={busy} onChange={(v) => setDays(Number(v))}
             options={RETENTION_OPTIONS.map((n) => ({ value: String(n), label: `${n} 天` }))} />
@@ -145,29 +145,29 @@ export function CleanupDialog({ initialDays, onClose: onDismiss, onExport, onDon
         <div className="flex min-h-[72px] items-center gap-5 border-t border-jolu-border">
           <span className="flex flex-1 flex-col gap-1.5">
             <span className="text-[13px] font-medium text-jolu-text">截止日期</span>
-            <span className="text-[11px] text-jolu-muted">根据当前日期与时区计算。</span>
+            <span className="text-[12px] text-jolu-muted">根据当前日期与时区计算。</span>
           </span>
           <span className="tnum text-xs text-jolu-muted">{cleanupCutoffDate(days, new Date(), preview?.cutoff_ms)}</span>
         </div>
       </section>
       <div className="grid grid-cols-2 gap-3 rounded-[10px] bg-jolu-side p-4">
         <span className="flex flex-col gap-1.5">
-          <span className="text-[11px] text-jolu-muted">请求记录</span>
+          <span className="text-[12px] text-jolu-muted">请求记录</span>
           <span className="tnum text-[22px] font-semibold text-jolu-text">{count === null ? (error ? "—" : "读取中…") : `${formatCount(count)} 条`}</span>
         </span>
         <span className="flex flex-col gap-1.5">
-          <span className="text-[11px] text-jolu-muted">预计释放</span>
+          <span className="text-[12px] text-jolu-muted">预计释放</span>
           <span className="tnum text-[22px] font-semibold text-jolu-text">—</span>
-          <span className="text-[10px] text-jolu-muted">数据库文件不会立即缩小，释放量待确认</span>
+          <span className="text-[11px] text-jolu-muted">数据库文件不会立即缩小，释放量待确认</span>
         </span>
       </div>
-      {error && <p role="alert" className="text-[11px] text-jolu-danger">清理预览失败：{error}</p>}
-      {preview && <p className="-mt-2 text-[11px] text-jolu-muted">同时删除 {formatCount(preview.usage_events)} 条增量事件、{formatCount(preview.sessions)} 条已结束会话信息。</p>}
-      <div className="flex items-start gap-2.5 rounded-[9px] bg-jolu-danger-soft p-3.5 text-[11px] text-jolu-danger">
+      {error && <p role="alert" className="text-[12px] text-jolu-danger">清理预览失败：{error}</p>}
+      {preview && <p className="-mt-2 text-[12px] text-jolu-muted">同时删除 {formatCount(preview.usage_events)} 条增量事件、{formatCount(preview.sessions)} 条已结束会话信息。</p>}
+      <div className="flex items-start gap-2.5 rounded-[9px] bg-jolu-danger-soft p-3.5 text-[12px] text-jolu-danger">
         <CircleAlert aria-hidden className="size-4 shrink-0" />
         删除后无法撤销；原始会话文件、账号与 Skills 均会保留。
       </div>
-      <p className="-mt-1 text-[11px] text-jolu-muted">采集位置会保留，旧日志不会在下一轮重新导入。</p>
+      <p className="-mt-1 text-[12px] text-jolu-muted">采集位置会保留，旧日志不会在下一轮重新导入。</p>
       <button type="button" role="checkbox" aria-checked={confirmed} disabled={busy || !preview} onClick={() => setConfirmed((v) => !v)}
         className="flex items-center gap-2 self-start rounded-md text-xs text-jolu-text outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
         {confirmed ? <SquareCheck aria-hidden className="size-4 text-jolu-on" /> : <Square aria-hidden className="size-4 text-jolu-muted" />}

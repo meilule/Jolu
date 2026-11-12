@@ -283,7 +283,7 @@ export function ConnectDialog({ platform: initialPlatform, actions, onClose: onD
               <span className="grid size-7 place-items-center"><PlatformLogo platform={provider} size={22} /></span>
               <span className="text-sm font-semibold text-jolu-text">{entry.name}</span>
               <span className="flex-1" />
-              {!tabs && !custom && <span className="rounded-[5px] bg-jolu-stage px-2 py-1 text-[11px] text-jolu-muted">{mode === "subscription" ? "当前仅订阅" : "当前仅 API Key"}</span>}
+              {!tabs && !custom && <span className="rounded-[5px] bg-jolu-stage px-2 py-1 text-[12px] text-jolu-muted">{mode === "subscription" ? "当前仅订阅" : "当前仅 API Key"}</span>}
               <PlatformSwitcher
                 current={provider}
                 onPick={(next) => {
@@ -402,7 +402,7 @@ export function ConnectDialog({ platform: initialPlatform, actions, onClose: onD
                 </Field>
                 <div className="flex flex-col gap-2">
                   {custom && manualModel && modelError && !fetching && (
-                    <div role="alert" className="flex items-center gap-2.5 rounded-lg bg-jolu-danger-soft px-2.5 py-2 text-[11px] text-jolu-danger">
+                    <div role="alert" className="flex items-center gap-2.5 rounded-lg bg-jolu-danger-soft px-2.5 py-2 text-[12px] text-jolu-danger">
                       <CircleAlert aria-hidden className="size-3.5 shrink-0" />
                       <span className="min-w-0 flex-1 break-all">{modelFetchErrorText(modelError)}</span>
                     </div>
@@ -445,18 +445,18 @@ export function ConnectDialog({ platform: initialPlatform, actions, onClose: onD
                           <JoluButton size="sm" variant="soft" disabled={fetching || verifying} onClick={() => void verifyModel()}>继续验证</JoluButton>
                         </div>
                       )}
-                      <span role={verifyResult?.ok === false ? "alert" : "status"} className={cn("flex items-center gap-1.5 text-[11px]", verifyResult ? verifyResult.ok ? "text-jolu-on" : "text-jolu-danger" : "text-jolu-muted")}>
+                      <span role={verifyResult?.ok === false ? "alert" : "status"} className={cn("flex items-center gap-1.5 text-[12px]", verifyResult ? verifyResult.ok ? "text-jolu-on" : "text-jolu-danger" : "text-jolu-muted")}>
                         {verifyResult?.ok && <CircleCheck aria-hidden className="size-3.5 shrink-0" />}
                         {verifying ? "正在验证模型，请等待服务返回…" : verifyResult?.message ?? "未验证 · 验证模型通过后才能保存连接。"}
                       </span>
                     </>
                   )}
                   {fetching ? (
-                    <span role="status" className="flex items-center gap-1.5 text-[11px] text-jolu-muted">
+                    <span role="status" className="flex items-center gap-1.5 text-[12px] text-jolu-muted">
                       <LoaderCircle aria-hidden className="size-3 animate-spin" />正在获取可用模型…等待接口返回，请勿重复提交。
                     </span>
                   ) : modelError && !(custom && manualModel) ? (
-                    <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+                    <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
                       <span className="text-jolu-danger">获取失败：{modelError}</span>
                       {!manualModel && canEnterManualModel(platform, modelError) && (
                         <button type="button" onClick={() => { setManualModel(true); setModel("") }} className="font-medium text-jolu-on hover:underline">
@@ -465,7 +465,7 @@ export function ConnectDialog({ platform: initialPlatform, actions, onClose: onD
                       )}
                     </div>
                   ) : (
-                    <span className="text-[11px] text-jolu-muted">
+                    <span className="text-[12px] text-jolu-muted">
                       {custom
                         ? (manualModel ? "手填模型后即可保存，作为接口可达的依据；可再次点击「获取模型」改回从列表选择。" : "填写地址与密钥后点击「获取模型」，再从下拉框选择；模型接口不可用时改为手填模型 ID。")
                         : manualModel ? platform === "zcode" ? "模型接口不支持枚举时手动填写；验证当前模型后再保存。" : "模型接口不支持枚举时手动填写；保存时会验证地址与密钥。" : "填写地址与密钥后点击「获取模型」，再从下拉框选择；修改后需重新获取。"}
@@ -540,8 +540,8 @@ function SubscriptionSection({ providerName, detecting, detection, onDetect, tab
             <Info label="凭证标识" value={detection.masked ?? "未获取"} />
             <Info label="套餐" value={detection.plan ?? "未获取"} />
           </div>
-          <span className="text-[11px] text-jolu-muted">{browserReady ? "账号已通过官方身份验证；套餐与额度按平台实际能力显示。" : "账号与套餐以本机客户端记录为准，未记录时显示「未获取」。"}</span>
-          {browserReady && detection.message && <span className="text-[11px] leading-relaxed text-jolu-muted">{detection.message}</span>}
+          <span className="text-[12px] text-jolu-muted">{browserReady ? "账号已通过官方身份验证；套餐与额度按平台实际能力显示。" : "账号与套餐以本机客户端记录为准，未记录时显示「未获取」。"}</span>
+          {browserReady && detection.message && <span className="text-[12px] leading-relaxed text-jolu-muted">{detection.message}</span>}
         </div>
         <div className="flex gap-2.5">
           {detectButton}
@@ -570,7 +570,7 @@ function SubscriptionSection({ providerName, detecting, detection, onDetect, tab
           <span role="status" className="text-xs text-jolu-muted">{browserPending ? browserMessage ?? "请在系统默认浏览器完成官方登录，验证成功后会自动返回。" : detection?.message ?? "读取或授权成功后才能保存连接。"}</span>
         </div>
       </div>
-      <p className="text-[11px] text-jolu-muted">Jolu 不要求输入账号密码。账号与套餐信息以检测结果为准。</p>
+      <p className="text-[12px] text-jolu-muted">Jolu 不要求输入账号密码。账号与套餐信息以检测结果为准。</p>
     </>
   )
 }
@@ -598,7 +598,7 @@ function ProtocolPicker({ value, onChange }: { value: ApiProtocol; onChange: (pr
           </button>
         ))}
       </div>
-      <span className="text-[11px] text-jolu-muted">决定请求格式与鉴权方式：OpenAI 兼容使用 Bearer，Anthropic 兼容使用 x-api-key。</span>
+      <span className="text-[12px] text-jolu-muted">决定请求格式与鉴权方式：OpenAI 兼容使用 Bearer，Anthropic 兼容使用 x-api-key。</span>
     </div>
   )
 }
@@ -632,7 +632,7 @@ function PlatformSwitcher({ current, onPick }: { current: ProviderId; onPick: (p
               >
                 <PlatformLogo platform={item.id} />
                 <span className="min-w-0 flex-1">{item.name}</span>
-                {pending ? <span className="text-[11px] text-jolu-muted">待接入</span> : item.id === current && <Check aria-hidden className="size-3.5 text-jolu-on" />}
+                {pending ? <span className="text-[12px] text-jolu-muted">待接入</span> : item.id === current && <Check aria-hidden className="size-3.5 text-jolu-on" />}
               </Menu.Item>
             )
           })}
@@ -705,7 +705,7 @@ export function ModelPicker({ models, value, onChange }: { models: string[]; val
               placeholder="搜索模型"
               aria-label="搜索模型"
               aria-activedescendant={visible[active] ? `${listId}-${active}` : undefined}
-              className="min-w-0 flex-1 bg-transparent text-[11px] text-jolu-text outline-none placeholder:text-jolu-muted"
+              className="min-w-0 flex-1 bg-transparent text-[12px] text-jolu-text outline-none placeholder:text-jolu-muted"
             />
           </label>
           <ul id={listId} role="listbox" aria-label="模型" className="max-h-[196px] overflow-y-auto">
@@ -726,7 +726,7 @@ export function ModelPicker({ models, value, onChange }: { models: string[]; val
                 {item === value && <Check aria-hidden className="size-[15px] shrink-0" />}
               </li>
             ))}
-            {!visible.length && <li className="px-2 py-1.5 text-[11px] text-jolu-muted">没有匹配的模型</li>}
+            {!visible.length && <li className="px-2 py-1.5 text-[12px] text-jolu-muted">没有匹配的模型</li>}
           </ul>
         </div>
       )}
@@ -740,7 +740,7 @@ function Field({ label, hint, error, children }: { label: string; hint?: string;
     <div className="flex flex-col gap-[7px]">
       <label htmlFor={id} className="text-xs font-medium text-jolu-text">{label}</label>
       {children(id)}
-      {error ? <span className="text-[11px] text-jolu-danger">{error}</span> : hint && <span className="text-[11px] text-jolu-muted">{hint}</span>}
+      {error ? <span className="text-[12px] text-jolu-danger">{error}</span> : hint && <span className="text-[12px] text-jolu-muted">{hint}</span>}
     </div>
   )
 }

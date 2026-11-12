@@ -96,7 +96,7 @@ export function ImportDialog({ onClose: onDismiss }: { onClose: () => void }) {
               </div>
             )}
             {phase === "error" && (
-              <div role="alert" className="flex items-start gap-2.5 rounded-[9px] bg-jolu-danger-soft p-3.5 text-[11px] text-jolu-danger">
+              <div role="alert" className="flex items-start gap-2.5 rounded-[9px] bg-jolu-danger-soft p-3.5 text-[12px] text-jolu-danger">
                 <AlertTriangle aria-hidden className="mt-px size-4 shrink-0" />
                 <span className="min-w-0 flex-1 leading-[1.6]">扫描失败：{scanError}</span>
                 <button
@@ -115,14 +115,14 @@ export function ImportDialog({ onClose: onDismiss }: { onClose: () => void }) {
                   {groups.map((group) => <SourceGroup key={group.source} group={group} selected={selected} busy={applying} onToggle={(reference) => setSelected((current) => toggleReference(current, reference))} />)}
                 </div>
                 {total === 0 && (
-                  <p className="text-[10.5px] text-jolu-muted">Jolu 自己接线写入这些文件的网关地址会被自动跳过，不会重复导入。</p>
+                  <p className="text-[11.5px] text-jolu-muted">Jolu 自己接线写入这些文件的网关地址会被自动跳过，不会重复导入。</p>
                 )}
               </>
             )}
           </div>
 
           <div className="flex items-center gap-3 border-t border-jolu-border pt-4">
-            <span className="text-[11px] text-jolu-muted">{selected.size > 0 ? `已选 ${selected.size} / ${total} 个` : "勾选要导入的条目"}</span>
+            <span className="text-[12px] text-jolu-muted">{selected.size > 0 ? `已选 ${selected.size} / ${total} 个` : "勾选要导入的条目"}</span>
             <span className="flex-1" />
             <JoluButton variant="outline" disabled={applying} onClick={onClose}>取消</JoluButton>
             <JoluButton variant="primary" disabled={applying || selected.size === 0} onClick={apply}>
@@ -149,7 +149,7 @@ function SourceGroup({ group, selected, busy, onToggle }: {
       <header className="flex items-center gap-2 pb-1.5">
         <span className="text-[13px] font-semibold text-jolu-text">{group.label}</span>
         {group.drafts.length > 0 && (
-          <span className="rounded-[5px] bg-jolu-side px-1.5 text-[10px] leading-[18px] text-jolu-muted">{group.drafts.length} 条</span>
+          <span className="rounded-[5px] bg-jolu-side px-1.5 text-[11px] leading-[18px] text-jolu-muted">{group.drafts.length} 条</span>
         )}
       </header>
       {group.drafts.length > 0 && (
@@ -168,18 +168,18 @@ function SourceGroup({ group, selected, busy, onToggle }: {
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <span className="flex min-w-0 items-center gap-2">
                     <span className="min-w-0 truncate text-xs font-medium text-jolu-text">{draft.name}</span>
-                    <span className="shrink-0 rounded-[5px] bg-jolu-side px-1.5 py-px text-[10px] leading-[16px] text-jolu-muted">{protocolLabel(draft.protocol)}</span>
+                    <span className="shrink-0 rounded-[5px] bg-jolu-side px-1.5 py-px text-[11px] leading-[16px] text-jolu-muted">{protocolLabel(draft.protocol)}</span>
                   </span>
-                  <span className="truncate text-[10.5px] text-jolu-muted">{draft.from} · {draft.baseUrl}</span>
+                  <span className="truncate text-[11.5px] text-jolu-muted">{draft.from} · {draft.baseUrl}</span>
                 </span>
-                <span className="shrink-0 pt-0.5 font-mono text-[10.5px] tabular-nums text-jolu-muted">{draft.keyMasked}</span>
+                <span className="shrink-0 pt-0.5 font-mono text-[11.5px] tabular-nums text-jolu-muted">{draft.keyMasked}</span>
               </label>
             </li>
           ))}
         </ul>
       )}
       {group.errors.map((error, index) => (
-        <p key={index} className="flex items-start gap-2 py-2 text-[10.5px] leading-[1.6] text-jolu-danger">
+        <p key={index} className="flex items-start gap-2 py-2 text-[11.5px] leading-[1.6] text-jolu-danger">
           <AlertTriangle aria-hidden className="mt-px size-3.5 shrink-0" />
           <span className="min-w-0 flex-1">读取失败：{error}</span>
         </p>
@@ -193,12 +193,12 @@ function EmptyGuidance() {
   return (
     <div className="flex flex-col gap-2.5 rounded-xl bg-jolu-side p-4">
       <span className="text-xs font-medium text-jolu-text">没有找到可导入的上游</span>
-      <p className="text-[11px] leading-[1.6] text-jolu-muted">Jolu 会读取以下本机配置里的地址与密钥，只读原文：</p>
+      <p className="text-[12px] leading-[1.6] text-jolu-muted">Jolu 会读取以下本机配置里的地址与密钥，只读原文：</p>
       <ul className="flex flex-col gap-1.5">
         {SOURCE_PATHS.map((entry) => (
-          <li key={entry.label} className="flex items-baseline gap-2 text-[11px]">
+          <li key={entry.label} className="flex items-baseline gap-2 text-[12px]">
             <span className="w-[84px] shrink-0 text-jolu-text">{entry.label}</span>
-            <code className="min-w-0 truncate font-mono text-[10.5px] text-jolu-muted">{entry.path}</code>
+            <code className="min-w-0 truncate font-mono text-[11.5px] text-jolu-muted">{entry.path}</code>
           </li>
         ))}
       </ul>

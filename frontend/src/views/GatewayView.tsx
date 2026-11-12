@@ -340,7 +340,7 @@ export function GatewayView() {
           <h1 className="text-[22px] font-semibold text-jolu-text">统一网关</h1>
           <p className="max-w-[660px] text-xs text-jolu-muted">模型来源直连最近会话，实时查看 AI 正在处理的任务。</p>
         </div>
-        <button ref={accessTrigger} type="button" onClick={() => setDialog({ kind: "wiring" })} className="jolu-control motion-button flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-cc-surface px-[11px] text-[11.5px] text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
+        <button ref={accessTrigger} type="button" onClick={() => setDialog({ kind: "wiring" })} className="jolu-control motion-button flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-cc-surface px-[11px] text-[12px] text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
           <Cable aria-hidden className="h-3.5 w-3.5" />
           接入设置
         </button>
@@ -363,14 +363,14 @@ export function GatewayView() {
           </select>
         </label>
         <button type="button" aria-pressed={onlyServing} onClick={() => setOnlyServing((value) => !value)}
-          className={cn("flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-[11px] outline-none transition-colors focus-visible:outline-2 focus-visible:outline-jolu-accent", onlyServing ? "bg-jolu-selected text-jolu-on" : "text-jolu-muted hover:text-jolu-text")}>
+          className={cn("flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-[12px] outline-none transition-colors focus-visible:outline-2 focus-visible:outline-jolu-accent", onlyServing ? "bg-jolu-selected text-jolu-on" : "text-jolu-muted hover:text-jolu-text")}>
           <span className={cn("size-[5px] rounded-full", onlyServing ? "bg-jolu-accent" : "bg-jolu-border")} />
           仅看已接入
         </button>
         <div className="flex-1" />
         {/* 默认来源：无前缀模型名（Claude Code 自带的 claude-*、或用户手写的 GLM-5.3-Flash）
             只能靠它兜底，否则网关一律以「未带来源前缀」拒绝。所以放在主工具栏上，不藏进弹窗。 */}
-        <label className="flex h-9 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-2.5 text-[11.5px]"
+        <label className="flex h-9 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-2.5 text-[12px]"
           title="不带「来源/」前缀的模型名会落到这里；不设置时这类请求会被拒绝">
           <span className="shrink-0 text-jolu-muted">默认来源</span>
           <select value={status?.default_connection ?? ""} disabled={busy || serving.length === 0}
@@ -379,7 +379,7 @@ export function GatewayView() {
               const next = event.target.value || null
               void run(() => gatewayApi.setDefaultSource(next), next ? "已设置默认来源" : "已清除默认来源", true)
             }}
-            className="max-w-[150px] bg-transparent text-[11.5px] text-jolu-text outline-none disabled:opacity-50">
+            className="max-w-[150px] bg-transparent text-[12px] text-jolu-text outline-none disabled:opacity-50">
             <option value="">未设置</option>
             {serving.map((connection) => (
               <option key={connection.id} value={connection.id}>{connection.name}</option>
@@ -387,17 +387,17 @@ export function GatewayView() {
           </select>
         </label>
         <button type="button" onClick={() => setDialog({ kind: "shared" })} title="局域网共享与客户端 Key（待确认）"
-          className="jolu-control motion-button flex h-9 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-[11.5px] text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
+          className="jolu-control motion-button flex h-9 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-[12px] text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
           <Network aria-hidden className="size-3.5 text-jolu-muted" />
           局域网共享
         </button>
         <button type="button" onClick={() => setDialog({ kind: "middleware" })} title="选路前改写请求：模型改名、参数覆盖、系统提示、敏感词、思考段（待确认）"
-          className="jolu-control motion-button flex h-9 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-[11.5px] text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
+          className="jolu-control motion-button flex h-9 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-[12px] text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
           <Layers aria-hidden className="size-3.5 text-jolu-muted" />
           中间件
         </button>
         <button type="button" onClick={() => setDialog({ kind: "manage" })} title="加入 / 移出模型池、改名与菜单 id、分组与排序"
-          className="jolu-control motion-button flex h-9 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-[11.5px] text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
+          className="jolu-control motion-button flex h-9 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-[12px] text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
           <Settings2 aria-hidden className="size-3.5 text-jolu-muted" />
           管理来源
         </button>
@@ -412,10 +412,10 @@ export function GatewayView() {
 
       <section className="flex min-h-16 shrink-0 items-center gap-2.5 rounded-xl bg-jolu-cc-surface px-5">
         <ShieldAlert aria-hidden className="size-[15px] shrink-0 text-jolu-on" />
-        <span className="text-[10.5px] text-jolu-muted">只监听本机回环 · {circuitText(status)} · 停止接入不会删除账号、Key 或历史记录。</span>
+        <span className="text-[11.5px] text-jolu-muted">只监听本机回环 · {circuitText(status)} · 停止接入不会删除账号、Key 或历史记录。</span>
         <div className="flex-1" />
         <button type="button" disabled={busy || !canEscape(status) || !isTauri} onClick={() => void run(() => gatewayApi.escape(), "已切回直连")}
-          className="motion-button h-[30px] shrink-0 rounded-lg bg-jolu-cc-surface px-3 text-[10.5px] text-jolu-danger outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-40">
+          className="motion-button h-[30px] shrink-0 rounded-lg bg-jolu-cc-surface px-3 text-[11.5px] text-jolu-danger outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-40">
           紧急切回直连
         </button>
       </section>

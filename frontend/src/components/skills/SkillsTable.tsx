@@ -33,7 +33,7 @@ export function SkillsTable({ items, total, selected, busy, showPlatform, onSele
   const HeadBox = picked === 0 ? Square : picked === items.length ? SquareCheck : SquareMinus
   return (
     <section className="jolu-card overflow-hidden rounded-xl border border-jolu-border bg-jolu-cc-surface">
-      <div className={cn(COLS, "h-10 bg-jolu-side px-3.5 text-[11px] font-medium text-jolu-muted")}>
+      <div className={cn(COLS, "h-10 bg-jolu-side px-3.5 text-[12px] font-medium text-jolu-muted")}>
         <button type="button" aria-label={picked ? "取消全选" : "全选当前结果"} onClick={() => onSelectAll(picked === 0)} className="grid size-5 place-items-center rounded outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent">
           <HeadBox aria-hidden className={cn("size-3.5", picked ? "text-jolu-on" : "text-jolu-muted")} />
         </button>
@@ -60,13 +60,13 @@ export function SkillsTable({ items, total, selected, busy, showPlatform, onSele
               <SkillIcon item={item} />
               <span className="flex min-w-0 flex-col gap-1">
                 <span className="truncate text-xs font-semibold text-jolu-text">{item.name}</span>
-                <span className="truncate text-[10px] text-jolu-muted" title={item.issue ?? item.description ?? undefined}>
+                <span className="truncate text-[11px] text-jolu-muted" title={item.issue ?? item.description ?? undefined}>
                   {showPlatform && `${providerName(item.platform)} · `}{item.issue ?? item.description ?? "没有描述"}
                 </span>
               </span>
             </button>
             <span className="min-w-0"><Tag title={item.project ?? undefined}>{scopeLabel(item)}</Tag></span>
-            <span className="truncate text-[11px] text-jolu-muted">{sourceLabel(item.source)}</span>
+            <span className="truncate text-[12px] text-jolu-muted">{sourceLabel(item.source)}</span>
             <span className="min-w-0">
               <Tag tone={item.status === "enabled" ? "on" : (item.status === "disabled" || item.status === "unknown") ? "muted" : "danger"} title={item.issue ?? undefined}>{statusLabel(item.status)}</Tag>
             </span>
@@ -101,7 +101,7 @@ export function SkillsTable({ items, total, selected, busy, showPlatform, onSele
           </div>
         )
       })}
-      <div className="flex h-11 items-center justify-between border-t border-jolu-border px-4 text-[11px] text-jolu-muted">
+      <div className="flex h-11 items-center justify-between border-t border-jolu-border px-4 text-[12px] text-jolu-muted">
         <span>共 {total} 个安装项{items.length !== total && ` · 当前显示 ${items.length} 个`} · 按目录区分同名 Skill</span>
         <span>{picked ? `已选择 ${picked} 个` : "勾选后可批量管理"}</span>
       </div>

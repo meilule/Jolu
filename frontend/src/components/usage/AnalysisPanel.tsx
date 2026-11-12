@@ -45,7 +45,7 @@ export function AnalysisPanel({ data, activity, activityError, fx, onDrillModel,
         <MetricCard icon={<HardDriveUpload />} label="缓存写入" value={formatTokens(t.cache_write ?? t.cache_write_known ?? null)} note={coverage(t.cache_write, t.cache_write_known, t.cache_write_unknown, "新建缓存")} />
       </MetricGrid>
       {(t.total == null && data.requests > 0) && (
-        <p className="text-[11px] text-jolu-muted">
+        <p className="text-[12px] text-jolu-muted">
           {`当前范围内 ${data.requests} 次调用中，部分来源（如 ZCode）未提供完整分项，卡片显示的是已知部分小计；模型消耗表按各来源已知值汇总。`}
         </p>
       )}
@@ -55,7 +55,7 @@ export function AnalysisPanel({ data, activity, activityError, fx, onDrillModel,
       <div className="grid min-h-[344px] grid-cols-[minmax(0,644fr)_minmax(0,348fr)] gap-4">
         <Card className="flex flex-col gap-2 p-4">
           <CardTitle title="模型消耗与估算费用" note="按费用降序 ↓" />
-          <div className="flex h-6 items-center gap-2.5 rounded-[5px] bg-jolu-side px-2.5 text-[10px] text-jolu-muted">
+          <div className="flex h-6 items-center gap-2.5 rounded-[5px] bg-jolu-side px-2.5 text-[11px] text-jolu-muted">
             <span className="min-w-0 flex-1">模型</span>
             <span className="w-14 text-right">调用次数</span>
             <span className="w-16 text-right">Token</span>
@@ -84,13 +84,13 @@ export function AnalysisPanel({ data, activity, activityError, fx, onDrillModel,
           ))}
           {!models.length && <span className="py-2 text-xs text-jolu-muted">范围内没有模型记录</span>}
           <span className="flex-1" />
-          <span className="text-[10px] text-jolu-muted">未计价显示 — · 平均响应只统计经本地代理的请求 · 点击模型查看明细</span>
+          <span className="text-[11px] text-jolu-muted">未计价显示 — · 平均响应只统计经本地代理的请求 · 点击模型查看明细</span>
         </Card>
 
         <Card className="flex flex-col gap-2.5 p-4">
           <CardTitle title="供应商费用" note={`估算 · ${fx.currency}`} />
           <div className="flex h-9 items-center justify-between rounded-lg bg-jolu-selected px-2.5">
-            <span className="text-[11px] text-jolu-on">当前范围合计</span>
+            <span className="text-[12px] text-jolu-on">当前范围合计</span>
             <span className="tnum text-xl font-semibold text-jolu-on">{formatMoney(convertFromUsd(data.cost.priced_requests ? total : null, fx), fx.currency)}</span>
           </div>
           <div className="flex flex-col gap-1">
@@ -107,7 +107,7 @@ export function AnalysisPanel({ data, activity, activityError, fx, onDrillModel,
                     <span className="grid size-5 place-items-center rounded-[5px] bg-jolu-side"><PlatformLogo platform={p.platform as PlatformId} size={16} /></span>
                     <span className="min-w-0 flex-1 truncate text-xs text-jolu-text">{providerName(p.platform)}</span>
                     <span className="tnum text-xs font-semibold text-jolu-text">{formatMoney(convertFromUsd(p.cost.amount, fx), fx.currency)}</span>
-                    <span className="tnum w-11 text-right text-[10px] text-jolu-muted">{formatPercent(ratio)}</span>
+                    <span className="tnum w-11 text-right text-[11px] text-jolu-muted">{formatPercent(ratio)}</span>
                   </span>
                   <span className="h-[3px] w-full rounded-sm bg-jolu-track">
                     <span className="block h-full rounded-sm bg-jolu-accent" style={{ width: `${(ratio ?? 0) * 100}%` }} />
@@ -118,10 +118,10 @@ export function AnalysisPanel({ data, activity, activityError, fx, onDrillModel,
             {!priced.length && <span className="py-2 text-xs text-jolu-muted">范围内没有可计价的记录</span>}
           </div>
           <span className="flex-1" />
-          <span className="whitespace-pre-line text-[10px] text-jolu-muted">{"仅汇总已计价记录 · 不含订阅月费\n点击供应商查看对应调用明细"}</span>
+          <span className="whitespace-pre-line text-[11px] text-jolu-muted">{"仅汇总已计价记录 · 不含订阅月费\n点击供应商查看对应调用明细"}</span>
         </Card>
       </div>
-      <p className="text-[11px] text-jolu-muted">输入已扣除单独计量的缓存项，避免重复统计；若来源无法拆分，保留原口径并明确标注。</p>
+      <p className="text-[12px] text-jolu-muted">输入已扣除单独计量的缓存项，避免重复统计；若来源无法拆分，保留原口径并明确标注。</p>
     </>
   )
 }

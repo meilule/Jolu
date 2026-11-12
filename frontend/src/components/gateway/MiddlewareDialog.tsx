@@ -17,7 +17,7 @@ import {
 } from "./middlewareForm"
 
 const fieldClass =
-  "rounded-lg border border-jolu-border bg-jolu-bg px-2 py-1.5 text-[11px] text-jolu-text outline-none focus:border-jolu-accent"
+  "rounded-lg border border-jolu-border bg-jolu-bg px-2 py-1.5 text-[12px] text-jolu-text outline-none focus:border-jolu-accent"
 
 /**
  * 网关中间件（待确认：Jolu.pen 没有这个弹窗，外壳与行布局沿用「局域网共享」弹窗）。
@@ -104,7 +104,7 @@ export function MiddlewareDialog({ busy, onClose, run }: {
       {ordered.length > 0 && (
         <div className="overflow-hidden rounded-lg border border-jolu-border">
           {ordered.map((row, index) => (
-            <div key={row.name} className={cn("flex items-center gap-2 px-2.5 py-2 text-[10px]", index > 0 && "border-t border-jolu-border")}>
+            <div key={row.name} className={cn("flex items-center gap-2 px-2.5 py-2 text-[11px]", index > 0 && "border-t border-jolu-border")}>
               <input type="checkbox" checked={row.enabled} disabled={busy} onChange={() => toggle(row)} aria-label={`启用 ${row.name}`}
                 className="size-3.5 shrink-0 accent-jolu-accent" />
               <span className="flex min-w-0 flex-1 flex-col">
@@ -130,7 +130,7 @@ export function MiddlewareDialog({ busy, onClose, run }: {
 
       {editing && (
         <div className="flex flex-col gap-2 rounded-lg border border-jolu-border px-3 py-2.5">
-          <span className="text-[10.5px] font-medium text-jolu-text">{editing.original ? `编辑「${editing.original}」` : "添加中间件"}</span>
+          <span className="text-[11.5px] font-medium text-jolu-text">{editing.original ? `编辑「${editing.original}」` : "添加中间件"}</span>
           <div className="flex flex-wrap items-center gap-1.5">
             <input value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} placeholder="名称，例如 快模型改名"
               className={cn(fieldClass, "h-8 min-w-[160px] flex-1")} />

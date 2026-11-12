@@ -44,7 +44,7 @@ export function TrendLegend({ mode }: { mode: TrendMode }) {
   return (
     <div className="flex h-4 items-center gap-[18px]">
       {items.map((item) => (
-        <span key={item.label} className="flex items-center gap-1.5 text-[10px] text-jolu-muted">
+        <span key={item.label} className="flex items-center gap-1.5 text-[11px] text-jolu-muted">
           <span aria-hidden className="h-[3px] w-3.5 rounded-sm" style={{ background: item.color }} />
           {item.label}
         </span>
@@ -151,7 +151,7 @@ export function TrendChart({ points, bucket, mode, onDrill }: {
                 <span key={label as string} className="flex justify-between text-xs"><span className="text-jolu-muted">{label}</span><span className="tnum text-jolu-text">{formatTokens(value as number | null)}</span></span>
               ))}
               <span className="flex items-center justify-between text-xs"><span className="text-jolu-text">总 Token</span><span className="tnum text-base font-semibold text-jolu-on">{formatTokens(point.total)}</span></span>
-              {[point.fresh_input, point.output, point.cache_read, point.cache_write].some(value=>value===null) && <span className="text-[10px] text-jolu-muted">此时段部分数据未提供，折线跨过缺失点连接。</span>}
+              {[point.fresh_input, point.output, point.cache_read, point.cache_write].some(value=>value===null) && <span className="text-[11px] text-jolu-muted">此时段部分数据未提供，折线跨过缺失点连接。</span>}
             </>
           ) : (
             <span className="flex items-center justify-between text-xs">
@@ -159,7 +159,7 @@ export function TrendChart({ points, bucket, mode, onDrill }: {
               <span className="tnum text-base font-semibold text-jolu-on">{mode === "requests" ? `${point.requests} 次` : formatUsd(point.cost)}</span>
             </span>
           )}
-          <span className="text-[10px] text-jolu-muted">点击查看这段时间的调用明细</span>
+          <span className="text-[11px] text-jolu-muted">点击查看这段时间的调用明细</span>
         </div>
       )}
     </div>

@@ -95,14 +95,14 @@ export function PrivacySection() {
       <div className="flex flex-col gap-2 border-t border-jolu-border py-3.5">
         <div className="flex items-baseline gap-2.5">
           <span className="text-[13px] font-medium text-jolu-text">各类处理方式</span>
-          <span className="text-[10.5px] text-jolu-muted">遮住：换成占位符如 <code className="rounded bg-jolu-side px-1 py-px font-mono text-[10px]">{MASKING_PLACEHOLDER_SAMPLE}</code> · 只记录：原样发出 · 拦下：整条请求不发</span>
+          <span className="text-[11.5px] text-jolu-muted">遮住：换成占位符如 <code className="rounded bg-jolu-side px-1 py-px font-mono text-[11px]">{MASKING_PLACEHOLDER_SAMPLE}</code> · 只记录：原样发出 · 拦下：整条请求不发</span>
         </div>
         <ul className="flex flex-col gap-1.5 pt-0.5">
           {PRIVACY_MASKING_KINDS.map((item) => (
             <li key={item.kind} className="flex items-center gap-3">
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="text-xs text-jolu-text">{item.name}</span>
-                <span className="truncate text-[10.5px] text-jolu-muted">{item.hint}</span>
+                <span className="truncate text-[11.5px] text-jolu-muted">{item.hint}</span>
               </span>
               <Segmented
                 label={`${item.name}的处理方式`}
@@ -117,7 +117,7 @@ export function PrivacySection() {
       </div>
       <div className="flex flex-col gap-2 border-t border-jolu-border py-3.5">
         <span className="text-[13px] font-medium text-jolu-text">从不脱敏</span>
-        <span className="text-[10.5px] text-jolu-muted">这些值总是原样发出（整段匹配、不分大小写），比如团队邮箱、测试密钥；每行一个，也可以用逗号隔开。交接摘要的脱敏同样放过它们。</span>
+        <span className="text-[11.5px] text-jolu-muted">这些值总是原样发出（整段匹配、不分大小写），比如团队邮箱、测试密钥；每行一个，也可以用逗号隔开。交接摘要的脱敏同样放过它们。</span>
         <textarea
           aria-label="从不脱敏的值"
           value={allowDraft ?? savedAllow}
@@ -136,7 +136,7 @@ export function PrivacySection() {
         desc="最近的请求各遮了什么，发出前后对照；只在内存、不含原值，重启后清空。"
         control={<ActionButton disabled={!isTauri} onClick={() => setRecords(true)}>查看记录</ActionButton>}
       />
-      <p className="border-t border-jolu-border py-3 text-[10.5px] leading-[1.6] text-jolu-muted">
+      <p className="border-t border-jolu-border py-3 text-[11.5px] leading-[1.6] text-jolu-muted">
         本地模型识别层暂未实现。
       </p>
       {records && <PrivacyRecordsDialog onClose={() => setRecords(false)} />}

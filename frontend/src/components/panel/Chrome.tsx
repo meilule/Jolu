@@ -101,7 +101,7 @@ export function TitleBar({ title = "Jolu" }: { title?: string }) {
         <Wordmark />
       </div>
       <div className="flex h-full shrink-0 items-center">
-        {error && <span role="alert" className="mr-2 text-[11px] text-danger">{error}</span>}
+        {error && <span role="alert" className="mr-2 text-[12px] text-danger">{error}</span>}
         {actions.map(({ action, label }) => (
           <button
             key={action}

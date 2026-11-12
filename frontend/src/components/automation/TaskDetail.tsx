@@ -77,7 +77,7 @@ export function TaskDetail({ detail, now, account, onBack, onAction, onEdit, onC
       <div className="flex min-h-12 items-center gap-2.5">
         <div className="flex min-w-0 flex-1 flex-col gap-[5px]">
           <h2 className="truncate text-[22px] font-semibold text-jolu-text">{execution?.name ?? selectedRun?.task_name ?? item.name}</h2>
-          <span className="truncate text-[11px] text-jolu-muted">任务 {taskCode(item.id)} · {projectOf(execution?.cwd)} · 创建于{dayTime(item.created_at, now)}</span>
+          <span className="truncate text-[12px] text-jolu-muted">任务 {taskCode(item.id)} · {projectOf(execution?.cwd)} · 创建于{dayTime(item.created_at, now)}</span>
         </div>
         <JoluButton size="sm" variant="neutral" onClick={onBack}><ArrowLeft aria-hidden />返回任务</JoluButton>
         <TaskMenu
@@ -121,7 +121,7 @@ export function TaskDetail({ detail, now, account, onBack, onAction, onEdit, onC
                 </Notice>
               </>
             ) : (
-              <span className="text-[11px] text-jolu-muted">{execution ? "尚未开始：首次执行后显示原会话与中断位置。" : "—"}</span>
+              <span className="text-[12px] text-jolu-muted">{execution ? "尚未开始：首次执行后显示原会话与中断位置。" : "—"}</span>
             )}
           </Card>
 
@@ -140,11 +140,11 @@ export function TaskDetail({ detail, now, account, onBack, onAction, onEdit, onC
               {execution && <PlatformLogo platform={execution.platform as PlatformId} size={22} />}
               <div className="flex min-w-0 flex-col gap-1">
                 <span className="truncate text-sm font-semibold text-jolu-text">{accountName}</span>
-                <span className="truncate text-[10px] text-jolu-muted">{account ? accountText(account.name, account.kind) : execution ? "账号已移除" : "—"}</span>
+                <span className="truncate text-[11px] text-jolu-muted">{account ? accountText(account.name, account.kind) : execution ? "账号已移除" : "—"}</span>
               </div>
             </div>
             {quota === null ? (
-              <span className="flex items-center gap-1.5 text-[11px] text-jolu-muted">
+              <span className="flex items-center gap-1.5 text-[12px] text-jolu-muted">
                 {!connectionId ? "—" : quotaError ? <>额度读取失败：{quotaError}</> : <><LoaderCircle aria-hidden className="size-3.5 animate-spin" />正在读取额度…</>}
               </span>
             ) : quota.windows.length ? quota.windows.slice(0, 3).map((w) => (
@@ -157,7 +157,7 @@ export function TaskDetail({ detail, now, account, onBack, onAction, onEdit, onC
                 blocking={w.blocking}
               />
             )) : (
-              <span className="text-[11px] text-jolu-muted">{quota.reason ?? "该账号没有可显示的额度窗口"}</span>
+              <span className="text-[12px] text-jolu-muted">{quota.reason ?? "该账号没有可显示的额度窗口"}</span>
             )}
             <JoluButton size="sm" variant="soft" className="self-start" onClick={onOpenProviders}>查看账号额度<ChevronRight aria-hidden /></JoluButton>
           </Card>
@@ -170,7 +170,7 @@ export function TaskDetail({ detail, now, account, onBack, onAction, onEdit, onC
                 {String(index + 1).padStart(2, "0")}  {q.name} · {q.status === "running" ? "执行中" : q.status === "waiting" ? "等待额度" : "排队中"}
               </span>
             )) : <span className="text-xs text-jolu-muted">{connectionId ? "当前账号没有排队的任务" : "—"}</span>}
-            <span className="text-[10px] text-jolu-muted">同一账号依次执行。额度恢复后，先继续当前任务。</span>
+            <span className="text-[11px] text-jolu-muted">同一账号依次执行。额度恢复后，先继续当前任务。</span>
           </Card>
 
           <Card className="flex flex-col gap-3 p-4">
@@ -179,11 +179,11 @@ export function TaskDetail({ detail, now, account, onBack, onAction, onEdit, onC
             <KeyValue label="等待截止" value={execution ? execution.wait_deadline ? dayTime(execution.wait_deadline, now) : "不限制" : "—"} />
             <KeyValue label="恢复方式" value={execution ? execution.auto_resume ? "自动检查后续跑" : "不自动续跑" : "—"} />
             <KeyValue label="重复运行" value="禁止重叠执行" />
-            <span className="text-[10px] text-jolu-muted">电脑休眠期间不检查；唤醒或重启 Jolu 后重新检查可用额度。</span>
+            <span className="text-[11px] text-jolu-muted">电脑休眠期间不检查；唤醒或重启 Jolu 后重新检查可用额度。</span>
           </Card>
         </div>
       </div>
-      <p className="text-[10px] text-jolu-muted">新建且从未执行的任务显示「尚未开始」，不展示中断步骤与原会话；实际续跑能力按执行工具开放。</p>
+      <p className="text-[11px] text-jolu-muted">新建且从未执行的任务显示「尚未开始」，不展示中断步骤与原会话；实际续跑能力按执行工具开放。</p>
     </>
   )
 }
@@ -208,7 +208,7 @@ function StatusCard({ item, now, busy, onAction, onCancel, onOpenRun, onOpenProv
       {icon}
       <span className="text-[13px] text-jolu-muted">{title}</span>
       <span className="flex-1" />
-      <span className={cn("inline-flex h-[22px] items-center rounded-[5px] px-2 text-[10px]", statusTone === "danger" ? "bg-jolu-danger-soft text-jolu-danger" : "bg-jolu-selected text-jolu-on")}>{statusLabel}</span>
+      <span className={cn("inline-flex h-[22px] items-center rounded-[5px] px-2 text-[11px]", statusTone === "danger" ? "bg-jolu-danger-soft text-jolu-danger" : "bg-jolu-selected text-jolu-on")}>{statusLabel}</span>
     </div>
   )
   const cancelButton = item.state !== "cancelled" && (
@@ -224,8 +224,8 @@ function StatusCard({ item, now, busy, onAction, onCancel, onOpenRun, onOpenProv
       <>
         {header(<Clock3 aria-hidden className="size-[22px] text-jolu-on" />, run.resets_at ? "预计恢复" : "恢复时间")}
         <span className="tnum text-[30px] font-semibold leading-none text-jolu-text">{run.resets_at ? dayTime(run.resets_at, now) : "未知"}</span>
-        <span className="text-[11px] text-jolu-muted">{run.resets_at ? `${untilText(run.resets_at, now)} · 预计时间不代表已可执行` : "暂未获取重置时间，任务保持等待"}</span>
-        <div className="flex gap-5 text-[11px] text-jolu-muted">
+        <span className="text-[12px] text-jolu-muted">{run.resets_at ? `${untilText(run.resets_at, now)} · 预计时间不代表已可执行` : "暂未获取重置时间，任务保持等待"}</span>
+        <div className="flex gap-5 text-[12px] text-jolu-muted">
           <span>上次检查 {run.last_check_at ? dayTime(run.last_check_at, now).replace("今天 ", "") : "—"}</span>
           <span>下次检查 {run.next_check_at ? dayTime(run.next_check_at, now).replace("今天 ", "") : "—"}</span>
         </div>
@@ -244,7 +244,7 @@ function StatusCard({ item, now, busy, onAction, onCancel, onOpenRun, onOpenProv
       <>
         {header(<LoaderCircle aria-hidden className="size-[22px] animate-spin text-jolu-on" />, "正在执行")}
         <span className="tnum text-[30px] font-semibold leading-none text-jolu-text">{clock(runningMs(run, now), false)}</span>
-        <span className="text-[11px] text-jolu-muted">实际执行时长，不含等待额度的时间</span>
+        <span className="text-[12px] text-jolu-muted">实际执行时长，不含等待额度的时间</span>
         <div className="flex gap-2">
           <JoluButton size="sm" variant="soft" onClick={() => onOpenRun(run.id)}>查看日志<ChevronRight aria-hidden /></JoluButton>
           <JoluButton size="sm" variant="danger-soft" disabled={!!busy} onClick={() => onAction("stop")}><Square aria-hidden />停止运行</JoluButton>
@@ -257,7 +257,7 @@ function StatusCard({ item, now, busy, onAction, onCancel, onOpenRun, onOpenProv
       <>
         {header(<Clock3 aria-hidden className="size-[22px] text-jolu-on" />, "排队中")}
         <span className="text-[30px] font-semibold leading-none text-jolu-text">{item.queue_ahead ? `前方 ${item.queue_ahead} 个任务` : "即将开始"}</span>
-        <span className="text-[11px] text-jolu-muted">同一账号按队列顺序执行，前一个任务结束后自动开始。</span>
+        <span className="text-[12px] text-jolu-muted">同一账号按队列顺序执行，前一个任务结束后自动开始。</span>
         <div className="flex gap-2">{pauseButton}{cancelButton}</div>
       </>
     )
@@ -284,7 +284,7 @@ function StatusCard({ item, now, busy, onAction, onCancel, onOpenRun, onOpenProv
       <>
         {header(<Clock3 aria-hidden className="size-[22px] text-jolu-on" />, "下次运行")}
         <span className="tnum text-[30px] font-semibold leading-none text-jolu-text">{dayTime(item.next_run_at, now)}</span>
-        <span className="text-[11px] text-jolu-muted">{launchLabel(item)} · {zoneName(localZone())}时间 · 仍在执行时跳过本次触发</span>
+        <span className="text-[12px] text-jolu-muted">{launchLabel(item)} · {zoneName(localZone())}时间 · 仍在执行时跳过本次触发</span>
         <div className="flex gap-2">
           <JoluButton size="sm" variant="primary" disabled={!!busy} onClick={() => onAction("run")}><Play aria-hidden />立即运行</JoluButton>
           {pauseButton}
@@ -298,7 +298,7 @@ function StatusCard({ item, now, busy, onAction, onCancel, onOpenRun, onOpenProv
     <>
       {header(<Clock3 aria-hidden className="size-[22px] text-jolu-muted" />, last ? "最近运行" : "尚未开始")}
       <span className={cn("text-[30px] font-semibold leading-none", TONE[statusTone])}>{statusLabel}</span>
-      <span className="text-[11px] text-jolu-muted">{statusNext}</span>
+      <span className="text-[12px] text-jolu-muted">{statusNext}</span>
       <div className="flex flex-wrap gap-2">
         {last && <JoluButton size="sm" variant="soft" onClick={() => onOpenRun(last.id)}>查看运行记录<ChevronRight aria-hidden /></JoluButton>}
         {item.state === "active" || item.state === "finished" ? (

@@ -138,7 +138,7 @@ export function AutomationView({ active, prefill, target, onTargetHandled, onOpe
     <div className="flex min-h-12 items-center gap-2.5">
       <div className="flex min-w-0 flex-1 flex-col gap-[5px]">
         <h2 className="truncate text-[22px] font-semibold text-jolu-text">{title}</h2>
-        <span className="truncate text-[11px] text-jolu-muted">{note}</span>
+        <span className="truncate text-[12px] text-jolu-muted">{note}</span>
       </div>
       <JoluButton size="sm" variant="primary" onClick={() => setDialog({ mode: "create", nonce: Date.now() })}><Plus aria-hidden />新建任务</JoluButton>
     </div>
@@ -205,7 +205,7 @@ export function AutomationView({ active, prefill, target, onTargetHandled, onOpe
                 onDelete={setDeleting}
               />
             ) : !overview.error && <LoadingCard title="正在读取任务" layout="tasks" />}
-            <p className="text-[10px] text-jolu-muted">{isTauri ? "" : "示例数据 · "}本地任务需要 Jolu 后台运行；休眠与关机期间停止调度，重新打开后检查待执行任务。</p>
+            <p className="text-[11px] text-jolu-muted">{isTauri ? "" : "示例数据 · "}本地任务需要 Jolu 后台运行；休眠与关机期间停止调度，重新打开后检查待执行任务。</p>
           </>
         ) : (
           <>

@@ -128,21 +128,21 @@ export function SkillDetail({ item, onBack, onEdit, onCopy, onOpenDir }: {
                   >
                     <Icon aria-hidden className={cn("size-4 shrink-0", active ? "text-jolu-on" : "text-jolu-muted")} />
                     <span className="min-w-0 flex-1 truncate">{entry.dir ? `${name} /` : name}</span>
-                    {!entry.dir && <span className="shrink-0 text-[10px] text-jolu-muted">{formatBytes(entry.size)}</span>}
+                    {!entry.dir && <span className="shrink-0 text-[11px] text-jolu-muted">{formatBytes(entry.size)}</span>}
                   </button>
                 )
               })}
-              {detail?.files_truncated && <span className="px-2 text-[10px] text-jolu-muted">文件较多，只显示前 200 项</span>}
+              {detail?.files_truncated && <span className="px-2 text-[11px] text-jolu-muted">文件较多，只显示前 200 项</span>}
             </div>
             <span className="h-px bg-jolu-border" />
             <Meta label="来源" value={sourceLabel(current.source)} />
             <Meta label="作用范围" value={current.scope === "project" ? `项目 · ${scopeLabel(current)}` : SCOPE_DETAIL[current.scope]} />
             <Meta label="最近修改" value={modifiedLabel(current.modified_ms)} />
             <Meta label="校验结果" value={current.issue ?? "名称、描述与目录结构有效"} danger={!!current.issue} />
-            <span className="text-[10px] text-jolu-muted">{current.original_path ? "原所在目录" : "所在目录"}</span>
-            <span className="break-all font-mono text-[11px] text-jolu-muted">{current.original_path ?? current.path}</span>
+            <span className="text-[11px] text-jolu-muted">{current.original_path ? "原所在目录" : "所在目录"}</span>
+            <span className="break-all font-mono text-[12px] text-jolu-muted">{current.original_path ?? current.path}</span>
             {current.original_path && (
-              <span className="text-[10px] text-jolu-muted">已移到 Jolu 停用区（工具不会加载），启用时移回原目录：<span className="break-all font-mono">{current.path}</span></span>
+              <span className="text-[11px] text-jolu-muted">已移到 Jolu 停用区（工具不会加载），启用时移回原目录：<span className="break-all font-mono">{current.path}</span></span>
             )}
             <JoluButton variant="outline" size="sm" className="h-[30px] self-start" onClick={() => void copyPath()}><Copy aria-hidden />复制路径</JoluButton>
           </aside>
@@ -162,7 +162,7 @@ export function SkillDetail({ item, onBack, onEdit, onCopy, onOpenDir }: {
                 </button>
               ))}
               <span className="flex-1" />
-              {!isSkillFile && <span className="self-center truncate text-[10px] text-jolu-muted">{file}</span>}
+              {!isSkillFile && <span className="self-center truncate text-[11px] text-jolu-muted">{file}</span>}
             </div>
             <div ref={bodyMotion} className="min-h-0 flex-1 overflow-y-auto">
               {!detail || (!isSkillFile && !fileContent) ? (
@@ -172,15 +172,15 @@ export function SkillDetail({ item, onBack, onEdit, onCopy, onOpenDir }: {
               ) : tab === "preview" && markdown ? (
                 <MarkdownPreview source={text} stripFront={isSkillFile} />
               ) : (
-                <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-jolu-text">{text}</pre>
+                <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-jolu-text">{text}</pre>
               )}
-              {(isSkillFile ? detail?.truncated : fileContent?.truncated) && <p className="mt-3 text-[10px] text-jolu-muted">文件较大，只显示前 512 KB</p>}
+              {(isSkillFile ? detail?.truncated : fileContent?.truncated) && <p className="mt-3 text-[11px] text-jolu-muted">文件较大，只显示前 512 KB</p>}
             </div>
           </section>
         </div>
       )}
 
-      <div className="flex min-h-[42px] items-center gap-2 rounded-lg bg-jolu-side px-3.5 text-[11px] text-jolu-muted">
+      <div className="flex min-h-[42px] items-center gap-2 rounded-lg bg-jolu-side px-3.5 text-[12px] text-jolu-muted">
         <Info aria-hidden className="size-4 shrink-0" />
         启用不代表立即执行。保存或启停后的生效时机以工具自身的加载规则为准（各工具的具体时机待确认）。
       </div>
@@ -191,7 +191,7 @@ export function SkillDetail({ item, onBack, onEdit, onCopy, onOpenDir }: {
 function Meta({ label, value, danger }: { label: string; value: string; danger?: boolean }) {
   return (
     <div className="flex flex-col gap-[5px]">
-      <span className="text-[10px] text-jolu-muted">{label}</span>
+      <span className="text-[11px] text-jolu-muted">{label}</span>
       <span className={cn("text-xs", danger ? "text-jolu-danger" : "text-jolu-text")}>{value}</span>
     </div>
   )

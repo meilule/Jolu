@@ -150,10 +150,10 @@ function Card({ logo, badge, badgeTone, title, desc, action }: {
     <div className="jolu-card flex h-[172px] min-w-0 flex-col gap-2.5 rounded-xl border border-jolu-border bg-jolu-cc-surface p-4">
       <div className="flex h-7 items-center justify-between">
         {logo}
-        <span className={cn("rounded-[5px] px-2 py-[5px] text-[11px] leading-none", badgeTone === "on" ? "bg-jolu-selected text-jolu-on" : "bg-jolu-stage text-jolu-muted")}>{badge}</span>
+        <span className={cn("rounded-[5px] px-2 py-[5px] text-[12px] leading-none", badgeTone === "on" ? "bg-jolu-selected text-jolu-on" : "bg-jolu-stage text-jolu-muted")}>{badge}</span>
       </div>
       <span className="truncate text-base font-semibold text-jolu-text">{title}</span>
-      <span className="truncate text-[11px] text-jolu-muted">{desc}</span>
+      <span className="truncate text-[12px] text-jolu-muted">{desc}</span>
       <span className="flex-1" />
       {action}
     </div>

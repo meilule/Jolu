@@ -34,7 +34,7 @@ export function CheckinProviderDialog({ onClose, onPick }: { onClose: () => void
         const provider = connectionProviderId({ platformId: entry.platform, edition: entry.edition })
         return <button key={entry.id} type="button" aria-label={`${entry.name} ${entry.region}`} disabled={!entry.manual || !provider} onClick={() => provider && finish(() => onPick(provider))} className="flex min-h-[100px] min-w-0 flex-col gap-2.5 rounded-[10px] border border-jolu-border p-3.5 text-left outline-none hover:border-jolu-accent hover:bg-jolu-selected focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-jolu-border disabled:hover:bg-transparent">
           <span className="flex items-center gap-2.5 text-sm font-medium text-jolu-text"><PlatformLogo platform={entry.platform} size={22} /><span>{entry.name} {entry.region}</span></span>
-          <span className="text-[11px] leading-relaxed text-jolu-muted">{entry.description}</span>
+          <span className="text-[12px] leading-relaxed text-jolu-muted">{entry.description}</span>
         </button>
       })}
     </div>

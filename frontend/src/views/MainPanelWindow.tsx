@@ -363,16 +363,16 @@ function AboutDialog({ version, onClose, exiting }: { version: string; onClose: 
           <AppIcon size={32} />
           <div className="flex flex-col">
             <span id={titleId} className="text-[13px] font-semibold text-text-primary">Jolu</span>
-            <span className="tnum font-mono text-[11px] text-text-tertiary">v{version}</span>
+            <span className="tnum font-mono text-[12px] text-text-tertiary">v{version}</span>
           </div>
         </div>
-        <p className="text-[11px] leading-[1.6] text-text-tertiary">
+        <p className="text-[12px] leading-[1.6] text-text-tertiary">
           在本机运行的 AI 编程工具管理器。统计来自本地会话记录与服务商接口，凭证只保存在本机。
         </p>
         <button
           type="button"
           onClick={() => void openUrl(REPO_URL)}
-          className="self-start text-[11px] text-accent-blue underline"
+          className="self-start text-[12px] text-accent-blue underline"
         >
           {REPO_URL}
         </button>

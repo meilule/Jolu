@@ -79,17 +79,17 @@ export function RouteLogPanel({ desktop, connections, tick }: { desktop: boolean
       <header className="flex h-[50px] items-center gap-2 px-4">
         <Link2 aria-hidden className="size-3.5 text-jolu-on" />
         <span className="text-[12.5px] text-jolu-text">路由流水</span>
-        <span className="text-[10px] text-jolu-muted" title="只保留最近约 1,000 条；统计只代表当前保留范围">
+        <span className="text-[11px] text-jolu-muted" title="只保留最近约 1,000 条；统计只代表当前保留范围">
           {!desktop ? "桌面端可用" : data && data.total > 0 ? `第 ${from}–${to} 条 · 共 ${data.total} 条` : data ? "暂无记录" : error ? "读取失败" : "读取中…"}
         </span>
       </header>
       {error && !data ? (
-        <div className="flex items-center justify-center gap-3 border-t border-jolu-border px-4 py-8 text-[10.5px] text-jolu-danger">
+        <div className="flex items-center justify-center gap-3 border-t border-jolu-border px-4 py-8 text-[11.5px] text-jolu-danger">
           读取路由流水失败：{error}
-          <button type="button" disabled={busy} onClick={() => void load(1, null)} className="rounded-md border border-jolu-border bg-jolu-bg px-2.5 py-1 text-[10.5px] text-jolu-text outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">重试</button>
+          <button type="button" disabled={busy} onClick={() => void load(1, null)} className="rounded-md border border-jolu-border bg-jolu-bg px-2.5 py-1 text-[11.5px] text-jolu-text outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">重试</button>
         </div>
       ) : rows.length === 0 ? (
-        <div className="border-t border-jolu-border px-4 py-8 text-center text-[10.5px] text-jolu-muted">
+        <div className="border-t border-jolu-border px-4 py-8 text-center text-[11.5px] text-jolu-muted">
           {desktop ? "网关收到请求后，这里会显示时间、Agent、请求模型、路由到的来源、耗时和结果。" : "浏览器预览不读取路由流水；请在桌面端查看真实数据。"}
         </div>
       ) : (
@@ -124,18 +124,18 @@ function RouteRow({ row, connection, attempt }: { row: RouteLogDto; connection: 
   const name = connection?.baseName ?? row.source
   return (
     <div className={cn(COLUMNS, "h-9 items-center border-t border-jolu-table-divider px-4")}>
-      <span className="tabular-nums text-[10px] text-jolu-muted">{new Date(row.ts).toLocaleTimeString("zh-CN", { hour12: false })}</span>
-      <span className="truncate text-[10.5px] text-jolu-text">{row.agent ? agentLabel(row.agent) : "—"}</span>
+      <span className="tabular-nums text-[11px] text-jolu-muted">{new Date(row.ts).toLocaleTimeString("zh-CN", { hour12: false })}</span>
+      <span className="truncate text-[11.5px] text-jolu-text">{row.agent ? agentLabel(row.agent) : "—"}</span>
       <span className="flex min-w-0 items-center gap-1" title={row.resolved_from === "bare" ? `${row.requested_model}（裸名：按模型目录第一个来源或默认来源解析）` : row.requested_model}>
-        <span className="truncate text-[10px] text-jolu-muted">{row.requested_model}</span>
+        <span className="truncate text-[11px] text-jolu-muted">{row.requested_model}</span>
         {row.resolved_from === "bare" && <span className="shrink-0 rounded bg-jolu-track px-[5px] text-[8.5px] leading-3 text-jolu-muted">裸名</span>}
         {row.profile && <span className="shrink-0 rounded bg-jolu-track px-[5px] text-[8.5px] leading-3 text-jolu-muted" title={`请求时生效的 Profile：${row.profile}`}>来自 Profile</span>}
       </span>
       <span className="flex min-w-0 items-center gap-1.5">
-        <span className="truncate text-[10.5px] text-jolu-text">{name ? `${name}${model ? ` · ${model}` : ""}` : "—"}</span>
+        <span className="truncate text-[11.5px] text-jolu-text">{name ? `${name}${model ? ` · ${model}` : ""}` : "—"}</span>
         {connection && <span className="shrink-0 rounded bg-jolu-track px-[5px] text-[8.5px] leading-3 text-jolu-muted">{routeTypeTag(connection.kind, connection.platformId)}</span>}
       </span>
-      <span className="tabular-nums text-[10px] text-jolu-muted">{duration(row.duration_ms)}</span>
+      <span className="tabular-nums text-[11px] text-jolu-muted">{duration(row.duration_ms)}</span>
       <span className={cn("flex min-w-0 flex-col text-[9.5px] leading-tight", row.result === "ok" ? "text-jolu-on" : row.result === "rejected" ? "text-jolu-muted" : "text-jolu-danger")}
         title={attempt ? "同一次请求在分组成员间转移的第几次尝试" : undefined}>
         <span>{row.result === "ok" ? "成功" : row.result === "rejected" ? "拒绝" : "失败"}</span>

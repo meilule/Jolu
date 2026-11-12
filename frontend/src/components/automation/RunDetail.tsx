@@ -67,7 +67,7 @@ export function RunDetail({ detail, now, account, onBack, onOpenSession, onStop,
       <div className="flex min-h-12 items-center gap-2.5">
         <div className="flex min-w-0 flex-1 flex-col gap-[5px]">
           <h2 className="truncate text-[22px] font-semibold text-jolu-text">{run.task_name}</h2>
-          <span className="truncate text-[11px] text-jolu-muted">运行 {runCode(run.id)} · {span} · {toolName(run.platform)} / {accountName}</span>
+          <span className="truncate text-[12px] text-jolu-muted">运行 {runCode(run.id)} · {span} · {toolName(run.platform)} / {accountName}</span>
         </div>
         <JoluButton size="sm" variant="neutral" onClick={onBack}><ArrowLeft aria-hidden />返回记录</JoluButton>
         {run.status === "running" && (
@@ -116,24 +116,24 @@ export function RunDetail({ detail, now, account, onBack, onOpenSession, onStop,
               <div key={file} className="flex items-center gap-2.5">
                 <FileCode aria-hidden className="size-4 shrink-0 text-jolu-muted" />
                 <span className="min-w-0 flex-1 truncate text-xs text-jolu-text" title={file}>{file.split(/[\\/]/).pop()}</span>
-                <span className="truncate text-[11px] text-jolu-muted" title={file}>{file.includes("/") || file.includes("\\") ? file.replace(/[\\/][^\\/]*$/, "") : "已修改"}</span>
+                <span className="truncate text-[12px] text-jolu-muted" title={file}>{file.includes("/") || file.includes("\\") ? file.replace(/[\\/][^\\/]*$/, "") : "已修改"}</span>
               </div>
             )) : <span className="text-xs text-jolu-muted">执行器没有返回文件修改</span>}
             <div className="flex items-center gap-2.5">
               <FileCode aria-hidden className="size-4 shrink-0 text-jolu-muted" />
               <span className="flex-1 text-xs text-jolu-text">相关测试</span>
-              <span className="text-[11px] text-jolu-muted">未验证</span>
+              <span className="text-[12px] text-jolu-muted">未验证</span>
             </div>
-            <span className="text-[10px] text-jolu-muted">仅展示实际执行器返回的结果；未返回验证信息时标记「未验证」。</span>
+            <span className="text-[11px] text-jolu-muted">仅展示实际执行器返回的结果；未返回验证信息时标记「未验证」。</span>
           </Card>
 
           <Card className="flex flex-col gap-2.5 p-4">
             <SectionTitle title="执行日志" note="完整内容见关联会话" />
             {logs.length ? (
-              <pre className="max-h-[220px] overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-[1.7] text-jolu-muted">
+              <pre className="max-h-[220px] overflow-auto whitespace-pre-wrap font-mono text-[12px] leading-[1.7] text-jolu-muted">
                 {logs.map((l) => `${hhmmss(l.ts)}  ${l.title}`).join("\n")}
               </pre>
-            ) : <span className="text-[11px] text-jolu-muted">暂无执行日志</span>}
+            ) : <span className="text-[12px] text-jolu-muted">暂无执行日志</span>}
             {run.session_id && run.platform !== "unknown" && (
               <JoluButton size="sm" variant="soft" className="self-start" onClick={() => onOpenSession(run.platform, run.session_id!)}>打开完整会话<ChevronRight aria-hidden /></JoluButton>
             )}
@@ -150,12 +150,12 @@ export function RunDetail({ detail, now, account, onBack, onOpenSession, onStop,
                   <Icon aria-hidden className={cn("mt-0.5 size-4 shrink-0", e.kind === "fail" || e.kind === "attention" ? "text-jolu-danger" : "text-jolu-on")} />
                   <div className="flex min-w-0 flex-col gap-1">
                     <span className="text-xs font-medium text-jolu-text">{e.title}</span>
-                    <span className="tnum text-[10px] text-jolu-muted">{hhmmss(e.ts)}</span>
-                    {e.detail && <span className="break-words text-[10px] text-jolu-muted">{e.detail}</span>}
+                    <span className="tnum text-[11px] text-jolu-muted">{hhmmss(e.ts)}</span>
+                    {e.detail && <span className="break-words text-[11px] text-jolu-muted">{e.detail}</span>}
                   </div>
                 </div>
               )
-            }) : <span className="text-[11px] text-jolu-muted">暂无记录</span>}
+            }) : <span className="text-[12px] text-jolu-muted">暂无记录</span>}
           </Card>
 
           <Card className="flex flex-col gap-3 p-4">
@@ -164,11 +164,11 @@ export function RunDetail({ detail, now, account, onBack, onOpenSession, onStop,
             <KeyValue label="账号" value={accountName} />
             <KeyValue label="模型" value={run.model ?? "跟随工具默认"} />
             <KeyValue label="Skills" value={task ? task.skills.length ? task.skills.join(" / ") : "未选择" : "—"} />
-            <span className="text-[10px] text-jolu-muted">执行器、模型和账号以本次运行快照为准。</span>
+            <span className="text-[11px] text-jolu-muted">执行器、模型和账号以本次运行快照为准。</span>
           </Card>
         </div>
       </div>
-      <p className="text-[10px] text-jolu-muted">自动化负责安排与记录运行；文件修改权限沿用任务执行器的明确授权。</p>
+      <p className="text-[11px] text-jolu-muted">自动化负责安排与记录运行；文件修改权限沿用任务执行器的明确授权。</p>
     </>
   )
 }

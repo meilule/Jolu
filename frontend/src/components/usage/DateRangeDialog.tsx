@@ -64,7 +64,7 @@ export function DateRangeDialog({ value, currentLabel, onConfirm, onClose: onDis
                   type="button"
                   onClick={() => setDraft({ start: range.start, end: range.end })}
                   className={cn(
-                    "h-7 rounded-md border px-2.5 text-[11px]",
+                    "h-7 rounded-md border px-2.5 text-[12px]",
                     active
                       ? "border-jolu-accent bg-jolu-selected text-jolu-on"
                       : "border-jolu-border text-jolu-muted hover:bg-jolu-stage",
@@ -83,7 +83,7 @@ export function DateRangeDialog({ value, currentLabel, onConfirm, onClose: onDis
             <Month year={left.year} month={left.month} draft={draft} today={today} onPrev={() => shift(-1)} onPick={(key) => setDraft((d) => pickDate(d, key))} />
             <Month year={anchor.year} month={anchor.month} draft={draft} today={today} onNext={atLatest ? undefined : () => shift(1)} onPick={(key) => setDraft((d) => pickDate(d, key))} />
           </div>
-          <p className="text-[11px] text-jolu-muted">按{zoneName(localZone())}时区统计，包含开始与结束当天；今天统计至当前时刻。</p>
+          <p className="text-[12px] text-jolu-muted">按{zoneName(localZone())}时区统计，包含开始与结束当天；今天统计至当前时刻。</p>
           <div className="flex h-9 items-center justify-between">
             <span className="text-xs text-jolu-muted">{valid ? `已选择 ${rangeDays({ start: draft.start!, end: draft.end! })} 天` : "请选择结束日期"}</span>
             <div className="flex gap-2">
@@ -139,7 +139,7 @@ function Month({ year, month, draft, today, onPrev, onNext, onPick }: {
         {nav("下一月", onNext, <ChevronRight aria-hidden className="size-4" />)}
       </div>
       <div className="grid grid-cols-7 gap-[3px]">
-        {WEEKDAYS.map((d) => <span key={d} className="grid h-[22px] place-items-center text-[10px] text-jolu-muted">{d}</span>)}
+        {WEEKDAYS.map((d) => <span key={d} className="grid h-[22px] place-items-center text-[11px] text-jolu-muted">{d}</span>)}
         {monthGrid(year, month).flat().map((key, index) => {
           if (!key) return <span key={`empty-${index}`} className="h-[29px]" />
           const edge = key === draft.start || key === draft.end

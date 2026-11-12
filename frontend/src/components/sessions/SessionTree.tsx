@@ -56,7 +56,7 @@ export function SessionTree({ groups, expanded, selected, searching, total, onTo
     <Card className="flex h-full w-[320px] shrink-0 flex-col gap-1 p-2.5">
       <div className="flex items-center justify-between px-0.5 pb-1">
         <h3 className="text-sm font-semibold text-jolu-text">{searching ? "匹配的项目与会话" : "项目与会话"}</h3>
-        <span className="text-[10px] text-jolu-muted">{groups.length} 项目 · {total} 条</span>
+        <span className="text-[11px] text-jolu-muted">{groups.length} 项目 · {total} 条</span>
       </div>
       <div ref={listRef} role="tree" aria-label="项目与会话" onKeyDown={onKeyDown} className="-mx-1 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-1">
         {groups.map((g) => {
@@ -73,8 +73,8 @@ export function SessionTree({ groups, expanded, selected, searching, total, onTo
               >
                 {open ? <ChevronDown aria-hidden className="size-3 text-jolu-muted" /> : <ChevronRight aria-hidden className="size-3 text-jolu-muted" />}
                 {open ? <FolderOpen aria-hidden className="size-[15px] text-jolu-muted" /> : <Folder aria-hidden className="size-[15px] text-jolu-muted" />}
-                <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-jolu-text" title={g.path ?? undefined}>{g.name}</span>
-                <span className="tnum text-[10px] text-jolu-muted">{g.sessions.length}</span>
+                <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-jolu-text" title={g.path ?? undefined}>{g.name}</span>
+                <span className="tnum text-[11px] text-jolu-muted">{g.sessions.length}</span>
               </button>
               {open && (
                 <div className="ml-[7px] flex flex-col gap-0.5 border-l border-jolu-border pl-[7px]">
@@ -96,7 +96,7 @@ export function SessionTree({ groups, expanded, selected, searching, total, onTo
                       >
                         <span className="flex w-full items-center gap-1.5">
                           <PlatformLogo platform={s.platform as PlatformId} size={12} />
-                          <span className={cn("min-w-0 flex-1 truncate text-[11px]", active ? "font-semibold text-jolu-on" : "text-jolu-text")}>{sessionTitle(s)}</span>
+                          <span className={cn("min-w-0 flex-1 truncate text-[12px]", active ? "font-semibold text-jolu-on" : "text-jolu-text")}>{sessionTitle(s)}</span>
                           <span className="tnum shrink-0 text-[9px] text-jolu-muted">{listTime(s.last_ts)}</span>
                         </span>
                         <span className="flex gap-2 pl-[18px] text-[9px]">
@@ -114,7 +114,7 @@ export function SessionTree({ groups, expanded, selected, searching, total, onTo
       </div>
       {searching ? (
         <div className="flex flex-col items-start gap-2 pt-1">
-          <span className="text-[10px] text-jolu-muted">仅显示匹配会话，自动展开对应项目。</span>
+          <span className="text-[11px] text-jolu-muted">仅显示匹配会话，自动展开对应项目。</span>
           <ToolButton bordered icon={<RotateCcw />} onClick={onClear}>清除搜索与筛选</ToolButton>
         </div>
       ) : (

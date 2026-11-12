@@ -101,7 +101,7 @@ export function SessionDetail({ session, connections, onDrillUsage, onContinue, 
       <div className="flex items-start gap-2.5">
         <div className="flex min-w-0 flex-1 flex-col gap-[7px]">
           <h3 className="truncate text-lg font-semibold text-jolu-text" title={sessionTitle(session)}>{sessionTitle(session)}</h3>
-          <span className="truncate whitespace-pre text-[11px] text-jolu-muted">{name}  /  {projectName(session.cwd)}  /  {spanLabel(session.first_ts, session.last_ts)}</span>
+          <span className="truncate whitespace-pre text-[12px] text-jolu-muted">{name}  /  {projectName(session.cwd)}  /  {spanLabel(session.first_ts, session.last_ts)}</span>
         </div>
         <Menu.Root modal={false}>
           <Menu.Trigger aria-label="更多会话操作" className="grid size-[30px] shrink-0 place-items-center rounded-lg bg-jolu-side text-jolu-muted outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent data-[state=open]:bg-jolu-stage">
@@ -154,9 +154,9 @@ export function SessionDetail({ session, connections, onDrillUsage, onContinue, 
             />
           ) : (
             <div className="flex flex-col gap-3">
-              {page.note && <p className="rounded-lg bg-jolu-stage px-2.5 py-1.5 text-[10px] leading-relaxed text-jolu-muted">{page.note}</p>}
+              {page.note && <p className="rounded-lg bg-jolu-stage px-2.5 py-1.5 text-[11px] leading-relaxed text-jolu-muted">{page.note}</p>}
               {page.offset > 0 && (
-                <button type="button" onClick={loadEarlier} disabled={loadingMore} className="flex h-6 items-center justify-center gap-1 text-[10px] text-jolu-muted outline-none hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent">
+                <button type="button" onClick={loadEarlier} disabled={loadingMore} className="flex h-6 items-center justify-center gap-1 text-[11px] text-jolu-muted outline-none hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent">
                   <ChevronsUp aria-hidden className="size-3" />
                   {loadingMore ? "正在读取…" : `加载更早的 ${page.offset} 条消息`}
                 </button>
@@ -177,7 +177,7 @@ export function SessionDetail({ session, connections, onDrillUsage, onContinue, 
           比其它按钮长，总是第一个被压坏。 */}
       <div className="flex min-h-[34px] shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
         <Eye aria-hidden className="size-[15px] shrink-0 text-jolu-muted" />
-        <span className="whitespace-nowrap text-[11px] text-jolu-muted">本机会话 · 只读</span>
+        <span className="whitespace-nowrap text-[12px] text-jolu-muted">本机会话 · 只读</span>
         <span className="flex-1" />
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
           <button type="button" onClick={onCreateAutomation} className="inline-flex h-[34px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-jolu-selected px-3 text-xs font-medium text-jolu-on outline-none hover:bg-jolu-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent">
@@ -204,7 +204,7 @@ function MenuItem({ icon, children, onSelect, disabled }: { icon: React.ReactNod
 }
 
 function Chip({ on, children }: { on?: boolean; children: React.ReactNode }) {
-  return <span className={cn("inline-flex h-[22px] items-center rounded-[5px] px-2 text-[10px]", on ? "bg-jolu-selected text-jolu-on" : "bg-jolu-stage text-jolu-muted")}>{children}</span>
+  return <span className={cn("inline-flex h-[22px] items-center rounded-[5px] px-2 text-[11px]", on ? "bg-jolu-selected text-jolu-on" : "bg-jolu-stage text-jolu-muted")}>{children}</span>
 }
 
 function SmallButton({ accent, onClick, children }: { accent?: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -220,7 +220,7 @@ function StateBox({ title, note, action, detail }: { title: string; note: string
     <div className="flex flex-col items-start gap-3 rounded-xl border border-jolu-border p-4">
       <span className="text-base font-semibold text-jolu-text">{title}</span>
       <span className="text-xs text-jolu-muted">{note}</span>
-      {detail && <span className="text-[11px] text-jolu-danger">{detail}</span>}
+      {detail && <span className="text-[12px] text-jolu-danger">{detail}</span>}
       {action}
     </div>
   )
@@ -238,7 +238,7 @@ function MessageView({ message, platform, name }: { message: MessageDto; platfor
       <div className="flex flex-col gap-2 rounded-[9px] bg-jolu-side p-3">
         <div className="flex items-center justify-between">
           <span className="text-sm font-semibold text-jolu-text">你</span>
-          <span className="tnum text-[10px] text-jolu-muted">{clock(message.ts)}</span>
+          <span className="tnum text-[11px] text-jolu-muted">{clock(message.ts)}</span>
         </div>
         <MessageMarkdown text={message.text} />
       </div>
@@ -249,14 +249,14 @@ function MessageView({ message, platform, name }: { message: MessageDto; platfor
       <div className="flex items-center gap-[7px]">
         <PlatformLogo platform={platform} size={17} />
         <span className="text-xs font-semibold text-jolu-text">{name}</span>
-        {message.model && <span className="min-w-0 truncate text-[10px] text-jolu-muted" title={message.model}>{message.model}</span>}
-        <span className="tnum text-[10px] text-jolu-muted">{clock(message.ts)}</span>
+        {message.model && <span className="min-w-0 truncate text-[11px] text-jolu-muted" title={message.model}>{message.model}</span>}
+        <span className="tnum text-[11px] text-jolu-muted">{clock(message.ts)}</span>
       </div>
       {/* ZCode 这类库型来源保留推理片段；源文件来源没有，不占位 */}
       {message.reasoning && (
         <details className="rounded-[7px] bg-jolu-side px-2.5 py-2">
-          <summary className="cursor-default text-[10px] text-jolu-muted">推理过程 · {message.reasoning.length} 字</summary>
-          <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-jolu-muted">{message.reasoning}</pre>
+          <summary className="cursor-default text-[11px] text-jolu-muted">推理过程 · {message.reasoning.length} 字</summary>
+          <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] text-jolu-muted">{message.reasoning}</pre>
         </details>
       )}
       {message.text && <MessageMarkdown text={message.text} />}
@@ -272,13 +272,13 @@ function ToolRow({ tool }: { tool: MessageDto["tools"][number] }) {
       <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="flex h-[34px] items-center gap-[7px] rounded-[7px] bg-jolu-side px-2.5 text-left outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent">
         {open ? <ChevronDown aria-hidden className="size-3.5 text-jolu-muted" /> : <ChevronRight aria-hidden className="size-3.5 text-jolu-muted" />}
         <FileCode aria-hidden className="size-3.5 text-jolu-muted" />
-        <span className="min-w-0 flex-1 truncate text-[11px] text-jolu-text">{tool.summary ? `${tool.name} · ${tool.summary}` : tool.name}</span>
-        <span className={cn("text-[10px]", tool.output ? "text-jolu-muted" : "text-jolu-muted/70")}>{tool.output ? "已完成" : "无输出记录"}</span>
+        <span className="min-w-0 flex-1 truncate text-[12px] text-jolu-text">{tool.summary ? `${tool.name} · ${tool.summary}` : tool.name}</span>
+        <span className={cn("text-[11px]", tool.output ? "text-jolu-muted" : "text-jolu-muted/70")}>{tool.output ? "已完成" : "无输出记录"}</span>
       </button>
       {open && (
         <div className="rounded-[7px] bg-jolu-side p-2.5">
           {/* 缺少工具输出时只显示调用摘要，不补写结果（画板 46） */}
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-jolu-muted">{tool.output ?? "来源没有记录这次调用的输出"}</pre>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] text-jolu-muted">{tool.output ?? "来源没有记录这次调用的输出"}</pre>
         </div>
       )}
     </div>
@@ -294,8 +294,8 @@ function InfoPanel({ session, page, accountText, onCopy, onDrillUsage }: {
 }) {
   const row = (label: string, value: React.ReactNode, copyText?: string, what?: string) => (
     <div className="flex min-h-[30px] items-center gap-3">
-      <span className="w-[60px] shrink-0 text-[11px] text-jolu-muted">{label}</span>
-      <span className="min-w-0 flex-1 truncate text-[11px] text-jolu-text">{value}</span>
+      <span className="w-[60px] shrink-0 text-[12px] text-jolu-muted">{label}</span>
+      <span className="min-w-0 flex-1 truncate text-[12px] text-jolu-text">{value}</span>
       {copyText && (
         <button type="button" aria-label={`复制${what}`} onClick={() => onCopy(copyText, what!)} className="grid size-[30px] place-items-center rounded-lg bg-jolu-side text-jolu-muted outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent">
           <Copy aria-hidden className="size-4" />
@@ -319,20 +319,20 @@ function InfoPanel({ session, page, accountText, onCopy, onDrillUsage }: {
       <div className="flex gap-2.5">
         {split.map(([label, value]) => (
           <div key={label} className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-lg bg-jolu-side p-2.5">
-            <span className="text-[10px] text-jolu-muted">{label}</span>
+            <span className="text-[11px] text-jolu-muted">{label}</span>
             <span className={cn("tnum text-[17px] font-semibold", value === null ? "text-jolu-muted" : "text-jolu-text")}>{formatTokens(value)}</span>
           </div>
         ))}
       </div>
       <div className="flex items-center gap-2.5">
-        <span className="text-[11px] text-jolu-muted">
+        <span className="text-[12px] text-jolu-muted">
           估算费用 {page && page.priced_requests ? formatUsd(page.cost) : "—"} · {session.requests} 次调用
           {page && page.priced_requests < page.requests ? `（${page.requests - page.priced_requests} 次未计价）` : ""}
         </span>
         <span className="flex-1" />
         <SmallButton accent onClick={onDrillUsage}>查看用量明细<ChevronRight aria-hidden className="size-3.5" /></SmallButton>
       </div>
-      <p className="text-[10px] text-jolu-muted">缺少模型价格或计量字段时显示 —；账号归属不使用当前登录账号推断。</p>
+      <p className="text-[11px] text-jolu-muted">缺少模型价格或计量字段时显示 —；账号归属不使用当前登录账号推断。</p>
     </div>
   )
 }

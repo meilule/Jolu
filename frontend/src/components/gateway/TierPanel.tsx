@@ -41,7 +41,7 @@ export function TierPanel({ models, mainModel, subagent, draft, onDraft, busy, w
     const auto: AutoChoice = value === "default" ? { kind: "default" } : value === "subagent" ? { kind: "subagent" } : { kind: "model", model: value.slice("model:".length) }
     onDraft({ ...draft, auto })
   }
-  const select = "h-8 min-w-0 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11px] text-jolu-text outline-none focus:border-jolu-accent"
+  const select = "h-8 min-w-0 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[12px] text-jolu-text outline-none focus:border-jolu-accent"
 
   return (
     <div className="mt-1 flex flex-col gap-1 border-t border-jolu-border pt-1.5" data-tier-panel>
@@ -58,7 +58,7 @@ export function TierPanel({ models, mainModel, subagent, draft, onDraft, busy, w
             return (
               <div key={tier} className="flex flex-col gap-1">
                 <div className="flex items-center gap-1.5">
-                  <span className="w-[62px] shrink-0 text-[10px] text-jolu-text">{TIER_LABELS[tier]}</span>
+                  <span className="w-[62px] shrink-0 text-[11px] text-jolu-text">{TIER_LABELS[tier]}</span>
                   <select aria-label={`${TIER_LABELS[tier]}模型`} value={model} disabled={busy} onChange={(event) => setModel(tier, event.target.value)} className={cn(select, "flex-1")}>
                     <option value="">跟随主模型</option>
                     {models.map((entry) => <option key={entry.id} value={entry.id}>{entry.id}</option>)}
@@ -93,7 +93,7 @@ export function TierPanel({ models, mainModel, subagent, draft, onDraft, busy, w
             )
           })}
           <div className="flex items-center gap-1.5">
-            <span className="w-[62px] shrink-0 text-[10px] text-jolu-text">Auto 判别</span>
+            <span className="w-[62px] shrink-0 text-[11px] text-jolu-text">Auto 判别</span>
             <select aria-label="Auto 判别模型" value={autoValue} disabled={busy} onChange={(event) => setAuto(event.target.value)} className={cn(select, "flex-1")}>
               <option value="default">交给 Claude Code 自己挑</option>
               <option value="subagent">跟随子代理 · {subagent || `主模型 ${mainModel || "未选"}`}</option>
@@ -103,7 +103,7 @@ export function TierPanel({ models, mainModel, subagent, draft, onDraft, busy, w
           <span className="text-[8.5px] text-jolu-muted">Auto 判别是 Claude Code 每个动作前先跑的分类器，选便宜的模型能省不少。</span>
           {wired && (
             <button type="button" disabled={busy} onClick={onApply}
-              className="h-8 self-end rounded-lg bg-jolu-accent px-3 text-[11px] font-medium text-[#071B10] outline-none disabled:opacity-45">
+              className="h-8 self-end rounded-lg bg-jolu-accent px-3 text-[12px] font-medium text-[#071B10] outline-none disabled:opacity-45">
               应用档位
             </button>
           )}

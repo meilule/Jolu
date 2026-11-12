@@ -92,7 +92,7 @@ export function SearchSection() {
           return (
             <div key={index} className="flex flex-col gap-2 border-t border-jolu-border py-3.5" data-search-row>
               <div className="flex items-center gap-2">
-                <span className="w-5 shrink-0 text-center text-[11px] text-jolu-muted">{index + 1}</span>
+                <span className="w-5 shrink-0 text-center text-[12px] text-jolu-muted">{index + 1}</span>
                 <SelectField
                   label="搜索后端"
                   value={draft.vendor}
@@ -102,7 +102,7 @@ export function SearchSection() {
                   className="w-[200px]"
                 />
                 <span className="flex-1" />
-                <span className="text-[11px] text-jolu-muted">暂停</span>
+                <span className="text-[12px] text-jolu-muted">暂停</span>
                 <Switch label={`暂停 ${vendor?.name ?? draft.vendor}`} on={draft.off} disabled={disabled} onChange={(off) => update(index, { off })} />
                 <ActionButton
                   tone="danger"
@@ -144,7 +144,7 @@ export function SearchSection() {
           >
             添加后端
           </ActionButton>
-          <span className={cn("flex-1 truncate text-[11px]", problem && changed ? "text-jolu-danger" : "text-jolu-muted")}>
+          <span className={cn("flex-1 truncate text-[12px]", problem && changed ? "text-jolu-danger" : "text-jolu-muted")}>
             {changed ? problem ?? "有未保存的修改" : "保留编辑框里的掩码 = 保留原 Key"}
           </span>
           <ActionButton tone="secondary" disabled={disabled || !changed || saving} onClick={() => setDrafts(toDrafts(saved))}>撤销</ActionButton>
@@ -166,16 +166,16 @@ export function SearchSection() {
             </label>
             <ActionButton busy={trying} disabled={disabled || !query.trim() || changed} onClick={trySearch}>试搜</ActionButton>
           </div>
-          {changed && <span className="text-[11px] text-jolu-muted">先保存，再试搜。</span>}
+          {changed && <span className="text-[12px] text-jolu-muted">先保存，再试搜。</span>}
           {tryError && <Notice tone="danger">{tryError}</Notice>}
-          {hits && hits.length === 0 && <span className="text-[11px] text-jolu-muted">没有结果。</span>}
+          {hits && hits.length === 0 && <span className="text-[12px] text-jolu-muted">没有结果。</span>}
           {hits && hits.length > 0 && (
             <ol className="flex flex-col gap-2" aria-label="试搜结果">
               {hits.map((hit, index) => (
                 <li key={`${hit.url}-${index}`} className="flex min-w-0 flex-col gap-0.5">
                   <span className="truncate text-xs font-medium text-jolu-text">{index + 1}. {hit.title}</span>
-                  <span className="truncate font-mono text-[10.5px] text-jolu-muted">{hit.url}</span>
-                  {hit.snippet && <span className="line-clamp-2 text-[11px] text-jolu-muted">{hit.snippet}</span>}
+                  <span className="truncate font-mono text-[11.5px] text-jolu-muted">{hit.url}</span>
+                  {hit.snippet && <span className="line-clamp-2 text-[12px] text-jolu-muted">{hit.snippet}</span>}
                 </li>
               ))}
             </ol>

@@ -111,7 +111,7 @@ export function IslandView() {
       </div>}
       </ContentTransition>
 
-      <p className="flex items-center gap-[7px] text-[11px] text-jolu-muted">
+      <p className="flex items-center gap-[7px] text-[12px] text-jolu-muted">
         <Info aria-hidden className="size-3.5 shrink-0" />
         设置即时生效；主面板与灵动岛同步切换主题。
       </p>
@@ -130,7 +130,7 @@ function StyleSection({ value, disabled, onChange }: { value: IslandStyle; disab
     <section className="flex w-full flex-col gap-2">
       <div className="flex items-baseline justify-between gap-4">
         <h2 className="text-sm font-semibold text-jolu-text">灵动岛样式</h2>
-        <span className="text-[11px] text-jolu-muted">本体与全部分身同时切换，随时可改回</span>
+        <span className="text-[12px] text-jolu-muted">本体与全部分身同时切换，随时可改回</span>
       </div>
       <div role="radiogroup" aria-label="灵动岛样式" className="grid grid-cols-2 gap-5">
         {STYLE_OPTIONS.map((option) => {
@@ -154,7 +154,7 @@ function StyleSection({ value, disabled, onChange }: { value: IslandStyle; disab
                   {option.title}
                   {active && <Check aria-hidden className="size-3.5 text-jolu-on" />}
                 </span>
-                <span className="text-[11px] leading-snug text-jolu-muted">{option.desc}</span>
+                <span className="text-[12px] leading-snug text-jolu-muted">{option.desc}</span>
               </span>
             </button>
           )
@@ -223,7 +223,7 @@ function ClonesSection({ settings, ready }: { settings: AppSettings; ready: bool
       <div className="flex h-8 items-center justify-between gap-4">
         <div className="flex items-baseline gap-3">
           <h2 className="text-sm font-semibold text-jolu-text">连接与分身</h2>
-          <span className="tnum text-[11px] text-jolu-muted">{count} / {MAX_ISLANDS}</span>
+          <span className="tnum text-[12px] text-jolu-muted">{count} / {MAX_ISLANDS}</span>
         </div>
         <div className="flex items-center gap-2">
           <SelectField
@@ -248,7 +248,7 @@ function ClonesSection({ settings, ready }: { settings: AppSettings; ready: bool
       </div>
 
       <div role="table" aria-label="灵动岛窗口" className="jolu-card overflow-hidden rounded-xl border border-jolu-border bg-jolu-cc-surface">
-        <div role="row" className="grid h-7 grid-cols-[110px_minmax(0,1fr)_160px_32px] items-center gap-4 bg-jolu-side px-4 text-[11px] text-jolu-muted">
+        <div role="row" className="grid h-7 grid-cols-[110px_minmax(0,1fr)_160px_32px] items-center gap-4 bg-jolu-side px-4 text-[12px] text-jolu-muted">
           <span role="columnheader">目标窗口</span>
           <span role="columnheader">显示连接</span>
           <span role="columnheader">显示位置</span>
@@ -290,8 +290,8 @@ function ClonesSection({ settings, ready }: { settings: AppSettings; ready: bool
           </div>
         ))}
       </div>
-      {conn.error && <p role="status" className="text-[11px] text-jolu-danger">连接列表读取失败：{conn.error}</p>}
-      <p className="text-[11px] text-jolu-muted">新分身沿用来源窗口的连接；最多 8 个，最后一个不可销毁。关闭显示时，连接与位置操作禁用。</p>
+      {conn.error && <p role="status" className="text-[12px] text-jolu-danger">连接列表读取失败：{conn.error}</p>}
+      <p className="text-[12px] text-jolu-muted">新分身沿用来源窗口的连接；最多 8 个，最后一个不可销毁。关闭显示时，连接与位置操作禁用。</p>
       {destroying && <ConfirmDialog returnFocusTo={destroying.trigger} title={`销毁「${destroying.name}」？`} description="将关闭这个灵动岛并移除它的窗口配置。账号连接和历史统计会保留。" confirmLabel="销毁灵动岛" danger onClose={() => setDestroying(null)} onConfirm={async () => { await api.islandAction("clone_destroy", destroying.id); toast.success(`已销毁${destroying.name}`) }} />}
     </section>
   )
@@ -363,7 +363,7 @@ function Row({ title, desc, control, card = false, className }: { title: string;
     <div className={cn("flex h-14 items-center gap-[18px] px-4", card && "jolu-card border border-jolu-border bg-jolu-cc-surface", className)}>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="text-[13px] font-medium text-jolu-text">{title}</span>
-        <span className="truncate text-[11px] text-jolu-muted" title={desc}>{desc}</span>
+        <span className="truncate text-[12px] text-jolu-muted" title={desc}>{desc}</span>
       </div>
       <div className="shrink-0">{control}</div>
     </div>

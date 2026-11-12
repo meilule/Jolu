@@ -33,14 +33,14 @@ function DiffDialog({ disk, draft, onUseDisk, onKeepDraft, onClose }: {
   const added = lines.filter((l) => l.kind === "add").length
   return (
     <DialogShell width={760} title="查看差异" onClose={onClose}>
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-jolu-muted">
+      <div className="flex flex-wrap items-center gap-2 text-[12px] text-jolu-muted">
         <span className="rounded bg-jolu-danger-soft px-1.5 py-0.5 font-mono text-jolu-danger">- 磁盘版本</span>
         <span className="rounded bg-jolu-selected px-1.5 py-0.5 font-mono text-jolu-on">+ 当前草稿</span>
         <span className="flex-1" />
         <span>{removed || added ? `删除 ${removed} 行 · 新增 ${added} 行` : "两个版本内容相同"}</span>
       </div>
-      {disk.truncated && <p role="alert" className="rounded-lg bg-jolu-danger-soft px-3 py-2 text-[11px] text-jolu-danger">磁盘上的文件超过 512 KB，只对比了前 512 KB；为避免丢失内容，不能直接使用磁盘版本。</p>}
-      <div className="max-h-[420px] min-h-[160px] overflow-auto rounded-lg border border-jolu-border bg-jolu-bg py-1 font-mono text-[11px] leading-5">
+      {disk.truncated && <p role="alert" className="rounded-lg bg-jolu-danger-soft px-3 py-2 text-[12px] text-jolu-danger">磁盘上的文件超过 512 KB，只对比了前 512 KB；为避免丢失内容，不能直接使用磁盘版本。</p>}
+      <div className="max-h-[420px] min-h-[160px] overflow-auto rounded-lg border border-jolu-border bg-jolu-bg py-1 font-mono text-[12px] leading-5">
         {lines.map((line, i) => (
           <div key={i} className={cn("flex min-w-max whitespace-pre px-3", line.kind === "del" && "bg-jolu-danger-soft text-jolu-danger", line.kind === "add" && "bg-jolu-selected text-jolu-on", line.kind === "same" && "text-jolu-text")}>
             <span aria-hidden className="w-4 shrink-0 select-none">{line.kind === "del" ? "-" : line.kind === "add" ? "+" : " "}</span>
@@ -218,7 +218,7 @@ export function SkillEditor({ target, items, platforms, projects, onCancel, onSa
             <FieldSelect label="作用范围" value={scopeKey} disabled={editing || saving} onChange={setScopeKey} options={editing && scope !== "global" && scope !== "project" ? [{ value: scopeKey, label: scopeKey }] : scopeOptions} />
           </Field>
         </div>
-        <p className="truncate text-[11px] text-jolu-muted">
+        <p className="truncate text-[12px] text-jolu-muted">
           {editing ? `文件位置：${target.item.path}` : `保存到 ${targetDirHint(platform, scope, project, platforms)}${name || "<名称>"}/`}
           {!editing && projects.length === 0 && " · 需要项目范围时，先在「目录设置」添加项目目录"}
         </p>
@@ -241,7 +241,7 @@ export function SkillEditor({ target, items, platforms, projects, onCancel, onSa
                   >
                     <FileText aria-hidden className="size-4 text-jolu-muted" />基础模板（替换当前内容）
                   </Menu.Item>
-                  <span className="block px-2 py-1 text-[10px] text-jolu-muted">更多模板待确认</span>
+                  <span className="block px-2 py-1 text-[11px] text-jolu-muted">更多模板待确认</span>
                 </Menu.Content>
               </Menu.Portal>
             </Menu.Root>
@@ -252,7 +252,7 @@ export function SkillEditor({ target, items, platforms, projects, onCancel, onSa
             onChange={(e) => setContent(e.target.value)}
             spellCheck={false}
             aria-label="SKILL.md 内容"
-            className="min-h-0 flex-1 resize-none bg-transparent font-mono text-[11px] leading-5 text-jolu-text outline-none"
+            className="min-h-0 flex-1 resize-none bg-transparent font-mono text-[12px] leading-5 text-jolu-text outline-none"
           />
         </section>
         <section className="jolu-card flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto rounded-xl border border-jolu-border bg-jolu-cc-surface p-6">
@@ -286,7 +286,7 @@ export function SkillEditor({ target, items, platforms, projects, onCancel, onSa
         <button type="button" role="checkbox" disabled={saving} aria-checked={enable} onClick={() => setEnable(!enable)} className="flex h-[34px] items-center gap-2 self-start rounded-md text-xs text-jolu-text outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent">
           {enable ? <SquareCheck aria-hidden className="size-4 text-jolu-on" /> : <Square aria-hidden className="size-4 text-jolu-muted" />}
           保存后启用
-          <span className="text-[11px] text-jolu-muted">（{platform === "claude" ? "不勾选时放入 Jolu 停用区，工具不会加载，同名副本不受影响" : "不勾选时按这份 SKILL.md 的路径写入 config.toml"}）</span>
+          <span className="text-[12px] text-jolu-muted">（{platform === "claude" ? "不勾选时放入 Jolu 停用区，工具不会加载，同名副本不受影响" : "不勾选时按这份 SKILL.md 的路径写入 config.toml"}）</span>
         </button>
       )}
 

@@ -178,7 +178,7 @@ export function ImportDialog({ platform, platforms, projects, onClose: onDismiss
           <FolderOpen aria-hidden className="size-4 shrink-0 text-jolu-on" />
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             <span className="truncate font-mono text-xs text-jolu-text">{source ?? "尚未选择目录"}</span>
-            <span className="text-[10px] text-jolu-muted">
+            <span className="text-[11px] text-jolu-muted">
               {scanning ? "正在检查…" : scan ? `已扫描 ${scan.items.length} 个 Skill · 包含引用文件与资源` : "选择包含 SKILL.md 的目录，或其上一级目录"}
             </span>
           </div>
@@ -188,18 +188,18 @@ export function ImportDialog({ platform, platforms, projects, onClose: onDismiss
         <div className="flex flex-col gap-2 rounded-lg bg-jolu-side p-3">
           <form className="flex items-end gap-2.5" onSubmit={(e) => { e.preventDefault(); void fetchGit() }}>
             <label className="flex min-w-0 flex-1 flex-col gap-1.5">
-              <span className="text-[11px] text-jolu-muted">仓库地址</span>
+              <span className="text-[12px] text-jolu-muted">仓库地址</span>
               <input value={gitUrl} onChange={(e) => setGitUrl(e.target.value)} disabled={fetching} placeholder="https://github.com/owner/repo" spellCheck={false} aria-label="仓库地址" className={cn(INPUT_CLASS, "font-mono")} />
             </label>
             <label className="flex w-[150px] shrink-0 flex-col gap-1.5">
-              <span className="text-[11px] text-jolu-muted">分支（可选）</span>
+              <span className="text-[12px] text-jolu-muted">分支（可选）</span>
               <input value={gitBranch} onChange={(e) => setGitBranch(e.target.value)} disabled={fetching} placeholder="默认分支" spellCheck={false} aria-label="分支（可选）" className={cn(INPUT_CLASS, "font-mono")} />
             </label>
             <JoluButton type="submit" variant="outline" className="h-[38px] shrink-0" disabled={!gitUrlOk || fetching}>
               {fetching ? <LoaderCircle aria-hidden className="animate-spin" /> : <Download aria-hidden />}{fetching ? "获取中…" : "获取"}
             </JoluButton>
           </form>
-          <span className="truncate text-[10px] text-jolu-muted" title={scan?.source}>
+          <span className="truncate text-[11px] text-jolu-muted" title={scan?.source}>
             {fetching ? "正在用本机 git 拉取仓库（最长 60 秒）…"
               : scanning ? "正在检查…"
                 : scan ? `已扫描 ${scan.items.length} 个 Skill · 包含引用文件与资源`
@@ -215,15 +215,15 @@ export function ImportDialog({ platform, platforms, projects, onClose: onDismiss
           <FieldSelect label="安装范围" value={scopeKey} onChange={setScopeKey} options={scopeOptions(projects)} />
         </Field>
       </div>
-      <span className="truncate text-[11px] text-jolu-muted">目标：{scan?.target ?? targetDirHint(target, scope, project, platforms)}</span>
+      <span className="truncate text-[12px] text-jolu-muted">目标：{scan?.target ?? targetDirHint(target, scope, project, platforms)}</span>
 
-      {error && <p role="alert" className="rounded-lg bg-jolu-danger-soft px-3 py-2 text-[11px] text-jolu-danger">{error}</p>}
+      {error && <p role="alert" className="rounded-lg bg-jolu-danger-soft px-3 py-2 text-[12px] text-jolu-danger">{error}</p>}
 
       {scan && (
         <div className="flex flex-col overflow-hidden rounded-[10px] border border-jolu-border">
           <div className="flex h-9 items-center justify-between bg-jolu-side px-3">
             <span className="text-xs font-semibold text-jolu-text">待导入项目</span>
-            <span className="text-[10px] text-jolu-muted">{counts.ok} 可导入 · {counts.conflict} 冲突 · {counts.invalid} 异常</span>
+            <span className="text-[11px] text-jolu-muted">{counts.ok} 可导入 · {counts.conflict} 冲突 · {counts.invalid} 异常</span>
           </div>
           {!scan.items.length && <p className="px-3 py-4 text-xs text-jolu-muted">这个目录里没有找到带 SKILL.md 的 Skill</p>}
           <div className="max-h-[240px] overflow-y-auto">
@@ -245,7 +245,7 @@ export function ImportDialog({ platform, platforms, projects, onClose: onDismiss
                   )}
                   <div className="flex min-w-0 flex-1 flex-col gap-1">
                     <span className="truncate text-xs font-medium text-jolu-text">{item.name}</span>
-                    <span className="truncate text-[10px] text-jolu-muted">{item.issue ?? "目录与元信息有效"}</span>
+                    <span className="truncate text-[11px] text-jolu-muted">{item.issue ?? "目录与元信息有效"}</span>
                   </div>
                   {item.status === "ok" && <Tag tone="on">可导入</Tag>}
                   {item.status === "invalid" && <Tag tone="danger">不可导入</Tag>}
@@ -259,7 +259,7 @@ export function ImportDialog({ platform, platforms, projects, onClose: onDismiss
                           <Menu.Item className="flex h-8 cursor-default items-center rounded-md px-2 text-xs text-jolu-text outline-none data-[highlighted]:bg-jolu-side" onSelect={() => setActions((a) => ({ ...a, [item.name]: "skip" }))}>跳过</Menu.Item>
                           <Menu.Item className="flex min-h-8 cursor-default flex-col items-start justify-center rounded-md px-2 py-1 text-xs text-jolu-text outline-none data-[highlighted]:bg-jolu-side" onSelect={() => setActions((a) => ({ ...a, [item.name]: "overwrite" }))}>
                             覆盖
-                            <span className="text-[10px] text-jolu-muted">先备份目标目录，再替换</span>
+                            <span className="text-[11px] text-jolu-muted">先备份目标目录，再替换</span>
                           </Menu.Item>
                         </Menu.Content>
                       </Menu.Portal>
@@ -275,9 +275,9 @@ export function ImportDialog({ platform, platforms, projects, onClose: onDismiss
       <button type="button" role="checkbox" aria-checked={enable} onClick={() => setEnable(!enable)} className="flex h-7 items-center gap-2 self-start rounded-md text-xs text-jolu-text outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent">
         {enable ? <SquareCheck aria-hidden className="size-4 text-jolu-on" /> : <Square aria-hidden className="size-4 text-jolu-muted" />}
         导入后启用
-        <span className="text-[10px] text-jolu-muted">默认关闭；关闭时 Claude Code 放入 Jolu 停用区，Codex 按路径停用</span>
+        <span className="text-[11px] text-jolu-muted">默认关闭；关闭时 Claude Code 放入 Jolu 停用区，Codex 按路径停用</span>
       </button>
-      <div className="flex gap-2 rounded-lg bg-jolu-side p-3 text-[11px] text-jolu-muted">
+      <div className="flex gap-2 rounded-lg bg-jolu-side p-3 text-[12px] text-jolu-muted">
         <Info aria-hidden className="size-4 shrink-0" />
         <span>导入仅复制文件，不跟随符号链接；冲突项默认跳过，选择覆盖时先备份目标目录；格式异常项需先修复。</span>
       </div>
@@ -360,7 +360,7 @@ export function CopyDialog({ items, projects, onClose: onDismiss, onDone }: {
           <FieldSelect label="安装范围" value={scopeKey} onChange={setScopeKey} options={scopeOptions(projects)} />
         </Field>
       </div>
-      <p className="text-[11px] text-jolu-muted">确认目标支持当前 Skill 格式后才允许复制。默认保留源文件，创建独立副本。</p>
+      <p className="text-[12px] text-jolu-muted">确认目标支持当前 Skill 格式后才允许复制。默认保留源文件，创建独立副本。</p>
       <div className="flex max-h-[220px] flex-col gap-1.5 overflow-y-auto">
         {!checks && <LoaderCircle aria-hidden className="size-4 animate-spin text-jolu-muted" />}
         {checks && items.map((item) => {
@@ -368,10 +368,10 @@ export function CopyDialog({ items, projects, onClose: onDismiss, onDone }: {
           const text = typeof c === "string" ? c : c.conflict ? "目标已有同名 Skill，不会覆盖" : c.issue ?? "兼容性校验通过"
           const good = typeof c === "object" && !c.conflict && !c.issue
           return (
-            <div key={item.path} className="flex items-center gap-2 text-[11px]">
+            <div key={item.path} className="flex items-center gap-2 text-[12px]">
               {!single && <span className="w-32 shrink-0 truncate text-jolu-text">{item.name}</span>}
               <Tag tone={good ? "on" : "danger"}>{text}</Tag>
-              {typeof c === "object" && <span className="min-w-0 truncate font-mono text-[10px] text-jolu-muted" title={c.target}>{c.target}</span>}
+              {typeof c === "object" && <span className="min-w-0 truncate font-mono text-[11px] text-jolu-muted" title={c.target}>{c.target}</span>}
             </div>
           )
         })}
@@ -416,10 +416,10 @@ export function RemoveDialog({ item, onClose: onDismiss, onDone }: { item: Skill
   return (
     <DialogShell open={dialogOpen} width={480} title="移除此安装项？" onClose={onClose} busy={removing}>
       <p className="text-xs text-jolu-text">{item.name}  ·  {providerName(item.platform)}{item.scope === "project" ? ` / ${scopeLabel(item)}` : ""}</p>
-      <p className="break-all font-mono text-[11px] text-jolu-muted">{item.path}</p>
-      <p className="text-[11px] text-jolu-muted">只影响此目录中的安装项，其他供应商副本保留。运行中的任务不立即中断；后续加载将不再使用。</p>
+      <p className="break-all font-mono text-[12px] text-jolu-muted">{item.path}</p>
+      <p className="text-[12px] text-jolu-muted">只影响此目录中的安装项，其他供应商副本保留。运行中的任务不立即中断；后续加载将不再使用。</p>
       <Tag tone="on">移除前自动备份到应用数据目录</Tag>
-      {error && <p role="alert" className="text-[11px] text-jolu-danger">{error}</p>}
+      {error && <p role="alert" className="text-[12px] text-jolu-danger">{error}</p>}
       <div className="flex justify-end gap-2">
         <JoluButton variant="outline" className="h-[34px]" disabled={removing} onClick={onClose}>取消</JoluButton>
         <JoluButton variant="danger-soft" className="h-[34px]" disabled={removing} onClick={() => void submit()}>
@@ -506,8 +506,8 @@ export function DirectoryDialog({ platform, roots, projects, onClose: onDismiss,
     <div key={key} className={cn("flex items-center gap-2.5 rounded-lg bg-jolu-side p-3", dim && "opacity-55")}>
       <FolderOpen aria-hidden className="size-4 shrink-0 text-jolu-muted" />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-[10px] text-jolu-muted">{label}</span>
-        <span className="truncate font-mono text-[11px] text-jolu-text" title={path}>{path}</span>
+        <span className="text-[11px] text-jolu-muted">{label}</span>
+        <span className="truncate font-mono text-[12px] text-jolu-text" title={path}>{path}</span>
         {note}
       </div>
       {action}
@@ -516,7 +516,7 @@ export function DirectoryDialog({ platform, roots, projects, onClose: onDismiss,
 
   const globalRow = (r: SkillRootDto) => {
     if (!r.overridable) {
-      const note = r.exists ? null : <span className="text-[10px] text-jolu-muted">未检测到这个目录</span>
+      const note = r.exists ? null : <span className="text-[11px] text-jolu-muted">未检测到这个目录</span>
       return row(`g-${r.platform}-${r.path}`, `${providerName(r.platform)} · 全局目录`, r.path, note,
         <Tip label="共享目录，不受工具环境变量影响，固定扫描"><span tabIndex={0}><JoluButton variant="outline" size="sm" disabled>更换</JoluButton></span></Tip>)
     }
@@ -528,9 +528,9 @@ export function DirectoryDialog({ platform, roots, projects, onClose: onDismiss,
     // 待确认：画板 84 · 01 只画了全局目录旁的「更换」；「恢复默认」、共享目录的禁用说明与下方停用提示按 D-18 补上
     const note = (
       <>
-        {notes && <span className="text-[10px] text-jolu-muted">{notes}</span>}
+        {notes && <span className="text-[11px] text-jolu-muted">{notes}</span>}
         {view.staleParked > 0 && (
-          <span className="flex items-start gap-1 text-[10px] text-jolu-text">
+          <span className="flex items-start gap-1 text-[11px] text-jolu-text">
             {/* 待确认：画板 84 未画此状态 */}
             <Info aria-hidden className="mt-px size-3 shrink-0" />{staleParkedNote(view.staleParked)}
           </span>
@@ -548,7 +548,7 @@ export function DirectoryDialog({ platform, roots, projects, onClose: onDismiss,
 
   return (
     <DialogShell open={dialogOpen} width={600} title="扫描目录设置" onClose={onClose} busy={saving}>
-      <p className="text-[11px] text-jolu-muted">供应商：{platform === "all" ? "全部" : providerName(platform)} · 全局目录可更换，只影响 Jolu 扫描和写入的位置，{GLOBAL_DIR_NOTE}；项目目录来自会话记录和手动添加</p>
+      <p className="text-[12px] text-jolu-muted">供应商：{platform === "all" ? "全部" : providerName(platform)} · 全局目录可更换，只影响 Jolu 扫描和写入的位置，{GLOBAL_DIR_NOTE}；项目目录来自会话记录和手动添加</p>
       <div className="flex max-h-[400px] flex-col gap-2 overflow-y-auto">
         {globals.map(globalRow)}
         {custom.map(p=>row(`c-${p}`,"自定义 · 只读扫描",p,null,<JoluButton variant="outline" size="sm" disabled={saving} onClick={()=>setCustom(custom.filter(x=>x!==p))}>移除</JoluButton>))}
@@ -568,14 +568,14 @@ export function DirectoryDialog({ platform, roots, projects, onClose: onDismiss,
             off,
           )
         })}
-        {!manual.length && !sessions.length && <p className="px-1 text-[11px] text-jolu-muted">会话记录里还没有项目目录；可以手动添加。</p>}
+        {!manual.length && !sessions.length && <p className="px-1 text-[12px] text-jolu-muted">会话记录里还没有项目目录；可以手动添加。</p>}
       </div>
-      {error && <p role="alert" className="text-[11px] text-jolu-danger">{error}</p>}
+      {error && <p role="alert" className="text-[12px] text-jolu-danger">{error}</p>}
       <div className="flex gap-2">
         <JoluButton variant="neutral" size="sm" disabled={!isTauri || saving} onClick={() => void add()}><Plus aria-hidden />添加目录</JoluButton>
         <JoluButton variant="soft" size="sm" disabled={saving} onClick={() => void save()}><RefreshCw aria-hidden />保存并扫描</JoluButton>
       </div>
-      <p className="text-[10px] text-jolu-muted">只扫描含有 Skills 目录的项目；已不存在的目录自动跳过。更换全局目录、忽略或移除项目不会移动或删除任何文件或会话数据。</p>
+      <p className="text-[11px] text-jolu-muted">只扫描含有 Skills 目录的项目；已不存在的目录自动跳过。更换全局目录、忽略或移除项目不会移动或删除任何文件或会话数据。</p>
     </DialogShell>
   )
 }

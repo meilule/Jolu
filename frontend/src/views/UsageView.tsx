@@ -200,7 +200,7 @@ export function UsageView({ active, request, onOpenSession }: {
           <AccountFilter accounts={accountsFor(conn.connections, platform)} value={accounts} onChange={setAccounts} />
           <span className="flex-1" />
           <CurrencyPicker value={costCurrency} loading={fx.loading} onChange={(next) => void cfg.setCostCurrency(next)} hint={fx} />
-          <span className="text-[11px] text-jolu-muted">{range.end.slice(5).replace("-", "/")} · {zone}时区</span>
+          <span className="text-[12px] text-jolu-muted">{range.end.slice(5).replace("-", "/")} · {zone}时区</span>
           <RefreshButton loading={overview.refreshing} onClick={() => { overview.refresh(); if (tab === "analysis") activity.refresh() }} />
         </div>
       ) : (
@@ -243,7 +243,7 @@ export function UsageView({ active, request, onOpenSession }: {
               />
             </label>
             <span className="flex-1" />
-            <span className="text-[11px] text-jolu-muted">统计时区 · {zone} {utcOffsetLabel()}</span>
+            <span className="text-[12px] text-jolu-muted">统计时区 · {zone} {utcOffsetLabel()}</span>
             <ToolButton icon={<Download />} busy={exporting} disabled={exporting || !calls.data?.total_count} onClick={() => void exportCsv()}>
               {exporting ? `正在导出 ${calls.data?.total_count ?? 0} 条…` : "导出 CSV"}
             </ToolButton>

@@ -23,8 +23,8 @@ import {
  */
 
 const ICON_BUTTON = "grid size-7 place-items-center rounded-md text-jolu-muted outline-none hover:bg-jolu-stage hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-35"
-const INPUT = "jolu-control h-8 rounded-lg border border-jolu-border bg-jolu-side px-2.5 text-[11px] text-jolu-text outline-none focus:border-jolu-accent"
-const SELECT = "h-8 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[10.5px] text-jolu-text outline-none focus:border-jolu-accent"
+const INPUT = "jolu-control h-8 rounded-lg border border-jolu-border bg-jolu-side px-2.5 text-[12px] text-jolu-text outline-none focus:border-jolu-accent"
+const SELECT = "h-8 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11.5px] text-jolu-text outline-none focus:border-jolu-accent"
 
 export function RoutingGroupsSection({ catalog, busy, run }: {
   catalog: CatalogModelDto[]
@@ -119,8 +119,8 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
       <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}
         className="flex w-full items-center gap-1.5 rounded-lg px-1 py-1.5 text-left outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent">
         {open ? <ChevronDown aria-hidden className="size-3.5 shrink-0 text-jolu-muted" /> : <ChevronRight aria-hidden className="size-3.5 shrink-0 text-jolu-muted" />}
-        <span className="shrink-0 text-[11.5px] font-semibold text-jolu-text">路由分组（待确认）</span>
-        {groups !== null && <span className="shrink-0 text-[10px] tabular-nums text-jolu-muted">{groups.length} 个</span>}
+        <span className="shrink-0 text-[12px] font-semibold text-jolu-text">路由分组（待确认）</span>
+        {groups !== null && <span className="shrink-0 text-[11px] tabular-nums text-jolu-muted">{groups.length} 个</span>}
         <span className="flex-1" />
       </button>
       {open && (
@@ -129,9 +129,9 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
             把多个「来源/模型」组成一个模型 id <code className="font-mono">group/分组id</code>，工具按它调用，网关按策略在成员间分摊与失败转移；按 Jolu.pen 画板确认后移入主界面。
           </p>
           {!isTauri ? (
-            <p className="text-[10.5px] text-jolu-muted">桌面端可用。</p>
+            <p className="text-[11.5px] text-jolu-muted">桌面端可用。</p>
           ) : groups === null ? (
-            <p className="text-[10.5px] text-jolu-muted">{loadFailed ? "分组读取失败，收起后再展开可重试。" : "读取分组…"}</p>
+            <p className="text-[11.5px] text-jolu-muted">{loadFailed ? "分组读取失败，收起后再展开可重试。" : "读取分组…"}</p>
           ) : (
             <>
               <div className="flex flex-col">
@@ -143,12 +143,12 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
                         <button type="button" aria-expanded={isOpen} onClick={() => toggleRow(group.slug)}
                           className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1.5 text-left outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent">
                           {isOpen ? <ChevronDown aria-hidden className="size-3.5 shrink-0 text-jolu-muted" /> : <ChevronRight aria-hidden className="size-3.5 shrink-0 text-jolu-muted" />}
-                          <span className="truncate text-[11.5px] font-semibold text-jolu-text">{group.name}</span>
-                          <span className="shrink-0 font-mono text-[10px] text-jolu-muted">（{group.slug}）</span>
-                          <span className="shrink-0 text-[10px] text-jolu-muted">· {strategyText(group.strategy)}</span>
-                          <span className="shrink-0 text-[10px] text-jolu-muted">· {group.members.length} 个成员</span>
+                          <span className="truncate text-[12px] font-semibold text-jolu-text">{group.name}</span>
+                          <span className="shrink-0 font-mono text-[11px] text-jolu-muted">（{group.slug}）</span>
+                          <span className="shrink-0 text-[11px] text-jolu-muted">· {strategyText(group.strategy)}</span>
+                          <span className="shrink-0 text-[11px] text-jolu-muted">· {group.members.length} 个成员</span>
                           {group.members.some((member) => isMemberPaused(member, Date.now())) && (
-                            <span className="shrink-0 text-[10px] text-jolu-warn">· {group.members.filter((member) => isMemberPaused(member, Date.now())).length} 个暂停中</span>
+                            <span className="shrink-0 text-[11px] text-jolu-warn">· {group.members.filter((member) => isMemberPaused(member, Date.now())).length} 个暂停中</span>
                           )}
                         </button>
                         <button type="button" className={cn(ICON_BUTTON, "hover:text-jolu-danger")} title="删除路由分组" aria-label={`删除路由分组 ${group.name}`}
@@ -183,13 +183,13 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
                   )
                 })}
                 {groups.length === 0 && (
-                  <p className="py-3 text-center text-[10.5px] text-jolu-muted">还没有路由分组。在下面新建一个，把多个「来源/模型」组成一个可调用的 id。</p>
+                  <p className="py-3 text-center text-[11.5px] text-jolu-muted">还没有路由分组。在下面新建一个，把多个「来源/模型」组成一个可调用的 id。</p>
                 )}
               </div>
 
               {creating ? (
                 <div className="flex flex-col gap-2 rounded-lg border border-jolu-border bg-jolu-side p-2.5">
-                  <span className="text-[10.5px] font-semibold text-jolu-text">新建路由分组</span>
+                  <span className="text-[11.5px] font-semibold text-jolu-text">新建路由分组</span>
                   <div className="flex flex-wrap items-end gap-2">
                     <label className="flex min-w-[140px] flex-1 flex-col gap-1">
                       <span className="text-[9.5px] text-jolu-muted">名称</span>
@@ -228,7 +228,7 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
                 </div>
               ) : (
                 <button type="button" disabled={busy} onClick={() => setCreating(true)}
-                  className="flex h-8 w-full items-center gap-1.5 rounded-lg border border-dashed border-jolu-border px-2.5 text-[11px] text-jolu-muted outline-none hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
+                  className="flex h-8 w-full items-center gap-1.5 rounded-lg border border-dashed border-jolu-border px-2.5 text-[12px] text-jolu-muted outline-none hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
                   <Plus aria-hidden className="size-3.5" />新建路由分组
                 </button>
               )}
@@ -305,7 +305,7 @@ function MemberPicker({ catalog, members, disabled, onChange, showTier }: {
   return (
     <div className="max-h-[168px] overflow-y-auto rounded-lg border border-jolu-border bg-jolu-bg">
       {rows.map((row) => (
-        <label key={row.key} className="flex h-7 cursor-pointer items-center gap-2 border-b border-jolu-table-divider px-2.5 text-[10.5px] last:border-b-0 hover:bg-jolu-side">
+        <label key={row.key} className="flex h-7 cursor-pointer items-center gap-2 border-b border-jolu-table-divider px-2.5 text-[11.5px] last:border-b-0 hover:bg-jolu-side">
           <input type="checkbox" checked={hasRoutingMember(members, row.member)} disabled={disabled}
             onChange={() => onChange(toggleRoutingMember(members, row.member))} className="size-3.5 accent-[var(--jolu-accent)]" />
           <code className="min-w-0 flex-1 truncate font-mono text-jolu-text">{routingMemberId(row.member)}</code>
@@ -345,7 +345,7 @@ function MemberPicker({ catalog, members, disabled, onChange, showTier }: {
           })()}
         </label>
       ))}
-      {rows.length === 0 && <p className="px-2.5 py-3 text-[10.5px] text-jolu-muted">模型目录为空：先在来源行「拉取」模型清单，再来勾选成员。</p>}
+      {rows.length === 0 && <p className="px-2.5 py-3 text-[11.5px] text-jolu-muted">模型目录为空：先在来源行「拉取」模型清单，再来勾选成员。</p>}
     </div>
   )
 }
