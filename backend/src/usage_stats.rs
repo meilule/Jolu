@@ -402,6 +402,9 @@ pub struct ModelRow {
     pub avg_duration_ms: Option<f64>,
     /// 组内全部请求可计价时才有值，否则显示「—」
     pub cost: Option<f64>,
+    /// 价目出处（官方定价页）与核对日期；本模型未收录价目时为 None（4.4）
+    pub price_source: Option<String>,
+    pub price_checked: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -579,7 +582,10 @@ fn models(reqs: &[Req]) -> Vec<ModelRow> {
         .map(|((platform, model), group)| {
             let durations: Vec<i64> = group.iter().filter_map(|r| r.duration_ms).collect();
             let priced = cost(group.iter().copied());
+            let source = model.as_deref().and_then(|name| crate::pricing::price_source(Some(platform.as_str()), name));
             ModelRow {
+                price_source: source.map(|(url, _)| url.to_string()),
+                price_checked: source.map(|(_, date)| date.to_string()),
                 platform,
                 model,
                 requests: group.len() as i64,
@@ -890,6 +896,25 @@ pub fn calls_csv(conn: &Connection, f: &StatsFilter) -> rusqlite::Result<(String
 mod tests {
     use super::*;
     use crate::db::{insert_records, RequestRecord};
+
+    #[test]
+    fn model_rows_carry_price_source_and_check_date() {
+        let conn = crate::db::open(std::path::Path::new(":memory:")).unwrap();
+        for (key, model) in [("1", "claude-sonnet-4-5"), ("2", "made-up-model")] {
+            conn.execute(
+                "INSERT INTO requests(platform,source,dedup_key,ts,model,total_tokens) VALUES('claude','test',?1,10,?2,5)",
+                rusqlite::params![key, model],
+            )
+            .unwrap();
+        }
+        let filter: StatsFilter = serde_json::from_value(serde_json::json!({"start": 0, "end": 100})).unwrap();
+        let rows = overview(&conn, &filter).unwrap().models;
+        let known = rows.iter().find(|row| row.model.as_deref() == Some("claude-sonnet-4-5")).unwrap();
+        assert!(known.price_source.as_deref().is_some_and(|url| url.starts_with("https://")));
+        assert_eq!(known.price_checked.as_deref(), Some("2026-11-03"));
+        let unknown = rows.iter().find(|row| row.model.as_deref() == Some("made-up-model")).unwrap();
+        assert_eq!((unknown.price_source.as_deref(), unknown.price_checked.as_deref()), (None, None), "未收录不编出处");
+    }
 
     #[test]
     fn source_breakdown_groups_by_connection_and_counts_unattributed_apart() {

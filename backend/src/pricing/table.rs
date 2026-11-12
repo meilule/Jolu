@@ -16,6 +16,9 @@
 
 use super::{LongContext, OffPeak, OffPeakWindow, Price};
 
+/// 本表最近一次逐条对照官方定价页的日期（与文件头「核验日期」同值；改价时一起改）。
+pub(super) const VERIFIED_ON: &str = "2026-11-03";
+
 /// GPT-6 系长上下文规则：>272K 输入时整条请求 input/cache ×2、output ×1.5。
 const LONG_272K_X2: LongContext = LongContext {
     threshold: 272_000,

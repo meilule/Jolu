@@ -386,3 +386,13 @@ export function unpricedNote(cost: {
   if ((cost.unpriced_partial ?? 0) > 0) parts.push(`${cost.unpriced_partial} 次分项不完整`)
   return `${parts.join(" · ")} · 不含月费`
 }
+
+/**
+ * 模型行悬停说明（4.4）：模型全名 + 价目出处与核对日期；未收录价目时如实说「未收录」，不编出处。
+ */
+export function modelPriceTip(row: { model: string | null; price_source?: string | null; price_checked?: string | null }): string {
+  const name = row.model ?? "未知模型"
+  if (!row.price_source) return `${name}\n未收录价目：费用显示 —`
+  const checked = row.price_checked ? ` · 核对于 ${row.price_checked}` : ""
+  return `${name}\n价目来源：${row.price_source}${checked}`
+}

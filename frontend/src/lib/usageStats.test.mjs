@@ -185,3 +185,11 @@ test("未计价说明区分「全部已计价」与三种未计价原因", async
   assert.match(partial, /1 次无用量/)
   assert.match(partial, /2 次分项不完整/)
 })
+
+test("模型行悬停：价目来源与核对日期，未收录如实说明（4.4）", async () => {
+  const { modelPriceTip } = await import("./usageStats.ts")
+  assert.equal(modelPriceTip({ model: "claude-sonnet-4-5", price_source: "https://example.com/pricing", price_checked: "2026-11-03" }),
+    "claude-sonnet-4-5\n价目来源：https://example.com/pricing · 核对于 2026-11-03")
+  assert.equal(modelPriceTip({ model: "made-up", price_source: null }), "made-up\n未收录价目：费用显示 —")
+  assert.equal(modelPriceTip({ model: null }), "未知模型\n未收录价目：费用显示 —")
+})

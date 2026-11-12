@@ -195,6 +195,11 @@ pub fn has_price(platform: Option<&str>, model: &str) -> bool {
     price_of(platform, model).is_some()
 }
 
+/// 价目出处（4.4，模型行悬停用）：官方定价页与本表的核对日期；没有收录的模型为 None。
+pub fn price_source(platform: Option<&str>, model: &str) -> Option<(&'static str, &'static str)> {
+    price_of(platform, model).map(|price| (price.source, table::VERIFIED_ON))
+}
+
 /// 某次请求命中的单价快照，供界面展示费用拆解。
 /// 返回的是**生效单价**（已含长上下文加价与谷时折价），与 `cost` 口径一致。
 #[derive(Debug, Clone, Copy)]

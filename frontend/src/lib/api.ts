@@ -810,6 +810,9 @@ export interface StatsModelRowDto {
   avg_duration_ms: number | null
   /** 组内全部请求可计价时才有值 */
   cost: number | null
+  /** 价目出处（官方定价页）与核对日期；未收录价目时为 null（4.4；旧后端不返回） */
+  price_source?: string | null
+  price_checked?: string | null
 }
 
 export interface StatsProviderRowDto {

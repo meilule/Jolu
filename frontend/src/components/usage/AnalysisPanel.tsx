@@ -1,5 +1,5 @@
 import { ArrowDownLeft, ArrowUpRight, HardDriveDownload, HardDriveUpload } from "lucide-react"
-import { formatMoney, formatPercent, formatSeconds, formatTokens, modelDisplayName, share } from "@/lib/usageStats"
+import { formatMoney, formatPercent, formatSeconds, formatTokens, modelDisplayName, modelPriceTip, share } from "@/lib/usageStats"
 import { convertFromUsd, type FxState } from "@/lib/costCurrency"
 import type { StatsActivityDto, StatsModelRowDto, StatsOverviewDto } from "@/lib/api"
 import { PlatformLogo } from "@/components/brand/PlatformLogo"
@@ -67,7 +67,7 @@ export function AnalysisPanel({ data, activity, activityError, fx, onDrillModel,
             <button
               key={`${m.platform}-${m.model}`}
               type="button"
-              title={m.model ?? undefined}
+              title={modelPriceTip(m)}
               onClick={() => onDrillModel(m)}
               className="tnum flex h-10 items-center gap-2.5 rounded-[5px] px-2.5 text-left text-xs text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent"
             >
