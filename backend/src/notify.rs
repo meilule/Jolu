@@ -134,6 +134,9 @@ pub fn balance_message(connection_name: &str, remaining: f64, currency: &str) ->
 
 /// Windows 实际发送与点击监听在插件后台线程进行；这里只能记录通知准备阶段返回的错误。
 pub(crate) fn show(app: &AppHandle, title: String, body: String, task_id: Option<i64>) {
+    // 安装版走协议激活的提示框：进了通知中心或 Jolu 已退出时点它也能打开对应页面（4.6）
+    let target = task_id.map_or(crate::toast_link::LinkTarget::Main, crate::toast_link::LinkTarget::Task);
+    if crate::toast_link::show(&app.config().identifier, &title, &body, &target) { return; }
     let mut builder = app.notification().builder().title(title).body(body);
     if let Some(id) = task_id { builder = builder.extra(TASK_KEY, id); }
     if let Err(error) = builder.show() { eprintln!("[通知] 发送失败：{error}"); }
@@ -171,6 +174,8 @@ fn native_notice(app: &AppHandle, notice: &AppNotice) {
     match &notice.body {
         NoticeBody::Balance { connection_id, connection_name, remaining, currency, .. } => {
             let (title, body) = balance_message(connection_name, *remaining, currency);
+            let target = crate::toast_link::LinkTarget::Connection(connection_id.clone());
+            if crate::toast_link::show(&app.config().identifier, &title, &body, &target) { return; }
             if let Err(error) = app.notification().builder().title(title).body(body).extra(CONNECTION_KEY, connection_id.clone()).show() {
                 eprintln!("[通知] 发送失败：{error}");
             }

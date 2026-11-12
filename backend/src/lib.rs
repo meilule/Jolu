@@ -10,6 +10,7 @@ mod opencode;
 mod opencode_usage;
 mod platforms;
 mod quota_registry;
+mod toast_link;
 mod provider_key;
 mod source_store;
 mod native_parse;
@@ -3889,6 +3890,31 @@ fn main_panel_ready(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 通知链接 → 主窗口跳转意图（4.6）。只打开主窗口的链接按「默认打开页面」处理。
+fn link_intent(app: &tauri::AppHandle, target: toast_link::LinkTarget) -> MainIntent {
+    match target {
+        toast_link::LinkTarget::Task(task_id) => MainIntent::Automation { task_id },
+        toast_link::LinkTarget::Connection(connection_id) => MainIntent::Providers { connection_id },
+        toast_link::LinkTarget::Main => MainIntent::Overview { settings: app.try_state::<Cfg>().map(|cfg| cfg.0.get()).unwrap_or_default() },
+    }
+}
+
+/// 第二个实例带着通知链接启动（Jolu 已在运行时点了协议激活的提示框）：交给已运行的实例定位。
+fn activate_with_link(app: &tauri::AppHandle, target: toast_link::LinkTarget) {
+    if STARTUP_READY.load(Ordering::Acquire) {
+        let intent = link_intent(app, target);
+        show_main_with_intent(app, intent);
+        return;
+    }
+    // 还在初始化：先记下跳转，主窗口挂载后自己取走
+    let intent = link_intent(app, target);
+    if let Ok(mut pending) = MAIN_INTENT.lock() { *pending = Some(intent); }
+    STARTUP_REQUESTED.store(true, Ordering::Release);
+    if let Err(error) = show_startup(app) {
+        eprintln!("[启动] 无法显示启动窗口: {error}");
+    }
+}
+
 fn activate_existing_instance(app: &tauri::AppHandle) {
     STARTUP_REQUESTED.store(true, Ordering::Release);
     if STARTUP_READY.load(Ordering::Acquire) {
@@ -4562,8 +4588,11 @@ pub fn run_mcp_search() {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            activate_existing_instance(app);
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            match toast_link::from_args(&args) {
+                Some(target) => activate_with_link(app, target),
+                None => activate_existing_instance(app),
+            }
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -4812,6 +4841,12 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             notify::register_click_handler(&handle)?;
+            // 系统通知冷启动（4.6）：登记 jolu: 协议；本次若是点通知启动的，记下要跳转的页面，主窗口挂载后取走
+            toast_link::register_protocol();
+            if let Some(target) = toast_link::from_args(std::env::args()).filter(|target| *target != toast_link::LinkTarget::Main) {
+                let intent = link_intent(&handle, target);
+                if let Ok(mut pending) = MAIN_INTENT.lock() { *pending = Some(intent); }
+            }
             app.manage(updater::UpdateDownloadState::default());
             let automatic = std::env::args_os().any(|arg| arg == "--autostart");
             if !automatic {

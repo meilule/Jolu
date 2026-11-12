@@ -90,3 +90,5 @@ strip = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Registry", "Win32_System_Threading"] }
+# 系统通知冷启动（toast_link.rs）：自建协议激活的提示框。与通知插件经 tauri-winrt-notification 用的是同一版本，不新增编译单元
+windows = { version = "0.62", features = ["Data_Xml_Dom", "UI_Notifications"] }

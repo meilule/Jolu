@@ -862,6 +862,9 @@ Section Uninstall
   ; We do this when not updating (to preserve the registry value on updates)
   ${If} $UpdateMode <> 1
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
+    ; Jolu: 删除程序启动时登记的 jolu: 协议（系统通知冷启动用，toast_link.rs）；更新时保留，
+    ; 新版本启动后会按新路径重写
+    DeleteRegKey HKCU "Software\Classes\jolu"
   ${EndIf}
 
   ; Delete app data if the checkbox is selected
