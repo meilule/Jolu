@@ -276,6 +276,8 @@ fn summary(app: &tauri::AppHandle) -> Summary {
                 crate::quota::QuotaState::Forbidden { .. } => summary.message = "无额度查询权限".into(),
                 crate::quota::QuotaState::RateLimited { .. } => summary.message = "查询限流，稍后重试".into(),
                 crate::quota::QuotaState::Failed { .. } => summary.message = "额度更新失败".into(),
+                // 观测值不进缓存（查询收尾时才合成），这里只为穷尽分支
+                crate::quota::QuotaState::Observed { .. } => summary.message = "只有上次请求的限流观测".into(),
             }
         }
     }

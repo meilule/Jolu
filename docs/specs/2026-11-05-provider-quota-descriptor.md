@@ -2,7 +2,7 @@
 
 - 日期：2026-11-05
 - 性质：纯调研 + 设计草案，不含实现。除本文件外未改动任何文件，未执行 git，未启停进程。
-- 2026-11-11 核对：前端窄版已实现——`frontend/src/lib/providers/types.ts` / `registry.ts`（§4.2 字段的子集：窗口形态、单位、环几何、标签配色、额度查询入口），`components/island/` 改为查表、不再写平台字面量（`islandPlatformLiterals.test.mjs` 守护），`providerRegistry.test.mjs` 覆盖注册表。仍未做：后端收敛到同一注册表（`backend/src` 中无对应描述符）、运行时 `confidence`（§4.4）、RateLimit 限流头接入（§3.1，网关中未见解析）、`PlatformId` 放宽（`frontend/src/types.ts` 仍为固定 10 项联合类型）、虚构供应商的渲染快照测试。
+- 2026-11-11 核对：前端窄版已实现——`frontend/src/lib/providers/types.ts` / `registry.ts`（§4.2 字段的子集：窗口形态、单位、环几何、标签配色、额度查询入口），`components/island/` 改为查表、不再写平台字面量（`islandPlatformLiterals.test.mjs` 守护），`providerRegistry.test.mjs` 覆盖注册表。2026-11-12 补齐：后端查询路线注册表 `backend/src/quota_registry.rs`、限流头观测 `gateway/ratelimit.rs` 与 `QuotaState::Observed`（前端 `confidence: "derived"`）、`PlatformId` 放宽与 `KNOWN_PLATFORM_IDS`、虚构供应商快照 `frontend/src/lib/fictionalProvider.test.mjs`；描述符仍是 TS 常量而非 `providers/*.json`，`coding_plan.rs` 的域名表未迁。
 - 背景：胶囊灵动岛要接入的供应商持续增加（已知将新增 MiniMax、Qwen/DashScope、Grok/xAI、DeepSeek），而各家的「额度形态」互不相同：5 小时 + 7 天滚动窗口、按日 token 桶、包月 credit、按量计费余额、免费额度。当前实现把这套差异写进了共享组件（`authQuotaRows` 的 5h/7d 占位、`quotaMap` 的 TONE、`CapsuleIsland` 的 `LABEL` 与 `platform === "grok"` 特判、`remainingDisplay` 的按平台文案），每接一家都要再散点改一遍。
 
 > 取证说明：本文所有接口结论都来自实际抓取到的页面，抓取失败或只有二手来源的条目一律标注「未找到官方文档」或「待复核」，不做补写。抓取状态见 §7。

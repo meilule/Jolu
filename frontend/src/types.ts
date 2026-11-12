@@ -1,5 +1,12 @@
 /** 平台、连接、来源、模型的区分见需求文档 §7.2 —— 四者是不同层级，不可混用 */
-export type PlatformId = "claude" | "codex" | "gemini" | "grok" | "opencode" | "zcode" | "trae" | "qoder" | "workbuddy" | "custom"
+/** 已知平台（与 `lib/platformCatalog.json` 一致）；需要枚举全部平台的地方用这个常量 */
+export const KNOWN_PLATFORM_IDS = ["claude", "codex", "gemini", "grok", "opencode", "zcode", "trae", "qoder", "workbuddy", "custom"] as const
+export type KnownPlatformId = (typeof KNOWN_PLATFORM_IDS)[number]
+/**
+ * 平台 id（4.3 放宽为字符串）：新增供应商只要在注册表登记描述符，不必再改这个联合类型。
+ * `string & {}` 保留已知值的自动补全；未知平台由注册表的缺省描述符兜底。
+ */
+export type PlatformId = KnownPlatformId | (string & {})
 
 /** 已实现并可连接 / 已实现但尚未连接 / 尚未接入（禁用） */
 export type PlatformAvailability = "available" | "not-connected" | "not-integrated"

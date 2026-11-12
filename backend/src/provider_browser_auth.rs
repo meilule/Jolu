@@ -77,7 +77,8 @@ impl Credential {
             QuotaState::Unauthorized { reason } => Err(reason),
             _ if verified => Ok(state),
             QuotaState::Unsupported { reason } | QuotaState::Forbidden { reason }
-                | QuotaState::RateLimited { reason } | QuotaState::Failed { reason } => Err(reason),
+                | QuotaState::RateLimited { reason } | QuotaState::Failed { reason }
+                | QuotaState::Observed { reason, .. } => Err(reason),
         }
     }
     pub(crate) fn query(&self) -> QuotaState {
@@ -237,7 +238,8 @@ fn ready(attempt: &Shared, credential: Credential, state: QuotaState) {
         QuotaState::Ok { plan, account, .. } => (plan, account.and_then(|a| a.email), None),
         QuotaState::Unauthorized { .. } => return,
         QuotaState::Unsupported { reason } | QuotaState::Forbidden { reason }
-            | QuotaState::RateLimited { reason } | QuotaState::Failed { reason } => {
+            | QuotaState::RateLimited { reason } | QuotaState::Failed { reason }
+            | QuotaState::Observed { reason, .. } => {
             let account = match &credential {
                 Credential::Workbuddy { session, .. } => session.email.clone(),
                 Credential::Qoder { session, .. } => session.account.clone(),

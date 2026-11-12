@@ -18,6 +18,11 @@ static CATALOG: LazyLock<Vec<Platform>> = LazyLock::new(|| {
 pub fn get(id: &str) -> Option<&'static Platform> {
     CATALOG.iter().find(|p| p.id == id)
 }
+/// 目录里的全部平台 id（注册表一致性测试用）。
+#[cfg(test)]
+pub fn ids() -> Vec<String> {
+    CATALOG.iter().map(|p| p.id.clone()).collect()
+}
 pub fn known(id: &str) -> bool {
     get(id).is_some()
 }

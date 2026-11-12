@@ -181,17 +181,18 @@ test("缺窗口补的占位行与改动前 authQuotaRows 的写死数据一致",
   assert.equal(isPlaceholderWindowKey("30d"), false)
 })
 
-test("Grok 不补 5h / 7d 占位，其余平台沿用占位", () => {
+test("Grok 不补 5h / 7d 占位，其余已登记平台沿用占位，未登记平台不补", () => {
   const weekly = [{ key: "7d", windowName: "周额度", usedPercent: 37.5, usedText: null, resetCountdown: null, badgeTone: "green" }]
   // 改动前：platform === "grok" 时直接用后端原始窗口，不会凭空多出一条 5 小时
   assert.deepEqual(quotaRowsFor("grok", weekly), weekly)
   assert.deepEqual(quotaRowsFor("grok", undefined), [])
-  // 其他平台（含未接入描述符的平台）仍是占位补全：缺 5h 给未知行
+  // 其他已登记平台仍是占位补全：缺 5h 给未知行
   const claudeRows = quotaRowsFor("claude", weekly)
   assert.deepEqual(claudeRows.map((row) => row.key), ["5h", "7d"])
   assert.equal(claudeRows[0].usedPercent, null)
   assert.deepEqual(claudeRows[1], weekly[0])
-  assert.deepEqual(quotaRowsFor("custom-unknown", weekly).map((row) => row.key), ["5h", "7d"])
+  // 4.3：没有描述符的平台不补占位，免得新供应商被画上假的 5h / 7d 空行（额度描述符说明 §6.5 第 3 步）
+  assert.deepEqual(quotaRowsFor("custom-unknown", weekly).map((row) => row.key), ["7d"])
 })
 
 const ZCODE_BASE = { title: "ZCode · BigModel 套餐剩余", source: "本机 ZCode BigModel Coding Plan API Key" }

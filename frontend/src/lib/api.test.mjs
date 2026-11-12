@@ -53,3 +53,14 @@ test("导入预览、确认导入与按日期导出按 Tauri 命令签名传参"
     delete globalThis.window
   }
 })
+
+test("限流头观测按 ok 渲染并标 derived，官方结果原样返回（4.3）", async () => {
+  const { normalizeQuota } = await import("./api.ts")
+  const windows = [{ key: "rl-requests", window_name: "请求数 · 上次请求观测 10:32", used_percent: 60, amount_text: "剩余 4 / 10", resets_at: null }]
+  assert.deepEqual(normalizeQuota({ state: "observed", windows, observed_at_ms: 5, reason: "API Key 不提供订阅额度" }),
+    { state: "ok", windows, plan: null, confidence: "derived", observed_at_ms: 5, reason: "API Key 不提供订阅额度" })
+  const official = { state: "ok", windows, plan: "Pro" }
+  assert.equal(normalizeQuota(official), official)
+  const failed = { state: "failed", reason: "x" }
+  assert.equal(normalizeQuota(failed), failed)
+})

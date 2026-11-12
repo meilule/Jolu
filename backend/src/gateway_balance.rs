@@ -281,6 +281,7 @@ mod tests {
             quota::QuotaState::Forbidden { .. } => ("forbidden", 0, false),
             quota::QuotaState::RateLimited { .. } => ("rate_limited", 0, false),
             quota::QuotaState::Failed { .. } => ("failed", 0, false),
+            quota::QuotaState::Observed { .. } => ("observed", 0, false),
         };
         println!("Claude coding plan: state={kind} windows={windows} resets_present={resets_present}");
         assert!(kind == "ok" && windows > 0, "套餐查询未返回额度窗口，state={kind}");

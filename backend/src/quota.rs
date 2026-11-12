@@ -262,6 +262,14 @@ pub enum QuotaState {
         #[serde(skip_serializing_if = "Option::is_none")]
         account: Option<AccountMetadata>,
     },
+    /// 没有官方额度可查时，网关转发响应里限流头的最近一次观测（4.3，`confidence = derived`）。
+    /// 与 `Ok` 分开：界面必须能和官方值区分，自动化等需要官方口径的地方按未知处理。
+    Observed {
+        windows: Vec<QuotaWindow>,
+        observed_at_ms: i64,
+        /// 本来的结论（为什么没有官方值），界面可一并说明
+        reason: String,
+    },
     /// 该接入方式不支持额度查询（如用 API Key 查官方订阅额度）
     Unsupported { reason: String },
     /// 凭证有效但无权限
@@ -881,7 +889,8 @@ fn validate_remote(
                 | QuotaState::Forbidden { reason }
                 | QuotaState::Unauthorized { reason }
                 | QuotaState::RateLimited { reason }
-                | QuotaState::Failed { reason } => Err(reason),
+                | QuotaState::Failed { reason }
+                | QuotaState::Observed { reason, .. } => Err(reason),
             };
         }
         return match fetch_s2(base, secret) {
@@ -898,7 +907,8 @@ fn validate_remote(
             | QuotaState::Forbidden { reason }
             | QuotaState::Unauthorized { reason }
             | QuotaState::RateLimited { reason }
-            | QuotaState::Failed { reason } => Err(reason),
+            | QuotaState::Failed { reason }
+            | QuotaState::Observed { reason, .. } => Err(reason),
         },
         ("codex", "auth") => {
             let account = crate::creds::local_codex_auth()
@@ -909,7 +919,8 @@ fn validate_remote(
                 | QuotaState::Forbidden { reason }
                 | QuotaState::Unauthorized { reason }
                 | QuotaState::RateLimited { reason }
-                | QuotaState::Failed { reason } => Err(reason),
+                | QuotaState::Failed { reason }
+                | QuotaState::Observed { reason, .. } => Err(reason),
             }
         }
         ("claude" | "codex", "api") => validate_official_api_key(platform, secret),

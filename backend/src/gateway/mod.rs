@@ -28,6 +28,7 @@ pub mod profiles;
 pub mod models_dev;
 pub mod zcode_start_prompt;
 pub mod quota_snapshot;
+pub(crate) mod ratelimit;
 pub mod middleware;
 pub(crate) mod js_hooks;
 pub mod identity;

@@ -9,6 +9,7 @@
 mod opencode;
 mod opencode_usage;
 mod platforms;
+mod quota_registry;
 mod provider_key;
 mod source_store;
 mod native_parse;
@@ -1815,12 +1816,15 @@ async fn connection_quota(app: tauri::AppHandle, db: State<'_, Db>, id: String, 
         }).await.map_err(|_| "浏览器账号查询异常")?;
         return finish_quota_query(app, pool, id, expected, state).await;
     }
-    // 只有原工具登录走本机来源；自定义及各平台 API 连接按其实际地址查询。
-    if platforms::uses_native_quota(&c.platform,&c.kind) {
+    // 查询路线集中在 quota_registry：只有原工具登录走本机来源；自定义及各平台 API 连接按其实际地址查询。
+    let has_base_url = c.base_url.as_deref().is_some_and(|base| !base.is_empty());
+    let route = quota_registry::route(&c.platform, &c.kind, &id, has_base_url);
+    use quota_registry::QuotaRoute;
+    if matches!(route, QuotaRoute::NativeSource | QuotaRoute::QoderSource | QuotaRoute::ZcodeLocal | QuotaRoute::LocalLogin | QuotaRoute::NativeUnsupported) {
         if validation::isolated() {
             return Ok(quota::QuotaState::Unauthorized { reason: "隔离验收不读取原工具的真实登录".into() });
         }
-        if c.kind == "auth" && (matches!(c.platform.as_str(), "trae" | "workbuddy" | "qoder") || id == "monitor:native:zcode:account") {
+        if matches!(route, QuotaRoute::NativeSource | QuotaRoute::QoderSource) {
             let cache_id = id.clone();
             let source_id = native_sources::monitor_id(&id).unwrap_or_default().to_string();
             let platform = c.platform.clone();
@@ -1852,7 +1856,7 @@ async fn connection_quota(app: tauri::AppHandle, db: State<'_, Db>, id: String, 
         // 命令、上面 `monitor:native:zcode:account` 分支同一套缓存与退避，见
         // `cached_zcode_connection_quota`；`force` 原样透传，保持 `Refresh` 的语义
         // （Force 重查、MaxAge 按周期复用、限流退避对所有刷新都生效）。
-        if c.platform == "zcode" && c.kind == "auth" {
+        if route == QuotaRoute::ZcodeLocal {
             let state = tauri::async_runtime::spawn_blocking(move || {
                 cached_zcode_connection_quota(
                     &QUOTA_CACHE,
@@ -1864,13 +1868,7 @@ async fn connection_quota(app: tauri::AppHandle, db: State<'_, Db>, id: String, 
             return finish_quota_query(app, pool, id, expected, state).await;
         }
         // 本机登录的订阅账号：直接读原工具的登录状态查询（各模块只读、不写回凭证）
-        let local: Option<fn() -> quota::QuotaState> = match (c.platform.as_str(), c.kind.as_str()) {
-            ("grok", "auth") => Some(grok_quota::local_grok_quota),
-            ("gemini", "auth") => Some(gemini_quota::local_gemini_quota),
-            ("opencode", "auth") => Some(opencode::local_openai_quota),
-            _ => None,
-        };
-        if let Some(local) = local {
+        if let Some(local) = quota_registry::local_login(&c.platform).filter(|_| route == QuotaRoute::LocalLogin) {
             // 这些来源没有保存到连接表的凭据快照，不能仅凭固定连接id缓存另一个本机登录。
             let state = tauri::async_runtime::spawn_blocking(local).await.map_err(|e|e.to_string())?;
             return finish_quota_query(app, pool, id, expected, state).await;
@@ -1894,8 +1892,9 @@ async fn connection_quota(app: tauri::AppHandle, db: State<'_, Db>, id: String, 
         cache_id,
         force,
         quota_cache_outcome,
-        || match c.base_url.as_deref() {
-            Some(base) if c.kind == "api" && !base.is_empty() => {
+        || match route {
+            QuotaRoute::ApiBaseUrl => {
+                let base = c.base_url.as_deref().unwrap_or_default();
                 // 套餐供应商优先于 sub2api 网关：按 base_url 域名识别（智谱/Kimi/MiniMax 等）
                 if coding_plan::detect_provider(base).is_some() {
                     coding_plan::coding_plan_quota(base, &secret)
@@ -1904,15 +1903,13 @@ async fn connection_quota(app: tauri::AppHandle, db: State<'_, Db>, id: String, 
                     quota::sub2api_quota(base, &secret)
                 }
             }
-            _ => match (c.platform.as_str(), c.kind.as_str()) {
-                ("claude", "auth") => quota::claude_oauth_quota(&secret),
-                ("codex", "auth") => quota::codex_oauth_quota(&secret, local_account.as_deref()),
-                ("claude" | "codex", "api") => quota::QuotaState::Unsupported {
-                    reason: "API Key 不提供订阅额度；将显示官方组织用量（需 Admin Key）或本机会话统计".into(),
-                },
-                (platform, _) => quota::QuotaState::Unsupported {
-                    reason: format!("{platform} 暂未接入官方额度查询"),
-                },
+            QuotaRoute::ClaudeOauth => quota::claude_oauth_quota(&secret),
+            QuotaRoute::CodexOauth => quota::codex_oauth_quota(&secret, local_account.as_deref()),
+            QuotaRoute::ApiKeyNoPlan => quota::QuotaState::Unsupported {
+                reason: "API Key 不提供订阅额度；将显示官方组织用量（需 Admin Key）或本机会话统计".into(),
+            },
+            _ => quota::QuotaState::Unsupported {
+                reason: format!("{} 暂未接入官方额度查询", c.platform),
             },
         },
     )).await.map_err(|e| e.to_string())?;
@@ -1920,11 +1917,29 @@ async fn connection_quota(app: tauri::AppHandle, db: State<'_, Db>, id: String, 
     finish_quota_query(app, pool, id, expected, state).await
 }
 
+/// 没有官方额度时（不支持 / 查询失败），用网关转发时读到的限流头观测兜底（4.3）。
+/// 官方结果、授权失效、权限不足、限流都原样返回：那些结论比一次旧观测更重要。
+fn with_observation(id: &str, state: quota::QuotaState) -> quota::QuotaState {
+    let reason = match &state {
+        quota::QuotaState::Unsupported { reason } | quota::QuotaState::Failed { reason } => reason.clone(),
+        _ => return state,
+    };
+    match crate::gateway::ratelimit::latest(id, chrono::Utc::now().timestamp_millis()) {
+        Some(snapshot) => quota::QuotaState::Observed {
+            windows: crate::gateway::ratelimit::windows(&snapshot),
+            observed_at_ms: snapshot.observed_at_ms,
+            reason,
+        },
+        None => state,
+    }
+}
+
 /// 原生平台与保存凭证的查询共用收尾，在同一数据库锁中核对查询归属并记录状态。
 async fn finish_quota_query(
     app: tauri::AppHandle, pool: Arc<Mutex<rusqlite::Connection>>, id: String,
     expected: connections::Creds, state: quota::QuotaState,
 ) -> Result<quota::QuotaState, String> {
+    let state = with_observation(&id, state);
     let update_id = id.clone();
     let success = matches!(state, quota::QuotaState::Ok { .. });
     let unauthorized = matches!(state, quota::QuotaState::Unauthorized { .. });
@@ -3782,6 +3797,32 @@ fn startup_size(app: &tauri::AppHandle) -> (f64, f64) {
 
 fn fit_scale(width: f64, height: f64) -> f64 {
     (width * 0.9 / 1280.0).min(height * 0.9 / 720.0).clamp(0.4, 1.0)
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use crate::quota::QuotaState;
+
+    /// 4.3：只有「不支持 / 失败」会被限流头观测兜底；官方结果与授权、权限、限流结论原样返回。
+    #[test]
+    fn only_missing_official_quota_falls_back_to_the_last_observation() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-ratelimit-limit-requests", "10".parse().unwrap());
+        headers.insert("x-ratelimit-remaining-requests", "4".parse().unwrap());
+        crate::gateway::ratelimit::observe("obs-conn", &headers, chrono::Utc::now().timestamp_millis());
+        let unsupported = super::with_observation("obs-conn", QuotaState::Unsupported { reason: "API Key 不提供订阅额度".into() });
+        match unsupported {
+            QuotaState::Observed { windows, reason, .. } => {
+                assert_eq!(reason, "API Key 不提供订阅额度");
+                assert_eq!(windows[0].used_percent, Some(60.0));
+            }
+            other => panic!("应该用观测兜底：{other:?}"),
+        }
+        assert!(matches!(super::with_observation("obs-conn", QuotaState::Failed { reason: "x".into() }), QuotaState::Observed { .. }));
+        assert!(matches!(super::with_observation("obs-conn", QuotaState::Unauthorized { reason: "x".into() }), QuotaState::Unauthorized { .. }));
+        assert!(matches!(super::with_observation("obs-conn", QuotaState::Ok { windows: vec![], plan: None, account: None }), QuotaState::Ok { .. }));
+        assert!(matches!(super::with_observation("no-observation", QuotaState::Unsupported { reason: "x".into() }), QuotaState::Unsupported { .. }));
+    }
 }
 
 #[cfg(test)]

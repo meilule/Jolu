@@ -242,12 +242,35 @@ export interface QuotaWindowDto {
  * 绝不渲染为 0% 或满格。
  */
 export type QuotaStateDto =
-  | { state: "ok"; windows: QuotaWindowDto[]; plan: string | null; account?: AccountQuotaMetadata | null }
+  | {
+      state: "ok"; windows: QuotaWindowDto[]; plan: string | null; account?: AccountQuotaMetadata | null
+      /**
+       * 运行时置信度（4.3）：缺省 / official = 官方接口；derived = 网关转发时读到的限流头观测
+       * （窗口名已写「上次请求观测 HH:MM」），此时 `observed_at_ms` 与 `reason`（为什么没有官方值）一并给出
+       */
+      confidence?: "official" | "derived"
+      observed_at_ms?: number
+      reason?: string
+    }
   | { state: "unsupported"; reason: string }
   | { state: "forbidden"; reason: string }
   | { state: "unauthorized"; reason: string }
   | { state: "rate_limited"; reason: string }
   | { state: "failed"; reason: string }
+
+/** 后端的限流头观测状态（`QuotaState::Observed`）；进前端时由 `normalizeQuota` 换成 ok + derived */
+export interface ObservedQuotaDto {
+  state: "observed"
+  windows: QuotaWindowDto[]
+  observed_at_ms: number
+  reason: string
+}
+
+/** 观测值按 ok 渲染但带上 `confidence: "derived"`，现有额度界面无需改动就能显示（窗口名已标明是观测） */
+export function normalizeQuota(state: QuotaStateDto | ObservedQuotaDto): QuotaStateDto {
+  if (state.state !== "observed") return state
+  return { state: "ok", windows: state.windows, plan: null, confidence: "derived", observed_at_ms: state.observed_at_ms, reason: state.reason }
+}
 
 export interface AccountQuotaMetadata {
   /** 官方明确提供的逐范围绝对数；缺失项不可从旧汇总文本反推。 */
@@ -550,7 +573,8 @@ export const api = {
   /** 安装已下载的安装包；Windows 上安装器接管并自动重启 */
   installDownloadedUpdate: () => invoke<void>("install_downloaded_update_and_restart"),
   setSilentStartup: (on: boolean) => invoke<AppSettings>("set_silent_startup", { on }),
-  connectionQuota: (id: string, force: Freshness = false) => invoke<QuotaStateDto>("connection_quota", { id, ...freshnessArgs(force) }),
+  connectionQuota: (id: string, force: Freshness = false) =>
+    invoke<QuotaStateDto | ObservedQuotaDto>("connection_quota", { id, ...freshnessArgs(force) }).then(normalizeQuota),
   connectionApiUsage: (id: string, force: Freshness = false) => invoke<ApiUsageStateDto>("connection_api_usage", { id, ...freshnessArgs(force) }),
   connectionBalance: (id: string, force: Freshness = false) => invoke<BalanceStateDto>("connection_balance", { id, ...freshnessArgs(force) }),
   costEstimate: (

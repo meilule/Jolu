@@ -40,6 +40,8 @@ use crate::proxy::ProxyDeps;
 /// - 402 → `status='exhausted'`（次日零点恢复）
 /// 状态码本身仍原样回传，调用方的退避/重授权逻辑依赖真实状态码。
 pub(crate) fn record_upstream_signal(deps: &Arc<ProxyDeps>, entry: &PoolEntry, upstream: &reqwest::Response) {
+    // 限流头的最近一次观测（4.3）：官方额度接口缺失时作降级来源，200 与 429 都可能带
+    crate::gateway::ratelimit::observe(&entry.connection_id, upstream.headers(), chrono::Utc::now().timestamp_millis());
     let status = upstream.status().as_u16();
     if status == 429 {
         let retry_after = upstream

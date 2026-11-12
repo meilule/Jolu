@@ -671,6 +671,7 @@ mod tests {
                 crate::quota::QuotaState::Forbidden { .. } => "forbidden",
                 crate::quota::QuotaState::RateLimited { .. } => "rate_limited",
                 crate::quota::QuotaState::Failed { .. } => "failed",
+                crate::quota::QuotaState::Observed { .. } => "observed",
             };
             println!("Trae {edition}: fresh_identity_verified={verified} quota_state={quota_state}");
             assert!(verified, "Trae 已保存浏览器账号实时身份核验未通过；原始信息不输出");

@@ -25,8 +25,9 @@ export function authQuotaRows(windows?: QuotaWindow[], missingText: string | nul
  *
  * 描述符声明了 `placeholderWindows: false` 的来源（Grok）直接用后端原始窗口：
  * 它只有周 / 月 / 积分窗口，补 5h / 7d 占位会凭空多出一条「5 小时」。
- * 其余平台沿用 `authQuotaRows` 的占位补全。
+ * 描述符声明了 `placeholderWindows: true` 的平台沿用 `authQuotaRows` 的占位补全；
+ * 没有描述符的平台（新供应商、未登记的来源）不补占位——否则会被画上假的 5h / 7d 空行（4.3）。
  */
 export function quotaRowsFor(platform: string, windows?: QuotaWindow[]): QuotaWindow[] {
-  return providerDescriptor(platform)?.placeholderWindows === false ? windows ?? [] : authQuotaRows(windows)
+  return providerDescriptor(platform)?.placeholderWindows === true ? authQuotaRows(windows) : windows ?? []
 }

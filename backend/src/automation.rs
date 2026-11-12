@@ -793,6 +793,8 @@ pub fn verdict(state: &QuotaState) -> QuotaVerdict {
         QuotaState::Unauthorized { reason } => QuotaVerdict::simple("reauth", reason.clone()),
         QuotaState::Unsupported { reason } | QuotaState::Forbidden { reason } => QuotaVerdict::simple("unsupported", reason.clone()),
         QuotaState::RateLimited { reason } | QuotaState::Failed { reason } => QuotaVerdict::simple("unknown", reason.clone()),
+        // 限流头观测只是「上次请求时刻」的估算，不能据此判定额度可用或用完
+        QuotaState::Observed { reason, .. } => QuotaVerdict::simple("unknown", format!("{reason}（只有上次请求的限流头观测，不作为额度判断依据）")),
     }
 }
 

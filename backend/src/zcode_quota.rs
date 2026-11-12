@@ -721,7 +721,8 @@ pub(crate) fn plan_balance_body(token: &str, device: &str) -> Result<Value, Stri
         QuotaState::Forbidden { reason }
         | QuotaState::RateLimited { reason }
         | QuotaState::Failed { reason }
-        | QuotaState::Unsupported { reason } => reason,
+        | QuotaState::Unsupported { reason }
+        | QuotaState::Observed { reason, .. } => reason,
         QuotaState::Ok { .. } => "ZCode 余额查询失败".to_string(),
     })
 }
