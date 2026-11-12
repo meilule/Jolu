@@ -1,7 +1,7 @@
 # 管家对齐 · 未完成工作接手清单
 
 **日期：** 2026-11-13
-**给谁：** 接手 magpie 对齐剩余工作的同事
+**给谁：** 接手 magpie 对齐剩余工作的同事。**本文档就是要改的交接文档**：完成某项后，更新本文档对应条目的状态，并在 §10（spec 文档）同步勾选。
 **前置阅读：** `docs/specs/2026-11-12-magpie-claude-agent-detail-parity.md`（背景拆解与实现依据，§10 是完成状态总览，§9 是定位与取舍——本文只列「还没做的」，不重复理由）
 
 **定位口径（接手前先对齐）：** Jolu 是 AI 工具的**管家**——持有账号生命周期（登录 → 保存 → 额度 → 续期），magpie 只借凭据转发。每补一项，先做到「不出错」再补下一项；动用户配置必须可还原；未知值不冒充（AGENTS.md 硬约束）。
@@ -105,6 +105,55 @@
 | 画板 | 详情面板与通用接入的界面稿 | F1–F6、P1-1 的表单 |
 
 ---
+
+## 三点五、逐项改动位置（改哪个文件、改什么函数，接手直接照着定位）
+
+> 行号是 2026-11-13 基线（`c2e1dc2`）的大致位置，函数名为准；动手前先 `grep` 确认。
+
+### P0-1 Claude env 写入（B1/B2/B3/B7）
+
+| 文件 | 位置 | 改什么 |
+|---|---|---|
+| `backend/src/gateway/wiring.rs` | `claude_wire`（148 行起）env 写入段（约 227 行附近） | 新增 B1/B2 两个 env 的写入：值来自 `models_dev::lookup_meta` 的窗口/输出字段；写不进快照就还原不了，见下一条 |
+| `backend/src/gateway/wiring_store.rs` | `Applied`（31 行） | 加 `max_output_tokens: Option<i64>`、`max_context_tokens: Option<i64>` 字段（`#[serde(default)]`，旧快照兼容），断开时这两个键按「我们写的」删除 |
+| `backend/src/gateway/wiring.rs` | 档位写入段（fable 分支） | B3：fable 档为「跟随主模型」且主模型非 Fable 家族时**跳过写入并删键**；用户自选（tier_own）照写 |
+| `backend/src/gateway/wiring.rs` | `claude_wire` / 各档 `_SUPPORTED_CAPABILITIES` 写入处 | B7：上游模型不支持 auto review 时写 `env.CLAUDE_CODE_AUTO_MODE_SERVER = "0"`，同样进快照 |
+| `backend/src/gateway/models_dev.rs` | `lookup_meta`（138 行）/ `builtin`（55 行） | 只读参考：确认窗口与输出字段的名字与覆盖率；缺字段的模型返回 None，调用方不写键 |
+| 测试 | `wiring.rs` tests（1506–1760 行有一组往返测试可照抄模式） | 每个新键加「写入→读回→断开还原」三段断言；B3 加「跟随态不写、自选态照写」断言 |
+
+### P0-2 B8a 回读配置
+
+| 文件 | 位置 | 改什么 |
+|---|---|---|
+| `backend/src/gateway/wiring.rs` | `status_with`（1116 行） | 回读 `settings.json` 顶层 `model` 现值（`edit::GetJSON`），与快照主模型不一致时 `drift = Some("model_changed")`，`reason` 写明「配置里的主模型已被 Claude Code 的 /model 改为 X」 |
+| `backend/src/gateway/wiring.rs` | 新增私有函数 `read_current_model(path)` | 优先级链照 magpie `claudeMain`（spec §4.2.1：顶层 model → 档位别名解 env → ANTHROPIC_MODEL → sonnet 档） |
+| `frontend/src/components/gateway/GatewayDialogs.tsx` | 行渲染（206 行附近的状态文案） | `drift === "model_changed"` 时显示回读到的现值，并提供「以配置为准」按钮（调既有 acceptWiring） |
+
+### P1-1 通用接入兜底
+
+| 文件 | 位置 | 改什么 |
+|---|---|---|
+| `backend/src/db.rs` | 迁移列表末尾 | 新表 `custom_agents(id, name, slug, config_path, format, base_url_key, auth_key, model_key, created_ms)`；迁移可恢复（同款表重复执行跳过） |
+| `backend/src/custom_agents.rs` | 新模块 | CRUD + 探测（`config_path` 存在即 installed）+ 接线（按 format 分派写入：JSON 走 `edit::SetJSON`、TOML 走 `toml_edit`、env 走行改写）；快照/还原复用 `wiring_store` 的机制 |
+| `backend/src/agent_discovery.rs` | `SPECS` 表 | 加「自定义」分支：`discover_with` 里拼上 `custom_agents` 表的条目（dir/file 来自用户填的路径） |
+| `backend/src/lib.rs` | 命令区 + invoke_handler | `custom_agents_list/add/remove/wire/unwire` 五个命令 |
+| `frontend/src/components/gateway/GatewayDialogs.tsx` | 接线弹窗末尾 | 「添加自定义工具」表单（名称/路径/格式/三键名），无画板标「待确认」 |
+
+### P2-2 额度主动通知
+
+| 文件 | 位置 | 改什么 |
+|---|---|---|
+| `backend/src/quota_registry.rs` | `route`（31 行）后加判定函数 | 阈值判定：`used_percent ≥ 80` / `state = Failed / Unauthorized` 触发 |
+| `backend/src/notify.rs` | `notify_task`（145 行）旁加 `notify_quota` | 复用既有通知基建发系统通知；同一连接 24 小时内不重复提醒（内存去重） |
+| `backend/src/lib.rs` | 额度查询命令完成处 | 查询结果落库后调判定 + 通知 |
+
+### P2-3 F6 diff 预览
+
+| 文件 | 位置 | 改什么 |
+|---|---|---|
+| `backend/src/gateway/wiring_store.rs` | `Applied` 旁 | 新增 `changes` 记录：接线/断开时把改动的键值对（文件、键路径、旧值、新值）存进快照表 |
+| `backend/src/lib.rs` | 新命令 `wiring_preview` | 返回「即将发生的变更」与「上次已发生的变更」两份 |
+| `frontend/src/components/gateway/GatewayDialogs.tsx` | 接线弹窗底部 | 「改动了 X · 查看」+ diff 列表 + 「断开并还原」前置确认框（照 magpie `ag-foot`/`ag-diff` 样式，spec §2.5） |
 
 ## 四、纪律（每项的验收都过这几条）
 
