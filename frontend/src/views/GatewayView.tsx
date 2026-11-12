@@ -3,7 +3,7 @@ import { Cable, Layers, Network, Settings2, ShieldAlert } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api, invoke, isTauri } from "@/lib/api"
 import {
-  gatewayApi, type CatalogModelDto, type GatewayGroupsDto, type GatewayMode,
+  gatewayApi, type AgentDiscoveryDto, type CatalogModelDto, type GatewayGroupsDto, type GatewayMode,
   type GatewayStatusDto, type SourceCapabilityDto, type WiringStatusDto,
 } from "@/lib/gatewayApi"
 import { agentLabel, canEscape, circuitText, wiredCount } from "@/lib/gatewayPage"
@@ -152,6 +152,8 @@ export function GatewayView() {
   }
 
   const agents = status?.wiring ?? EMPTY_WIRING
+  // A1（待画板确认）：本机 agent 发现结果；打开接线弹窗时拉一次
+  const [agentDiscovery, setAgentDiscovery] = useState<AgentDiscoveryDto[] | null>(null)
   const serving = connections.filter((connection) => connection.serve_enabled)
   const wired = wiredCount(status)
   const sourceGroups = orderGroups(groups.sources, pinned, "source")
@@ -340,7 +342,11 @@ export function GatewayView() {
           <h1 className="text-[22px] font-semibold text-jolu-text">统一网关</h1>
           <p className="max-w-[660px] text-xs text-jolu-muted">模型来源直连最近会话，实时查看 AI 正在处理的任务。</p>
         </div>
-        <button ref={accessTrigger} type="button" onClick={() => setDialog({ kind: "wiring" })} className="jolu-control motion-button flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-cc-surface px-[11px] text-[12px] text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
+        <button ref={accessTrigger} type="button" onClick={() => {
+            setDialog({ kind: "wiring" })
+            // A1：接线弹窗打开时拉一次本机发现结果（轻量：只查文件与目录，不跑命令）
+            gatewayApi.agentDiscovery().then((list) => setAgentDiscovery(list)).catch(() => setAgentDiscovery(null))
+          }} className="jolu-control motion-button flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-cc-surface px-[11px] text-[12px] text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
           <Cable aria-hidden className="h-3.5 w-3.5" />
           接入设置
         </button>
@@ -440,7 +446,7 @@ export function GatewayView() {
       {dialog?.kind === "serve-conflict" && <MessageDialog title="这个来源没有加入模型池" tone="danger" message={dialog.message} onClose={() => setDialog({ kind: "manage" })} />}
       {dialog?.kind === "shared" && <SharedAccessDialog shared={sharedLan} busy={busy} onSharedChange={(on) => { setSharedLan(on); void run(() => gatewayApi.setSharedLan(on), on ? "已开启局域网共享（重启接入后监听生效）" : "已关闭局域网共享", true).then((ok) => { if (!ok) setSharedLan(!on) }) }} onClose={() => setDialog(null)} run={(work, title) => run(work, title)} />}
       {dialog?.kind === "middleware" && <MiddlewareDialog busy={busy} onClose={() => setDialog(null)} run={(work, title) => run(work, title)} />}
-      {dialog?.kind === "wiring" && <WiringDialog agents={agents} models={claudeModels} modelChoice={claudeModel} onModelChoice={setClaudeModelChoice} subagentChoice={claudeSubagent} onSubagentChoice={setClaudeSubagent} tierDraft={tierDraft} onTierDraft={setTierDraft} onApplyTiers={applyTiers} profiles={profiles} onProfileApply={profileApply} onProfileSave={profileSave} onProfileDelete={profileDelete} busy={busy} onClose={() => setDialog(null)} onWire={(agent) => { setDialog(null); wire(agent) }} onUnwire={confirmUnwire} onAccept={confirmAccept} />}
+      {dialog?.kind === "wiring" && <WiringDialog agents={agents} discovery={agentDiscovery ?? undefined} models={claudeModels} modelChoice={claudeModel} onModelChoice={setClaudeModelChoice} subagentChoice={claudeSubagent} onSubagentChoice={setClaudeSubagent} tierDraft={tierDraft} onTierDraft={setTierDraft} onApplyTiers={applyTiers} profiles={profiles} onProfileApply={profileApply} onProfileSave={profileSave} onProfileDelete={profileDelete} busy={busy} onClose={() => setDialog(null)} onWire={(agent) => { setDialog(null); wire(agent) }} onUnwire={confirmUnwire} onAccept={confirmAccept} />}
       {dialog?.kind === "codex" && <CodexDialog returnFocusTo={accessTrigger.current} mode={agents.find((entry) => entry.agent === "codex")?.codex_mode ?? "provider"} busy={busy} onClose={() => setDialog(null)} onConfirm={() => run(() => gatewayApi.setWiring("codex", true), "已接入 Codex", true)} />}
       {dialog?.kind === "gemini" && <GeminiDialog returnFocusTo={accessTrigger.current} busy={busy} onClose={() => setDialog(null)} onConfirm={() => run(() => gatewayApi.setWiring("gemini", true), "已接入 Gemini CLI", true)} />}
       {dialog?.kind === "restore-failed" && <MessageDialog title="没能恢复工具配置" tone="danger" message={dialog.message} action={{ label: "重试断开", onClick: async () => { setDialog(null); await unwire(dialog.agent) } }} onClose={() => setDialog(null)} />}

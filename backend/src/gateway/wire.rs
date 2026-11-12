@@ -920,6 +920,9 @@ async fn forward_one(
                 (CallerProtocol::Responses, "openai") if crate::gateway::responses_chat::serves_responses(entry.base_url.as_deref()) => Conversion::None,
                 (CallerProtocol::Responses, "openai") => Conversion::ResponsesToChat,
                 (CallerProtocol::Anthropic, "openai") => Conversion::AnthropicToChat,
+                // Chat / Responses 调用方 → anthropic 协议的 API 来源（3.3 补全：Responses 先转 Chat 再转 Anthropic）
+                (CallerProtocol::Chat, "anthropic") => Conversion::ChatToAnthropic,
+                (CallerProtocol::Responses, "anthropic") => Conversion::ResponsesToAnthropic,
                 _ => {
                     return error_response(
                         StatusCode::BAD_REQUEST,
@@ -949,6 +952,20 @@ async fn forward_one(
                     Ok(chat) => (chat, crate::gateway::responses_chat::chat_path(path_and_query)),
                     Err(reason) => return error_response(StatusCode::BAD_REQUEST, &format!("Anthropic 请求转 Chat 失败：{reason}")),
                 },
+                // Responses → 先转成 Chat，再走 Chat → Anthropic（对角线全部经 Chat 中转）
+                Conversion::ChatToAnthropic | Conversion::ResponsesToAnthropic => {
+                    let chat = match protocol {
+                        CallerProtocol::Responses => serde_json::from_slice::<Value>(body)
+                            .map_err(|error| error.to_string())
+                            .and_then(|value| crate::gateway::responses_chat::request(&value).map(|chat| chat.to_string())),
+                        _ => serde_json::from_slice::<Value>(body).map_err(|error| error.to_string()).map(|value| value.to_string()),
+                    };
+                    let chat = chat.and_then(|text| crate::gateway::translate::chat_to_anthropic_request(text.as_bytes()));
+                    match chat {
+                        Ok(anthropic) => (anthropic, crate::gateway::translate::messages_path().to_string()),
+                        Err(reason) => return error_response(StatusCode::BAD_REQUEST, &format!("请求转 Anthropic Messages 失败：{reason}")),
+                    }
+                }
             };
             // 自由格式工具名要从原始 Responses 请求里取（转换后的 Chat 请求里它们已经是普通函数）
             let original_body = body_before_conversion;
@@ -973,6 +990,13 @@ async fn forward_one(
                 Conversion::None => response,
                 Conversion::ResponsesToChat => crate::gateway::responses_chat::response_body(response, original_custom_tools(&original_body)).await,
                 Conversion::AnthropicToChat => crate::gateway::translate::anthropic_response(response, requested_model).await,
+                // 回程：anthropic 上游的回复转回 Chat 形态；Responses 调用方再套一层
+                // responses_chat::response_body 转回 Responses 形态
+                Conversion::ChatToAnthropic => crate::gateway::translate::chat_response(response, requested_model).await,
+                Conversion::ResponsesToAnthropic => {
+                    let chat_form = crate::gateway::translate::chat_response(response, requested_model).await;
+                    crate::gateway::responses_chat::response_body(chat_form, original_custom_tools(&original_body)).await
+                }
             };
             guard.finish();
             record_route(
@@ -1100,6 +1124,12 @@ enum Conversion {
     None,
     ResponsesToChat,
     AnthropicToChat,
+    /// Chat / Responses 调用方 → anthropic 协议的 API 来源。
+    /// 路径统一改写到 /v1/messages（translate::messages_path）；响应经
+    /// translate::chat_response 转回 Chat，Responses 变体再套 responses_chat::response_body
+    /// 转回 Responses 形态。
+    ChatToAnthropic,
+    ResponsesToAnthropic,
 }
 
 /// 原始 Responses 请求里的自由格式工具名。

@@ -65,6 +65,7 @@ mod grok_browser_auth;
 mod zcode_browser_auth;
 mod cli_browser_auth;
 mod agent_version;
+mod agent_discovery;
 mod keep_awake;
 mod wsl_probe;
 mod otlp;
@@ -1363,6 +1364,15 @@ async fn agent_versions() -> Result<Vec<agent_version::AgentVersion>, String> {
     tauri::async_runtime::spawn_blocking(agent_version::detect)
         .await
         .map_err(|error| format!("检测 Agent 版本失败：{error}"))
+}
+
+/// Agent 自动发现（A1/A2，只读）：探测本机装了哪些 agent。
+/// 状态 installed / cli_missing / not_found 与命中的证据都如实返回，不猜。
+#[tauri::command]
+async fn agent_discover() -> Result<Vec<agent_discovery::AgentDiscovery>, String> {
+    tauri::async_runtime::spawn_blocking(agent_discovery::discover)
+        .await
+        .map_err(|error| format!("探测本机 Agent 失败：{error}"))
 }
 
 /// 探测 WSL 与其中各 agent 的安装情况（只读，不写 WSL 内文件）。
@@ -4604,6 +4614,7 @@ pub fn run() {
             scan_local_sessions,
             collection_status,
             agent_versions,
+            agent_discover,
             wsl_probe_agents,
             otlp_export_usage,
             data_info,

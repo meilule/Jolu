@@ -24,6 +24,18 @@ export interface WiringStatusDto {
   codex_mode?: "oauth" | "provider" | null
 }
 
+/** Agent 自动发现（A1/A2）：探测本机装了哪些 agent；state 为 installed / cli_missing / not_found */
+export interface AgentDiscoveryDto {
+  agent: string
+  name: string
+  installed: boolean
+  state: "installed" | "cli_missing" | "not_found"
+  /** 最强证据：config_file / config_dir / bin */
+  evidence: "config_file" | "config_dir" | "bin" | null
+  cli_found: boolean
+  cli_path: string | null
+}
+
 export interface GatewayGroupDto {
   id: string
   name: string
@@ -267,6 +279,8 @@ export const gatewayApi = {
   accessKey: (refresh: boolean) => invoke<string>("gateway_access_key", { refresh }),
   copyKey: () => invoke<void>("gateway_copy_key"),
   status: () => invoke<GatewayStatusDto>("gateway_status"),
+  /** Agent 自动发现（A1/A2，只读）：本机装了哪些 agent */
+  agentDiscovery: () => invoke<AgentDiscoveryDto[]>("agent_discover"),
   /** 切换模式；切回 observe 时后端会先还原全部接线 */
   setMode: (mode: GatewayMode, defaultConnection: string | null) =>
     invoke<unknown>("gateway_set_mode", { mode, defaultConnection }),
