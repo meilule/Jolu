@@ -2,7 +2,7 @@ import { useState } from "react"
 import { FilePlus2, Plug, ShieldCheck, Trash2, TriangleAlert, Undo2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { CustomAgentDto, CustomAgentInputDto, WiringPreviewDto } from "@/lib/gatewayApi"
-import { CUSTOM_EXAMPLES, agentBadge } from "@/lib/agentPage"
+import { CUSTOM_EXAMPLES } from "@/lib/agentPage"
 import { Button, Modal } from "@/components/gateway/GatewayDialogs"
 import { AgentBadge, Switch } from "./AgentList"
 import { DiffView } from "./DiffView"
@@ -26,7 +26,6 @@ export function CustomAgentPanel({ agent, models, routing, preview, previewError
   onUnwire: () => void
   onRemove: () => void
 }) {
-  const badge = agentBadge(agent.id, agent.name)
   const managed = agent.wired || Boolean(agent.drift)
   const files = preview?.files ?? []
   const keys = [
@@ -37,7 +36,7 @@ export function CustomAgentPanel({ agent, models, routing, preview, previewError
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-3.5 overflow-y-auto px-7 py-5">
       <div className="flex items-center gap-3">
-        <AgentBadge bg={badge.bg} glyph={badge.glyph} size={40} />
+        <AgentBadge agent={agent.id} name={agent.name} size={40} />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-[17px] font-semibold text-jolu-text">{agent.name}</span>

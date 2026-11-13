@@ -6,7 +6,7 @@ import {
 import { cn } from "@/lib/utils"
 import type { ProfileDto, WiringPreviewDto } from "@/lib/gatewayApi"
 import type { AgentVersionRow } from "@/lib/settingsApi"
-import { TIER_HINTS, agentBadge, driftText, longContextMode, longContextText, parseTokens, wireExplanation, type AgentRow } from "@/lib/agentPage"
+import { TIER_HINTS, driftText, longContextMode, longContextText, parseTokens, wireExplanation, type AgentRow } from "@/lib/agentPage"
 import { EFFORT_LABELS, TIERS, tierEfforts, type AutoChoice, type Tier, type TierDraft } from "@/lib/tierModels"
 import { AgentBadge, Switch } from "./AgentList"
 import { DiffView } from "./DiffView"
@@ -69,7 +69,6 @@ export function AgentDetail(props: AgentDetailProps) {
 }
 
 function Header({ row, version, busy, hidden, onUnwire, onToggleHidden }: AgentDetailProps) {
-  const badge = agentBadge(row.agent, row.name)
   const [menu, setMenu] = useState(false)
   const status = row.group === "wired"
     ? [driftText(row.wiring?.drift) ?? "已接入 · 经模型路由调用模型", row.wiring?.codex_mode === "oauth" ? "保留 ChatGPT 登录" : null].filter(Boolean).join(" · ")
@@ -78,7 +77,7 @@ function Header({ row, version, busy, hidden, onUnwire, onToggleHidden }: AgentD
       : row.subtitle
   return (
     <div className="flex items-center gap-3">
-      <AgentBadge bg={badge.bg} glyph={badge.glyph} size={40} />
+      <AgentBadge agent={row.agent} name={row.name} size={40} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex items-center gap-2">
           <span className="truncate text-[17px] font-semibold text-jolu-text">{row.name}</span>

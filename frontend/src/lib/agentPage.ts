@@ -9,17 +9,9 @@ import type { AgentDiscoveryDto, CustomAgentDto, WiringStatusDto } from "./gatew
 /** Jolu 能接线的工具（与后端 `wiring::AGENTS` 一致） */
 export const WIRABLE_AGENTS = ["claude-code", "codex", "gemini", "opencode", "zcode"] as const
 
-/** 工具的小标识：底色与字形取自画板 V5-1 列表 */
-export const AGENT_BADGES: Readonly<Record<string, { bg: string; glyph: string }>> = {
-  "claude-code": { bg: "#D97757", glyph: "✳" },
-  codex: { bg: "#111111", glyph: "◎" },
-  gemini: { bg: "#4285F4", glyph: "✦" },
-  opencode: { bg: "#3A3A3C", glyph: "OC" },
-  zcode: { bg: "#2F6BFF", glyph: "Z" },
-}
-
-export function agentBadge(agent: string, name: string): { bg: string; glyph: string } {
-  return AGENT_BADGES[agent] ?? { bg: "#615CED", glyph: (name.trim()[0] ?? "?").toUpperCase() }
+/** 自定义工具（没有官方 logo）的首字母小方块；Jolu 支持的工具用官方 logo，见 `AgentBadge` */
+export function agentBadge(_agent: string, name: string): { bg: string; glyph: string } {
+  return { bg: "#615CED", glyph: (name.trim()[0] ?? "?").toUpperCase() }
 }
 
 /** 会话、Skills、自动化里用的平台 id */

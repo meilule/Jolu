@@ -1,6 +1,8 @@
 import { EyeOff, Plus, RefreshCw, Search } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { GROUP_LABELS, agentBadge, agentRows, type AgentRow } from "@/lib/agentPage"
+import { AGENT_PLATFORM, GROUP_LABELS, agentBadge, agentRows, type AgentRow } from "@/lib/agentPage"
+import { PlatformLogo } from "@/components/brand/PlatformLogo"
+import opencodeLogo from "@/assets/platforms/opencode.svg"
 
 /**
  * Agent 页左栏「工具列表」（画板 V5-1 / V5-2，宽 300）：列表头、搜索、三组工具、已隐藏。
@@ -75,13 +77,12 @@ export function AgentList({ rows, selected, detectedAt, busy, search, onSearch, 
 }
 
 function AgentItem({ row, active, busy, hidden, onSelect, onToggle }: { row: AgentRow; active: boolean; busy: boolean; hidden: boolean; onSelect: () => void; onToggle: () => void }) {
-  const badge = agentBadge(row.agent, row.name)
   const blocked = row.group === "blocked"
   return (
     <div className={cn("flex h-12 shrink-0 items-center gap-2.5 rounded-[9px] px-2", active ? "bg-jolu-selected" : "hover:bg-jolu-stage", blocked && "opacity-75", hidden && "opacity-60")}>
       <button type="button" onClick={onSelect} aria-current={active ? "true" : undefined}
         className="flex min-w-0 flex-1 items-center gap-2.5 text-left outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent">
-        <AgentBadge bg={badge.bg} glyph={badge.glyph} size={24} />
+        <AgentBadge agent={row.agent} name={row.name} size={24} />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="truncate text-[13px] font-medium text-jolu-text">{row.name}</span>
           <span className={cn("truncate text-note", row.tone === "danger" ? "text-jolu-danger" : row.tone === "warn" ? "text-[#9A5B00]" : "text-jolu-muted")}>{row.subtitle}</span>
@@ -92,11 +93,31 @@ function AgentItem({ row, active, busy, hidden, onSelect, onToggle }: { row: Age
   )
 }
 
-export function AgentBadge({ bg, glyph, size }: { bg: string; glyph: string; size: 24 | 40 }) {
+/**
+ * 工具标识：Jolu 支持的工具一律用官方 logo（鼠鼠 2026-11-13 要求，替换画板 V5 里的字符小标识）。
+ * Claude Code / Codex / Gemini CLI / ZCode 复用 `PlatformLogo` 里的官方图形与官网图标；OpenCode 用
+ * opencode.ai 官网的 favicon（`assets/platforms/opencode.svg`，只去掉了外层的配色样式包装）。
+ * 用户自己添加的自定义工具没有官方 logo，用首字母小方块。
+ */
+export function AgentBadge({ agent, name, size }: { agent: string; name: string; size: 24 | 40 }) {
+  const platform = AGENT_PLATFORM[agent]
+  const box = size === 24 ? "size-6 rounded-[7px]" : "size-10 rounded-[10px]"
+  const inner = size === 24 ? 20 : 30
+  if (agent === "opencode") {
+    return <img src={opencodeLogo} alt="" aria-hidden width={size} height={size} className={cn("shrink-0", box)} />
+  }
+  if (platform) {
+    return (
+      <span aria-hidden className={cn("flex shrink-0 items-center justify-center border border-jolu-border bg-jolu-bg", box)}>
+        <PlatformLogo platform={platform as Parameters<typeof PlatformLogo>[0]["platform"]} size={inner} />
+      </span>
+    )
+  }
+  const badge = agentBadge(agent, name)
   return (
-    <span aria-hidden style={{ background: bg }}
-      className={cn("flex shrink-0 items-center justify-center font-bold text-white", size === 24 ? "size-6 rounded-[7px] text-[10px]" : "size-10 rounded-[10px] text-[16px]")}>
-      {glyph}
+    <span aria-hidden style={{ background: badge.bg }}
+      className={cn("flex shrink-0 items-center justify-center font-bold text-white", box, size === 24 ? "text-[10px]" : "text-[16px]")}>
+      {badge.glyph}
     </span>
   )
 }
