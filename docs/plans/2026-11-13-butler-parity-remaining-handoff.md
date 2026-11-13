@@ -19,6 +19,7 @@
 | P0-2 B8a + B8b | 2026-11-13 完成：`status_with` 回读 `settings.json`（`claude_read_model`，magpie `claudeMain` 优先级链 + 别名解析），与上次写的主模型不同时 `drift = "model_changed"`，返回 `current_model` / `current_resolved`；接线入口在主模型或派生值变化时不再被当成「无需重写」 |
 | P2-3 F6 后端 | 2026-11-13 完成：接线拆成 `plan_wire` + `commit_plan`、断开拆成 `plan_unwire`；新模块 `wiring_diff.rs`（逐行 LCS、折叠未改动段、键数统计、密钥遮挡）；命令 `gateway_wiring_preview`（已接入 = Jolu 改了什么；接入前 = 将要写成什么）。前端按 R2 / V5 画板接入 |
 | R2 / V5 界面（F1、F2、F5、F6 前端，B8a 界面，A 段前端） | 2026-11-13 完成：鼠鼠指定按 Jolu.pen「统一网关 · R2 重设计」的 V5 实现。导航拆成「Agent」「模型路由」两页；Agent 页含档位行 `/model` 提示（F1）、子代理没选模型时强度置灰（F2，档位行同理）、长对话三态（F5）、写入预览与查看差异（F6）、`/model` 被换过时「以配置为准」（B8a 界面）、未检测到 / CLI 未找到分组（A 段）；模型路由页含概览四项指标（`gateway_day_overview`，按请求计、改道算一次）、对外访问、只读模型池；供应商加「模型路由」区块（V5-5）。仍待确认：F3 按 Agent 裁剪菜单、F4 新会话强度（后端都还没有）、改端口命令、Key 表格样式、深色稿 |
+| P2-2 额度主动通知 | 2026-11-13 完成：`notify.rs` 的 `quota_alert` / `quota_should_alert` / `check_quota`，在 `finish_quota_query` 收尾时判定：任一窗口用到 80%（将尽）、登录失效、连续 2 次查询失败；同一账号同一种 24 小时内不重复，恢复正常后再跌破立即提醒；网关观测值不触发。设置 `notify_quota_alerts`（默认开，通知设置页一行，无画板标「待确认」）。点击通知定位账号 |
 | 遗留：脱敏改坏中文请求体 | 2026-11-13 查明**不是脱敏的问题**：脱敏对中文 JSON 往返无损（`mask.rs` 的 `non_ascii_tests`）；真机现象来自调用方发了非 UTF-8 字节（Windows PowerShell 5 直接发中文字符串）。网关现在对这种请求体明确报「请求体不是 UTF-8 编码」 |
 
 ---

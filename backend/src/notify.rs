@@ -40,6 +40,8 @@ pub struct AppNotice {
 enum NoticeBody {
     Balance { connection_id: String, connection_name: String, platform: String, remaining: f64, currency: String, threshold: f64 },
     Task { task_id: i64, state: &'static str, platform: String, task_name: String, reason: Option<String> },
+    /// 额度主动提醒（P2-2）：`alert` = low（将尽）/ expired（登录失效）/ failed（连续查询失败）
+    Quota { connection_id: String, connection_name: String, platform: String, alert: &'static str, detail: String },
 }
 
 static NEXT_NOTICE: AtomicU64 = AtomicU64::new(1);
@@ -158,6 +160,7 @@ fn allowed(settings: &Settings, notice: &AppNotice) -> bool {
     match &notice.body {
         NoticeBody::Balance { threshold, currency, .. } => settings.balance_alert_threshold == Some(*threshold) && settings.balance_alert_currency == *currency,
         NoticeBody::Task { state, .. } => if *state == "resumed" { settings.notify_task_resumed } else { settings.notify_task_finished },
+        NoticeBody::Quota { .. } => settings.notify_quota_alerts,
     }
 }
 
@@ -174,6 +177,14 @@ fn native_notice(app: &AppHandle, notice: &AppNotice) {
     match &notice.body {
         NoticeBody::Balance { connection_id, connection_name, remaining, currency, .. } => {
             let (title, body) = balance_message(connection_name, *remaining, currency);
+            let target = crate::toast_link::LinkTarget::Connection(connection_id.clone());
+            if crate::toast_link::show(&app.config().identifier, &title, &body, &target) { return; }
+            if let Err(error) = app.notification().builder().title(title).body(body).extra(CONNECTION_KEY, connection_id.clone()).show() {
+                eprintln!("[通知] 发送失败：{error}");
+            }
+        }
+        NoticeBody::Quota { connection_id, connection_name, alert, detail, .. } => {
+            let (title, body) = quota_message(alert, connection_name, detail);
             let target = crate::toast_link::LinkTarget::Connection(connection_id.clone());
             if crate::toast_link::show(&app.config().identifier, &title, &body, &target) { return; }
             if let Err(error) = app.notification().builder().title(title).body(body).extra(CONNECTION_KEY, connection_id.clone()).show() {
@@ -220,9 +231,123 @@ pub fn check_balance(app: &AppHandle, connection_id: &str, connection_name: &str
     dispatch(app, NoticeBody::Balance { connection_id: connection_id.into(), connection_name: mask_secrets(connection_name), platform: platform.into(), remaining, currency: currency.trim().to_ascii_uppercase(), threshold });
 }
 
+/* ─────────────────────────── 额度主动提醒（P2-2） ─────────────────────────── */
+
+/// 已用比例到这里算「将尽」（剩余 20%）
+pub const QUOTA_LOW_PERCENT: f64 = 80.0;
+/// 同一账号同一种提醒的最短间隔
+pub const QUOTA_REPEAT_MS: i64 = 24 * 60 * 60 * 1000;
+/// 连续失败几次才提醒（单次网络抖动不打扰）
+pub const QUOTA_FAILURES: u32 = 2;
+
+/// 一次额度查询结果要不要提醒：(种类, 说明)。只看官方口径：网关观测值（Observed）、
+/// 能力不支持、被限流都不提醒；失败只在连续 [`QUOTA_FAILURES`] 次后提醒。
+pub fn quota_alert(state: &crate::quota::QuotaState, failures: u32) -> Option<(&'static str, String)> {
+    use crate::quota::QuotaState;
+    match state {
+        QuotaState::Ok { windows, .. } => windows
+            .iter()
+            .filter_map(|window| window.used_percent.map(|used| (window, used)))
+            .filter(|(_, used)| *used >= QUOTA_LOW_PERCENT)
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(window, used)| ("low", format!("{}剩余 {}%", window.window_name, (100.0 - used).max(0.0).round()))),
+        QuotaState::Unauthorized { .. } => Some(("expired", "登录已失效，额度停止更新".into())),
+        QuotaState::Failed { reason } if failures >= QUOTA_FAILURES => Some(("failed", short_reason(reason))),
+        _ => None,
+    }
+}
+
+pub fn quota_message(alert: &str, connection_name: &str, detail: &str) -> (String, String) {
+    let title = match alert {
+        "low" => "额度快用完了",
+        "expired" => "账号需要重新登录",
+        _ => "额度查询连续失败",
+    };
+    (title.into(), format!("{connection_name}：{detail}"))
+}
+
+/// 每个账号：上次提醒（种类, 时间）与连续失败次数
+#[derive(Default, Clone, Debug, PartialEq)]
+pub struct QuotaMemory {
+    pub last: Option<(&'static str, i64)>,
+    pub failures: u32,
+}
+
+/// 记一次查询结果，返回这次要发的提醒。种类变了立即提醒；同一种 24 小时内不重复；恢复正常后清掉记录。
+pub fn quota_should_alert(memory: &mut QuotaMemory, state: &crate::quota::QuotaState, now_ms: i64) -> Option<(&'static str, String)> {
+    use crate::quota::QuotaState;
+    match state {
+        QuotaState::Failed { .. } => memory.failures = memory.failures.saturating_add(1),
+        QuotaState::Ok { .. } | QuotaState::Unauthorized { .. } => memory.failures = 0,
+        _ => {}
+    }
+    let Some((kind, detail)) = quota_alert(state, memory.failures) else {
+        // 查询成功且没到阈值：恢复正常，下次再跌破时重新提醒
+        if matches!(state, QuotaState::Ok { .. }) {
+            memory.last = None;
+        }
+        return None;
+    };
+    let repeat = memory.last.is_some_and(|(last, at)| last == kind && now_ms - at < QUOTA_REPEAT_MS);
+    if repeat {
+        return None;
+    }
+    memory.last = Some((kind, now_ms));
+    Some((kind, detail))
+}
+
+static QUOTAS: LazyLock<Mutex<HashMap<String, QuotaMemory>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 额度查询结束后调用（lib.rs 的 finish_quota_query）
+pub fn check_quota(app: &AppHandle, connection_id: &str, connection_name: &str, platform: &str, state: &crate::quota::QuotaState) {
+    let alert = {
+        let mut map = QUOTAS.lock().unwrap_or_else(|p| p.into_inner());
+        let memory = map.entry(connection_id.to_string()).or_default();
+        quota_should_alert(memory, state, chrono::Utc::now().timestamp_millis())
+    };
+    let Some((alert, detail)) = alert else { return };
+    dispatch(app, NoticeBody::Quota {
+        connection_id: connection_id.into(),
+        connection_name: mask_secrets(connection_name),
+        platform: platform.into(),
+        alert,
+        detail: mask_secrets(&detail),
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn window(used: f64) -> crate::quota::QuotaWindow {
+        crate::quota::QuotaWindow { key: "5h".into(), window_name: "5 小时".into(), used_percent: Some(used), amount_text: None, remaining_text: None, resets_at: None }
+    }
+
+    #[test]
+    fn quota_alerts_fire_once_per_kind_and_rearm_after_recovery() {
+        use crate::quota::QuotaState;
+        let ok = |used: f64| QuotaState::Ok { windows: vec![window(used)], plan: None, account: None };
+        let mut memory = QuotaMemory::default();
+        assert_eq!(quota_should_alert(&mut memory, &ok(50.0), 0), None);
+        assert_eq!(quota_should_alert(&mut memory, &ok(85.0), 1).map(|a| a.0), Some("low"));
+        assert_eq!(quota_should_alert(&mut memory, &ok(90.0), 2), None, "24 小时内同一种不重复");
+        assert_eq!(quota_should_alert(&mut memory, &ok(95.0), 2 + QUOTA_REPEAT_MS).map(|a| a.1), Some("5 小时剩余 5%".into()), "过了 24 小时仍将尽再提醒一次");
+        assert_eq!(quota_should_alert(&mut memory, &ok(10.0), 3 + QUOTA_REPEAT_MS), None);
+        assert_eq!(quota_should_alert(&mut memory, &ok(81.0), 4 + QUOTA_REPEAT_MS).map(|a| a.0), Some("low"), "恢复后再跌破立即提醒");
+        let expired = QuotaState::Unauthorized { reason: "x".into() };
+        assert_eq!(quota_should_alert(&mut memory, &expired, 5 + QUOTA_REPEAT_MS).map(|a| a.0), Some("expired"), "种类变了立即提醒");
+    }
+
+    #[test]
+    fn quota_failures_need_two_in_a_row_and_observed_never_alerts() {
+        use crate::quota::QuotaState;
+        let failed = QuotaState::Failed { reason: "网络超时".into() };
+        let mut memory = QuotaMemory::default();
+        assert_eq!(quota_should_alert(&mut memory, &failed, 0), None, "单次失败不打扰");
+        assert_eq!(quota_should_alert(&mut memory, &failed, 1).map(|a| a.0), Some("failed"));
+        let observed = QuotaState::Observed { windows: vec![window(99.0)], observed_at_ms: 0, reason: "x".into() };
+        assert_eq!(quota_alert(&observed, 0), None, "网关观测值不是官方口径，不提醒");
+    }
     #[test]
     fn delivery_uses_one_channel_and_falls_back_on_in_app_failure() {
         use std::cell::Cell;

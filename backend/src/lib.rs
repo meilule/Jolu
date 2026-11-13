@@ -1952,6 +1952,7 @@ async fn finish_quota_query(
 ) -> Result<quota::QuotaState, String> {
     let state = with_observation(&id, state);
     let update_id = id.clone();
+    let lookup = pool.clone();
     let success = matches!(state, quota::QuotaState::Ok { .. });
     let unauthorized = matches!(state, quota::QuotaState::Unauthorized { .. });
     let outcome = (success || unauthorized).then_some(success);
@@ -1968,6 +1969,13 @@ async fn finish_quota_query(
     }
     if app.state::<Cfg>().0.get().island_connection_id.as_deref() == Some(id.as_str()) {
         update_tray_icon(&app);
+    }
+    // 额度主动提醒（P2-2）：将尽 / 登录失效 / 连续失败；暂停查询的账号不会走到这里
+    let named = lookup.lock().ok().and_then(|conn| {
+        conn.query_row("SELECT name, platform FROM connections WHERE id = ?1", [&id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).ok()
+    });
+    if let Some((name, platform)) = named {
+        notify::check_quota(&app, &id, &name, &platform, &state);
     }
     Ok(state)
 }
@@ -5106,10 +5114,11 @@ fn set_appearance_preferences(app: tauri::AppHandle, zoom: u16, density: String,
 // 任务 2.5 开始
 /// 任务提醒（画板 94）：两个开关分别保存，传 None 的保持不变
 #[tauri::command]
-fn set_task_notify(app: tauri::AppHandle, resumed: Option<bool>, finished: Option<bool>) -> Result<settings::Settings, String> {
+fn set_task_notify(app: tauri::AppHandle, resumed: Option<bool>, finished: Option<bool>, quota: Option<bool>) -> Result<settings::Settings, String> {
     let next = app.state::<Cfg>().0.try_update(|settings| {
         if let Some(on) = resumed { settings.notify_task_resumed = on; }
         if let Some(on) = finished { settings.notify_task_finished = on; }
+        if let Some(on) = quota { settings.notify_quota_alerts = on; }
     })?;
     let _ = app.emit("settings-changed", next.clone());
     Ok(next)

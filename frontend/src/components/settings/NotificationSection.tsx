@@ -104,6 +104,13 @@ export function NotificationSection({ cfg, setDirty }: { cfg: Cfg; setDirty: Set
           desc="提供查看任务入口，失败显示简短原因。"
           control={<Switch label="任务完成与失败" on={s.notify_task_finished} disabled={disabled || cfg.isSaving("notify_task_finished")} onChange={(on) => void cfg.setTaskNotify({ finished: on })} />}
         />
+        {/* 待确认：Jolu.pen 画板 94 没有这一行（P2-2 管家主动提醒） */}
+        <SettingsRow
+          className="min-h-[72px]"
+          title="额度将尽与失效（待确认）"
+          desc="任一额度窗口用到 80%、登录失效或连续两次查询失败时提醒；同一账号 24 小时内不重复。"
+          control={<Switch label="额度将尽与失效" on={s.notify_quota_alerts !== false} disabled={disabled || cfg.isSaving("notify_quota_alerts")} onChange={(on) => void cfg.setTaskNotify({ quota: on })} />}
+        />
       </SettingsGroup>
 
       <div className="flex flex-col gap-2.5 rounded-xl border border-jolu-border bg-jolu-bg p-4 shadow-sm">

@@ -415,6 +415,8 @@ export interface AppSettings {
   notify_task_resumed: boolean
   /** 任务提醒：完成与失败（含需要处理、等待超时）时通知 */
   notify_task_finished: boolean
+  /** 额度主动提醒（P2-2，待确认）：将尽 / 登录失效 / 连续查询失败 */
+  notify_quota_alerts?: boolean
   /** 隐私脱敏（P5）：网关中转的请求在离开本机前按固定规则换成占位符；旧版设置缺省为关 */
   privacy_masking?: boolean
   /** 隐私脱敏各种类的处理方式，只含非默认项（warn 只记录 / block 拦下）；缺省为全部遮住 */

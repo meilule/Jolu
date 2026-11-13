@@ -2,7 +2,8 @@ import type { ToastInput } from "./toastQueue"
 
 export type BalanceNotice = { id: number; kind: "balance"; connection_id: string; connection_name: string; platform: string; remaining: number; currency: string; threshold: number }
 export type TaskNotice = { id: number; kind: "task"; task_id: number; state: "resumed" | "completed" | "failed"; platform: string; task_name: string; reason?: string | null }
-export type AppNotice = BalanceNotice | TaskNotice
+export type QuotaNotice = { id: number; kind: "quota"; connection_id: string; connection_name: string; platform: string; alert: "low" | "expired" | "failed"; detail: string }
+export type AppNotice = BalanceNotice | TaskNotice | QuotaNotice
 export type NoticeTarget = { kind: "account"; id: string; nonce: number } | { kind: "task"; id: number; nonce: number }
 
 export function parseAppNotice(value: unknown): AppNotice | null {
@@ -17,6 +18,8 @@ export function parseAppNotice(value: unknown): AppNotice | null {
   if (v.kind === "task" && Number.isSafeInteger(v.task_id) && (v.task_id as number) > 0
     && ["resumed", "completed", "failed"].includes(v.state as string) && text("platform", 64) && text("task_name")
     && (v.reason == null || typeof v.reason === "string" && v.reason.length <= 2048)) return value as TaskNotice
+  if (v.kind === "quota" && text("connection_id", 128) && text("connection_name") && text("platform", 64) && text("detail", 512)
+    && ["low", "expired", "failed"].includes(v.alert as string)) return value as QuotaNotice
   return null
 }
 
@@ -29,6 +32,13 @@ export function formatNoticeAmount(value: number, currency: string): string {
 export function noticeToast(notice: AppNotice, open: { account: (id: string) => void | boolean; task: (id: number) => void | boolean }): ToastInput {
   if (notice.kind === "balance") return {
     scope: `balance:${notice.connection_id}`, tone: "warn", title: "余额偏低", balance: { remaining: notice.remaining, currency: notice.currency, threshold: notice.threshold, connectionName: notice.connection_name, platform: notice.platform },
+    action: { label: "查看账号", onClick: () => open.account(notice.connection_id) },
+  }
+  if (notice.kind === "quota") return {
+    scope: `quota:${notice.connection_id}`,
+    tone: notice.alert === "low" ? "warn" : "danger",
+    title: notice.alert === "low" ? "额度快用完了" : notice.alert === "expired" ? "账号需要重新登录" : "额度查询连续失败",
+    detail: `${notice.connection_name}：${notice.detail}`,
     action: { label: "查看账号", onClick: () => open.account(notice.connection_id) },
   }
   const titles = { resumed: "任务已继续", completed: "任务已完成", failed: "任务失败" }

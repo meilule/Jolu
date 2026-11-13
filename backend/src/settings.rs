@@ -172,6 +172,10 @@ pub struct Settings {
     /// 任务提醒：任务完成与失败（含「需要处理」「等待超时」）时通知。
     #[serde(default = "yes")]
     pub notify_task_finished: bool,
+    /// 额度主动提醒（P2-2，无画板，待确认）：额度将尽（任一窗口用到 80%）、登录失效、连续查询失败时提醒；
+    /// 同一账号同一种提醒 24 小时内不重复
+    #[serde(default = "yes")]
+    pub notify_quota_alerts: bool,
     /// 隐私脱敏（P5）：开启后网关中转模式在请求出机前把密钥 / 私钥 / 令牌 / 邮箱等
     /// 换成占位符，回复回来再换回真值（见 gateway/mask.rs）。默认关闭，旧配置文件缺字段按关闭处理。
     #[serde(default)]
@@ -328,6 +332,7 @@ impl Default for Settings {
             network_mode: default_network_mode(),
             network_proxy_url: None,
             notify_task_resumed: true,
+            notify_quota_alerts: true,
             notify_task_finished: true,
             privacy_masking: false,
             privacy_actions: std::collections::BTreeMap::new(),

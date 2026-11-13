@@ -50,6 +50,7 @@ const DEFAULTS: AppSettings = {
   network_proxy_url: null,
   notify_task_resumed: true,
   notify_task_finished: true,
+  notify_quota_alerts: true,
 }
 
 interface SharedSettings {
@@ -181,7 +182,10 @@ export function useSettings() {
   }, [save])
 
   /** 设置 · 通知（画板 94）：任务提醒开关，只改传入的那一个 */
-  const setTaskNotify = useCallback((patch: { resumed?: boolean; finished?: boolean }) => save(patch.resumed !== undefined ? "notify_task_resumed" : "notify_task_finished", () => settingsApi.setTaskNotify(patch.resumed ?? null, patch.finished ?? null)), [save])
+  const setTaskNotify = useCallback((patch: { resumed?: boolean; finished?: boolean; quota?: boolean }) => save(
+    patch.resumed !== undefined ? "notify_task_resumed" : patch.finished !== undefined ? "notify_task_finished" : "notify_quota_alerts",
+    () => settingsApi.setTaskNotify(patch.resumed ?? null, patch.finished ?? null, patch.quota ?? null),
+  ), [save])
 
   const { settings, ready, loading } = state
   const error = saveError ?? state.error

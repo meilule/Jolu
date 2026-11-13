@@ -37,3 +37,15 @@ test('identical names and amounts from different accounts or tasks never merge t
   list=pushToast(list,noticeToast({...task,id:4,task_id:8},open),4,0)
   assert.equal(list.length,2)
 })
+
+test("额度主动提醒（P2-2）：只认三种种类，点击打开账号", () => {
+  const notice = parseAppNotice({ id: 7, kind: "quota", connection_id: "c1", connection_name: "工作账号", platform: "claude", alert: "low", detail: "5 小时剩余 12%" })
+  assert.ok(notice)
+  let opened = null
+  const toast = noticeToast(notice, { account: (id) => { opened = id }, task: () => {} })
+  assert.equal(toast.title, "额度快用完了")
+  assert.equal(toast.tone, "warn")
+  toast.action.onClick()
+  assert.equal(opened, "c1")
+  assert.equal(parseAppNotice({ id: 8, kind: "quota", connection_id: "c1", connection_name: "x", platform: "claude", alert: "other", detail: "d" }), null)
+})
