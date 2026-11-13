@@ -92,15 +92,26 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
     return () => window.clearInterval(timer)
   }, [loadCore, detect])
 
-  const rows: AgentRow[] = useMemo(() => [
-    ...WIRABLE_AGENTS.map((agent) => agentRow(
-      agent,
-      status?.wiring.find((entry) => entry.agent === agent) ?? null,
-      discovery?.find((entry) => entry.agent === agent) ?? null,
-      agent === "claude-code" ? (applied?.model ?? null) : null,
-    )),
-    ...customs.map(customAgentRow),
-  ], [status, discovery, applied, customs])
+  const rows: AgentRow[] = useMemo(() => {
+    // 列表按「后端探测到谁」来建，而不是硬编码白名单：
+    // 只遍历 WIRABLE_AGENTS 时，agent_discovery 新增的 8 家永远不显示（界面上只有 5 个）。
+    // 顺序：先已接线能力的 5 家（有专门接线），再其余探测到的（只能走通用接入）。
+    const seen = new Set<string>()
+    const built: AgentRow[] = []
+    const push = (agent: string) => {
+      if (seen.has(agent)) return
+      seen.add(agent)
+      built.push(agentRow(
+        agent,
+        status?.wiring.find((entry) => entry.agent === agent) ?? null,
+        discovery?.find((entry) => entry.agent === agent) ?? null,
+        agent === "claude-code" ? (applied?.model ?? null) : null,
+      ))
+    }
+    WIRABLE_AGENTS.forEach(push)
+    ;(discovery ?? []).forEach((entry) => push(entry.agent))
+    return [...built, ...customs.map(customAgentRow)]
+  }, [status, discovery, applied, customs])
   const custom = selected && isCustomAgent(selected) ? customs.find((entry) => entry.id === selected) ?? null : null
 
   // 默认选中第一个已接入的工具，没有就选第一个可接入的

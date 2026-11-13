@@ -58,6 +58,9 @@ export function driftText(drift: WiringStatusDto["drift"]): string | null {
  * - 本机检测到（或旧版后端没有检测结果）且有可写的配置 → 可以接入；
  * - CLI 未找到 / 没检测到 / 配置文件还没生成 → 暂时不能接入。
  */
+/** 没有 CLI 的桌面客户端：`cli_missing` 不代表卸载，配置在就能接入 */
+const DESKTOP_CLIENTS: ReadonlySet<string> = new Set(["zcode", "zed"])
+
 export function agentRow(agent: string, wiring: WiringStatusDto | null, discovery: AgentDiscoveryDto | null, model?: string | null): AgentRow {
   const name = discovery?.name || wiringName(agent)
   const drift = driftText(wiring?.drift)
@@ -72,10 +75,17 @@ export function agentRow(agent: string, wiring: WiringStatusDto | null, discover
   if (discovery && discovery.state === "not_found") {
     return { agent, name, group: "blocked", subtitle: "本机没有检测到", tone: "normal", toggle: null, wiring, discovery }
   }
+  // CLI 不在 PATH：区分两种情况（这条容易一刀切错）
+  // - 桌面客户端（ZCode）：本来就没有 CLI，配置在就能接入 → 留在「可以接入」
+  // - 真 CLI 工具：CLI 不在说明已经卸载、只剩配置残留 → 归「暂时不能接入」，
+  //   否则列表里会堆一堆用户没装的工具，分不清哪些真能用
+  if (discovery && discovery.state === "cli_missing" && !DESKTOP_CLIENTS.has(agent)) {
+    return { agent, name, group: "blocked", subtitle: "检测到配置 · CLI 未找到", tone: "normal", toggle: null, wiring, discovery }
+  }
   if (wiring?.reason) {
     return { agent, name, group: "blocked", subtitle: wiring.reason, tone: "normal", toggle: null, wiring, discovery }
   }
-  const subtitle = discovery?.state === "cli_missing" ? "检测到配置 · CLI 未找到" : AVAILABLE_SUBTITLES[agent] ?? "可以接入"
+  const subtitle = AVAILABLE_SUBTITLES[agent] ?? "可以接入"
   return { agent, name, group: "available", subtitle, tone: "normal", toggle: "off", wiring, discovery }
 }
 
@@ -127,6 +137,44 @@ export const CUSTOM_EXAMPLES: Readonly<Record<"json" | "toml" | "env", { path: s
   json: { path: "~/.config/crush/crush.json", base: "providers.jolu.base_url", auth: "providers.jolu.api_key", model: "models.large.model", suffix: "/v1" },
   toml: { path: "~/.config/tool/config.toml", base: "provider.base_url", auth: "provider.api_key", model: "model", suffix: "/v1" },
   env: { path: "~/.tool/.env", base: "OPENAI_BASE_URL", auth: "OPENAI_API_KEY", model: "OPENAI_MODEL", suffix: "/v1" },
+}
+
+/**
+ * 通用接入的工具预设（扩展 agent 广度用）：路径与键名取自各工具官方配置格式。
+ * 用户在「添加自定义工具」里选一个，就能自动填好格式与三个键；不用自己查文档。
+ * 只收录键名可从工具文档确认的；不确定的留空由用户填（AGENTS.md：不猜）。
+ */
+export interface CustomAgentPreset {
+  /** 与 agent_discovery 的 SPECS id 一致，用于和探测结果对上 */
+  id: string
+  name: string
+  format: "json" | "toml" | "env"
+  configPath: string
+  baseKey: string
+  authKey: string
+  modelKey: string
+  /** 地址要不要带 /v1 这类后缀 */
+  suffix: string
+  /**
+   * 键名是否已有代码或文档依据。
+   * false = 按工具常见格式推测，界面必须提示用户核对后再接入（AGENTS.md：未知值不冒充）。
+   */
+  verified: boolean
+}
+
+export const CUSTOM_AGENT_PRESETS: readonly CustomAgentPreset[] = [
+  { id: "qwen", name: "Qwen Code", format: "json", configPath: "~/.qwen/settings.json", baseKey: "env.OPENAI_BASE_URL", authKey: "env.OPENAI_API_KEY", modelKey: "env.OPENAI_MODEL", suffix: "/v1", verified: false },
+  { id: "kimi", name: "Kimi CLI", format: "toml", configPath: "~/.kimi/config.toml", baseKey: "provider.base_url", authKey: "provider.api_key", modelKey: "provider.model", suffix: "/v1", verified: false },
+  { id: "droid", name: "Droid", format: "json", configPath: "~/.factory/settings.json", baseKey: "customModels[0].baseUrl", authKey: "customModels[0].apiKey", modelKey: "customModels[0].model", suffix: "/v1", verified: false },
+  { id: "zed", name: "Zed", format: "json", configPath: "~/.config/zed/settings.json", baseKey: "language_models.openai.api_url", authKey: "language_models.openai.api_key", modelKey: "language_models.openai.available_models", suffix: "/v1", verified: false },
+  { id: "crush", name: "Crush", format: "json", configPath: "~/.config/crush/crush.json", baseKey: "providers.jolu.base_url", authKey: "providers.jolu.api_key", modelKey: "models.large.model", suffix: "/v1", verified: true },
+  { id: "goose", name: "Goose", format: "env", configPath: "~/.config/goose/.env", baseKey: "OPENAI_BASE_URL", authKey: "OPENAI_API_KEY", modelKey: "OPENAI_MODEL", suffix: "/v1", verified: false },
+  { id: "continue", name: "Continue", format: "json", configPath: "~/.continue/config.json", baseKey: "models.0.apiBase", authKey: "models.0.apiKey", modelKey: "models.0.model", suffix: "/v1", verified: false },
+]
+
+/** 探测到但还没有专门接线的工具：给用户指到「添加自定义工具」并预填预设 */
+export function customPresetFor(agent: string): CustomAgentPreset | null {
+  return CUSTOM_AGENT_PRESETS.find((preset) => preset.id === agent) ?? null
 }
 
 /** 「接入会做什么」三条说明（画板 V5-2）：写哪里、原有的怎么保留、断开时怎么还原。 */

@@ -2,7 +2,7 @@ import { useState } from "react"
 import { FilePlus2, Plug, ShieldCheck, Trash2, TriangleAlert, Undo2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { CustomAgentDto, CustomAgentInputDto, WiringPreviewDto } from "@/lib/gatewayApi"
-import { CUSTOM_EXAMPLES } from "@/lib/agentPage"
+import { CUSTOM_AGENT_PRESETS, CUSTOM_EXAMPLES, type CustomAgentPreset } from "@/lib/agentPage"
 import { Button, Modal } from "@/components/gateway/GatewayDialogs"
 import { AgentBadge, Switch } from "./AgentList"
 import { DiffView } from "./DiffView"
@@ -120,7 +120,22 @@ export function CustomAgentPanel({ agent, models, routing, preview, previewError
 export function CustomAgentDialog({ busy, onClose, onSave }: { busy: boolean; onClose: () => void; onSave: (input: CustomAgentInputDto) => Promise<boolean> }) {
   const [format, setFormat] = useState<"json" | "toml" | "env">("json")
   const [form, setForm] = useState({ name: "", config_path: "", base_url_key: "", auth_key: "", model_key: "", base_suffix: "/v1" })
+  const [preset, setPreset] = useState<CustomAgentPreset | null>(null)
   const example = CUSTOM_EXAMPLES[format]
+  /** 选一个工具预设：格式与三个键一次填好，用户只需核对（未验证的会提示核对） */
+  const applyPreset = (next: CustomAgentPreset | null) => {
+    setPreset(next)
+    if (!next) return
+    setFormat(next.format)
+    setForm({
+      name: next.name,
+      config_path: next.configPath,
+      base_url_key: next.baseKey,
+      auth_key: next.authKey,
+      model_key: next.modelKey,
+      base_suffix: next.suffix,
+    })
+  }
   const set = (key: keyof typeof form) => (event: React.ChangeEvent<HTMLInputElement>) => setForm((current) => ({ ...current, [key]: event.target.value }))
   const ready = form.name.trim() && form.config_path.trim() && form.base_url_key.trim() && form.auth_key.trim()
   const field = (key: keyof typeof form, label: string, placeholder: string, note?: string) => (
@@ -142,6 +157,24 @@ export function CustomAgentDialog({ busy, onClose, onSave }: { busy: boolean; on
         }).then((ok) => { if (ok) onClose() })} />
       </>}>
       <p className="text-meta text-jolu-muted">Jolu 没有专门适配的工具，可以照它的文档填写配置文件和键名。待确认：没有画板。</p>
+      <label className="flex flex-col gap-1.5">
+        <span className="text-meta font-medium text-jolu-text">从已支持的工具开始</span>
+        <select
+          value={preset?.id ?? ""}
+          onChange={(event) => applyPreset(CUSTOM_AGENT_PRESETS.find((item) => item.id === event.target.value) ?? null)}
+          className="h-9 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-meta text-jolu-text outline-none focus:border-jolu-accent">
+          <option value="">自己填（不套用预设）</option>
+          {CUSTOM_AGENT_PRESETS.map((item) => (
+            <option key={item.id} value={item.id}>{item.name}{item.verified ? "" : " · 键名待核对"}</option>
+          ))}
+        </select>
+        {preset && !preset.verified && (
+          <span className="flex items-start gap-1.5 text-note text-[#9A5B00]">
+            <TriangleAlert aria-hidden className="mt-px size-3 shrink-0" />
+            这个工具的键名是按常见格式推测的，接入前请对照它的官方文档核对；键名不对会写坏配置（Jolu 会先备份）。
+          </span>
+        )}
+      </label>
       {field("name", "名称 *", "例如 Crush")}
       <div className="flex flex-col gap-1.5">
         <span className="text-meta font-medium text-jolu-text">配置文件格式 *</span>

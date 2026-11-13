@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { agentRow, agentRows, customAgentRow, isCustomAgent, longContextMode, longContextText, parseTokens, readHidden, writeHidden, wireExplanation } from "./agentPage.ts"
+import { agentRow, agentRows, customAgentRow, customPresetFor, isCustomAgent, CUSTOM_AGENT_PRESETS, longContextMode, longContextText, parseTokens, readHidden, writeHidden, wireExplanation } from "./agentPage.ts"
 
 const wiring = (patch = {}) => ({ agent: "claude-code", wired: false, config_path: "~/.claude/settings.json", notice: null, reason: null, ...patch })
 const found = (state = "installed") => ({ agent: "claude-code", name: "Claude Code", installed: state === "installed", state, evidence: "bin", cli_found: state === "installed", cli_path: null })
@@ -25,8 +25,14 @@ test("工具按 已接入 / 可以接入 / 暂时不能接入 分组（画板 V5
   assert.equal(missing.group, "blocked")
   assert.equal(missing.toggle, null)
 
-  const cliMissing = agentRow("zcode", wiring({ agent: "zcode" }), { ...found("cli_missing"), agent: "zcode", name: "ZCode" })
-  assert.equal(cliMissing.group, "available", "ZCode 是桌面客户端，没有 CLI 也能接入")
+  // 桌面客户端（ZCode）：本来就没有 CLI，配置在就能接入，不显示「CLI 未找到」
+  const desktop = agentRow("zcode", wiring({ agent: "zcode" }), { ...found("cli_missing"), agent: "zcode", name: "ZCode" })
+  assert.equal(desktop.group, "available", "ZCode 是桌面客户端，没有 CLI 也能接入")
+  assert.doesNotMatch(desktop.subtitle, /CLI 未找到/)
+
+  // 真 CLI 工具（qwen）：CLI 不在 = 只剩配置残留，归「暂时不能接入」，避免列表堆满没装的工具
+  const cliMissing = agentRow("qwen", wiring({ agent: "qwen" }), { ...found("cli_missing"), agent: "qwen", name: "Qwen Code" })
+  assert.equal(cliMissing.group, "blocked")
   assert.match(cliMissing.subtitle, /CLI 未找到/)
 })
 
@@ -82,4 +88,25 @@ test("通用接入的自定义工具按接入状态分组（P1-1）", () => {
   assert.equal(customAgentRow({ ...base, installed: false }).group, "blocked")
   assert.ok(isCustomAgent("custom-agent:crush"))
   assert.ok(!isCustomAgent("claude-code"))
+})
+
+test("自定义工具预设：每条键名完整，未验证的必须标出来", () => {
+  const presets = CUSTOM_AGENT_PRESETS
+  assert.ok(presets.length >= 6, `预设应有至少 6 家，实际 ${presets.length}`)
+  for (const preset of presets) {
+    assert.ok(preset.id && preset.name, "id 与名称必填")
+    assert.ok(["json", "toml", "env"].includes(preset.format), `${preset.id} 格式合法`)
+    assert.ok(preset.configPath.startsWith("~"), `${preset.id} 路径应以 ~ 开头`)
+    assert.ok(preset.baseKey && preset.authKey, `${preset.id} 地址键与令牌键必填`)
+    // 未验证的要如实标出来，不能假装准确
+    assert.equal(typeof preset.verified, "boolean", `${preset.id} 必须声明 verified`)
+  }
+  // 只有已从纸码/文档确认的才允许 verified: true
+  const verified = presets.filter((p) => p.verified).map((p) => p.id)
+  assert.deepEqual(verified, ["crush"], `目前只有 Crush 的键名有代码依据，实际 ${verified}`)
+})
+
+test("customPresetFor 只认已知 id", () => {
+  assert.equal(customPresetFor("crush")?.name, "Crush")
+  assert.equal(customPresetFor("不存在的工具"), null)
 })

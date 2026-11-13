@@ -169,9 +169,11 @@ function WiredBody(props: AgentDetailProps) {
         )}
         <Section title="模型菜单" summary={`${models.length} 个可用 · 来自模型路由的模型池与路由分组`} open={!!open.menu} onToggle={() => toggle("menu")} first={!claude}
           action={<button type="button" disabled title="按工具挑选与排序（F3）待确认" className="h-7 rounded-md border border-jolu-border px-2.5 text-meta text-jolu-muted opacity-60">挑选与排序（待确认）</button>}>
+          {/* shrink-0：ul 是 flex 容器，列表项默认会被压扁（实测 17 项时每行只剩 7.5px，
+              文字叠成一团）。列表项必须锁定自身行高，滚动交给 ul。 */}
           <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto">
-            {models.map((model) => <li key={model} className="truncate font-mono text-note text-jolu-text">{model}</li>)}
-            {models.length === 0 && <li className="text-meta text-jolu-muted">模型池里还没有可用模型</li>}
+            {models.map((model) => <li key={model} className="shrink-0 truncate font-mono text-note text-jolu-text">{model}</li>)}
+            {models.length === 0 && <li className="shrink-0 text-meta text-jolu-muted">模型池里还没有可用模型</li>}
           </ul>
         </Section>
         {claude && (
