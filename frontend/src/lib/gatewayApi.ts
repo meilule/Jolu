@@ -28,6 +28,21 @@ export interface WiringStatusDto {
   current_resolved?: string | null
 }
 
+/** 模型路由今日概览（画板 V5-3 四项指标） */
+export interface DayOverviewDto {
+  today: number
+  yesterday: number
+  /** 失败后换下一个成员的请求数 */
+  reroutes: number
+  /** 最后一次尝试仍失败、Agent 真正收到错误的请求数 */
+  errors: number
+  /** 今天各 agent 的请求数 */
+  by_agent: Record<string, number>
+  /** 流水只保留最近 1000 行：为 true 时这些数是下限 */
+  partial: boolean
+  last_error: RouteLogDto | null
+}
+
 /** 接线改动预览的一行：+ 新增、- 删除、空格 = 未改动上下文、… = 折叠的未改动段 */
 export interface WiringDiffLineDto {
   op: "+" | "-" | " " | "…"
@@ -424,5 +439,9 @@ export const gatewayApi = {
   /** 模型来源 → 最近会话：在途快照 + 经网关会话 + 权威 Token */
   sessionsOverview: () => invoke<SessionsOverviewDto>("gateway_sessions_overview"),
   /** 今日（本地零点起）经网关的请求数 */
+  /** 模型路由概览：按请求计（改道的多次尝试算一次）；partial = 流水保留上限内的下限 */
+  dayOverview: () => invoke<DayOverviewDto>("gateway_day_overview"),
+  /** 本机局域网地址（出口 IPv4）；没有网络时为 null */
+  lanAddress: () => invoke<string | null>("gateway_lan_address"),
   todayCounts: () => invoke<{ since: number; at: number; ok: number; rejected: number; failed: number }>("gateway_today_counts"),
 }

@@ -1,15 +1,11 @@
 import { useEffect, useRef, useState } from "react"
-import { TierPanel } from "./TierPanel"
-import type { TierDraft } from "@/lib/tierModels"
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { TriangleAlert, X } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { AgentDiscoveryDto, CatalogModelDto, GatewayGroupDto, GroupKind, WiringStatusDto } from "@/lib/gatewayApi"
-import { agentLabel } from "@/lib/gatewayPage"
+import type { CatalogModelDto, GatewayGroupDto, GroupKind } from "@/lib/gatewayApi"
 import { gatewayApi } from "@/lib/gatewayApi"
 import { isTauri } from "@/lib/api"
 import { useToast } from "@/components/ui/Toast"
-import { ConfirmDialog as ActionConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { JoluButton } from "@/components/ui/JoluButton"
 import type { Connection } from "@/types"
 
@@ -18,8 +14,10 @@ import type { Connection } from "@/types"
  * 来源进出模型池、改名与菜单 id、分组管理在「管理来源」弹窗（SourceManageDialog.tsx）。
  */
 
-export function Modal({ title, icon, tone, children, footer, onClose, busy = false, width = 540 }: { title: string; icon?: React.ReactNode; tone?: "danger"; children: React.ReactNode; footer: React.ReactNode; onClose: () => void; busy?: boolean; width?: number }) {
+export function Modal({ title, icon, tone, children, footer, onClose, busy = false, width = 540, inline = false }: { title: string; icon?: React.ReactNode; tone?: "danger"; children: React.ReactNode; footer: React.ReactNode; onClose: () => void; busy?: boolean; width?: number; inline?: boolean }) {
   const trigger = useRef(document.activeElement)
+  // 内嵌：模型路由页的右侧检查器直接放弹窗内容（R2 / V5-4），标题由检查器头部给出，不要底部按钮
+  if (inline) return <section aria-label={title} aria-busy={busy} className="flex flex-col gap-4">{children}</section>
   return <RadixDialog.Root open onOpenChange={value => { if (!value && !busy) onClose() }}>
     <RadixDialog.Portal>
       <RadixDialog.Overlay className="motion-overlay fixed inset-x-0 bottom-0 top-[30px] z-50 bg-black/40" />
@@ -89,7 +87,7 @@ export function RenameDialog({ connection, busy, onClose, onSave }: { connection
  * 模型元数据（models.dev：上下文窗口、显示名、推理档位）的现状与手动刷新（2.8，待确认：无画板）。
  * 平时 7 天自动刷新一次；从没拉到过时用内置快照。
  */
-function ModelsMetaRefresh() {
+export function ModelsMetaRefresh() {
   const [status, setStatus] = useState<[number, number] | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -119,170 +117,6 @@ function ModelsMetaRefresh() {
         {busy ? "刷新中…" : "立即刷新"}
       </button>
     </span>
-  )
-}
-
-export function WiringDialog({ agents, models, modelChoice, onModelChoice, subagentChoice, onSubagentChoice, tierDraft, onTierDraft, onApplyTiers, profiles, onProfileApply, onProfileSave, onProfileDelete, busy, onClose, onWire, onUnwire, onAccept, discovery }: {
-  agents: WiringStatusDto[]
-  /** Agent 自动发现（A1/A2，待画板确认）：未检测到安装的 agent 置灰不开放接线 */
-  discovery?: AgentDiscoveryDto[]
-  /** 可选的 `<来源>/<模型>` 列表（来自模型目录，只含已接入来源；context 为 models.dev 上下文窗口） */
-  models: { id: string; context?: number }[]
-  modelChoice: string
-  onModelChoice: (value: string) => void
-  /** Claude Code 的 subagent 独立模型；空串 = 跟随主模型 */
-  subagentChoice: string
-  onSubagentChoice: (value: string) => void
-  /** Claude Code 档位自选（批 4）草稿与应用 */
-  tierDraft: TierDraft
-  onTierDraft: (next: TierDraft) => void
-  onApplyTiers: () => void
-  /** Profile（配置一键切换）：保存当前全部接线的主模型，应用时逐个重放 */
-  profiles: import("@/lib/gatewayApi").ProfileDto[]
-  onProfileApply: (name: string) => void
-  onProfileSave: (name: string) => void
-  onProfileDelete: (name: string) => void
-  busy: boolean
-  onClose: () => void
-  onWire: (agent: string) => void
-  onUnwire: (agent: string) => void
-  onAccept: (agent: string) => void
-}) {
-  const [profileName, setProfileName] = useState("")
-  const [profileOpen, setProfileOpen] = useState(false)
-  const claude = agents.find((entry) => entry.agent === "claude-code")
-  return (
-    <Modal busy={busy} title="Agent 接线" onClose={onClose} footer={<Button label="关闭" disabled={busy} onClick={onClose} />}>
-      <p className="text-[9.5px] text-jolu-muted">状态按配置文件里实际写入的值判断；重新应用不会重新拍快照。</p>
-      {claude && (
-        <div className="flex flex-col gap-1 rounded-lg border border-jolu-border bg-jolu-side px-2.5 py-2">
-          <span className="text-[9.5px] text-jolu-text">Claude Code 主模型</span>
-          {models.length === 0 ? (
-            <span className="text-[8.5px] text-jolu-warn">还没有可用模型：先在上面接入来源，再点来源区的「拉取」拿清单。</span>
-          ) : (
-            <select
-              value={modelChoice}
-              disabled={busy}
-              onChange={(event) => onModelChoice(event.target.value)}
-              className="h-8 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[12px] text-jolu-text outline-none focus:border-jolu-accent"
-            >
-              {models.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.context ? `${model.id} · ${model.context >= 1_000_000 ? `${(model.context / 1_000_000).toFixed(1).replace(/\.0$/, "")}M` : `${Math.round(model.context / 1000)}K`}` : model.id}
-                </option>
-              ))}
-            </select>
-          )}
-          <span className="text-[8.5px] text-jolu-muted">
-            {modelChoice
-              ? "写入 settings.json 顶层 model 与全部档位（opus/sonnet/haiku/fable/small-fast 跟随主模型）；ANTHROPIC_MODEL 会被移除，/model 切换不再被覆盖。断开时还原你原来的全部模型配置。"
-              : "不选则只接地址和令牌，你的模型配置原样保留；Claude Code 会发自带模型名，需要「默认来源」兜底才能路由。"}
-          </span>
-          {/* subagent 独立模型：留空跟随主模型（Claude Code 缺省），这与 magpie 的 Quiet 字段同语义 */}
-          <span className="mt-1 text-[9.5px] text-jolu-text">Subagent 模型</span>
-          <select
-            value={subagentChoice}
-            disabled={busy}
-            onChange={(event) => onSubagentChoice(event.target.value)}
-            className="h-8 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[12px] text-jolu-text outline-none focus:border-jolu-accent"
-          >
-            <option value="">跟随主模型</option>
-            {models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
-          </select>
-          <span className="text-[8.5px] text-jolu-muted">
-            Claude Code 的子代理任务（Task 工具）用它；留空即跟随主模型，也是 Claude Code 的缺省行为。
-          </span>
-          <ModelsMetaRefresh />
-          {models.length > 0 && (
-            <TierPanel models={models} mainModel={modelChoice} subagent={subagentChoice} draft={tierDraft} onDraft={onTierDraft}
-              busy={busy} wired={claude.wired} onApply={onApplyTiers} />
-          )}
-        </div>
-      )}
-      <div className="flex flex-col gap-1.5">
-        {agents.map((entry) => {
-          // A1（待画板确认）：未检测到安装（配置与命令都没有）不开放接线；已接线的不受影响
-          const found = discovery?.find((d) => d.agent === entry.agent)
-          const notInstalled = found ? !found.installed && !entry.wired : false
-          const uninstalledNote = notInstalled ? "未检测到本机安装（配置目录与命令都没有）" : null
-          return (
-          <div key={entry.agent} className={cn("flex items-center gap-2 rounded-lg border border-jolu-border bg-jolu-bg px-2.5 py-2", notInstalled && "opacity-55")}>
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="text-[11.5px] text-jolu-text">{agentLabel(entry.agent)}</span>
-              <span className={cn("truncate text-[8.5px]", notInstalled ? "text-jolu-warn" : entry.drift === "unreachable" ? "text-jolu-danger" : entry.wired ? "text-jolu-on" : entry.drift ? "text-jolu-danger" : "text-jolu-muted")}>
-                {uninstalledNote ?? (entry.drift === "unreachable" ? "已接入，但网关没在运行：请求会失败" : entry.wired ? "已接入" : entry.drift === "foreign" ? "已被另一个 Jolu 接管" : entry.drift === "removed" ? "配置里已移除" : entry.drift === "changed" ? "配置被改写" : entry.drift === "pending" ? "上次接线未完成" : entry.reason ?? "未接入")}
-              </span>
-            </div>
-            {entry.wired ? <Button label="断开" disabled={busy} onClick={() => onUnwire(entry.agent)} /> : entry.drift ? (<><Button label="重新应用" primary disabled={busy || notInstalled} onClick={() => onWire(entry.agent)} /><Button label="接受现状" disabled={busy} onClick={() => onAccept(entry.agent)} /></>) : (<Button label="接线" primary disabled={busy || notInstalled || (!entry.config_path && !!entry.reason)} onClick={() => onWire(entry.agent)} />)}
-          </div>
-          )
-        })}
-      </div>
-      <span className="text-[8.5px] text-jolu-muted">同一工具的第二份安装（WSL、便携版）暂不支持，只在主安装上接线。</span>
-      {/* Profile：把全部接线的主模型存成一个快照，一次切回（待画板确认前的最小可用版） */}
-      <div className="flex flex-col gap-1 rounded-lg border border-jolu-border bg-jolu-side px-2.5 py-2">
-        <button type="button" onClick={() => setProfileOpen((open) => !open)}
-          className="flex items-center justify-between text-[9.5px] text-jolu-text outline-none">
-          <span>Profiles · 配置一键切换（待确认）</span>
-          <span className="text-jolu-muted">{profileOpen ? "收起 ▲" : `展开 ▼（已有 ${profiles.length} 个）`}</span>
-        </button>
-        {profileOpen && (
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-1.5">
-              <input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="Profile 名称（保存当前接线）"
-                className="h-8 min-w-0 flex-1 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[12px] text-jolu-text outline-none focus:border-jolu-accent" />
-              <Button label="保存当前" disabled={busy || profileName.trim() === ""} onClick={() => { onProfileSave(profileName.trim()); setProfileName("") }} />
-            </div>
-            {profiles.length === 0 ? (
-              <span className="text-[8.5px] text-jolu-muted">还没有 Profile：接好各工具的模型后，保存成一套，之后一键切回。</span>
-            ) : (
-              profiles.map((profile) => (
-                <div key={profile.name} className="flex items-center gap-2 rounded-lg bg-jolu-bg px-2 py-1.5">
-                  <span className="min-w-0 flex-1 truncate text-[11.5px] text-jolu-text">{profile.name}</span>
-                  <span className="shrink-0 text-[8.5px] text-jolu-muted" title={profile.extras?.favorites?.length ? `常用：${profile.extras.favorites.join("、")}` : undefined}>
-                    {Object.keys(profile.agents).length} 个工具
-                    {profile.extras?.agents && Object.keys(profile.extras.agents).length > 0 ? " · 含档位" : ""}
-                    {profile.extras?.default_connection ? " · 含默认来源" : ""}
-                  </span>
-                  <Button label="应用" primary disabled={busy} onClick={() => onProfileApply(profile.name)} />
-                  <Button label="删除" disabled={busy} onClick={() => onProfileDelete(profile.name)} />
-                </div>
-              ))
-            )}
-            <span className="text-[8.5px] text-jolu-muted">应用只影响「当前已接线」的工具；配置被外部改写的会跳过并说明。</span>
-          </div>
-        )}
-      </div>
-    </Modal>
-  )
-}
-
-export function CodexDialog({ mode, returnFocusTo, onClose, onConfirm }: { mode: "oauth" | "provider"; busy: boolean; returnFocusTo?: HTMLElement | null; onClose: () => void; onConfirm: () => Promise<boolean> }) {
-  const oauth = mode === "oauth"
-  return (
-    <ActionConfirmDialog returnFocusTo={returnFocusTo} title="接入 Codex" description="确认下方接线方式后更新 Codex 本机配置。" confirmLabel="接入" onClose={onClose} onConfirm={onConfirm}>
-      <p className="text-[11px] text-jolu-muted">Jolu 会把 Codex 的请求转到本机模型入口；只写入 config.toml。</p>
-      <div className={cn("flex flex-col gap-1.5 rounded-lg border p-3", oauth ? "border-jolu-on bg-jolu-status-success-bg" : "border-jolu-border bg-jolu-side")}>
-        <span className="text-[12px] font-semibold text-jolu-text">{oauth ? "保留 ChatGPT 登录" : "使用网关 Key"}</span>
-        <span className="text-[9px] text-jolu-muted">{oauth ? "检测到 ChatGPT 登录：只改请求地址（openai_base_url），不写 Key、不动 auth.json。" : "没有检测到 ChatGPT 登录：写自定义 provider 和 jolu-codex 令牌，不改其他 provider。"}</span>
-      </div>
-      {!oauth && <Warning tone="muted">如果以后登录 ChatGPT，重新接线即可切回保留登录的接法。</Warning>}
-      <Warning tone="muted">Codex 发 Responses 请求；只支持 Chat Completions 的上游会在请求时返回 404。</Warning>
-    </ActionConfirmDialog>
-  )
-}
-
-export function GeminiDialog({ returnFocusTo, onClose, onConfirm }: { busy: boolean; returnFocusTo?: HTMLElement | null; onClose: () => void; onConfirm: () => Promise<boolean> }) {
-  return (
-    <ActionConfirmDialog returnFocusTo={returnFocusTo} title="接入 Gemini CLI" description="接线期间 Gemini 将使用 Jolu 网关 Key，断开时恢复原登录方式。" confirmLabel="确认接入" onClose={onClose} onConfirm={onConfirm}>
-      <Warning>接线期间 Gemini 会改用 Jolu 网关 Key，不再使用 Google 账号登录。OAuth 凭据文件不会被删除。</Warning>
-      <div className="flex flex-col rounded-lg bg-jolu-side px-3">
-        <Line label="当前登录方式" value="Google 账号 · oauth-personal" />
-        <Line label="接线期间" value="网关 Key · gemini-api-key" danger />
-        <Line label="断开时" value="恢复原登录方式与原 Key" />
-      </div>
-      <span className="text-[8.5px] text-jolu-muted">原值会存进接线记录；如果断开时还原失败，会在「Agent 接线」里提示并提供重试。</span>
-    </ActionConfirmDialog>
   )
 }
 

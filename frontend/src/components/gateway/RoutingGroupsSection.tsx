@@ -26,13 +26,21 @@ const ICON_BUTTON = "grid size-7 place-items-center rounded-md text-jolu-muted o
 const INPUT = "jolu-control h-8 rounded-lg border border-jolu-border bg-jolu-side px-2.5 text-[12px] text-jolu-text outline-none focus:border-jolu-accent"
 const SELECT = "h-8 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[11.5px] text-jolu-text outline-none focus:border-jolu-accent"
 
-export function RoutingGroupsSection({ catalog, busy, run }: {
+export function RoutingGroupsSection({ catalog, busy, run, embedded = false, focus, createNonce, onChanged }: {
   catalog: CatalogModelDto[]
+  /** 嵌进模型路由页的检查器（R2 / V5）：默认展开、不显示折叠头 */
+  embedded?: boolean
+  /** 左栏点了某个分组：展开它的编辑 */
+  focus?: string
+  /** 左栏点了「＋」：打开新建表单（每次点击换一个值） */
+  createNonce?: number
+  /** 分组增删改后通知页面刷新左栏 */
+  onChanged?: () => void
   busy: boolean
   /** 弹窗的统一操作入口：加锁、成功提示、刷新页面数据；失败时提示并返回 false */
   run: (work: () => Promise<unknown>, ok?: string, throwOnFailure?: boolean) => Promise<boolean>
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(embedded)
   const [groups, setGroups] = useState<RoutingGroupDto[] | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -55,6 +63,7 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
   const [editTimeout, setEditTimeout] = useState("")
 
   const reload = () => {
+    onChanged?.()
     if (!isTauri) return
     gatewayApi.groupList()
       .then((rows) => { setGroups(rows); setLoadFailed(false) })
@@ -77,6 +86,10 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
     ? [...ROUTING_STRATEGIES, { value: editStrategy, text: strategyText(editStrategy) }]
     : ROUTING_STRATEGIES
 
+  useEffect(() => {
+    if (createNonce) setCreating(true)
+  }, [createNonce])
+
   const toggleRow = (slug: string) => {
     if (expanded === slug) { setExpanded(null); return }
     const group = groups?.find((item) => item.slug === slug)
@@ -87,6 +100,12 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
     setEditClassifier(group.intent?.classifier ?? "")
     setEditTimeout(group.intent?.timeout_ms ? String(group.intent.timeout_ms) : "")
   }
+
+  // 左栏选中的分组：读到列表后展开它
+  useEffect(() => {
+    if (focus && groups && expanded !== focus && groups.some((item) => item.slug === focus)) toggleRow(focus)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus, groups])
 
   const resetCreating = () => {
     setCreating(false); setNewName(""); setNewSlug(""); setNewStrategy("order"); setNewMembers([]); setNewClassifier(""); setNewTimeout("")
@@ -115,14 +134,14 @@ export function RoutingGroupsSection({ catalog, busy, run }: {
   }
 
   return (
-    <section className="-mx-6 px-6 pb-1">
-      <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}
+    <section className={embedded ? "" : "-mx-6 px-6 pb-1"}>
+      {!embedded && <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}
         className="flex w-full items-center gap-1.5 rounded-lg px-1 py-1.5 text-left outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent">
         {open ? <ChevronDown aria-hidden className="size-3.5 shrink-0 text-jolu-muted" /> : <ChevronRight aria-hidden className="size-3.5 shrink-0 text-jolu-muted" />}
         <span className="shrink-0 text-[12px] font-semibold text-jolu-text">路由分组（待确认）</span>
         {groups !== null && <span className="shrink-0 text-[11px] tabular-nums text-jolu-muted">{groups.length} 个</span>}
         <span className="flex-1" />
-      </button>
+      </button>}
       {open && (
         <div className="flex flex-col gap-2.5 px-1 pb-2 pt-0.5">
           <p className="text-[9.5px] leading-relaxed text-jolu-muted">

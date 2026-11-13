@@ -10,10 +10,12 @@ import {
   writeSidebarCollapsed,
 } from "./mainNavigation.ts"
 
-test("签到在供应商同级下方；网关排在 Skills 管理之后（Jolu.pen 模块 I / J）", () => {
+test("签到在供应商同级下方；Agent 与模型路由排在 Skills 管理之后（Jolu.pen 模块 I / R2 · V5）", () => {
   assert.deepEqual(PRIMARY_PAGES.map((item) => item.label), [
-    "灵动岛", "供应商", "一键签到", "用量统计", "会话线程", "自动化", "Skills 管理", "统一网关",
+    "灵动岛", "供应商", "一键签到", "用量统计", "会话线程", "自动化", "Skills 管理", "Agent", "模型路由",
   ])
+  assert.equal(resolveOpenPage("agents", null), "agents")
+  assert.equal(resolveOpenPage("gateway", null), "gateway", "旧设置里的网关页仍是模型路由")
   assert.equal(resolveOpenPage("checkin", null), "checkin")
   assert.equal(resolveOpenPage("last", "checkin"), "checkin")
   assert.equal(pageLabel("settings"), "设置")

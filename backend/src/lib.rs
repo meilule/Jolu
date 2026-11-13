@@ -3208,6 +3208,32 @@ fn gateway_today_counts(app: tauri::AppHandle) -> Result<GatewayTodayCounts, Str
     Ok(GatewayTodayCounts { since, at, ok, rejected, failed })
 }
 
+/// 本机的局域网地址（画板 V5-4「地址」行）：按路由表选出的出口 IPv4。UDP connect 不发任何包，
+/// 只让系统选一个出口地址；拿不到（没有网络）返回 None。
+#[tauri::command]
+fn gateway_lan_address() -> Option<String> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("192.0.2.1:9").ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then(|| ip.to_string())
+}
+
+/// 模型路由概览（画板 V5-3 四项指标、Agent 页「今日路由」）：按请求而不是按流水行计。
+#[tauri::command]
+fn gateway_day_overview(app: tauri::AppHandle) -> Result<crate::gateway::route_log::DayOverview, String> {
+    let today = chrono::Local::now().date_naive();
+    let start = |day: chrono::NaiveDate| {
+        day.and_hms_opt(0, 0, 0)
+            .and_then(|midnight| midnight.and_local_timezone(chrono::Local).earliest())
+            .map(|midnight| midnight.timestamp_millis())
+            .unwrap_or(0)
+    };
+    let yesterday = today.pred_opt().unwrap_or(today);
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    crate::gateway::route_log::day_overview(&conn, start(today), start(yesterday)).map_err(|error| error.to_string())
+}
+
 /// 接受接线漂移：只清接线记录，不改用户的配置文件。
 #[tauri::command]
 fn gateway_wiring_accept(app: tauri::AppHandle, agent: String) -> Result<(), String> {
@@ -4800,6 +4826,8 @@ pub fn run() {
             gateway_route_log_page,
             gateway_sessions_overview,
             gateway_today_counts,
+            gateway_day_overview,
+            gateway_lan_address,
             dock_undock,
             cost_estimate,
             connection_quota,

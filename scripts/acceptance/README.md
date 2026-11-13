@@ -38,10 +38,12 @@ Remove-Item Env:JOLU_DEV_URL                                 # 验收结束后�
 
 `start.ps1` 必须保持纯 ASCII：Windows PowerShell 5.1 会把不带 BOM 的 UTF-8 文件按 ANSI 读取，中文注释可能吞掉下一行代码。
 
-## 统一网关（J6）
+## Agent 与模型路由（R2 · V5）
 
-- `gateway-unified.e2e.mjs`：浏览器预览，挂载真实 `GatewayView` 与合成 API / 合成事件通道（不连桌面、不调原生命令）。覆盖运行优先、流光、K/M 缩写、真实 0 与「—」、展开收起、请求结束与乱序事件、路由流水翻页带回查询上界、非法页码、管理来源弹窗。需要先启动前端服务，用 `JOLU_PREVIEW_URL` 指定地址；截图在 `output/acceptance/gateway-unified/`。
-- `gateway-unified-desktop.e2e.mjs`：真实桌面验收。隔离 Jolu 实例 + 真实 Claude Code / Codex / OpenCode / Gemini CLI + 合成模型上游 `model-upstream.py`。步骤：
+2026-11-13 起主窗口按 Jolu.pen「统一网关 · R2 重设计」的 V5 拆成「Agent」与「模型路由」两页，J6 主图（会话直连图、连接栏、「接入设置」弹窗）已删除，原来挂这些界面的 `gateway-unified.e2e.mjs` 与 `gateway-confirmations.e2e.mjs` 随之移除。
+
+- `agents-routing-r2.e2e.mjs`：浏览器预览，挂载真实 `AgentsView` / `GatewayView` 与合成 API（不连桌面、不读写任何工具配置）。核对 V5-1（工具三组、详情链接计数、档位提示、改动差异）、V5-2（接入会做什么、写入预览）、V5-3（四项指标、请求怎么走、需要你处理）、V5-4（地址卡、局域网地址、接入示例）与只读模型池。先 `pnpm --dir frontend exec vite --port 5197 --strictPort`，再 `JOLU_PREVIEW_URL=http://localhost:5197 node scripts/acceptance/agents-routing-r2.e2e.mjs`（Vite 只监听 localhost 时不要用 127.0.0.1）；截图在 `output/acceptance/agents-routing-r2/`。
+- `gateway-unified-desktop.e2e.mjs`：真实桌面验收（**待按 R2 改写**：导航已改点「模型路由」，但「运行中」会话的界面核对依赖已删除的会话直连图，这一项会失败；接线、会话 ID 与来源关联的后端核对仍有效）。隔离 Jolu 实例 + 真实 Claude Code / Codex / OpenCode / Gemini CLI + 合成模型上游 `model-upstream.py`。步骤：
   1. 按上文 5193 方式编译并 `start.ps1 -Executable …` 启动隔离实例；
   2. `JOLU_UPSTREAM_DELAY=4 python -I scripts/acceptance/model-upstream.py 18766`（只监听回环，回复固定文本与合成用量；请求头写入 `output/acceptance/upstream-requests.jsonl`，凭据类请求头脱敏）；
   3. 在 `output/acceptance/node` 里设置 `JOLU_DEV_URL` 后运行脚本。
@@ -49,7 +51,7 @@ Remove-Item Env:JOLU_DEV_URL                                 # 验收结束后�
 
 ## 档位面板与联网搜索设置
 
-- `gateway-tiers-search.e2e.mjs`：浏览器预览，挂载真实的接线弹窗（含档位面板）与设置页「联网搜索 / 搜索插件」分区，原生调用全部合成（不读写任何工具配置）。核对：Opus 4.5 只给到 high、Haiku 不给 effort、只有一个 effort 被选中、「跟随子代理」在子代理跟随主模型时填主模型；搜索 Key 只显示掩码、保存时掩码原样交回、新 Key 原文只交一次、试搜结果展示、Trae 标为不支持。先 `pnpm dev`，再 `JOLU_PREVIEW_URL=http://localhost:5173 node scripts/acceptance/gateway-tiers-search.e2e.mjs`；截图在 `output/acceptance/gateway-tiers-search/`。
+- `gateway-tiers-search.e2e.mjs`：浏览器预览，挂载真实的接线弹窗（含档位面板）与设置页「联网搜索 / 搜索插件」分区（**档位部分待改挂 Agent 页**：接线弹窗已随 R2 删除，档位改在 `components/agents/AgentDetail.tsx`；搜索设置部分仍有效），原生调用全部合成（不读写任何工具配置）。核对：Opus 4.5 只给到 high、Haiku 不给 effort、只有一个 effort 被选中、「跟随子代理」在子代理跟随主模型时填主模型；搜索 Key 只显示掩码、保存时掩码原样交回、新 Key 原文只交一次、试搜结果展示、Trae 标为不支持。先 `pnpm dev`，再 `JOLU_PREVIEW_URL=http://localhost:5173 node scripts/acceptance/gateway-tiers-search.e2e.mjs`；截图在 `output/acceptance/gateway-tiers-search/`。
 
 ## 观测模式标记头
 

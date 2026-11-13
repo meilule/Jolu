@@ -5,14 +5,16 @@
  * 便于 node --test 直接验证。
  */
 
-export type MainPage = "island" | "providers" | "checkin" | "usage" | "sessions" | "automation" | "skills" | "gateway" | "settings"
+export type MainPage = "island" | "providers" | "checkin" | "usage" | "sessions" | "automation" | "skills" | "agents" | "gateway" | "settings"
 
 export interface MainPageItem {
   id: MainPage
   label: string
 }
 
-/** 侧栏上部的八个模块（模块 J「统一网关」排在 Skills 管理之后）；「设置」固定在侧栏底部，单独列出。 */
+/** 侧栏上部的九个模块；「设置」固定在侧栏底部，单独列出。
+ *  R2 / V5（Jolu.pen「统一网关 · R2 重设计」）：原「统一网关」拆成「Agent」（管工具）与「模型路由」（管请求怎么走），
+ *  模型路由沿用页面 id `gateway`，旧的默认页面 / 上次页面设置照常可用。 */
 export const PRIMARY_PAGES: readonly MainPageItem[] = [
   { id: "island", label: "灵动岛" },
   { id: "providers", label: "供应商" },
@@ -21,7 +23,8 @@ export const PRIMARY_PAGES: readonly MainPageItem[] = [
   { id: "sessions", label: "会话线程" },
   { id: "automation", label: "自动化" },
   { id: "skills", label: "Skills 管理" },
-  { id: "gateway", label: "统一网关" },
+  { id: "agents", label: "Agent" },
+  { id: "gateway", label: "模型路由" },
 ]
 
 export const SETTINGS_PAGE: MainPageItem = { id: "settings", label: "设置" }

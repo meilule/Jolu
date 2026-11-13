@@ -39,7 +39,9 @@ import {
  * - `requests_per_day` 到量直接 429（进 provider 之前），`tokens_per_day` 预扣 + 回冲强制（budget.rs）；
  * - Key 原文只在签发时返回一次。
  */
-export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run }: {
+export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run, inline = false }: {
+  /** 内嵌进模型路由页「对外访问」检查器（R2 / V5-4） */
+  inline?: boolean
   /** 当前共享开关值（来自 settings.gateway_shared_lan） */
   shared: boolean
   busy: boolean
@@ -135,6 +137,7 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
       width={620}
       busy={busy}
       onClose={onClose}
+      inline={inline}
       footer={<Button label="关闭" disabled={busy} onClick={onClose} />}
     >
       {/* 待确认：Jolu.pen 未包含此弹窗，样式等鼠鼠确认后补画板。 */}
@@ -167,8 +170,8 @@ export function SharedAccessDialog({ shared, busy, onSharedChange, onClose, run 
         )}
       </div>
 
-      {/* 共享开关 */}
-      <div className="flex flex-col gap-1.5 rounded-lg border border-jolu-border bg-jolu-side px-3 py-2.5">
+      {/* 共享开关：内嵌在「对外访问」时由检查器头部的分段切换负责，这里不重复 */}
+      <div className={cn("flex flex-col gap-1.5 rounded-lg border border-jolu-border bg-jolu-side px-3 py-2.5", inline && "hidden")}>
         <label className="flex items-center gap-2.5">
           <input type="checkbox" checked={shared} disabled={busy} onChange={(event) => onSharedChange(event.target.checked)}
             className="size-4 accent-jolu-accent" />

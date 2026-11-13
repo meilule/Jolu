@@ -31,7 +31,8 @@ const SessionsView = createLazyPage(() => import("./SessionsView").then((m) => (
 const AutomationView = createLazyPage(() => import("./AutomationView").then((m) => ({ default: m.AutomationView })), "自动化", "tasks")
 const SkillsView = createLazyPage(() => import("./SkillsView").then((m) => ({ default: m.SkillsView })), "Skills 管理", "table")
 const UsageView = createLazyPage(() => import("./UsageView").then((m) => ({ default: m.UsageView })), "用量统计", "stats")
-const GatewayView = createLazyPage(() => import("./GatewayView").then((m) => ({ default: m.GatewayView })), "模型入口", "settings")
+const GatewayView = createLazyPage(() => import("./GatewayView").then((m) => ({ default: m.GatewayView })), "模型路由", "settings")
+const AgentsView = createLazyPage(() => import("./AgentsView").then((m) => ({ default: m.AgentsView })), "Agent", "settings")
 const SettingsPage = createLazyPage(() => import("./SettingsPage").then((m) => ({ default: m.SettingsPage })), "设置", "settings")
 
 /**
@@ -264,7 +265,11 @@ export function MainPanelWindow({
         <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <PageHeader title={pageLabel(page)} collapsed={collapsed} onToggleSidebar={toggleSidebar} />
           <div ref={scrollRef} data-panel-scroll className="min-h-0 min-w-0 flex-1 overflow-auto">
-            <div ref={pageMotion} className={cn("px-8 py-5", page === "providers" && "h-full min-h-0")}>
+            <div ref={pageMotion} className={cn(
+              // R2 / V5：Agent 与模型路由是贴边的「清单 + 详情」双栏，不留内容区内边距
+              page === "agents" || page === "gateway" ? "h-full min-h-0" : "px-8 py-5",
+              page === "providers" && "h-full min-h-0",
+            )}>
               {page === "island" && <IslandView />}
               {page === "usage" && (
                 <UsageView
@@ -292,7 +297,8 @@ export function MainPanelWindow({
               )}
               {page === "providers" && <ProvidersView accountTarget={accountTarget} onAccountTargetHandled={clearAccountTarget} />}
               {checkinVisited.current && <div hidden={page !== "checkin"}><CheckinView active={page === "checkin" && panelActive} /></div>}
-              {page === "gateway" && <GatewayView />}
+              {page === "agents" && <AgentsView onNavigate={navigate} />}
+              {page === "gateway" && <GatewayView onNavigate={navigate} onOpenConnection={(connectionId) => { navigate("providers"); setAccountTarget({ connectionId, nonce: Date.now() }) }} />}
               {page === "settings" && <SettingsPage section={settingsSection} navigationRequest={navigationRequest} onOpenSkills={() => navigate("skills")} />}
               {/* 模块 E · 自动化 */}
               {page === "automation" && (

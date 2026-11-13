@@ -25,7 +25,9 @@ const fieldClass =
  * 选路之前按顺序执行；单个中间件出错只跳过自己。保存时后端先在样例请求上试跑，
  * 跑不通的配置不会写进库，避免「开了但从没生效」。
  */
-export function MiddlewareDialog({ busy, onClose, run }: {
+export function MiddlewareDialog({ busy, onClose, run, inline = false }: {
+  /** 内嵌进模型路由页「中间件」检查器（R2 / V5） */
+  inline?: boolean
   busy: boolean
   onClose: () => void
   run: (work: () => Promise<unknown>, successTitle?: string) => Promise<boolean>
@@ -88,7 +90,7 @@ export function MiddlewareDialog({ busy, onClose, run }: {
   const kindOf = (id: string) => MIDDLEWARE_KINDS.find((kind) => kind.id === id)
 
   return (
-    <Modal title="网关中间件" icon={<Layers aria-hidden className="size-4 text-jolu-muted" />} width={620} busy={busy} onClose={onClose}
+    <Modal title="网关中间件" icon={<Layers aria-hidden className="size-4 text-jolu-muted" />} width={620} busy={busy} onClose={onClose} inline={inline}
       footer={<><Button label="关闭" disabled={busy} onClick={onClose} />{!editing && <Button label="添加中间件" primary disabled={busy} onClick={startNew} />}</>}>
       <p className="text-[9.5px] text-jolu-muted">
         选路之前按从上到下的顺序改写请求；某一条出错只跳过它，请求照常发出。隐私脱敏最先执行，中间件其次。

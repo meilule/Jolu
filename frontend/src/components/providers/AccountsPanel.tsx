@@ -23,6 +23,7 @@ import { AccountBatchToolbar, BatchAccountDeleteDialog, type BatchAccountTarget 
 import { Tip } from "@/components/ui/Tip"
 import { useToast } from "@/components/ui/Toast"
 import type { Connection, ConnectionKind, PlatformId } from "@/types"
+import { RoutingCardRow, RoutingEditSection, useRoutingIndex, type RoutingIndex } from "./RoutingBlock"
 
 const PrivacyContext = createContext(false)
 const PRIVACY_KEY = "jolu.accounts.hide-sensitive"
@@ -82,6 +83,8 @@ export function AccountsPanel({ conn, onConnect, target, onTargetHandled }: {
   const [removing, setRemoving] = useState<Connection | null>(null)
   const [promoting, setPromoting] = useState<Connection | null>(null)
   const [editing, setEditing] = useState<Connection | null>(null)
+  // R2 / V5-5：账号卡与编辑弹窗里的「模型路由」区块共用一份模型池与分组索引
+  const routing = useRoutingIndex()
   const [batchTargets, setBatchTargets] = useState<BatchAccountTarget[] | null>(null)
   const [batchBusy, setBatchBusy] = useState(false)
   const batchRunning = useRef(false)
@@ -193,6 +196,8 @@ export function AccountsPanel({ conn, onConnect, target, onTargetHandled }: {
               onRemove={() => setRemoving(account)}
               onPromote={() => setPromoting(account)}
               onEdit={() => setEditing(account)}
+              routing={routing}
+              onRoutingChanged={() => void conn.reload()}
               onResume={() => {
                 void conn.setPaused(account.id, false)
                   .then(() => toast.success(`已恢复 ${account.baseName} 的查询`))
@@ -261,6 +266,7 @@ export function AccountsPanel({ conn, onConnect, target, onTargetHandled }: {
       {editing && (
         <EditDialog
           account={editing}
+          routing={<RoutingEditSection account={accounts.find((a) => a.id === editing.id) ?? editing} onChanged={() => { routing.reload(); void conn.reload() }} />}
           others={accounts.filter((a) => a.id !== editing.id)}
           onClose={() => setEditing(null)}
           onSave={async (name, secret, model) => {
@@ -372,8 +378,10 @@ function EmptyState({ title, desc, action }: { title: string; desc: string; acti
   )
 }
 
-function AccountCard({ account, current, located, selecting = false, selected = false, disabled = false, selectionLabel, onToggle, onRemove, onPromote, onEdit, onResume }: {
+function AccountCard({ account, current, located, selecting = false, selected = false, disabled = false, selectionLabel, onToggle, onRemove, onPromote, onEdit, onResume, routing, onRoutingChanged }: {
   account: Connection
+  routing: RoutingIndex
+  onRoutingChanged: () => void
   current: boolean
   located?: boolean
   selecting?: boolean
@@ -433,6 +441,7 @@ function AccountCard({ account, current, located, selecting = false, selected = 
           {account.masked && <SensitiveValue label="Key 标识" icon={KeyRound} value={account.masked} compact />}
         </div>}
       </div>
+      <RoutingCardRow account={account} index={routing} readOnly={selecting || disabled} onChanged={onRoutingChanged} />
       <CardActions account={account} paused={paused} refresh={refresh} hasQuota={policy.showQuota} canPromote={canPromote} readOnly={selecting || disabled} onPromote={onPromote} onEdit={onEdit} onRemove={onRemove} onDetails={()=>setDetailsOpen(true)} />
       {detailsOpen && <ConfirmShell title="账号详情" subtitle={`${displayName(account,hidden)} · ${entry.name}`} onClose={()=>setDetailsOpen(false)} busy={false} footer={<JoluButton variant="neutral" onClick={()=>setDetailsOpen(false)}>关闭</JoluButton>}>
         <div className="flex max-h-[calc(100dvh-250px)] min-h-0 flex-col gap-4 overflow-y-auto pr-1" data-account-details>
@@ -739,8 +748,10 @@ function RemoveDialog({ account, current, alternatives, islandUsers, onClose, on
  * 其他平台更换密钥由后端验证；自定义供应商的后端只看「有模型」（D-11），所以更换密钥后必须用新密钥
  * 重新获取模型，或在模型接口不可用时手填模型 ID 并「验证模型」，才能保存（editSaveState）。
  */
-function EditDialog({ account, others, onClose, onSave }: {
+function EditDialog({ account, others, onClose, onSave, routing }: {
   account: Connection
+  /** R2 / V5-5 模型路由分区：改动立即生效，不跟随「保存」 */
+  routing: ReactNode
   others: Connection[]
   onClose: () => void
   onSave: (name: string, secret: string | null, model: string | null) => Promise<void>
@@ -802,6 +813,7 @@ function EditDialog({ account, others, onClose, onSave }: {
           onModel={(next, ready) => { setModel(next); setModelReady(ready) }}
         />
       )}
+      {routing}
       {save.reason && <p className="text-[12px] text-jolu-muted">{save.reason}</p>}
       {confirm.error && <p role="alert" className="text-xs text-jolu-danger">{confirm.error}</p>}
     </ConfirmShell>

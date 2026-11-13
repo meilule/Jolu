@@ -242,8 +242,8 @@ fn new_instance_id() -> String {
     format!("{now:032x}{:08x}", std::process::id())[..32].to_string()
 }
 
-/// 主窗口的八个页面，与前端 `MainPage` 一致。
-const MAIN_PAGES: [&str; 8] = ["island", "providers", "checkin", "usage", "sessions", "automation", "skills", "settings"];
+/// 主窗口的十个页面，与前端 `MainPage` 一致（R2 / V5 起「统一网关」拆成 Agent 与模型路由两页）。
+const MAIN_PAGES: [&str; 10] = ["island", "providers", "checkin", "usage", "sessions", "automation", "skills", "agents", "gateway", "settings"];
 
 pub fn validate_default_page(page: &str) -> Result<(), String> {
     if page == "last" || MAIN_PAGES.contains(&page) { Ok(()) } else { Err(format!("未知的默认打开页面：{page}")) }
@@ -668,7 +668,7 @@ mod tests {
     fn default_page_rejects_unknown() {
         assert!(super::validate_default_page("bogus").is_err());
         assert!(super::validate_default_page("").is_err());
-        for page in ["last", "island", "providers", "checkin", "usage", "sessions", "automation", "skills", "settings"] {
+        for page in ["last", "island", "providers", "checkin", "usage", "sessions", "automation", "skills", "agents", "gateway", "settings"] {
             assert!(super::validate_default_page(page).is_ok(), "{page} 应当可选");
         }
         assert!(super::validate_last_page("last").is_err(), "上次访问的页面只能记具体页面");

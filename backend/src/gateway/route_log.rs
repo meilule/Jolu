@@ -227,6 +227,81 @@ pub fn source_usage(conn: &Connection) -> rusqlite::Result<Vec<SourceUsage>> {
     rows.collect()
 }
 
+/// 模型路由概览（画板 V5-3「四项指标」与 Agent 页「今日路由 N」）。
+///
+/// 一次网关请求在分组改道时会写多行（共享 `request_id`），这里按请求而不是按行计：
+/// - `today` / `yesterday`：请求数；
+/// - `reroutes`：今天写了不止一行的请求（失败后换下一个成员）；
+/// - `errors`：今天最后一次尝试仍不是 ok 的请求（Agent 真正收到的错误）；
+/// - `by_agent`：今天各 agent 的请求数（agent 未识别的不计）。
+///
+/// 流水只保留最近 1000 行：最早一行晚于昨天零点时，`partial = true`，昨天与今天的数都是下限。
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct DayOverview {
+    pub today: i64,
+    pub yesterday: i64,
+    pub reroutes: i64,
+    pub errors: i64,
+    pub by_agent: std::collections::BTreeMap<String, i64>,
+    pub partial: bool,
+    /// 今天最近一次 Agent 收到的错误（最后一次尝试那行）
+    pub last_error: Option<RouteLogEntry>,
+}
+
+pub fn day_overview(conn: &Connection, today_start: i64, yesterday_start: i64) -> rusqlite::Result<DayOverview> {
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM gateway_route_log WHERE ts >= ?1 ORDER BY id ASC"))?;
+    let rows = stmt.query_map([yesterday_start], row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let oldest: Option<i64> = conn.query_row("SELECT MIN(ts) FROM gateway_route_log", [], |r| r.get(0))?;
+    let total: i64 = conn.query_row("SELECT COUNT(*) FROM gateway_route_log", [], |r| r.get(0))?;
+    // 按请求分组。request_id 是进程内计数、重启后从头开始：编号明显倒退时视为新一轮，避免把两次运行的请求并在一起
+    let mut groups: Vec<(i64, Vec<RouteLogEntry>)> = Vec::new();
+    let mut index: std::collections::HashMap<(u32, i64), usize> = std::collections::HashMap::new();
+    let (mut epoch, mut max_seen) = (0u32, 0i64);
+    for entry in rows {
+        let key = match entry.request_id {
+            Some(id) => {
+                if id + 100 < max_seen {
+                    epoch += 1;
+                    max_seen = 0;
+                }
+                max_seen = max_seen.max(id);
+                (epoch, id)
+            }
+            None => (u32::MAX, -entry.id),
+        };
+        match index.get(&key) {
+            Some(&at) => groups[at].1.push(entry),
+            None => {
+                index.insert(key, groups.len());
+                groups.push((entry.ts, vec![entry]));
+            }
+        }
+    }
+    let mut out = DayOverview {
+        partial: total >= 1000 && oldest.is_some_and(|ts| ts > yesterday_start),
+        ..Default::default()
+    };
+    for (first_ts, attempts) in groups {
+        if first_ts < today_start {
+            out.yesterday += 1;
+            continue;
+        }
+        out.today += 1;
+        if attempts.len() > 1 {
+            out.reroutes += 1;
+        }
+        if let Some(agent) = attempts[0].agent.clone().filter(|a| !a.is_empty()) {
+            *out.by_agent.entry(agent).or_default() += 1;
+        }
+        let last = attempts.last().cloned();
+        if let Some(last) = last.filter(|l| l.result != "ok") {
+            out.errors += 1;
+            out.last_error = Some(last);
+        }
+    }
+    Ok(out)
+}
+
 /// 某时刻之后的请求数，按结果分组：(ok, rejected, failed)。供灵动岛「今日经网关」使用。
 /// 流水只保留最近 1000 行，当天超过 1000 次时这是下限，调用方据此标注。
 pub fn counts_since(conn: &Connection, since_ms: i64) -> rusqlite::Result<(i64, i64, i64)> {
@@ -251,6 +326,35 @@ mod tests {
 
     fn db() -> Connection {
         crate::db::open(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    #[test]
+    fn day_overview_counts_requests_not_rows() {
+        let conn = db();
+        let insert = |ts: i64, agent: &str, result: &str, request_id: Option<i64>| {
+            conn.execute(
+                "INSERT INTO gateway_route_log(ts, agent, requested_model, result, request_id) VALUES(?1, ?2, 'group/x', ?3, ?4)",
+                params![ts, agent, result, request_id],
+            )
+            .unwrap();
+        };
+        // 昨天 1 次；今天：一次改道后成功、一次两次尝试都失败、一次直接成功（无 request_id）
+        insert(50, "claude-code", "ok", Some(1));
+        insert(150, "claude-code", "failed", Some(2));
+        insert(151, "claude-code", "ok", Some(2));
+        insert(160, "codex", "failed", Some(3));
+        insert(161, "codex", "failed", Some(3));
+        insert(170, "claude-code", "ok", None);
+        let day = day_overview(&conn, 100, 0).unwrap();
+        assert_eq!((day.today, day.yesterday, day.reroutes, day.errors), (3, 1, 2, 1));
+        assert_eq!(day.by_agent.get("claude-code"), Some(&2));
+        assert_eq!(day.by_agent.get("codex"), Some(&1));
+        assert_eq!(day.last_error.as_ref().map(|e| e.ts), Some(161), "取最后一次尝试那行");
+        assert!(!day.partial);
+        // 重启后 request_id 从头计：不能并进上一轮的同号请求
+        insert(300, "codex", "ok", Some(500));
+        insert(301, "codex", "ok", Some(2));
+        assert_eq!(day_overview(&conn, 100, 0).unwrap().today, 5);
     }
 
     #[test]

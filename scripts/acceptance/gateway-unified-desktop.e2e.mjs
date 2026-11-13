@@ -86,8 +86,8 @@ try {
   await main.setViewportSize({ width: 1600, height: 1800 }).catch(() => {})
   await main.reload()  // 每次从干净的页面状态开始（滚动位置、展开状态）
   await main.waitForSelector('nav[aria-label="主导航"]', { timeout: 60000 })
-  await main.locator('nav[aria-label="主导航"]').getByRole("button", { name: "统一网关", exact: true }).click()
-  await main.getByRole("heading", { name: "统一网关" }).last().waitFor()
+  await main.locator('nav[aria-label="主导航"]').getByRole("button", { name: "模型路由", exact: true }).click()
+  await main.getByText("概览", { exact: true }).first().waitFor()
   await main.screenshot({ path: join(OUT, "01-before.png"), fullPage: true })
 
   /* ── 真实 CLI：各自独立主目录，同时发请求（上游延迟 4 秒，便于观察运行中） ── */
