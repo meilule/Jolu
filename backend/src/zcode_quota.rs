@@ -140,20 +140,68 @@ pub(crate) fn local_zcode_quota() -> QuotaState {
     }
 }
 
+/// 解开 `credentials.json` 里的一个值。
+///
+/// 两种封装：
+///
+/// - `enc:v1:`：旧版，AES-256-GCM，密钥 = `sha256(secret)`，secret 由
+///   [`credential_secret`] 用机器与路径派生（ZCode 3.17 及更早）。
+/// - `enc:v2:os:<24位hex指纹>:<iv>.<tag>.<密文>`：ZCode 3.18 起把**随机** 32 字节密钥
+///   交给系统凭据管理器保存（service `ZCode Credential Encryption`，account 是
+///   `sha256(绝对路径)` 的 hex），密文里前置指纹用来在换机器/换目录后快速判错。
+///   三段点分，base64url 无填充。
+///
+/// 明文值原样返回；认得出是 `enc:` 但不认识的封装一律失败，不猜。
 fn decrypt_credential(raw: &str, secret: &str) -> Result<String, ()> {
-    let Some(payload) = raw.strip_prefix("enc:v1:") else {
-        return if raw.starts_with("enc:") { Err(()) } else { Ok(raw.to_owned()) };
+    if let Some(payload) = raw.strip_prefix("enc:v1:") {
+        return decrypt_gcm(&sha256_bytes(secret.as_bytes()), payload);
+    }
+    if let Some(rest) = raw.strip_prefix("enc:v2:os:") {
+        // 先判形状再取密钥：格式残缺就不必打扰系统凭据库
+        let (fingerprint, body) = rest.split_once(':').ok_or(())?;
+        if fingerprint.len() != 24 { return Err(()); }
+        return decrypt_v2(fingerprint, body, &os_credential_key()?);
+    }
+    if raw.starts_with("enc:") { return Err(()); }
+    Ok(raw.to_owned())
+}
+
+/// `enc:v2:os:` 的后半段：24 位 hex 指纹 + `iv.tag.ciphertext` 三段。
+/// 密钥由调用方给（生产上从系统凭据库读），便于单元测试用合成密钥覆盖。
+fn decrypt_v2(fingerprint: &str, body: &str, key: &[u8]) -> Result<String, ()> {
+    // 指纹是密钥的 sha256 前 12 字节：对不上就是换了机器或换了凭据库，
+    // 继续试只会在 AES 层拿一个含糊的失败
+    if !fingerprint.eq_ignore_ascii_case(&hex12(&sha256_bytes(key))) {
+        return Err(());
+    }
+    decrypt_gcm(key, body)
+}
+
+/// `enc:` 封装本体：AES-256-GCM，`iv.tag.ciphertext` 三段 base64url。
+fn decrypt_gcm(key: &[u8], payload: &str) -> Result<String, ()> {
+    let mut parts = payload.split('.');
+    let (Some(iv), Some(tag), Some(body), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(());
     };
-    let parts: Vec<_> = payload.split('.').collect();
-    if parts.len() != 3 { return Err(()); }
-    let iv = URL_SAFE_NO_PAD.decode(parts[0]).map_err(|_| ())?;
-    let tag = URL_SAFE_NO_PAD.decode(parts[1]).map_err(|_| ())?;
-    let mut encrypted = URL_SAFE_NO_PAD.decode(parts[2]).map_err(|_| ())?;
+    let iv = URL_SAFE_NO_PAD.decode(iv).map_err(|_| ())?;
+    let tag = URL_SAFE_NO_PAD.decode(tag).map_err(|_| ())?;
+    let mut encrypted = URL_SAFE_NO_PAD.decode(body).map_err(|_| ())?;
     if iv.len() != 12 || tag.len() != 16 { return Err(()); }
     encrypted.extend_from_slice(&tag);
-    let cipher = Aes256Gcm::new_from_slice(&Sha256::digest(secret.as_bytes())).map_err(|_| ())?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| ())?;
     let bytes = cipher.decrypt(Nonce::from_slice(&iv), encrypted.as_slice()).map_err(|_| ())?;
     String::from_utf8(bytes).map_err(|_| ())
+}
+
+fn sha256_bytes(bytes: &[u8]) -> Vec<u8> {
+    Sha256::digest(bytes).to_vec()
+}
+
+/// 指纹的低 12 字节 hex，与密文前缀同长（24 字符）
+fn hex12(digest: &[u8]) -> String {
+    digest.iter().take(12).map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// 官方客户端加密登录用的口令：与官方 credentialCipherProvider 的公开实现一致；
@@ -163,6 +211,77 @@ fn credential_secret(home: &Path) -> String {
     let username = std::env::var(if cfg!(windows) { "USERNAME" } else { "USER" }).unwrap_or_else(|_| "unknown".into());
     std::env::var("ZCODE_CREDENTIAL_SECRET").ok().filter(|s| !s.is_empty())
         .unwrap_or_else(|| format!("zcode-credential-fallback:{platform}:{}:{username}", home.display()))
+}
+
+/// 系统凭据管理器里这把密钥的 service 名（官方 `systemCredentialCipher.ts` 的
+/// `SYSTEM_SERVICE`）。keyring 条目名是 `<account>.<service>`，account 为
+/// `sha256(credentials.json 绝对路径)` 的 hex。
+const OS_KEY_SERVICE: &str = "ZCode Credential Encryption";
+
+/// 从 Windows 凭据管理器读 ZCode 3.18+ 的凭据加密密钥（32 字节原始 AES key）。
+///
+/// 密钥是 ZCode 首次启动时随机生成、交给系统凭据库保存的，Jolu 只能读、不能派生；
+/// 读不到就意味着本机没有 v2 登录（或换了 Windows 用户），调用方按解密失败处理。
+///
+/// 条目签名：`CredReadW`（`CRED_TYPE_GENERIC`）→ `CredentialBlob` 是 UTF-16LE 的
+/// 43 字符 base64url（官方 Node keyring 把字符串按 UTF-16 交出去），解码后 32 字节。
+/// 也接受 UTF-8 存放的同类条目：不同 keyring 前端实现的编码不统一，长度能自证。
+#[cfg(windows)]
+fn os_credential_key() -> Result<Vec<u8>, ()> {
+    use windows_sys::Win32::Security::Credentials::{
+        CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
+    };
+    let path = crate::creds::home().ok_or(())?.join(".zcode").join("v2").join("credentials.json");
+    let account = hex_of(&sha256_bytes(path_display(&path).as_bytes()));
+    let target: Vec<u16> = format!("{account}.{OS_KEY_SERVICE}").encode_utf16().chain(std::iter::once(0)).collect();
+    let mut raw: *mut CREDENTIALW = std::ptr::null_mut();
+    let ok = unsafe { CredReadW(target.as_ptr(), CRED_TYPE_GENERIC, 0, &mut raw) };
+    if ok == 0 || raw.is_null() { return Err(()); }
+    // blob 指向系统分配的内存：先拷出来再 CredFree，避免用着悬空指针
+    let blob = unsafe {
+        let cred = &*raw;
+        let bytes = if cred.CredentialBlobSize == 0 || cred.CredentialBlob.is_null() {
+            None
+        } else {
+            Some(std::slice::from_raw_parts(cred.CredentialBlob, cred.CredentialBlobSize as usize).to_vec())
+        };
+        CredFree(raw as *const core::ffi::c_void);
+        bytes
+    };
+    let bytes = blob.ok_or(())?;
+    decode_key_blob(&bytes)
+}
+
+/// 非 Windows 没有这套凭据库：ZCode 的 v2 封装只在 Windows 上用系统凭据。
+#[cfg(not(windows))]
+fn os_credential_key() -> Result<Vec<u8>, ()> {
+    Err(())
+}
+
+/// 凭据 blob → 32 字节密钥。优先按 UTF-16LE（官方 Node keyring 的写法），
+/// 退到 UTF-8；两者都必须是 43 字符 base64url，解开正好 32 字节。
+fn decode_key_blob(bytes: &[u8]) -> Result<Vec<u8>, ()> {
+    let text = if bytes.len() % 2 == 0 && bytes.iter().skip(1).step_by(2).all(|byte| *byte == 0) {
+        String::from_utf16(&bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect::<Vec<_>>()).map_err(|_| ())?
+    } else {
+        String::from_utf8(bytes.to_vec()).map_err(|_| ())?
+    };
+    let text = text.trim();
+    if text.len() != 43 || !text.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_') {
+        return Err(());
+    }
+    let key = URL_SAFE_NO_PAD.decode(text).map_err(|_| ())?;
+    if key.len() == 32 { Ok(key) } else { Err(()) }
+}
+
+/// 绝对路径的字符串形态：官方用 `path.resolve(...)` 的正常形式（Windows 反斜杠），
+/// 不做大小写归一——指纹按字面比对，猜错只会多一次解密失败。
+fn path_display(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn hex_of(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// 本机 ZCode 自己登录凭据里的 Coding Plan Key 及其账号家族（`FAMILY_ZAI` / `FAMILY_BIGMODEL`）。
@@ -756,6 +875,125 @@ mod tests {
         assert!(decrypt_credential("enc:v1:bad.bad.bad", secret).is_err());
         assert!(decrypt_credential("enc:v2:unknown", secret).is_err());
         assert_eq!(decrypt_credential("legacy-plain", secret).unwrap(), "legacy-plain");
+    }
+
+    /// 合成一把 32 字节密钥下的 `enc:v2:os:` 密文，形状与 ZCode 3.18 写出的一致
+    fn v2_envelope(key: &[u8], plain: &str) -> String {
+        let iv = [9u8; 12];
+        let cipher = Aes256Gcm::new_from_slice(key).unwrap();
+        let encrypted = cipher.encrypt(Nonce::from_slice(&iv), plain.as_bytes()).unwrap();
+        let split = encrypted.len() - 16;
+        format!(
+            "enc:v2:os:{}:{}.{}.{}",
+            hex12(&sha256_bytes(key)),
+            URL_SAFE_NO_PAD.encode(iv),
+            URL_SAFE_NO_PAD.encode(&encrypted[split..]),
+            URL_SAFE_NO_PAD.encode(&encrypted[..split])
+        )
+    }
+
+    /// 从合成信封里切出 `decrypt_v2` 的两个入参（避开真机凭据库）
+    fn v2_parts(raw: &str) -> (&str, &str) {
+        let rest = raw.strip_prefix("enc:v2:os:").unwrap();
+        rest.split_once(':').unwrap()
+    }
+
+    /// 只读 smoke：用本机真实 `credentials.json` 与系统凭据库验证 v2 解密链路。
+    /// 默认 ignored——依赖本机 ZCode 登录，只在显式核对时执行；不打印任何明文。
+    #[test]
+    #[ignore = "读本机 ZCode 登录与系统凭据库；仅显式只读执行"]
+    fn local_v2_credentials_decrypt_readonly_smoke() {
+        let home = crate::creds::home().expect("需要 USERPROFILE");
+        let raw = std::fs::read_to_string(home.join(".zcode/v2/credentials.json")).expect("未找到本机 ZCode 登录");
+        let credentials: Value = serde_json::from_str(&raw).unwrap();
+        let secret = credential_secret(&home);
+        let mut total = 0;
+        let mut encrypted = 0;
+        let mut v2 = 0;
+        let mut failed = 0;
+        for (name, value) in credentials.as_object().expect("credentials.json 应为对象") {
+            let Some(value) = value.as_str() else { continue };
+            total += 1;
+            if value.starts_with("enc:v2:os:") { v2 += 1; }
+            if !value.starts_with("enc:") { continue; }
+            encrypted += 1;
+            match decrypt_credential(value, &secret) {
+                Ok(plain) if !plain.trim().is_empty() => {}
+                Ok(_) => panic!("{name} 解出空值"),
+                Err(_) => failed += 1,
+            }
+        }
+        eprintln!("entries={total} encrypted={encrypted} v2={v2} failed={failed}");
+        assert!(total > 0, "本机 ZCode 登录为空");
+        assert_eq!(failed, 0, "有 {failed} 个加密条目解不开");
+
+        // 网关转发与 Start Plan 同样吃这条解密链：顺带核对它们各自的入口，
+        // 只打印是否可用与家族，不打印 Key / JWT。
+        match coding_plan_key_at(&home) {
+            Ok((_, family)) => eprintln!("coding_plan_key=ok family={family}"),
+            Err(reason) => eprintln!("coding_plan_key=none ({reason})"),
+        }
+        eprintln!("coding_plan_jwt={}", if coding_plan_jwt_at(&home).is_some() { "ok" } else { "none" });
+        match team_selection_at(&home) {
+            Some(selection) => eprintln!("team_selection=ok family={}", selection.family),
+            None => eprintln!("team_selection=none"),
+        }
+    }
+
+    /// 只读 smoke：本机是否已经能读出 ZCode 额度（端到端，含网络请求）。
+    #[test]
+    #[ignore = "会向 ZCode 端点发真实请求；仅显式只读执行"]
+    fn local_quota_readonly_smoke() {
+        match local_zcode_quota() {
+            QuotaState::Ok { windows, plan, account } => {
+                eprintln!("state=ok windows={} plan={plan:?} email={:?}", windows.len(), account.as_ref().and_then(|a| a.email.as_deref()));
+                assert!(!windows.is_empty() || plan.is_some(), "额度为空且没有套餐信息");
+            }
+            other => panic!("额度读取失败: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decrypts_v2_with_keyring_key_and_checks_fingerprint() {
+        let key: Vec<u8> = (0u8..32).collect();
+        let raw = v2_envelope(&key, "synthetic-v2-token");
+        let (fingerprint, body) = v2_parts(&raw);
+        assert_eq!(decrypt_v2(fingerprint, body, &key).unwrap(), "synthetic-v2-token");
+
+        // 换了密钥：指纹先不一致，不必等到 AES 层
+        let other: Vec<u8> = (1u8..33).collect();
+        let wrong = v2_envelope(&other, "synthetic-v2-token");
+        let (wrong_fp, wrong_body) = v2_parts(&wrong);
+        assert!(decrypt_v2(wrong_fp, wrong_body, &key).is_err());
+
+        // 指纹正确但密文被改：AES-GCM 的 tag 校验失败
+        let tampered = raw.replace(&raw[raw.len() - 4..], "AAAA");
+        let (tampered_fp, tampered_body) = v2_parts(&tampered);
+        assert!(decrypt_v2(tampered_fp, tampered_body, &key).is_err());
+
+        // 形状不全的封装不猜（这些在取密钥之前就被挡掉）
+        assert!(decrypt_credential("enc:v2:os:", "x").is_err());
+        assert!(decrypt_credential("enc:v2:os:00112233445566778899aabb", "x").is_err());
+        assert!(decrypt_credential("enc:v2:os:short:aaa.bbb.ccc", "x").is_err());
+        assert!(decrypt_credential("enc:v2:file:whatever", "x").is_err());
+    }
+
+    #[test]
+    fn key_blob_decodes_utf16_and_utf8_and_rejects_other_lengths() {
+        let key: Vec<u8> = (7u8..39).collect();
+        let text = URL_SAFE_NO_PAD.encode(&key);
+        assert_eq!(text.len(), 43);
+        // 官方 Node keyring 把字符串按 UTF-16LE 交出去
+        let utf16: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(decode_key_blob(&utf16).unwrap(), key);
+        // 有的 keyring 前端写 UTF-8：长度自证，同样接受
+        assert_eq!(decode_key_blob(text.as_bytes()).unwrap(), key);
+        // 不是 43 字符 base64url、或解出来不是 32 字节，都算读不到
+        assert!(decode_key_blob(b"too-short").is_err());
+        assert!(decode_key_blob(b"").is_err());
+        let long = URL_SAFE_NO_PAD.encode([0u8; 31]);
+        let long16: Vec<u8> = long.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert!(decode_key_blob(&long16).is_err());
     }
 
     #[test]
