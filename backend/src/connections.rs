@@ -19,13 +19,33 @@ mod manual_models_tests {
     #[test]
     fn new_native_api_connections_pass_local_preparation() {
         for (platform,base,service) in [("zcode","https://open.bigmodel.cn/api/anthropic",None),("opencode","https://opencode.ai/zen/go/v1",Some("opencode-go"))] {
-            let input=NewConnection{platform:platform.into(),kind:"api".into(),name:"synthetic".into(),secret:Some("synthetic-key".into()),base_url:Some(base.into()),model:Some("synthetic".into()),effort:None,context_1m:None,protocol:None,service:service.map(str::to_owned)};
+            let input=NewConnection{platform:platform.into(),kind:"api".into(),name:"synthetic".into(),secret:Some("synthetic-key".into()),base_url:Some(base.into()),model:Some("synthetic".into()),effort:None,context_1m:None,protocol:None,slug_base:None,service:service.map(str::to_owned)};
             let prepared=prepare_new(input).unwrap_or_else(|e|panic!("{platform}: {e}"));
             let db = crate::db::open(std::path::Path::new(":memory:")).unwrap();
             add(&db,prepared).unwrap();let rows=list(&db).unwrap();assert_eq!(rows.len(),1);assert_eq!(rows[0].service.as_deref(),service);assert_eq!(rows[0].model.as_deref(),Some("synthetic"));
             if platform=="zcode"{assert_eq!(rows[0].protocol.as_deref(),Some("anthropic"));}
         }
     }
+    #[test]
+    /// 上游错误体里的短消息：两种常见形态都取到，其它一律不取
+    fn upstream_message_reads_short_reasons_only() {
+        // 第三方中转（华龙这类）的形态；403 + 这句话才能告诉用户「Key 被上游停用」
+        assert_eq!(
+            upstream_message(r#"{"code":"GROUP_DISABLED","message":"API Key 所属分组已停用"}"#).as_deref(),
+            Some("API Key 所属分组已停用")
+        );
+        // OpenAI 官方的嵌套形态
+        assert_eq!(
+            upstream_message(r#"{"error":{"message":"Incorrect API key provided"}}"#).as_deref(),
+            Some("Incorrect API key provided")
+        );
+        // 空串、无 message、非 JSON、超长：一律不取，用通用文案
+        assert!(upstream_message(r#"{"message":"  "}"#).is_none());
+        assert!(upstream_message(r#"{"code":"X"}"#).is_none());
+        assert!(upstream_message("<html>502 Bad Gateway</html>").is_none());
+        assert!(upstream_message(&format!(r#"{{"message":"{}"}}"#, "长".repeat(121))).is_none());
+    }
+
     #[test]
     fn models_endpoint_normalizes_base_and_rejects_non_http() {
         assert_eq!(models_endpoint("https://gw.test", "openai", None).unwrap(), "https://gw.test/v1/models");
@@ -58,7 +78,7 @@ mod gateway_tests {
     #[test]
     fn local_registration_is_deduplicated_and_does_not_enable_connections() {
         let db = crate::db::open(std::path::Path::new(":memory:")).unwrap();
-        let input = |key: &str| NewConnection { service: None, platform: "claude".into(), kind: "api".into(), name: "local".into(), secret: Some(key.into()), base_url: Some("https://example.test".into()), model: None, effort: None, context_1m: None, protocol: None };
+        let input = |key: &str| NewConnection { service: None, platform: "claude".into(), kind: "api".into(), name: "local".into(), secret: Some(key.into()), base_url: Some("https://example.test".into()), model: None, effort: None, context_1m: None, protocol: None , slug_base: None};
         let (id, added) = register_local(&db, input("sk-first-1234")).unwrap();
         assert!(added);
         assert!(selectable_creds(&db, &id).is_err());
@@ -84,7 +104,7 @@ mod gateway_tests {
         let id = add(&db, NewConnection { service: None,
             platform: "claude".into(), kind: "api".into(), name: "pause test".into(),
             secret: Some("synthetic-pause-key".into()), base_url: None,
-            model: None, effort: None, context_1m: None, protocol: None,
+            model: None, effort: None, context_1m: None, protocol: None, slug_base: None,
         }).unwrap();
         db.execute("UPDATE connections SET status = 'paused' WHERE id = ?1", [&id]).unwrap();
         touch_sync(&db, &id).unwrap();
@@ -106,7 +126,7 @@ mod gateway_tests {
         let id = add(&db, NewConnection { service: None,
             platform: "codex".into(), kind: "api".into(), name: "saved connection".into(),
             secret: Some("synthetic-preserved-key".into()), base_url: Some("https://example.test".into()),
-            model: None, effort: None, context_1m: None, protocol: None,
+            model: None, effort: None, context_1m: None, protocol: None, slug_base: None,
         }).unwrap();
         set_paused(&db, &id, true).unwrap();
         assert!(query_creds(&db, &id).is_err());
@@ -126,7 +146,7 @@ mod gateway_tests {
     fn official_native_keys_require_explicit_credentials_and_supported_platform() {
         let input=|platform: &str, kind: &str, secret: Option<&str>| NewConnection { service: None,
             platform:platform.into(), kind:kind.into(), name:"official test".into(),
-            secret:secret.map(str::to_string),base_url:None,model:None,effort:None,context_1m:None,protocol:None,
+            secret:secret.map(str::to_string),base_url:None,model:None,effort:None,context_1m:None,protocol:None, slug_base: None,
         };
         for platform in ["gemini","grok"] {
             assert!(prepare_new(input(platform,"api",Some("synthetic-key"))).is_ok());
@@ -141,7 +161,7 @@ mod gateway_tests {
         let connection = |base: &str| NewConnection { service: None,
             platform: "claude".into(), kind: "api".into(), name: "HTTP gateway test".into(),
             secret: Some("synthetic-test-key".into()), base_url: Some(base.into()),
-            model: None, effort: None, context_1m: None, protocol: None,
+            model: None, effort: None, context_1m: None, protocol: None, slug_base: None,
         };
         for base in ["http://api.example.com", "http://192.168.1.2:8080", "http://localhost:8000", "https://api.example.com", "HTTP://api.example.com"] {
             assert!(prepare_new(connection(base)).is_ok(), "should accept {base}");
@@ -171,7 +191,33 @@ mod rename_tests {
             effort: None,
             context_1m: None,
             protocol: None,
+            slug_base: None,
         }
+    }
+
+    /// 从本机导入的连接：显示名带来源标签，slug 基名单独给（不带标签）
+    #[test]
+    fn slug_base_keeps_source_label_out_of_the_prefix() {
+        let db = db();
+        let id = add(&db, NewConnection {
+            service: None,
+            platform: "custom".into(),
+            kind: "api".into(),
+            name: "Claude Code · Claude Code 上游".into(),
+            secret: Some("sk-import-1234".into()),
+            base_url: Some("https://relay.test".into()),
+            model: None,
+            effort: None,
+            context_1m: None,
+            protocol: Some("openai".into()),
+            slug_base: Some("Claude Code 上游".into()),
+        })
+        .unwrap();
+        let row = &list(&db).unwrap()[0];
+        // 显示名保留来源标签
+        assert_eq!(row.name, "Claude Code · Claude Code 上游");
+        // 前缀不再重复拼 claude-code
+        assert_eq!(row.slug.as_deref(), Some("claude-code"), "{id}");
     }
 
     #[test]
@@ -212,7 +258,7 @@ mod rename_tests {
             model: None,
             effort: None,
             context_1m: None,
-            protocol: None,
+            protocol: None, slug_base: None,
         };
         // 用户填了名称：覆盖自动生成名，并去首尾空白
         let renamed = with_custom_name(vec![input("Claude API Key")], Some("  我的连接  ".into())).unwrap();
@@ -230,7 +276,7 @@ mod rename_tests {
     fn local_subscription_names_ignore_frontend_custom_names() {
         let input = NewConnection { service: None, platform: "claude".into(), kind: "auth".into(),
             name: "Claude 官方订阅".into(), secret: None, base_url: None, model: None,
-            effort: None, context_1m: None, protocol: None };
+            effort: None, context_1m: None, protocol: None , slug_base: None};
         let output = with_custom_name(vec![input], Some("前端任意名称".into())).unwrap();
         assert_eq!(output[0].name, "Claude 官方订阅");
     }
@@ -245,7 +291,7 @@ mod query_result_tests {
         let id = add(&db, NewConnection {
             service: None, platform: "claude".into(), kind: "api".into(), name: "query result".into(),
             secret: Some("synthetic-old-key".into()), base_url: Some("https://gateway.example.test".into()),
-            model: None, effort: None, context_1m: None, protocol: None,
+            model: None, effort: None, context_1m: None, protocol: None, slug_base: None,
         }).unwrap();
         let expected = query_creds(&db, &id).unwrap().unwrap();
         (db, id, expected)
@@ -315,7 +361,7 @@ mod removal_reference_tests {
         add(db, NewConnection {
             service: None, platform: "claude".into(), kind: "api".into(), name: name.into(),
             secret: Some("synthetic-removal-key".into()), base_url: None,
-            model: None, effort: None, context_1m: None, protocol: None,
+            model: None, effort: None, context_1m: None, protocol: None, slug_base: None,
         }).unwrap()
     }
 
@@ -410,7 +456,7 @@ mod local_sync_tests {
             model: None,
             effort: None,
             context_1m: None,
-            protocol: None,
+            protocol: None, slug_base: None,
         }
     }
 
@@ -515,7 +561,7 @@ mod custom_provider_tests {
             model: Some("gpt-4.1-mini".into()),
             effort: None,
             context_1m: None,
-            protocol: protocol.map(Into::into),
+            protocol: protocol.map(Into::into), slug_base: None,
         }
     }
 
@@ -780,6 +826,13 @@ pub struct NewConnection {
     /// 接口协议：openai（Bearer）或 anthropic（x-api-key）；自定义供应商必填
     #[serde(default)]
     pub protocol: Option<String>,
+    /// 菜单前缀（slug）的基名；None 时用 `name`。
+    ///
+    /// 给「显示名要拼来源标签、前缀不能跟着拼」的调用方用：从本机导入把来源标签拼进了
+    /// 显示名（「Claude Code · Claude Code 上游」），拿它当前缀会得到 `claude-code-claude-code`
+    /// 这种重复词。只影响新建时分配，已有连接的 slug 永不改写。
+    #[serde(default)]
+    pub slug_base: Option<String>,
 }
 
 /// 脱敏：保留可识别的前缀与末 4 位，中间固定 4 个星号。
@@ -995,7 +1048,9 @@ pub fn add(conn: &Sql, c: NewConnection) -> Result<String, String> {
     let base = c.base_url;
     let account_email = if c.kind == "auth" { c.secret.as_deref().and_then(|s| crate::login_detect::account_for_secret(&c.platform, s)) } else { None };
     let account_fp = crate::gateway::identity::account_fingerprint(&c.platform, &c.kind, c.secret.as_deref());
-    let slug = crate::gateway::identity::allocate_slug(conn, &id, &c.platform, &c.name, account_fp.as_deref())
+    // 前缀基名可以单独给：显示名里的来源标签不该进 slug
+    let slug_name = c.slug_base.as_deref().filter(|base| !base.trim().is_empty()).unwrap_or(&c.name);
+    let slug = crate::gateway::identity::allocate_slug(conn, &id, &c.platform, slug_name, account_fp.as_deref())
         .map_err(|error| format!("分配连接标识失败：{error}"))?;
 
     conn.execute_batch("SAVEPOINT jolu_add_connection").map_err(|e| e.to_string())?;
@@ -1022,7 +1077,19 @@ pub fn add(conn: &Sql, c: NewConnection) -> Result<String, String> {
 
 /// 移除连接：只删凭证与配置，**历史统计保留**（§6.3）。
 /// requests 表按 platform 存储、不关联 connection_id，因此这里天然不会碰到统计数据。
-/// 「获取模型」：从网关拉取可用模型列表。
+/// 上游错误体里给人看的短消息：`{"message":…}` 或 OpenAI 形态的 `{"error":{"message":…}}`。
+/// 超过 120 字、空串、或不是对象都不取——宁可用通用文案，也不把整页 HTML 塞进提示。
+fn upstream_message(body: &str) -> Option<String> {
+    let body: serde_json::Value = serde_json::from_str(body).ok()?;
+    let message = body
+        .get("message")
+        .and_then(|value| value.as_str())
+        .or_else(|| body.get("error").and_then(|error| error.get("message")).and_then(|value| value.as_str()))?;
+    let message = message.trim();
+    (!message.is_empty() && message.chars().count() <= 120).then(|| message.to_string())
+}
+
+/// 「获取模型」（画布 18）：从网关拉取可用模型列表。
 /// Claude 与 Anthropic 兼容的自定义供应商走 x-api-key + anthropic-version，OpenAI 兼容网关走 Bearer；
 /// 两家的 /v1/models 响应同为 {"data": [{"id": ...}]}，取 id 即可。
 pub fn fetch_models(platform: &str, protocol: Option<&str>, base_url: &str, secret: &str) -> Result<Vec<String>, String> {
@@ -1036,7 +1103,14 @@ pub fn fetch_models(platform: &str, protocol: Option<&str>, base_url: &str, secr
         return Err(redirect_error(status));
     }
     if !status.is_success() {
-        return Err(format!("获取模型失败：HTTP {status}，请检查 Key 与地址"));
+        // 上游的错误体（`{"code":"GROUP_DISABLED","message":"…"}`）比状态码有用得多：
+        // 403 可能是 Key 无效、也可能是这把 Key 被上游停用了，用户据此才能判断该找谁。
+        // 只在能解析出短文本时附加，且不含任何凭证。
+        let detail = upstream_message(&resp.text().unwrap_or_default());
+        return Err(match detail {
+            Some(message) => format!("获取模型失败：HTTP {status}（{message}），请检查 Key 与地址"),
+            None => format!("获取模型失败：HTTP {status}，请检查 Key 与地址"),
+        });
     }
     let body: serde_json::Value = resp.json().map_err(|e| format!("响应解析失败：{}", e.without_url()))?;
     let ids = body
@@ -1810,7 +1884,7 @@ mod account_email_tests {
     #[test]
     fn account_email_survives_rename_pause_and_dto_has_no_secret() {
         let db = crate::db::open(std::path::Path::new(":memory:")).unwrap();
-        let id = add(&db, NewConnection { service: None, platform:"codex".into(), kind:"auth".into(), name:"Work".into(), secret:Some("synthetic-identity-only".into()), base_url:None, model:None, effort:None, context_1m:None, protocol:None }).unwrap();
+        let id = add(&db, NewConnection { service: None, platform:"codex".into(), kind:"auth".into(), name:"Work".into(), secret:Some("synthetic-identity-only".into()), base_url:None, model:None, effort:None, context_1m:None, protocol:None , slug_base: None}).unwrap();
         db.execute("UPDATE connections SET account_email='person@example.test', name='Renamed' WHERE id=?1", [&id]).unwrap();
         set_paused(&db, &id, true).unwrap();
         let rows = list(&db).unwrap();
@@ -1829,17 +1903,17 @@ mod account_email_tests {
     fn serve_enabled_requires_capable_platform_and_roundtrips() {
         let db = crate::db::open(std::path::Path::new(":memory:")).unwrap();
         // API 连接可开
-        let api_id = add(&db, NewConnection { service: None, platform:"claude".into(), kind:"api".into(), name:"Kimi Key".into(), secret:Some("synthetic-key".into()), base_url:Some("https://api.moonshot.cn/anthropic".into()), model:None, effort:None, context_1m:None, protocol:Some("anthropic".into()) }).unwrap();
+        let api_id = add(&db, NewConnection { service: None, platform:"claude".into(), kind:"api".into(), name:"Kimi Key".into(), secret:Some("synthetic-key".into()), base_url:Some("https://api.moonshot.cn/anthropic".into()), model:None, effort:None, context_1m:None, protocol:Some("anthropic".into()) , slug_base: None}).unwrap();
         assert!(list(&db).unwrap()[0].serve_enabled == false, "新连接默认不对外服务");
         set_serve(&db, &api_id, true).unwrap();
         assert!(list(&db).unwrap()[0].serve_enabled);
         set_serve(&db, &api_id, false).unwrap();
         assert!(!list(&db).unwrap()[0].serve_enabled);
         // claude / codex 订阅可开
-        let claude_id = add(&db, NewConnection { service: None, platform:"claude".into(), kind:"auth".into(), name:"Claude 官方".into(), secret:Some("synthetic-auth".into()), base_url:None, model:None, effort:None, context_1m:None, protocol:None }).unwrap();
+        let claude_id = add(&db, NewConnection { service: None, platform:"claude".into(), kind:"auth".into(), name:"Claude 官方".into(), secret:Some("synthetic-auth".into()), base_url:None, model:None, effort:None, context_1m:None, protocol:None , slug_base: None}).unwrap();
         set_serve(&db, &claude_id, true).unwrap();
         // 所有官方订阅都可选择；未就绪状态另行展示，不锁死来源开关。
-        let gemini_id = add(&db, NewConnection { service: None, platform:"gemini".into(), kind:"auth".into(), name:"Gemini 订阅".into(), secret:Some("synthetic-auth".into()), base_url:None, model:None, effort:None, context_1m:None, protocol:None }).unwrap();
+        let gemini_id = add(&db, NewConnection { service: None, platform:"gemini".into(), kind:"auth".into(), name:"Gemini 订阅".into(), secret:Some("synthetic-auth".into()), base_url:None, model:None, effort:None, context_1m:None, protocol:None , slug_base: None}).unwrap();
         set_serve(&db, &gemini_id, true).unwrap();
         for platform in ["grok", "opencode", "workbuddy", "qoder", "trae", "zcode"] {
             db.execute("INSERT INTO connections(id,platform,kind,name,secret,created_ms,slug) VALUES(?1,?1,'auth',?1,'synthetic-only',1,?1)", [platform]).unwrap();

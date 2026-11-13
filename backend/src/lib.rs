@@ -3332,34 +3332,67 @@ async fn list_connections(db: State<'_, DbRead>) -> Result<Vec<connections::Conn
 
 /// 刷新某个来源的模型清单并落库（写 `connections.models_json`）。
 ///
-/// 为什么需要单独一条命令：界面读的 `catalog::list` 只读缓存、从不打上游，所以订阅类来源
-/// （`kind = auth`）在缓存为空时永远显示 0 模型。Claude / Codex 有内置清单兜底，ZCode、Grok、
-/// Gemini 这类只能实时拉——没有这个入口，用户就会卡在「0 模型 → 选不了模型 → 只能手写环境变量」。
+/// 为什么需要单独一条命令：界面读的 `catalog::list` 只读缓存、从不打上游，所以缓存为空时
+/// 永远显示 0 模型。两类来源走两条路：
+///
+/// - **API 连接**（`kind = api`）：直接在原进程按保存的地址与协议打 `<base>/v1/models`，
+///   与「获取模型」同一个 `fetch_models`，**不需要网关在跑**。从本机导入的连接、以及手填
+///   地址但当时模型接口不通的连接，就靠这条补上清单。
+/// - **订阅连接**（`kind = auth`）：交给各平台适配器，它们要读网关进程里的凭证缓存，
+///   所以这一类才要求网关在运行。
 ///
 /// 只从已存连接取凭证，不接受前端传入的 Key；凭据不出后端。
 #[tauri::command]
 async fn gateway_refresh_models(app: tauri::AppHandle, connection_id: String) -> Result<Vec<String>, String> {
-    let (platform, status) = {
+    // kind / base_url / secret / protocol 只有 API 连接用得上，订阅连接留空即可
+    let (platform, kind, base_url, secret, protocol) = {
         let state = app.state::<Db>();
         let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
         conn.query_row(
-            "SELECT platform, status FROM connections WHERE id = ?1",
+            "SELECT platform, kind, base_url, secret, protocol FROM connections WHERE id = ?1",
             [&connection_id],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            |r| Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+            )),
         )
         .map_err(|_| "来源不存在".to_string())?
     };
-    if !matches!(status.as_str(), "connected" | "ok" | "valid") {
-        return Err("该来源当前不可用：请先重新登录或检查凭证".into());
-    }
-    let deps = crate::proxy::running_deps()
-        .ok_or("网关未在运行：请先开启「允许接入」，再刷新模型清单")?;
-    let fetched = match platform.as_str() {
-        "zcode" => crate::gateway::adapter::zcode::models(&deps, &connection_id).await,
-        "grok" => crate::gateway::adapter::grok::models(&deps, &connection_id).await,
-        "gemini" => crate::gateway::adapter::gemini_subscription::models(&deps, &connection_id).await,
-        _ => Err(format!("该平台没有可实时拉取的模型清单（{platform}）")),
-    }?;
+    let fetched = if kind == "api" {
+        let base = base_url.unwrap_or_default();
+        let secret = secret.unwrap_or_default();
+        if base.trim().is_empty() || secret.trim().is_empty() {
+            return Err("这个连接没有可用的地址或密钥，请先编辑连接补全".into());
+        }
+        let platform_for_fetch = platform.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            connections::fetch_models(&platform_for_fetch, protocol.as_deref(), &base, &secret)
+        })
+        .await
+        .map_err(|error| error.to_string())??
+    } else {
+        // 订阅连接：状态不是可用时先让用户重新登录，拿旧凭证打上游只会得到 401
+        let status = {
+            let state = app.state::<Db>();
+            let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+            conn.query_row("SELECT status FROM connections WHERE id = ?1", [&connection_id], |r| r.get::<_, String>(0))
+                .map_err(|_| "来源不存在".to_string())?
+        };
+        if !matches!(status.as_str(), "connected" | "ok" | "valid") {
+            return Err("该来源当前不可用：请先重新登录或检查凭证".into());
+        }
+        let deps = crate::proxy::running_deps()
+            .ok_or("网关未在运行：请先开启「允许接入」，再刷新模型清单")?;
+        match platform.as_str() {
+            "zcode" => crate::gateway::adapter::zcode::models(&deps, &connection_id).await,
+            "grok" => crate::gateway::adapter::grok::models(&deps, &connection_id).await,
+            "gemini" => crate::gateway::adapter::gemini_subscription::models(&deps, &connection_id).await,
+            _ => Err(format!("该平台没有可实时拉取的模型清单（{platform}）")),
+        }?
+    };
     if fetched.is_empty() {
         return Err("上游返回了空清单：请确认该账号已开通可用的模型".into());
     }

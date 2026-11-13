@@ -63,9 +63,16 @@ const DENSITY: Readonly<Record<ZcodeBucketQuotaSize, BucketDensity>> = {
 /**
  * ZCode 的按桶额度（方案 A）：一个后端窗口一张小卡。
  *
- * 与灵动岛同一套口径（纯逻辑在 `lib/quotaBuckets.ts`）：百分比优先、数字压缩、
- * 每桶一张带进度条的小卡。颜色只用主窗口既有的 `jolu-*` 变量；进度条复用 `QuotaBar`
- * 的轨道 / 填充类，没有新增样式。未知（无百分比）不画进度条，真实 0% 画空轨道并写 `0%`。
+ * **两档的进度口径不同**（2026-11-13 鼠鼠定的）：
+ * - `card`（主窗口账号卡）按**剩余**画：没用就是满格绿条，与 QuotaBar（WorkBuddy 等平台的条）
+ *   同一口径；主值也显示剩余百分比（`100%`），和满格条对得上——已用占比只留在
+ *   `已用 / 总量` 与「剩 N」两行里；
+ * - `island`（灵动岛展开卡）维持**已用**口径不动：主值 `0%` = 一点没用，条几乎空，
+ *   与额度环、胶囊芯片一致。
+ *
+ * 与灵动岛同一套数据口径（纯逻辑在 `lib/quotaBuckets.ts`）：百分比优先、数字压缩、
+ * 每桶一张带进度条的小卡。颜色只用主窗口既有的 `jolu-*` 变量。未知（无百分比）不画
+ * 进度条；额度用满（已用 ≥100%）时剩余条为空、主值 `0%` 红色。
  *
  * 两种数据入口：
  * - `windows`：后端 DTO，组件自己按 30 秒刷新倒计时（主窗口账号卡）；
@@ -122,32 +129,40 @@ export function ZcodeBucketQuota({
         <span className={cn("shrink-0 tabular-nums text-jolu-muted", density.headerReset)}>{resetLabel(view.reset)}</span>
       </div>
       <div className={cn("grid min-w-0", density.grid, cols === 1 ? "grid-cols-1" : "grid-cols-2")}>
-        {view.buckets.map((bucket) => (
-          <div
-            key={bucket.key}
-            data-quota-bucket={bucket.key}
-            className={cn("flex min-w-0 flex-col border border-jolu-border bg-jolu-side", density.card)}
-          >
-            <div className="flex min-w-0 items-baseline justify-between gap-1.5">
-              <span className={cn("min-w-0 truncate text-jolu-muted", density.name)} title={bucket.name}>{bucket.name}</span>
-              <span className={cn("shrink-0 font-semibold tabular-nums", density.value, bucket.tone === "danger" ? "text-jolu-danger" : "text-jolu-text")}>
-                {bucket.value}
-              </span>
-            </div>
-            {bucket.usedTotal && bucket.value !== bucket.usedTotal && (
-              <span className={cn("truncate tabular-nums text-jolu-muted", density.detail)} title={bucket.usedTotal}>{bucket.usedTotal}</span>
-            )}
-            {bucket.percent !== null && (
-              <div className={cn("overflow-hidden rounded-[3px] bg-jolu-track", density.track)}>
-                <div
-                  className={cn("motion-quota-bar h-full rounded-[3px]", bucket.tone === "danger" ? "bg-jolu-danger" : "bg-jolu-accent")}
-                  style={{ width: `${bucket.percent}%` }}
-                />
+        {view.buckets.map((bucket) => {
+          // card 按剩余画（没用=满格绿条，与 QuotaBar 同口径），island 维持已用口径
+          const remainingBar = size === "card" && bucket.percent !== null ? 100 - bucket.percent : bucket.percent
+          // card 的主值也是剩余百分比；百分比未知时退回 `已用 / 总量`（与 island 的回落一致）
+          const value = size === "card"
+            ? (bucket.percent !== null ? `${Math.round(100 - bucket.percent)}%` : bucket.usedTotal ?? "—")
+            : bucket.value
+          return (
+            <div
+              key={bucket.key}
+              data-quota-bucket={bucket.key}
+              className={cn("flex min-w-0 flex-col border border-jolu-border bg-jolu-side", density.card)}
+            >
+              <div className="flex min-w-0 items-baseline justify-between gap-1.5">
+                <span className={cn("min-w-0 truncate text-jolu-muted", density.name)} title={bucket.name}>{bucket.name}</span>
+                <span className={cn("shrink-0 font-semibold tabular-nums", density.value, bucket.tone === "danger" ? "text-jolu-danger" : "text-jolu-text")}>
+                  {value}
+                </span>
               </div>
-            )}
-            <span className={cn("truncate tabular-nums text-jolu-muted", density.detail)}>{bucket.remaining ? `剩 ${bucket.remaining}` : "剩 —"}</span>
-          </div>
-        ))}
+              {bucket.usedTotal && bucket.value !== bucket.usedTotal && (
+                <span className={cn("truncate tabular-nums text-jolu-muted", density.detail)} title={bucket.usedTotal}>{bucket.usedTotal}</span>
+              )}
+              {remainingBar !== null && (
+                <div className={cn("overflow-hidden rounded-[3px] bg-jolu-track", density.track)}>
+                  <div
+                    className={cn("motion-quota-bar h-full rounded-[3px]", bucket.tone === "danger" ? "bg-jolu-danger" : "bg-jolu-accent")}
+                    style={{ width: `${remainingBar}%` }}
+                  />
+                </div>
+              )}
+              <span className={cn("truncate tabular-nums text-jolu-muted", density.detail)}>{bucket.remaining ? `剩 ${bucket.remaining}` : "剩 —"}</span>
+            </div>
+          )
+        })}
       </div>
     </div>
   )

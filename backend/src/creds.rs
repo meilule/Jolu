@@ -331,7 +331,7 @@ pub fn local_connections(platform: &str, kind: &str) -> Result<Vec<crate::connec
             out.push(crate::connections::NewConnection { service: None,
                 platform: platform.into(), kind: kind.into(), name: if kind == "auth" { "Claude 官方订阅" } else { "Claude API Key" }.into(),
                 secret: Some(secret), base_url,
-                model: None, effort: None, context_1m: None, protocol: None,
+                model: None, effort: None, context_1m: None, protocol: None, slug_base: None,
             });
         }
         return Ok(out);
@@ -341,7 +341,7 @@ pub fn local_connections(platform: &str, kind: &str) -> Result<Vec<crate::connec
     // Auth 不依赖 API 提供商配置，错误的 API 地址不能阻断订阅凭证读取。
     if kind == "auth" {
         if let Some(secret) = auth.as_ref().and_then(|v| str_at(v, &["tokens", "access_token"])) {
-            out.push(crate::connections::NewConnection { service: None, platform: platform.into(), kind: kind.into(), name: "Codex 官方订阅".into(), secret: Some(secret), base_url: None, model: None, effort: None, context_1m: None, protocol: None });
+            out.push(crate::connections::NewConnection { service: None, platform: platform.into(), kind: kind.into(), name: "Codex 官方订阅".into(), secret: Some(secret), base_url: None, model: None, effort: None, context_1m: None, protocol: None, slug_base: None });
         }
         return Ok(out);
     }
@@ -359,7 +359,7 @@ pub fn local_connections(platform: &str, kind: &str) -> Result<Vec<crate::connec
             .or_else(|| auth.as_ref().and_then(|v| str_at(v, &["OPENAI_API_KEY"])))
     };
     if let Some(secret) = key {
-        out.push(crate::connections::NewConnection { service: None, platform: platform.into(), kind: kind.into(), name: "Codex API Key".into(), secret: Some(secret), base_url, model: None, effort: None, context_1m: None, protocol: None });
+        out.push(crate::connections::NewConnection { service: None, platform: platform.into(), kind: kind.into(), name: "Codex API Key".into(), secret: Some(secret), base_url, model: None, effort: None, context_1m: None, protocol: None, slug_base: None });
     }
     Ok(out)
 }

@@ -57,6 +57,14 @@ pub(crate) fn scan() -> Result<Value, String> {
 
 /// 按引用落库：重读原文取真 Key，走既有 `connections::add`（加密、slug 分配、掩码都在正路里）。
 /// 只做「新增」；前端先行 diff，apply 不做去重以外的写操作。
+///
+/// 两处与「显示名」解耦的地方：
+///
+/// - **slug 用草稿自己的名字**（`slug_base`），不用拼了来源标签的显示名，否则会得到
+///   `claude-code-claude-code` 这种重复词；
+/// - **导入后顺带拉一次模型清单**：这里只有 Key 与地址、没有模型，不拉的话这个来源在
+///   模型路由里永远是「0 个模型」。拉取失败**不阻断导入**——用户至少先拿到连接，可以
+///   在账号卡上再点拉取；失败原因随返回值带出，由调用方决定怎么提示。
 pub(crate) fn apply(conn: &rusqlite::Connection, references: &[String]) -> Result<Vec<String>, String> {
     let mut created = Vec::new();
     for reference in references {
@@ -74,14 +82,25 @@ pub(crate) fn apply(conn: &rusqlite::Connection, references: &[String]) -> Resul
                 platform: "custom".into(),
                 kind: "api".into(),
                 name: name.clone(),
-                secret: Some(draft.key),
-                base_url: Some(draft.base_url),
+                secret: Some(draft.key.clone()),
+                base_url: Some(draft.base_url.clone()),
                 model: None,
                 effort: None,
                 context_1m: None,
                 protocol: Some(draft.protocol.into()),
+                // 「Claude Code 上游」→ `claude-code-upstream`；纯中文名仍按兜底规则走
+                slug_base: Some(draft.name.clone()),
             },
         )?;
+        // 清单落库：成功就把模型一次带出来，失败只记原因、不回滚这次导入
+        let models = crate::connections::fetch_models("custom", Some(draft.protocol), &draft.base_url, &draft.key)
+            .ok()
+            .filter(|list| !list.is_empty());
+        if let Some(list) = &models {
+            if let Ok(json) = serde_json::to_string(list) {
+                let _ = conn.execute("UPDATE connections SET models_json = ?2 WHERE id = ?1", rusqlite::params![id, json]);
+            }
+        }
         created.push(format!("{name}（{id}）"));
     }
     Ok(created)
