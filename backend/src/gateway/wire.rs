@@ -22,16 +22,6 @@ pub(crate) enum CallerProtocol {
     Responses,
 }
 
-impl CallerProtocol {
-    /// 连接 protocol 字段的对应值（直通匹配用）。
-    fn wire_name(self) -> &'static str {
-        match self {
-            CallerProtocol::Anthropic => "anthropic",
-            CallerProtocol::Chat | CallerProtocol::Responses => "openai",
-        }
-    }
-}
-
 /// 错误响应（JSON，保持依赖面不变的手工拼装）。
 pub(crate) fn error_response(status: StatusCode, message: &str) -> Response {
     let body = format!(

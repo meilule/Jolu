@@ -191,14 +191,6 @@ fn pending(value: &Value, poll_token: String) -> Result<Pending, String> {
     })
 }
 
-/// 发起授权。
-///
-/// `family` 为空时按 BigModel 请求——这是历史默认，保持旧调用方行为不变。
-/// z.ai 账号需要显式传 `zai`，让服务端签发对应家族的凭据。
-pub(crate) fn begin() -> Result<Pending, String> {
-    begin_family(FAMILY_BIGMODEL)
-}
-
 /// 家族名的归一化。
 ///
 /// 前端对没有双版本的供应商统一传 `default`（`providerCatalog` 里 ZCode 没有 edition 字段），

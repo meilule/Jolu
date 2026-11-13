@@ -1,6 +1,10 @@
 //! ZCode 3.17.2 自己的系统提示文本（Start Plan 通道要求逐字节一致）。
 //! 来源：magpie 社区插件 packages/zcode/prompt.mjs（取自 zai-org/ZCode a9fe401 源码）。
 //! ⚠ 供应商风控会按版本核对这些文本：ZCode 升级后需同步更新（见模块注释）。
+//!
+//! 这是对上游提示表的逐条镜像：其中有几条（空的附加上下文、工作目录 / Git 行的标签）当前拼装没用到，
+//! 仍然保留，便于升级时逐条比对、不漏项。
+#![allow(dead_code)]
 
 /// 请求第一条 user 消息里的日期行（{date} 由调用方替换）。
 pub(crate) const CONTEXT_DATE_LINE: &str = "Today's date is {date}.";

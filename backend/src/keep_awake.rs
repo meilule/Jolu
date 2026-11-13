@@ -46,6 +46,9 @@ mod platform {
     }
 }
 
+#[cfg(test)]
+#[cfg(test)]
+#[cfg(test)]
 /// 当前是否处于保持唤醒状态（真实生效状态，不是用户意图）。
 pub(crate) fn enabled() -> bool {
     ENABLED.load(Ordering::Acquire)

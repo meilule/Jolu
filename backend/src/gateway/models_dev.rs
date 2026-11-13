@@ -79,31 +79,6 @@ fn cache_path(app: &tauri::AppHandle) -> Option<PathBuf> {
         .map(|dir| dir.join("models-dev.json"))
 }
 
-/// 查询一个模型的元数据：缓存新鲜直接用；过期/缺失尝试拉取并刷新缓存；
-/// 拉取失败退回旧缓存（哪怕过期——有过期数据比没有强）。
-pub(crate) fn lookup(app: &tauri::AppHandle, model: &str) -> Result<ModelMeta, String> {
-    let path = cache_path(app).ok_or("无法定位应用数据目录")?;
-    let cached = read_cache(&path);
-    let fresh = cached.as_ref().is_some_and(|c| now_ms() - c.fetched_ms < TTL_MS);
-    if fresh {
-        return Ok(cached
-            .and_then(|c| c.models.get(model).cloned())
-            .unwrap_or_default());
-    }
-    match fetch() {
-        Ok(new) => {
-            let _ = std::fs::write(&path, serde_json::to_string(&new).unwrap_or_default());
-            Ok(new.models.get(model).cloned().unwrap_or_default())
-        }
-        Err(error) => {
-            if let Some(old) = cached.and_then(|c| c.models.get(model).cloned()) {
-                return Ok(old);
-            }
-            Err(error)
-        }
-    }
-}
-
 /// 主模型 id 是否超过 200K 上下文（wiring 写入时的 1M 标记依据，magpie `mark1M` 同款）。
 /// 只读缓存：元数据缺失（缓存还没被目录页的后台刷新填上）按 false 处理——宁可少标记，不虚标。
 pub(crate) fn exceeds_200k(app: &tauri::AppHandle, model: &str) -> bool {

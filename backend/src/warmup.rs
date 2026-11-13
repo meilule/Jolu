@@ -18,7 +18,7 @@ use serde::Serialize;
 pub(crate) const WARMUP_PROMPT: &str = "Reply with just: ok";
 
 /// 支持的平台：只做能非交互执行的（与自动化的执行器一致）。
-const WARMUP_PLATFORMS: [&str; 2] = ["claude-code", "codex"];
+pub(crate) const WARMUP_PLATFORMS: [&str; 2] = ["claude-code", "codex"];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WarmupSkip {
@@ -48,11 +48,6 @@ pub(crate) fn should_fire(
         });
     }
     Ok(())
-}
-
-/// 平台是否支持 warm-up（非交互执行）。
-pub(crate) fn supported(platform: &str) -> bool {
-    WARMUP_PLATFORMS.contains(&platform)
 }
 
 /// 本地日期字符串 `YYYY-MM-DD`。
@@ -99,10 +94,10 @@ mod tests {
 
     #[test]
     fn only_non_interactive_agents_are_supported() {
-        assert!(supported("claude-code"));
-        assert!(supported("codex"));
+        assert!(WARMUP_PLATFORMS.contains(&"claude-code"));
+        assert!(WARMUP_PLATFORMS.contains(&"codex"));
         for other in ["gemini", "opencode", "zcode", "qoder", "workbuddy", "trae"] {
-            assert!(!supported(other), "{other} 没有非交互执行器，不能做 warm-up");
+            assert!(!WARMUP_PLATFORMS.contains(&other), "{other} 没有非交互执行器，不能做 warm-up");
         }
     }
 

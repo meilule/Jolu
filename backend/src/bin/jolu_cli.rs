@@ -184,7 +184,7 @@ async fn library(args: &[String]) -> Result<(), String> {
     let Some(action) = args.first() else {
         return Err("用 `jolu library install <agent>` / `remove <agent> <名>` / `list`".into());
     };
-    let (directory, database) = paths::locate()?;
+    let (_, database) = paths::locate()?;
     match action.as_str() {
         "list" => {
             let conn = open_database()?;
@@ -221,15 +221,6 @@ async fn library(args: &[String]) -> Result<(), String> {
         }
         other => Err(format!("未知 library 动作「{other}」")),
     }
-}
-
-/// 可写连接（install / remove / restore 要写库）
-fn open_writable(database: &std::path::Path) -> Result<rusqlite::Connection, String> {
-    rusqlite::Connection::open_with_flags(
-        database,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-    )
-    .map_err(|error| format!("打开数据库失败：{error}"))
 }
 
 async fn search(args: &[String]) -> Result<(), String> {

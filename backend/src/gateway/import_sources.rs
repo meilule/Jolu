@@ -12,22 +12,6 @@
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct ImportDraft {
-    /// 稳定引用：`<source>:<条目键>`，apply 按它重读原文
-    pub reference: String,
-    /// 来源应用：cc-switch / claude-code / codex
-    pub source: String,
-    /// 来源里的位置（Claude Code / CC Switch·Claude / …）
-    pub from: String,
-    pub name: String,
-    pub base_url: String,
-    /// Anthropic（claude 兼容）或 OpenAI 兼容
-    pub protocol: &'static str,
-    /// 掩码（前端展示用）；真 Key 只在 apply 时由后端重读
-    pub key_masked: String,
-}
-
 fn home() -> Option<PathBuf> {
     crate::creds::home()
 }

@@ -199,7 +199,7 @@ pub(crate) fn seat_verdict(detail: &serde_json::Value) -> Result<(), String> {
     })
 }
 
-async fn team_credential(deps: &Arc<ProxyDeps>, id: &str) -> Result<(String, &'static str), String> {
+async fn team_credential(_deps: &Arc<ProxyDeps>, id: &str) -> Result<(String, &'static str), String> {
     let _guard = crate::gateway::subscription::lock(id).await;
     let home = crate::creds::home().ok_or("无法定位用户目录")?;
     let Some(selection) = crate::zcode_quota::team_selection_at(&home) else {

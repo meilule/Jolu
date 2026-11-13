@@ -29,7 +29,7 @@ pub struct WarmupOutcome {
 pub(crate) fn pick_agent(db: &crate::automation::Shared) -> Option<String> {
     let current = crate::automation::current_connection_ids(db);
     if current.is_empty() { return None; }
-    ["claude-code", "codex"]
+    crate::warmup::WARMUP_PLATFORMS
         .into_iter()
         .find(|platform| {
             let tool = match *platform { "claude-code" => "claude", _ => "codex" };

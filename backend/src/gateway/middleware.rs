@@ -76,8 +76,6 @@ pub(crate) struct Outcome {
     pub skipped: Vec<String>,
     /// word-guard 命中阻断词时的拒绝原因；`Some` 表示请求应当被拒发
     pub blocked: Option<String>,
-    /// system-prompt 是否真的追加了内容（trace 用）
-    pub injected_prompt: bool,
 }
 
 /// 按顺序执行启用的中间件，原地改写请求体。

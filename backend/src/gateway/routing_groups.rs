@@ -9,7 +9,6 @@
 //! - 会话亲和与冷却在 wire 层的候选循环里生效，这里只产出**有序候选**。
 
 use rusqlite::{Connection, OptionalExtension};
-use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -466,14 +465,6 @@ pub(crate) fn expand(
     // 嵌套展开后同一「来源/模型」只试一次
     let out = dedupe_members(&out);
     (out, skipped)
-}
-
-/// 成员列表的 JSON（命令层出入参用）。
-pub(crate) fn members_json(members: &[GroupMember]) -> Value {
-    json!(members
-        .iter()
-        .map(|m| json!({"slug": m.slug, "model": m.model}))
-        .collect::<Vec<_>>())
 }
 
 #[cfg(test)]

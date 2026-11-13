@@ -88,6 +88,8 @@ pub struct CustomAgentView {
     pub drift: Option<String>,
     /// 接入时写下的模型
     pub model: Option<String>,
+    /// 接入时间（毫秒）；没接入为 None
+    pub wired_ms: Option<i64>,
 }
 
 pub const FORMATS: [&str; 3] = ["json", "toml", "env"];
@@ -436,6 +438,7 @@ pub fn view(agent: &CustomAgent) -> CustomAgentView {
         wired,
         drift,
         model: agent.model_key.as_ref().and_then(|key| agent.applied.as_ref()?.get(key).cloned()),
+        wired_ms: agent.wired_ms,
     }
 }
 

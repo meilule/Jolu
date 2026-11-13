@@ -54,12 +54,12 @@ pub fn validate(name: &str, kind: &str, config: &Value) -> Result<(), String> {
     }
 }
 
-pub fn list(conn: &Connection) -> Result<Vec<Middleware>, String> {
+pub(crate) fn list(conn: &Connection) -> Result<Vec<Middleware>, String> {
     chain::list(conn).map_err(|_| "无法读取网关中间件".to_string())
 }
 
 /// 新增或覆盖一个中间件（按名称幂等）；先校验，校验不过不写库。
-pub fn save(
+pub(crate) fn save(
     conn: &Connection,
     name: &str,
     kind: &str,

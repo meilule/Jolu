@@ -183,6 +183,9 @@ pub(crate) struct Reservation {
     pub routed: Routed,
 }
 
+#[cfg(test)]
+#[cfg(test)]
+#[cfg(test)]
 pub(crate) fn spent(conn: &Connection, name: &str, day: &str) -> Result<i64, String> {
     init(conn).map_err(|_| "无法读取 Token 预算".to_string())?;
     conn.query_row("SELECT spent FROM gateway_key_tokens WHERE name = ?1 AND day = ?2", [name, day], |r| r.get(0))
@@ -191,6 +194,9 @@ pub(crate) fn spent(conn: &Connection, name: &str, day: &str) -> Result<i64, Str
         .map_err(|_| "无法读取 Token 预算".to_string())
 }
 
+#[cfg(test)]
+#[cfg(test)]
+#[cfg(test)]
 fn inflight(name: &str, day: &str) -> i64 {
     INFLIGHT.lock().map(|map| map.get(&(name.to_string(), day.to_string())).copied().unwrap_or(0)).unwrap_or(0)
 }
@@ -245,6 +251,9 @@ pub(crate) fn reserve(
     Ok(Some(Reservation { name: name.to_string(), day, estimate, routed }))
 }
 
+#[cfg(test)]
+#[cfg(test)]
+#[cfg(test)]
 /// 回冲：把这次的预扣从在途里扣掉，记入实际用量（读不到用量按预扣额记）与费用（能计价才记）。
 pub(crate) fn settle(conn: &Connection, reservation: &Reservation, actual: Option<i64>) {
     settle_with_cost(conn, reservation, actual, None)

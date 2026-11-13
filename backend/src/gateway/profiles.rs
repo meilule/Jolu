@@ -107,6 +107,9 @@ pub(crate) fn list(conn: &Connection) -> rusqlite::Result<Vec<Profile>> {
     Ok(out)
 }
 
+#[cfg(test)]
+#[cfg(test)]
+#[cfg(test)]
 /// 保存 / 覆盖一个 Profile。`agents` 里模型为空的条目被丢弃——Profile 存的是决策，不是空占位。
 pub(crate) fn save(conn: &Connection, name: &str, agents: &AgentModels) -> Result<Profile, String> {
     save_with(conn, name, agents, &ProfileExtras::default())
@@ -220,6 +223,9 @@ pub(crate) fn capture_current(conn: &Connection) -> Result<AgentModels, String> 
     Ok(out)
 }
 
+#[cfg(test)]
+#[cfg(test)]
+#[cfg(test)]
 /// 切换的差异说明：每个 agent 要从什么模型换到什么；`None` 表示该 agent 当前没接线，
 /// Profile 不动它。调用方（命令层）拿它做确认弹窗与结果 Toast。
 pub(crate) fn diff(current_wired: &AgentModels, profile: &Profile) -> BTreeMap<String, Option<String>> {

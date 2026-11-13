@@ -178,6 +178,9 @@ fn in_off_peak(window: &OffPeakWindow, hour: u8, weekday: u8) -> bool {
     }
 }
 
+#[cfg(test)]
+#[cfg(test)]
+#[cfg(test)]
 /// 非 Gemini 的简化计价：不含思考/工具 Token 与长提示档；需要这些信息的调用方使用 [`estimate_usage`]。
 pub fn estimate(
     platform: Option<&str>,

@@ -1188,6 +1188,9 @@ fn foreign_marker(agent: &str, text: &str, instance_short: &str) -> Option<Strin
     (suffix != instance_short).then(|| suffix.to_string())
 }
 
+#[cfg(test)]
+#[cfg(test)]
+#[cfg(test)]
 /// 当前配置是否由本实例写入（状态判断用）。
 fn ours(agent: &str, text: &str, port: u16, instance_short: &str) -> bool {
     ours_with(agent, text, port, instance_short, None)
@@ -1381,40 +1384,6 @@ fn effective_snapshot(prior: Option<&str>, computed: Option<serde_json::Value>) 
     prior.map(str::to_string).or_else(|| computed.map(|s| s.to_string()))
 }
 
-/// 接入：读原值 → 拒绝别的实例 → 备份 → 原子写。返回（原值快照，实际写入的值）。
-/// `before_write` 在文件落盘前调用：调用方用它先写 pending 记录，崩溃时才看得出写到哪一步。
-/// `prior_snapshot` 是上一次接线保存的原值：重新应用时用它，不能拿当前文件重新快照——
-/// 当前文件里可能已经是我们写进去的网关地址，重算会把用户的真实上游弄丢。
-/// `model` 只对 Claude Code 生效：网关按 `<来源>/<模型>` 选路，不写模型映射工具就会发自带别名。
-/// `prior_model` 是上一次接线写下的模型映射（取自接线记录的 applied），重新接线时用来把它
-/// 从「用户原值」里排除——否则断开接线会把用户的模型名还原成网关来源名。
-pub(crate) fn wire(
-    agent: &str,
-    port: u16,
-    instance_short: &str,
-    backup_dir: &Path,
-    prior_snapshot: Option<&str>,
-    model: Option<&str>,
-    label: Option<&str>,
-    description: Option<&str>,
-    prior_model: Option<&str>,
-    prior_label: Option<&str>,
-    subagent_model: Option<&str>,
-    prior_values: &[String],
-    tiers: Option<&TierModels>,
-    tier_about: &dyn Fn(&str) -> (Option<String>, Option<String>),
-    extras: &ClaudeExtras,
-    holds: &dyn Fn(&str) -> bool,
-    zcode_models: &[ZcodeModel],
-    before_write: impl FnOnce(Option<&str>, &Applied) -> Result<(), String>,
-) -> Result<(Option<String>, Applied), String> {
-    let plan = plan_wire(
-        agent, port, instance_short, prior_snapshot, model, label, description, prior_model, prior_label,
-        subagent_model, prior_values, tiers, tier_about, extras, holds, zcode_models,
-    )?;
-    commit_plan(plan, backup_dir, before_write)
-}
-
 /// 落盘一份接线计划：备份 → `before_write`（调用方先写 pending 记录）→ 多文件原子写（失败回滚）。
 pub(crate) fn commit_plan(
     plan: WirePlan,
@@ -1436,6 +1405,12 @@ pub(crate) struct WirePlan {
     pub applied: Applied,
 }
 
+/// 接入的计划：读原值 → 拒绝别的实例 → 算出要写的文件与记账（只算不写；落盘见 [`commit_plan`]）。
+/// `prior_snapshot` 是上一次接线保存的原值：重新应用时用它，不能拿当前文件重新快照——
+/// 当前文件里可能已经是我们写进去的网关地址，重算会把用户的真实上游弄丢。
+/// `model` 只对 Claude Code 生效：网关按 `<来源>/<模型>` 选路，不写模型映射工具就会发自带别名。
+/// `prior_model` 是上一次接线写下的模型映射（取自接线记录的 applied），重新接线时用来把它
+/// 从「用户原值」里排除——否则断开接线会把用户的模型名还原成网关来源名。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn plan_wire(
     agent: &str,

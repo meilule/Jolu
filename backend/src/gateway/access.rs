@@ -486,6 +486,9 @@ impl RequestLimitRefusal {
     }
 }
 
+#[cfg(test)]
+#[cfg(test)]
+#[cfg(test)]
 /// 命名 Key 的当日请求限额，在请求进入任何上游适配器之前检查（对齐 magpie
 /// keyLimited：超限 429，读取类请求与工具回调不计费）。
 ///
@@ -629,6 +632,9 @@ pub(crate) fn authorize_detail(
     })
 }
 
+#[cfg(test)]
+#[cfg(test)]
+#[cfg(test)]
 fn authorize_with(
     conn: &Connection,
     token: Option<&str>,
