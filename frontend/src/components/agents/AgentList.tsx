@@ -1,4 +1,4 @@
-import { EyeOff, RefreshCw, Search } from "lucide-react"
+import { EyeOff, Plus, RefreshCw, Search } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { GROUP_LABELS, agentBadge, agentRows, type AgentRow } from "@/lib/agentPage"
 
@@ -6,7 +6,9 @@ import { GROUP_LABELS, agentBadge, agentRows, type AgentRow } from "@/lib/agentP
  * Agent 页左栏「工具列表」（画板 V5-1 / V5-2，宽 300）：列表头、搜索、三组工具、已隐藏。
  * 开关直接接入 / 断开；点整行看右侧详情。
  */
-export function AgentList({ rows, selected, detectedAt, busy, search, onSearch, hidden, showHidden, onShowHidden, onSelect, onToggle, onRedetect }: {
+export function AgentList({ rows, selected, detectedAt, busy, search, onSearch, hidden, showHidden, onShowHidden, onSelect, onToggle, onRedetect, onAddCustom }: {
+  /** 通用接入（P1-1）：添加 Jolu 没有专门适配的工具 */
+  onAddCustom: () => void
   rows: AgentRow[]
   selected: string | null
   detectedAt: number | null
@@ -53,6 +55,10 @@ export function AgentList({ rows, selected, detectedAt, busy, search, onSearch, 
         </div>
       ))}
       {groups.length === 0 && <p className="px-1.5 py-4 text-meta text-jolu-muted">{search ? "没有匹配的工具" : "还没有检测结果"}</p>}
+      <button type="button" onClick={onAddCustom} disabled={busy}
+        className="mt-2 flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-dashed border-jolu-border text-meta text-jolu-muted outline-none hover:bg-jolu-side hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
+        <Plus aria-hidden className="size-3.5" />添加自定义工具
+      </button>
       <div className="flex-1" />
       {(hiddenCount > 0 || showHidden) && (
         <div className="flex items-center gap-1.5 border-t border-jolu-table-divider px-2 pt-2">

@@ -339,6 +339,8 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN is_running INTEGER NOT NULL DEFAULT 0", []);
     // 3.9 意图路由：分组的判定配置（可空，旧分组不受影响）
     let _ = conn.execute("ALTER TABLE routing_groups ADD COLUMN intent_json TEXT", []);
+    // 通用接入（P1-1）：新表，重复执行跳过
+    crate::custom_agents::ensure_schema(conn)?;
     // 统一网关：流水记录选中的连接与已验证的调用方会话（可空新列，旧行保持 NULL，可恢复）
     let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN connection_id TEXT", []);
     let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN session_platform TEXT", []);

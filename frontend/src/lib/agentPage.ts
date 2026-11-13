@@ -4,7 +4,7 @@
  * 左栏按「已接入 / 可以接入 / 暂时不能接入」分组；右侧详情的摘要、档位提示与
  * 「接入会做什么」都从这里取，便于 node --test 直接验证。
  */
-import type { AgentDiscoveryDto, WiringStatusDto } from "./gatewayApi.ts"
+import type { AgentDiscoveryDto, CustomAgentDto, WiringStatusDto } from "./gatewayApi.ts"
 
 /** Jolu 能接线的工具（与后端 `wiring::AGENTS` 一致） */
 export const WIRABLE_AGENTS = ["claude-code", "codex", "gemini", "opencode", "zcode"] as const
@@ -113,6 +113,28 @@ export function agentRows(rows: AgentRow[], search: string, hidden: readonly str
     groups: order.map((group) => ({ group, rows: visible.filter((row) => row.group === group) })).filter((entry) => entry.rows.length > 0),
     hiddenCount,
   }
+}
+
+/** 通用接入的自定义工具在列表里的样子（P1-1） */
+export function customAgentRow(agent: CustomAgentDto): AgentRow {
+  const base = { agent: agent.id, name: agent.name, wiring: null, discovery: null }
+  if (agent.wired || agent.drift) {
+    const drift = agent.drift === "removed" ? "配置文件被删除，未经路由" : agent.drift ? "配置被改动，未经路由" : null
+    return { ...base, group: "wired", subtitle: drift ?? (agent.model || "已接入 · 自定义"), tone: drift ? "danger" : "normal", toggle: agent.wired ? "on" : null }
+  }
+  if (!agent.installed) return { ...base, group: "blocked", subtitle: "配置所在的目录不存在", tone: "normal", toggle: null }
+  return { ...base, group: "available", subtitle: `自定义 · ${agent.format.toUpperCase()}`, tone: "normal", toggle: "off" }
+}
+
+export function isCustomAgent(id: string): boolean {
+  return id.startsWith("custom-agent:")
+}
+
+/** 添加自定义工具时每种格式的键名示例 */
+export const CUSTOM_EXAMPLES: Readonly<Record<"json" | "toml" | "env", { path: string; base: string; auth: string; model: string; suffix: string }>> = {
+  json: { path: "~/.config/crush/crush.json", base: "providers.jolu.base_url", auth: "providers.jolu.api_key", model: "models.large.model", suffix: "/v1" },
+  toml: { path: "~/.config/tool/config.toml", base: "provider.base_url", auth: "provider.api_key", model: "model", suffix: "/v1" },
+  env: { path: "~/.tool/.env", base: "OPENAI_BASE_URL", auth: "OPENAI_API_KEY", model: "OPENAI_MODEL", suffix: "/v1" },
 }
 
 /** 「接入会做什么」三条说明（画板 V5-2）：写哪里、原有的怎么保留、断开时怎么还原。 */

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { agentRow, agentRows, longContextMode, longContextText, parseTokens, readHidden, writeHidden, wireExplanation } from "./agentPage.ts"
+import { agentRow, agentRows, customAgentRow, isCustomAgent, longContextMode, longContextText, parseTokens, readHidden, writeHidden, wireExplanation } from "./agentPage.ts"
 
 const wiring = (patch = {}) => ({ agent: "claude-code", wired: false, config_path: "~/.claude/settings.json", notice: null, reason: null, ...patch })
 const found = (state = "installed") => ({ agent: "claude-code", name: "Claude Code", installed: state === "installed", state, evidence: "bin", cli_found: state === "installed", cli_path: null })
@@ -68,4 +68,18 @@ test("接入说明每家都写清还原方式；隐藏列表存取失败不抛�
   const broken = { getItem: () => { throw new Error("blocked") }, setItem: () => { throw new Error("blocked") } }
   assert.deepEqual(readHidden(broken), [])
   assert.doesNotThrow(() => writeHidden(["x"], broken))
+})
+
+test("通用接入的自定义工具按接入状态分组（P1-1）", () => {
+  const base = { id: "custom-agent:crush", name: "Crush", slug: "crush", config_path: "~/.config/crush/crush.json", format: "json", base_url_key: "a", auth_key: "b", model_key: null, base_suffix: "/v1", installed: true, wired: false, drift: null, model: null }
+  assert.equal(customAgentRow(base).group, "available")
+  assert.equal(customAgentRow(base).subtitle, "自定义 · JSON")
+  assert.equal(customAgentRow({ ...base, wired: true, model: "group/fast" }).subtitle, "group/fast")
+  const drifted = customAgentRow({ ...base, drift: "changed" })
+  assert.equal(drifted.group, "wired")
+  assert.equal(drifted.tone, "danger")
+  assert.equal(drifted.toggle, null)
+  assert.equal(customAgentRow({ ...base, installed: false }).group, "blocked")
+  assert.ok(isCustomAgent("custom-agent:crush"))
+  assert.ok(!isCustomAgent("claude-code"))
 })

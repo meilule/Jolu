@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { api, invoke, isTauri } from "@/lib/api"
-import { gatewayApi, type AgentDiscoveryDto, type GatewayStatusDto, type ProfileDto, type WiringPreviewDto } from "@/lib/gatewayApi"
+import { gatewayApi, type AgentDiscoveryDto, type CustomAgentDto, type CustomAgentInputDto, type GatewayStatusDto, type ProfileDto, type WiringPreviewDto } from "@/lib/gatewayApi"
 import { settingsApi, type AgentVersionRow } from "@/lib/settingsApi"
 import { skillsApi } from "@/lib/skillsApi"
 import { automationApi } from "@/lib/automationApi"
-import { AGENT_PLATFORM, WIRABLE_AGENTS, agentRow, readHidden, writeHidden, type AgentRow } from "@/lib/agentPage"
+import { AGENT_PLATFORM, WIRABLE_AGENTS, agentRow, customAgentRow, isCustomAgent, readHidden, writeHidden, type AgentRow } from "@/lib/agentPage"
 import { emptyTierDraft, tierDraftFrom, tierModelsFrom, type TierDraft } from "@/lib/tierModels"
 import type { MainPage } from "@/lib/mainNavigation"
 import { useToast } from "@/components/ui/Toast"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { AgentList } from "@/components/agents/AgentList"
 import { AgentDetail, type AgentCounts, type AgentLink } from "@/components/agents/AgentDetail"
+import { CustomAgentDialog, CustomAgentPanel } from "@/components/agents/CustomAgentPanel"
 
 /**
  * Agent 页（Jolu.pen「统一网关 · R2 重设计」V5-1 已接入工具详情 / V5-2 接入前预览）。
@@ -47,11 +48,15 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
   const [subagent, setSubagent] = useState("")
   const [draft, setDraft] = useState<TierDraft>(emptyTierDraft)
   const [confirm, setConfirm] = useState<Confirm | null>(null)
+  const [customs, setCustoms] = useState<CustomAgentDto[]>([])
+  const [customModel, setCustomModel] = useState("")
+  const [adding, setAdding] = useState(false)
   const lock = useRef(false)
 
   const loadCore = useCallback(async () => {
     if (!isTauri) return
     try {
+      void gatewayApi.customAgents().then(setCustoms).catch(() => setCustoms([]))
       const [nextStatus, catalog, groups, nextProfiles, overview, settings] = await Promise.all([
         gatewayApi.status(), gatewayApi.catalog(), gatewayApi.groupList().catch(() => []), gatewayApi.profilesList().catch(() => []),
         gatewayApi.dayOverview().catch(() => null), invoke<{ claude_long_context?: string }>("get_settings").catch(() => null),
@@ -87,12 +92,16 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
     return () => window.clearInterval(timer)
   }, [loadCore, detect])
 
-  const rows: AgentRow[] = useMemo(() => WIRABLE_AGENTS.map((agent) => agentRow(
-    agent,
-    status?.wiring.find((entry) => entry.agent === agent) ?? null,
-    discovery?.find((entry) => entry.agent === agent) ?? null,
-    agent === "claude-code" ? (applied?.model ?? null) : null,
-  )), [status, discovery, applied])
+  const rows: AgentRow[] = useMemo(() => [
+    ...WIRABLE_AGENTS.map((agent) => agentRow(
+      agent,
+      status?.wiring.find((entry) => entry.agent === agent) ?? null,
+      discovery?.find((entry) => entry.agent === agent) ?? null,
+      agent === "claude-code" ? (applied?.model ?? null) : null,
+    )),
+    ...customs.map(customAgentRow),
+  ], [status, discovery, applied, customs])
+  const custom = selected && isCustomAgent(selected) ? customs.find((entry) => entry.id === selected) ?? null : null
 
   // 默认选中第一个已接入的工具，没有就选第一个可接入的
   useEffect(() => {
@@ -129,13 +138,16 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
     }
     let alive = true
     setPreviewError(null)
-    gatewayApi.wiringPreview(selected, previewModel || null).then((value) => { if (alive) setPreview(value) })
+    const request = isCustomAgent(selected)
+      ? gatewayApi.customAgentPreview(selected, row.group === "wired" ? null : customModel || null)
+      : gatewayApi.wiringPreview(selected, previewModel || null)
+    request.then((value) => { if (alive) setPreview(value) })
       .catch((error) => { if (alive) { setPreview(null); setPreviewError(String(error)) } })
     return () => { alive = false }
-  }, [selected, row?.group, previewModel, status])
+  }, [selected, row?.group, previewModel, customModel, status, customs])
 
   useEffect(() => {
-    if (!isTauri || !selected) return
+    if (!isTauri || !selected || isCustomAgent(selected)) return
     const platform = AGENT_PLATFORM[selected]
     let alive = true
     setCounts({ ...EMPTY_COUNTS, routes: routesByAgent ? routesByAgent[selected] ?? 0 : null })
@@ -196,7 +208,37 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
     })
   }
 
-  const toggle = (target: AgentRow) => (target.toggle === "on" ? unwire(target.agent) : wire(target.agent))
+  const customName = (id: string) => customs.find((entry) => entry.id === id)?.name ?? id
+  const reloadCustoms = async () => setCustoms(await gatewayApi.customAgents())
+  const customWire = (id: string) => void run(async () => {
+    await ensureRouting()
+    await gatewayApi.customAgentWire(id, customModel || null)
+    await reloadCustoms()
+  }, `已接入 ${customName(id)}`)
+  const customUnwire = (id: string) => setConfirm({
+    title: `断开 ${customName(id)} 并还原？`,
+    description: "只还原 Jolu 写下的地址、令牌与模型键；接入后你自己改过的值不会被还原。",
+    label: "断开并还原",
+    danger: true,
+    work: () => run(async () => { await gatewayApi.customAgentUnwire(id); await reloadCustoms() }, `已断开 ${customName(id)}`, true),
+  })
+  const customRemove = (id: string) => setConfirm({
+    title: `删除自定义工具「${customName(id)}」？`,
+    description: "只删除 Jolu 里的这条接入说明，不改动工具的配置文件。",
+    label: "删除",
+    danger: true,
+    work: () => run(async () => { await gatewayApi.customAgentRemove(id); await reloadCustoms(); setSelected(null) }, "已删除", true),
+  })
+  const customAdd = (input: CustomAgentInputDto) => run(async () => {
+    const added = await gatewayApi.customAgentAdd(input)
+    await reloadCustoms()
+    setSelected(added.id)
+  }, `已添加 ${input.name}`)
+
+  const toggle = (target: AgentRow) => {
+    if (isCustomAgent(target.agent)) return target.toggle === "on" ? customUnwire(target.agent) : customWire(target.agent)
+    return target.toggle === "on" ? unwire(target.agent) : wire(target.agent)
+  }
 
   /** 档位 / 主模型 / 子代理 / 自动模式改动立即写入（已接入时）；未接入时只更新草稿，接入时一并写入 */
   const applyTiers = (nextDraft: TierDraft, main: string, sub: string) => {
@@ -272,8 +314,12 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
   return (
     <div className="flex h-full min-h-0 overflow-hidden bg-jolu-bg">
       <AgentList rows={rows} selected={selected} detectedAt={detectedAt} busy={busy} search={search} onSearch={setSearch}
-        hidden={hidden} showHidden={showHidden} onShowHidden={setShowHidden} onSelect={setSelected} onToggle={toggle} onRedetect={redetect} />
-      {row ? (
+        hidden={hidden} showHidden={showHidden} onShowHidden={setShowHidden} onSelect={setSelected} onToggle={toggle} onRedetect={redetect}
+        onAddCustom={() => setAdding(true)} />
+      {custom ? (
+        <CustomAgentPanel agent={custom} models={models} routing={routing} preview={preview} previewError={previewError} busy={busy}
+          model={customModel} onModel={setCustomModel} onWire={() => customWire(custom.id)} onUnwire={() => customUnwire(custom.id)} onRemove={() => customRemove(custom.id)} />
+      ) : row ? (
         <AgentDetail
           row={row}
           version={versions.find((entry) => entry.agent === row.agent && entry.found) ?? null}
@@ -308,6 +354,7 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
       ) : (
         <div className="flex flex-1 items-center justify-center text-meta text-jolu-muted">正在检测本机工具…</div>
       )}
+      {adding && <CustomAgentDialog busy={busy} onClose={() => setAdding(false)} onSave={customAdd} />}
       {confirm && <ConfirmDialog title={confirm.title} description={confirm.description} confirmLabel={confirm.label} danger={confirm.danger} onClose={() => setConfirm(null)} onConfirm={confirm.work} />}
     </div>
   )

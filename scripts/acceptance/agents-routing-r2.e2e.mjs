@@ -69,6 +69,8 @@ gatewayApi.middlewares=async()=>[{name:'a',kind:'model-map',config:{},enabled:tr
 gatewayApi.clientKeys=async()=>[];
 gatewayApi.sessionsOverview=async()=>({seq:1,at:now,in_flight:[],sessions:[]});
 gatewayApi.lanAddress=async()=>'192.168.1.23';
+gatewayApi.customAgents=async()=>[{id:'custom-agent:crush',name:'Crush',slug:'crush',config_path:'~/.config/crush/crush.json',format:'json',base_url_key:'providers.jolu.base_url',auth_key:'providers.jolu.api_key',model_key:'models.large.model',base_suffix:'/v1',installed:true,wired:false,drift:null,model:null}];
+gatewayApi.customAgentPreview=async()=>({mode:'wire',files:[diff('~/.config/crush/crush.json',[{op:'+',text:'  "providers": {'},{op:'+',text:'    "jolu": { "base_url": "http://127.0.0.1:15721/v1", "api_key": "jolu-custom-crush.abcd1234" }'},{op:'+',text:'  }'}],2,false)]});
 gatewayApi.allowIpsFromEnv=async()=>false;
 const view=new URLSearchParams(location.search).get('view')||'agents';
 const node=view==='agents'?React.createElement(AgentsView,{onNavigate(){}}):React.createElement(GatewayView,{onNavigate(){}});
@@ -110,7 +112,7 @@ await import('/r2-fixture');</script></body></html>` }))
 
   // V5-1：已接入的 Claude Code
   await page.goto(`${base}/r2-check?view=agents`)
-  await page.getByText("本机检测到 5 个工具").waitFor()
+  await page.getByText("本机检测到 6 个工具").waitFor()
   await page.getByText("已接入 · 经模型路由调用模型").waitFor()
   for (const text of ["已接入", "可以接入", "暂时不能接入", "配置被改动，未经路由", "Skills 7", "会话 12", "自动化 2", "今日路由 612", "/model opus", "也跑标题、Explore 等后台小任务", "断开并还原", "日常编码"]) {
     assert.ok(await page.getByText(text, { exact: true }).first().isVisible(), `V5-1 缺少：${text}`)
@@ -126,6 +128,16 @@ await import('/r2-fixture');</script></body></html>` }))
   await page.getByText("写入预览 · 还没有改动").waitFor()
   assert.ok(await page.getByRole("button", { name: "接入 OpenCode" }).isVisible())
   await page.screenshot({ path: resolve(output, "v5-2-agent-preview.png") })
+
+  // 通用接入（P1-1）：自定义工具详情与添加表单
+  await page.getByRole("button", { name: /Crush/ }).first().click()
+  await page.getByText("自定义 · 未接入").waitFor()
+  await page.getByText("写入预览 · 会新建这个文件").waitFor()
+  await page.screenshot({ path: resolve(output, "p1-1-custom-agent.png") })
+  await page.getByRole("button", { name: "添加自定义工具" }).click()
+  await page.getByRole("dialog", { name: "添加自定义工具" }).waitFor()
+  await page.screenshot({ path: resolve(output, "p1-1-custom-add.png") })
+  await page.keyboard.press("Escape")
 
   // V5-3：模型路由概览
   await page.goto(`${base}/r2-check?view=gateway`)

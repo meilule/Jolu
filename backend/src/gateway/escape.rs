@@ -343,6 +343,17 @@ pub(crate) fn restore_all(app: &tauri::AppHandle) -> EscapeOutcome {
             Err(error) => outcome.failed.push(format!("{agent}：{error}")),
         }
     }
+    // 通用接入的自定义工具（P1-1）一并还原：只改 Jolu 写下的键
+    if let (Ok(conn), Ok(dir)) = (app.state::<crate::Db>().0.lock(), app.path().app_data_dir()) {
+        let backup = dir.join("gateway-backups");
+        for agent in crate::custom_agents::list(&conn).unwrap_or_default().into_iter().filter(|a| a.applied.is_some()) {
+            match crate::custom_agents::unwire(&conn, &agent.id, &backup) {
+                Ok(true) => outcome.restored.push(agent.name.clone()),
+                Ok(false) => outcome.skipped.push(agent.name.clone()),
+                Err(error) => outcome.failed.push(format!("{}：{error}", agent.name)),
+            }
+        }
+    }
     // 清空接线快照（过渡版本仍双写 settings），避免下次误用旧值
     if !outcome.restored.is_empty() || !outcome.skipped.is_empty() {
         let _ = app.state::<crate::Cfg>().0.try_update(|settings| {

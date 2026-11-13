@@ -11,6 +11,7 @@ mod opencode_usage;
 mod platforms;
 mod quota_registry;
 mod toast_link;
+mod custom_agents;
 mod provider_key;
 mod source_store;
 mod native_parse;
@@ -3216,6 +3217,69 @@ fn gateway_today_counts(app: tauri::AppHandle) -> Result<GatewayTodayCounts, Str
     Ok(GatewayTodayCounts { since, at, ok, rejected, failed })
 }
 
+/* ─────────────────────────── 通用接入（P1-1） ─────────────────────────── */
+
+#[tauri::command]
+fn custom_agents_list(app: tauri::AppHandle) -> Result<Vec<crate::custom_agents::CustomAgentView>, String> {
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    Ok(crate::custom_agents::list(&conn).map_err(|e| e.to_string())?.iter().map(crate::custom_agents::view).collect())
+}
+
+#[tauri::command]
+fn custom_agents_add(app: tauri::AppHandle, input: crate::custom_agents::CustomAgentInput) -> Result<crate::custom_agents::CustomAgentView, String> {
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    let agent = crate::custom_agents::add(&conn, &input, chrono::Local::now().timestamp_millis())?;
+    Ok(crate::custom_agents::view(&agent))
+}
+
+#[tauri::command]
+fn custom_agents_remove(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    crate::custom_agents::remove(&conn, &id)
+}
+
+fn custom_backup_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path().app_data_dir().map(|dir| dir.join("gateway-backups")).map_err(|e| format!("无法定位应用数据目录：{e}"))
+}
+
+#[tauri::command]
+fn custom_agents_wire(app: tauri::AppHandle, id: String, model: Option<String>) -> Result<crate::custom_agents::CustomAgentView, String> {
+    let settings = app.state::<Cfg>().0.get();
+    let (mode, _) = crate::gateway::mode_from(&settings);
+    if !settings.proxy_enabled || mode != crate::gateway::Mode::Relay {
+        return Err("模型路由没有运行：请先开启模型路由，再接入工具".into());
+    }
+    let backup = custom_backup_dir(&app)?;
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    let view = crate::custom_agents::wire(&conn, &id, settings.proxy_port, &settings.instance_id, model.as_deref(), &backup)?;
+    drop(conn);
+    let _ = app.emit("gateway-wiring-changed", ());
+    Ok(view)
+}
+
+#[tauri::command]
+fn custom_agents_unwire(app: tauri::AppHandle, id: String) -> Result<bool, String> {
+    let backup = custom_backup_dir(&app)?;
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    let changed = crate::custom_agents::unwire(&conn, &id, &backup)?;
+    drop(conn);
+    let _ = app.emit("gateway-wiring-changed", ());
+    Ok(changed)
+}
+
+#[tauri::command]
+fn custom_agents_preview(app: tauri::AppHandle, id: String, model: Option<String>) -> Result<crate::gateway::escape::WiringPreview, String> {
+    let settings = app.state::<Cfg>().0.get();
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    crate::custom_agents::preview(&conn, &id, settings.proxy_port, &settings.instance_id, model.as_deref())
+}
+
 /// 本机的局域网地址（画板 V5-4「地址」行）：按路由表选出的出口 IPv4。UDP connect 不发任何包，
 /// 只让系统选一个出口地址；拿不到（没有网络）返回 None。
 #[tauri::command]
@@ -4836,6 +4900,12 @@ pub fn run() {
             gateway_today_counts,
             gateway_day_overview,
             gateway_lan_address,
+            custom_agents_list,
+            custom_agents_add,
+            custom_agents_remove,
+            custom_agents_wire,
+            custom_agents_unwire,
+            custom_agents_preview,
             dock_undock,
             cost_estimate,
             connection_quota,

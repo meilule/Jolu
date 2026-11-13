@@ -28,6 +28,33 @@ export interface WiringStatusDto {
   current_resolved?: string | null
 }
 
+/** 通用接入的自定义工具（与后端 `custom_agents::CustomAgentView` 一致；不含原值快照） */
+export interface CustomAgentDto {
+  id: string
+  name: string
+  slug: string
+  config_path: string
+  format: "json" | "toml" | "env"
+  base_url_key: string
+  auth_key: string
+  model_key: string | null
+  base_suffix: string
+  installed: boolean
+  wired: boolean
+  drift: "changed" | "removed" | null
+  model: string | null
+}
+
+export interface CustomAgentInputDto {
+  name: string
+  config_path: string
+  format: "json" | "toml" | "env"
+  base_url_key: string
+  auth_key: string
+  model_key: string | null
+  base_suffix: string | null
+}
+
 /** 模型路由今日概览（画板 V5-3 四项指标） */
 export interface DayOverviewDto {
   today: number
@@ -441,6 +468,13 @@ export const gatewayApi = {
   /** 今日（本地零点起）经网关的请求数 */
   /** 模型路由概览：按请求计（改道的多次尝试算一次）；partial = 流水保留上限内的下限 */
   dayOverview: () => invoke<DayOverviewDto>("gateway_day_overview"),
+  /* ── 通用接入（P1-1）：Jolu 没有专门适配的工具，手填配置文件与键名 ── */
+  customAgents: () => invoke<CustomAgentDto[]>("custom_agents_list"),
+  customAgentAdd: (input: CustomAgentInputDto) => invoke<CustomAgentDto>("custom_agents_add", { input }),
+  customAgentRemove: (id: string) => invoke<void>("custom_agents_remove", { id }),
+  customAgentWire: (id: string, model: string | null) => invoke<CustomAgentDto>("custom_agents_wire", { id, model }),
+  customAgentUnwire: (id: string) => invoke<boolean>("custom_agents_unwire", { id }),
+  customAgentPreview: (id: string, model: string | null) => invoke<WiringPreviewDto>("custom_agents_preview", { id, model }),
   /** 本机局域网地址（出口 IPv4）；没有网络时为 null */
   lanAddress: () => invoke<string | null>("gateway_lan_address"),
   todayCounts: () => invoke<{ since: number; at: number; ok: number; rejected: number; failed: number }>("gateway_today_counts"),
