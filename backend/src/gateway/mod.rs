@@ -54,6 +54,7 @@ pub(crate) mod subscription;
 pub(crate) mod translate;
 pub mod wire;
 pub mod wiring;
+pub mod wiring_diff;
 pub mod wiring_store;
 
 /// 本地代理的工作模式。默认 `Observe`，行为与历史版本完全一致。

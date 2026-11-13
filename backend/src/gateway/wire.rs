@@ -451,6 +451,17 @@ struct GatewayState<'a> {
     cooldowns: &'a Mutex<crate::gateway::route::Cooldowns>,
 }
 
+/// 读不到 model 时的说明。请求体不是 UTF-8 单独点名：Windows PowerShell 5 的
+/// `Invoke-RestMethod -Body "<中文>"` 按本地代码页发送，中文会变成非法字节——
+/// 这不是网关或脱敏改坏了 JSON，而是调用方的编码问题。
+pub(crate) fn missing_model_reason(body: &[u8]) -> &'static str {
+    if std::str::from_utf8(body).is_err() {
+        "请求体不是 UTF-8 编码（常见于 Windows PowerShell 5 直接发送含中文的字符串），请以 UTF-8 字节发送"
+    } else {
+        "请求体缺少 model 字段或不是有效 JSON"
+    }
+}
+
 /// 统一入口。`path_and_query` 原样拼到上游 base 后（路径参数与查询都保真）。
 /// `client_key` 是鉴权中间件命中的命名客户端 Key（局域网共享时）；只进路由流水。
 pub(crate) async fn handle(
@@ -496,7 +507,7 @@ pub(crate) async fn handle(
         }
     }
     let Some(raw_model) = extract_model(&body) else {
-        return error_response(StatusCode::BAD_REQUEST, "请求体缺少 model 字段或不是有效 JSON");
+        return error_response(StatusCode::BAD_REQUEST, missing_model_reason(&body));
     };
     // 规范名 = 剥掉 Claude Code 的 [1m]/[1M] 窗口标记。路由、流水、用量、上游
     // 全部用规范名，避免同一模型在统计里出现两行、上游收到不认识的后缀。

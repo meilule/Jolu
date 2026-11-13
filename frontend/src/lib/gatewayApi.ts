@@ -19,9 +19,36 @@ export interface WiringStatusDto {
   /** 接线记录阶段：idle / pending / wired；旧版后端不返回 */
   state?: "idle" | "pending" | "wired" | null
   /** 漂移：pending / removed / changed / foreign */
-  drift?: "pending" | "removed" | "changed" | "foreign" | "unreachable" | null
+  drift?: "pending" | "removed" | "changed" | "foreign" | "unreachable" | "model_changed" | null
   /** Codex 检测到的登录方式 */
   codex_mode?: "oauth" | "provider" | null
+  /** B8a：Claude Code 配置里现在的主模型（回读，/model 改的就是它） */
+  current_model?: string | null
+  /** B8b：current_model 是档位别名时解析出的真实模型 */
+  current_resolved?: string | null
+}
+
+/** 接线改动预览的一行：+ 新增、- 删除、空格 = 未改动上下文、… = 折叠的未改动段 */
+export interface WiringDiffLineDto {
+  op: "+" | "-" | " " | "…"
+  text: string
+}
+
+/** 一个配置文件的改动（密钥已在后端遮住） */
+export interface WiringFileDiffDto {
+  /** 展示路径，用户目录写成 ~ */
+  path: string
+  /** 对比前文件是否存在 */
+  existed: boolean
+  /** 改动的键数 */
+  keys: number
+  lines: WiringDiffLineDto[]
+}
+
+export interface WiringPreviewDto {
+  /** wire = 接入前的写入预览；wired = 已接入时 Jolu 改了什么（断开时逐键还原） */
+  mode: "wire" | "wired"
+  files: WiringFileDiffDto[]
 }
 
 /** Agent 自动发现（A1/A2）：探测本机装了哪些 agent；state 为 installed / cli_missing / not_found */
@@ -366,6 +393,11 @@ export const gatewayApi = {
   modelsDevRefresh: () => invoke<[number, number]>("gateway_models_dev_refresh"),
   /** 模型元数据现状：[拉取时间（0 = 内置快照）, 模型数] */
   modelsDevStatus: () => invoke<[number, number]>("gateway_models_dev_status"),
+  /** 改动预览（F6）：已接入且不传模型 / 档位时为「Jolu 改了什么」（mode = wired），否则为「将要写成什么」（mode = wire） */
+  wiringPreview: (agent: string, model?: string | null, subagentModel?: string | null, tiers?: TierModels | null) =>
+    invoke<WiringPreviewDto>("gateway_wiring_preview", { agent, model: model ?? null, subagentModel: subagentModel ?? null, tiers: tiers ?? null }),
+  /** Claude Code 长对话压缩（B5）："" = 272K 时压缩，"full" = 完整窗口，其余为自定义大小（272k / 1M / 400000） */
+  longContextSet: (value: string) => invoke<string>("gateway_long_context_set", { value }),
   /** 接线前的提醒（只读），如 Claude Code 同时设了顶层 model 与 env.ANTHROPIC_MODEL */
   wiringPreflight: (agent: string) => invoke<string[]>("gateway_wiring_preflight", { agent }),
   /** 接受漂移：只清接线记录，不改用户的配置文件 */

@@ -2764,6 +2764,55 @@ fn gateway_wiring_preflight(agent: String) -> Vec<String> {
     crate::gateway::wiring::preflight_notices(&agent)
 }
 
+/// 接线改动预览（F6，画板 V5-1 / V5-2）：已接入时给「Jolu 改了什么」，接入前给「将要写成什么」。
+/// 只读，不写文件；用户配置里的密钥在后端遮住。
+#[tauri::command]
+async fn gateway_wiring_preview(
+    app: tauri::AppHandle,
+    agent: String,
+    model: Option<String>,
+    subagent_model: Option<String>,
+    tiers: Option<crate::gateway::wiring_store::TierModels>,
+) -> Result<crate::gateway::escape::WiringPreview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::gateway::escape::preview_agent(&app, &agent, model.as_deref(), subagent_model.as_deref(), tiers.as_ref())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Claude Code 长对话压缩（B5，画板 V5-1「高级」）：`""` 默认 272K、`"full"` 完整窗口、其余为自定义大小。
+/// 保存后若 Claude Code 已接入，按新设置重写 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`。
+#[tauri::command]
+fn gateway_long_context_set(app: tauri::AppHandle, value: String) -> Result<String, String> {
+    let value = value.trim().to_string();
+    let normalized = match value.to_ascii_lowercase().as_str() {
+        "" | "default" => String::new(),
+        "full" => "full".to_string(),
+        other => {
+            crate::gateway::escape::parse_tokens(other).ok_or("长对话大小写成 272k、1M 或 400000 这样的格式")?;
+            value.clone()
+        }
+    };
+    app.state::<Cfg>().0.try_update(|settings| settings.claude_long_context = normalized.clone())?;
+    let applied = app
+        .state::<Db>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|conn| crate::gateway::wiring_store::load(&conn, "claude-code"))
+        .filter(|record| record.state == "wired")
+        .and_then(|record| record.applied());
+    match applied {
+        Some(applied) if applied.model.is_some() => {
+            gateway_wiring_set_inner(&app, "claude-code".into(), true, applied.model.as_deref(), applied.subagent_model.as_deref(), applied.tiers.as_ref())?;
+            let _ = app.emit("gateway-wiring-changed", ());
+            Ok("已保存，并已更新 Claude Code 的配置".into())
+        }
+        _ => Ok("已保存；下次接入 Claude Code 时生效".into()),
+    }
+}
+
 /// 接线记录里实际写入的模型配置（Claude Code 的主模型、子代理、档位），给接线弹窗回填。
 #[derive(serde::Serialize)]
 struct WiringAppliedView {
@@ -4627,6 +4676,8 @@ pub fn run() {
             library_list,
             gateway_wiring_applied,
             gateway_wiring_preflight,
+            gateway_wiring_preview,
+            gateway_long_context_set,
             gateway_client_key_limits_set,
             gateway_models_dev_refresh,
             gateway_models_dev_status,

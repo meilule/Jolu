@@ -82,7 +82,7 @@ mod tests {
     fn wired_tools_with_a_stopped_gateway_are_flagged_unreachable() {
         let status = crate::gateway::wiring::WiringStatus {
             agent: "claude-code".into(), wired: true, config_path: None, notice: None, reason: None,
-            state: Some("wired".into()), drift: None, codex_mode: None,
+            state: Some("wired".into()), drift: None, codex_mode: None, current_model: None, current_resolved: None,
         };
         let mut settings = crate::settings::Settings::default();
         settings.proxy_enabled = false;

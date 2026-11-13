@@ -360,6 +360,8 @@ export type IslandStyle = "classic" | "capsule"
 /** 持久化设置（§2.6 / §7.3）。托盘与设置界面共享同一份值 */
 export interface AppSettings {
   silent_startup: boolean
+  /** Claude Code 长对话压缩（B5）："" = 272K 时压缩，"full" = 完整窗口，其余为自定义大小 */
+  claude_long_context?: string
   auto_check_updates: boolean
   /** 自动检查更新的间隔（分钟，5–1440） */
   update_interval_minutes?: number

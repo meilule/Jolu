@@ -53,6 +53,10 @@ pub struct Applied {
     /// 旧快照没有此字段 → 反序列化为 None = 全跟随，行为与升级前一致。
     #[serde(default)]
     pub tiers: Option<TierModels>,
+    /// 只对 Claude Code：按主模型派生写入的 env（最大输出、上下文窗口、压缩阈值、能力声明、
+    /// auto review 开关）。重新接线时据此判断「文件里这个值是我们写的」，不收进原值快照。
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub extra_env: std::collections::BTreeMap<String, String>,
 }
 
 /// Claude Code 的档位自选集合。字段与 `ANTHROPIC_DEFAULT_<TIER>_MODEL` 一一对应，
@@ -387,7 +391,7 @@ mod tests {
     #[test]
     fn pending_then_wired_then_idle_round_trip() {
         let conn = db();
-        let applied = Applied { base: "http://127.0.0.1:12731".into(), token: Some("jolu-codex.abcd1234".into()), provider: None, mode: Some("provider".into()), model: None, label: None, subagent_model: None, tiers: None };
+        let applied = Applied { base: "http://127.0.0.1:12731".into(), token: Some("jolu-codex.abcd1234".into()), provider: None, mode: Some("provider".into()), model: None, label: None, subagent_model: None, tiers: None, extra_env: Default::default() };
         mark_pending(&conn, "codex", "instance-1", "relay", Some(r#"{"model_provider":"openai"}"#), &applied, Some("jolu-codex.abcd1234")).unwrap();
         let record = load(&conn, "codex").unwrap();
         assert_eq!(record.state, "pending");

@@ -1427,3 +1427,28 @@ mod tests {
         assert!(Policy::new(&BTreeMap::from([("NAME".to_string(), "mask".to_string())]), &[]).is_err());
     }
 }
+
+#[cfg(test)]
+mod non_ascii_tests {
+    use super::*;
+
+    /// 2026-11-13 交接里记的「脱敏把中文请求体改坏」：脱敏对中文 JSON 往返无损，
+    /// 真正的原因是调用方发了非 UTF-8 字节（见 wire::missing_model_reason）。
+    #[test]
+    fn chinese_bodies_survive_masking_and_gbk_bytes_get_a_clear_reason() {
+        let masker = Masker::new();
+        let body = r#"{"model":"zcode/glm-5","messages":[{"role":"user","content":"你好，邮箱 a.b@example.com，没别的"}]}"#;
+        let (masked, report) = masker.mask_body_with(body.as_bytes(), &Policy::default()).unwrap();
+        let masked = masked.expect("邮箱应被遮住");
+        assert_eq!(report.masked, 1);
+        let value: serde_json::Value = serde_json::from_slice(&masked).expect("改写后仍是合法 JSON");
+        assert_eq!(value["model"], "zcode/glm-5");
+        assert!(value["messages"][0]["content"].as_str().unwrap().starts_with("你好，邮箱 "));
+        let plain = r#"{"model":"m","messages":[{"role":"user","content":"你好"}]}"#;
+        assert!(masker.mask_body_with(plain.as_bytes(), &Policy::default()).unwrap().0.is_none(), "没有命中就放行原文");
+        // 「你好」的 GBK 字节：不是 UTF-8
+        let gbk: Vec<u8> = [&br#"{"model":"m","content":""#[..], &[0xC4, 0xE3, 0xBA, 0xC3], &br#""}"#[..]].concat();
+        assert!(crate::gateway::wire::missing_model_reason(&gbk).contains("UTF-8"));
+        assert!(crate::gateway::wire::missing_model_reason(b"{}").contains("缺少 model"));
+    }
+}

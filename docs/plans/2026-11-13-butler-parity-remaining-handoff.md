@@ -15,6 +15,10 @@
 | A1/A2 agent 安装探测与状态分层 | `backend/src/agent_discovery.rs`；接线弹窗已置灰未安装项 |
 | 9.4 全协议互转（3×3 矩阵） | `translate.rs` / `wire.rs`；mock 上游端到端验证过 |
 | 9.6 插件市场 | 鼠鼠决定**不做**（替代：预设库 + 通用接入） |
+| P0-1 B1/B2/B3/B7 + B5/B6 后端 | 2026-11-13 完成：`wiring.rs` 的 `ClaudeExtras` / `claude_extra_env`（最大输出、上下文窗口、长对话压缩、全局能力声明、非 Claude 主模型写 `CLAUDE_CODE_AUTO_MODE_SERVER=0`）；数值取 models.dev 缓存 → 内置快照，缺失不写并记日志（按 D2 倾向执行）；`Applied.extra_env` 记账、按键排除自己写的值；Fable 档跟随别家主模型时留空；长对话设置 `claude_long_context` + 命令 `gateway_long_context_set`。往返测试覆盖写入 → 读回 → 断开还原 |
+| P0-2 B8a + B8b | 2026-11-13 完成：`status_with` 回读 `settings.json`（`claude_read_model`，magpie `claudeMain` 优先级链 + 别名解析），与上次写的主模型不同时 `drift = "model_changed"`，返回 `current_model` / `current_resolved`；接线入口在主模型或派生值变化时不再被当成「无需重写」 |
+| P2-3 F6 后端 | 2026-11-13 完成：接线拆成 `plan_wire` + `commit_plan`、断开拆成 `plan_unwire`；新模块 `wiring_diff.rs`（逐行 LCS、折叠未改动段、键数统计、密钥遮挡）；命令 `gateway_wiring_preview`（已接入 = Jolu 改了什么；接入前 = 将要写成什么）。前端按 R2 / V5 画板接入 |
+| 遗留：脱敏改坏中文请求体 | 2026-11-13 查明**不是脱敏的问题**：脱敏对中文 JSON 往返无损（`mask.rs` 的 `non_ascii_tests`）；真机现象来自调用方发了非 UTF-8 字节（Windows PowerShell 5 直接发中文字符串）。网关现在对这种请求体明确报「请求体不是 UTF-8 编码」 |
 
 ---
 

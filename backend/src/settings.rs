@@ -139,6 +139,11 @@ pub struct Settings {
     /// 过渡版本继续写入，方便回退到旧版；状态判断以 `agent_wiring` 表为准。
     #[serde(default)]
     pub gateway_wiring: std::collections::BTreeMap<String, String>,
+    /// Claude Code 长对话压缩（B5，画板 V5-1「高级」）：`""` = 272K 时压缩（默认）、
+    /// `"full"` = 用满模型窗口、其余为自定义大小（`272k` / `1M` / `400000`）。接线时写进
+    /// `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，不超过模型窗口；窗口未知时不写。
+    #[serde(default)]
+    pub claude_long_context: String,
     /// 默认打开页面（画板 86）：`last` 表示上次访问的页面，其余为七个主窗口页面之一。
     #[serde(default = "default_default_page")]
     pub default_page: String,
@@ -314,6 +319,7 @@ impl Default for Settings {
             search_apis: Vec::new(),
             instance_id: String::new(),
             gateway_wiring: std::collections::BTreeMap::new(),
+            claude_long_context: String::new(),
             default_page: default_default_page(),
             last_page: None,
             main_zoom: default_main_zoom(),
