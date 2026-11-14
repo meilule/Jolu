@@ -45,39 +45,42 @@ const EYES: Record<BotExpr, EyeStyle> = {
 
 const n = (value: number) => Math.round(value * 100) / 100
 
-/** 单只眼睛。F 为脸的直径，(cx, cy) 为眼睛中心，flip 用于左右镜像的形状。 */
+/** 单只眼睛。F 为脸的直径，(cx, cy) 为眼睛中心，flip 用于左右镜像的形状。
+    形状统一挂 .cbot-eye-shape：capsule.css 的绿/青/灰三档 fill 用 CSS 声明命中这里
+    （CSS 声明压过 SVG fill 属性），与 .cbot-eye-p 包裹层、.cbot-eyes-inner 的层级解耦。 */
 function Eye({ kind, cx, cy, F, e, flip }: { kind: string; cx: number; cy: number; F: number; e: EyeStyle; flip: boolean }) {
   const sw = n(Math.max(1.5, F * 0.055))
-  const stroke = { fill: "none", stroke: e.c, strokeWidth: sw, strokeLinecap: "round" as const, strokeLinejoin: "round" as const }
+  // vector-effect：球面透视缩放时描线粗细保持不变（EyeTracker「写尺寸不写缩放」的 SVG 等效）
+  const stroke = { fill: "none", stroke: e.c, strokeWidth: sw, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, vectorEffect: "non-scaling-stroke" as const }
   switch (kind) {
     case "pill": {
       const w = F * 0.14, h = F * 0.3 * (e.h ?? 1)
-      return <rect x={n(cx - w / 2)} y={n(cy - h / 2)} width={n(w)} height={n(h)} rx={n(w / 2)} fill={e.c} />
+      return <rect className="cbot-eye-shape" x={n(cx - w / 2)} y={n(cy - h / 2)} width={n(w)} height={n(h)} rx={n(w / 2)} fill={e.c} />
     }
     case "line": {
       const w = F * 0.224
-      return <rect x={n(cx - w / 2)} y={n(cy - sw / 2)} width={n(w)} height={sw} rx={n(sw / 2)} fill={e.c} />
+      return <rect className="cbot-eye-shape" x={n(cx - w / 2)} y={n(cy - sw / 2)} width={n(w)} height={sw} rx={n(sw / 2)} fill={e.c} />
     }
     case "round":
-      return <circle cx={n(cx)} cy={n(cy)} r={n(F * 0.085 * (e.s ?? 1))} fill={e.c} />
+      return <circle className="cbot-eye-shape" cx={n(cx)} cy={n(cy)} r={n(F * 0.085 * (e.s ?? 1))} fill={e.c} />
     case "happy":
-      return <path d={`M${n(cx - F * 0.1)} ${n(cy + F * 0.045)} Q${n(cx)} ${n(cy - F * 0.1)} ${n(cx + F * 0.1)} ${n(cy + F * 0.045)}`} {...stroke} />
+      return <path className="cbot-eye-shape" d={`M${n(cx - F * 0.1)} ${n(cy + F * 0.045)} Q${n(cx)} ${n(cy - F * 0.1)} ${n(cx + F * 0.1)} ${n(cy + F * 0.045)}`} {...stroke} />
     case "sad":
-      return <path d={`M${n(cx - F * 0.1)} ${n(cy - F * 0.045)} Q${n(cx)} ${n(cy + F * 0.1)} ${n(cx + F * 0.1)} ${n(cy - F * 0.045)}`} {...stroke} />
+      return <path className="cbot-eye-shape" d={`M${n(cx - F * 0.1)} ${n(cy - F * 0.045)} Q${n(cx)} ${n(cy + F * 0.1)} ${n(cx + F * 0.1)} ${n(cy - F * 0.045)}`} {...stroke} />
     case "x": {
       const a = F * 0.07
-      return <path d={`M${n(cx - a)} ${n(cy - a)} L${n(cx + a)} ${n(cy + a)} M${n(cx + a)} ${n(cy - a)} L${n(cx - a)} ${n(cy + a)}`} {...stroke} />
+      return <path className="cbot-eye-shape" d={`M${n(cx - a)} ${n(cy - a)} L${n(cx + a)} ${n(cy + a)} M${n(cx + a)} ${n(cy - a)} L${n(cx - a)} ${n(cy + a)}`} {...stroke} />
     }
     case "gt": {
       const a = F * 0.06, b = F * 0.075, s = flip ? -1 : 1
-      return <path d={`M${n(cx - a * s)} ${n(cy - b)} L${n(cx + a * s)} ${n(cy)} L${n(cx - a * s)} ${n(cy + b)}`} {...stroke} />
+      return <path className="cbot-eye-shape" d={`M${n(cx - a * s)} ${n(cy - b)} L${n(cx + a * s)} ${n(cy)} L${n(cx - a * s)} ${n(cy + b)}`} {...stroke} />
     }
     case "spin": {
       const r = F * 0.08, c = 2 * Math.PI * r
       return (
         <g transform={`rotate(${flip ? 180 : 0} ${n(cx)} ${n(cy)})`}>
-          <circle className="cbot-spin-eye" style={{ ["--o" as string]: `${n(cx)}px ${n(cy)}px` }} cx={n(cx)} cy={n(cy)} r={n(r)}
-            fill="none" stroke={e.c} strokeWidth={sw} strokeLinecap="round" strokeDasharray={`${n(c * 0.68)} ${n(c)}`} />
+          <circle className="cbot-spin-eye cbot-eye-shape" style={{ ["--o" as string]: `${n(cx)}px ${n(cy)}px` }} cx={n(cx)} cy={n(cy)} r={n(r)}
+            fill="none" stroke={e.c} strokeWidth={sw} strokeLinecap="round" strokeDasharray={`${n(c * 0.68)} ${n(c)}`} vectorEffect="non-scaling-stroke" />
         </g>
       )
     }
@@ -86,11 +89,11 @@ function Eye({ kind, cx, cy, F, e, flip }: { kind: string; cx: number; cy: numbe
       const w = F * 0.14, h = F * 0.234, x0 = cx - w / 2, y0 = cy - h * 0.46, u = w / 10, v = h / 18
       const p = (x: number, y: number) => `${n(x0 + x * u)} ${n(y0 + y * v)}`
       const top = flip ? `M${p(0, 0)} L${p(10, 3)}` : `M${p(0, 3)} L${p(10, 0)}`
-      return <path d={`${top} L${p(10, 14)} Q${p(10, 18)} ${p(5, 18)} Q${p(0, 18)} ${p(0, 14)} Z`} fill={e.c} />
+      return <path className="cbot-eye-shape" d={`${top} L${p(10, 14)} Q${p(10, 18)} ${p(5, 18)} Q${p(0, 18)} ${p(0, 14)} Z`} fill={e.c} />
     }
     case "star": {
       const r = F * 0.11, k = r * 0.12
-      return <path d={`M${n(cx)} ${n(cy - r)} Q${n(cx + k)} ${n(cy - k)} ${n(cx + r)} ${n(cy)} Q${n(cx + k)} ${n(cy + k)} ${n(cx)} ${n(cy + r)} Q${n(cx - k)} ${n(cy + k)} ${n(cx - r)} ${n(cy)} Q${n(cx - k)} ${n(cy - k)} ${n(cx)} ${n(cy - r)} Z`} fill={e.c} />
+      return <path className="cbot-eye-shape" d={`M${n(cx)} ${n(cy - r)} Q${n(cx + k)} ${n(cy - k)} ${n(cx + r)} ${n(cy)} Q${n(cx + k)} ${n(cy + k)} ${n(cx)} ${n(cy + r)} Q${n(cx - k)} ${n(cy + k)} ${n(cx - r)} ${n(cy)} Q${n(cx - k)} ${n(cy - k)} ${n(cx)} ${n(cy - r)} Z`} fill={e.c} />
     }
   }
   return null
@@ -195,7 +198,9 @@ export function Bot({
   const svgRef = useRef<SVGSVGElement>(null)
   const faceRef = useRef<SVGCircleElement>(null)
   const eyesRef = useRef<SVGGElement>(null)
-  useGaze(faceRef, eyesRef, { base: gazeBase(expr, dockEdge), amp: gazeAmp(expr) }, F)
+  // 球面眼睛静息几何（Bencho EyeTracker 移植）：眼距 / 垂直偏移随表情的 dy 变化
+  const gapPx = F * 0.135, eyeCy = F / 2 + (e.dy ?? 0) * F
+  useGaze(faceRef, eyesRef, { base: gazeBase(expr, dockEdge), amp: gazeAmp(expr), gapPx, cyPx: eyeCy }, F)
 
   // Token 轮播：首轮先看眼睛 2 秒，之后眼睛 4 秒、Token 3 秒；迷你尺寸不显示数字
   const tickerOn = Boolean(ticker) && F >= MIN_TICK_FACE && !display
@@ -243,7 +248,7 @@ export function Bot({
     previous.current = expr
   }, [expr, count])
 
-  const g = F * 0.135, cy = F / 2 + (e.dy ?? 0) * F
+  const g = gapPx, cy = eyeCy
   const ringEls: ReactNode[] = rings.map((ring, i) => {
     const r = size / 2 - i * (ringWidth + ringGap) - ringWidth / 2
     const C = 2 * Math.PI * r
@@ -310,8 +315,9 @@ export function Bot({
           <g ref={eyesRef} className="cbot-eyes" style={{ filter: `drop-shadow(0 0 ${n(Math.max(1.5, F * 0.1))}px var(--glow))` }}>
             <g className="cbot-eyes-slide">
               <g className="cbot-eyes-inner" key={expr}>
-                <Eye kind={e.k} cx={F / 2 - g} cy={cy} F={F} e={e} flip={false} />
-                <Eye kind={e.R ?? e.k} cx={F / 2 + g} cy={cy} F={F} e={e} flip />
+                {/* 球面眼睛：每只眼包一层，useGaze 按帧写各自的 transform（透视变形） */}
+                <g className="cbot-eye-p"><Eye kind={e.k} cx={F / 2 - g} cy={cy} F={F} e={e} flip={false} /></g>
+                <g className="cbot-eye-p"><Eye kind={e.R ?? e.k} cx={F / 2 + g} cy={cy} F={F} e={e} flip /></g>
               </g>
             </g>
           </g>

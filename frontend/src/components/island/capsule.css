@@ -20,6 +20,11 @@
   --pn-capsule-bot: #1d1d1f;
   --pn-capsule-bot-stroke: transparent;
   --pn-capsule-warn-soft: #fff1dc;
+  /* 液态玻璃材质（学习自抖音 @派大鑫《苹果液态玻璃深度拆解》，见 prototype liquid-glass.js）：
+     岛窗口是无边框透明窗，webview 采不到桌面像素，位移折射无从谈起 ——
+     这里落地的是材质层：半透明 tint + 方向性高光描边环（折射留待有背景内容的表面）。
+     tint 保守（浅 80% / 深 72%）：岛浮在任意壁纸上，文字可读性优先于玻璃感。 */
+  --pn-capsule-glass-tint: rgba(255, 255, 255, .8);
   --cap-spring: cubic-bezier(.32, 1.28, .48, 1);
 }
 .dark {
@@ -40,6 +45,7 @@
   --pn-capsule-bot: #2c2c2e;
   --pn-capsule-bot-stroke: #ffffff33;
   --pn-capsule-warn-soft: #3a2a0f;
+  --pn-capsule-glass-tint: rgba(20, 20, 22, .72);
 }
 
 /* 外壳：宽、高、圆角一起插值，形成胶囊 ⇄ 卡片的形变。
@@ -49,9 +55,18 @@
    只有展开的卡片用一层完整落在窗口内的阴影。 */
 .cap-shell {
   position: relative; overflow: hidden; user-select: none; outline: none; box-sizing: border-box;
-  color: var(--pn-capsule-text); background: var(--pn-capsule-bg); border: 1px solid var(--pn-capsule-stroke);
+  color: var(--pn-capsule-text); background: var(--pn-capsule-glass-tint); border: 1px solid var(--pn-capsule-stroke);
   box-shadow: none;
   backdrop-filter: blur(30px) saturate(1.6); -webkit-backdrop-filter: blur(30px) saturate(1.6);
+}
+/* 高光描边环：方向性亮度勾轮廓（左上亮→右下暗），随圆角动画 inherit —— 液态玻璃第③层 */
+.cap-shell::before, .cap-bubble::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; padding: 1px;
+  background: linear-gradient(135deg, rgba(255,255,255,.85), rgba(255,255,255,.08) 45%, rgba(255,255,255,.5) 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask-composite: exclude;
 }
 /* 形变期间（贴边弹出 / 收回 / 展开放大）关掉模糊：
    原生窗口每一帧都要改尺寸，blur 每帧重栅格化整块表面会直接掉帧。
@@ -92,7 +107,7 @@
 .cap-shell[data-open="true"] .cap-ex > .cap-sec:nth-child(5) { transition-delay: .36s; }
 .cap-bubble {
   position: relative; height: 40px; min-width: 40px; padding: 0 13px; border-radius: 20px; display: flex; align-items: center; justify-content: center; gap: 6px;
-  background: var(--pn-capsule-bg); border: 1px solid var(--pn-capsule-stroke); box-shadow: 0 3px 12px var(--pn-capsule-shadow);
+  background: var(--pn-capsule-glass-tint); border: 1px solid var(--pn-capsule-stroke); box-shadow: 0 3px 12px var(--pn-capsule-shadow);
   backdrop-filter: blur(30px); font-size: 12px; font-weight: 600; color: var(--pn-capsule-text); white-space: nowrap; animation: cap-bubble-in .5s var(--cap-spring);
 }
 .cap-bubble b { font-size: 14px; }
@@ -176,13 +191,17 @@
 .cbot .cbot-ring:focus-visible .cbot-ring-track { stroke: var(--pn-capsule-blue); }
 .cbot .cbot-eyes-inner { transform-box: fill-box; transform-origin: center; }
 /* 工作中（表达式 work）：眼睛用胶囊的绿色强调色，会话结束后随表达式回到默认墨色。
-   命中是最内层眼睛形状——.cbot-eyes-inner 的直接子节点（两只眼睛各自渲染的 rect / circle / path），
-   fill 走 CSS 声明覆盖 SVG 的 fill 属性；.cbot-eyes-slide 的位移与 .cbot-blink / .cbot-scan 的
-   keyframes 都写在别的节点 / 别的属性上，不受这条影响。其他表达式不命中，保持原色。 */
-.cbot[data-expr="work"] .cbot-eyes-inner > * { fill: var(--pn-capsule-green); }
+   命中是最内层眼睛形状（.cbot-eye-shape，Bot.tsx 里每只眼睛的 rect / circle / path）。
+   结构是 .cbot-eyes-inner > .cbot-eye-p（球面眼睛的逐眼变换层，useGaze 写 transform）
+   > .cbot-eye-shape —— 所以必须用后代选择器命中形状本身：
+   fill 走 CSS 声明覆盖 SVG 的 fill 属性（presentation attribute 排在所有作者声明之后），
+   写在 .cbot-eye-p 上只会继承、会被形状自身的 fill 属性压回去。
+   .cbot-eyes-slide 的位移与 .cbot-blink / .cbot-scan 的 keyframes 都写在别的节点 /
+   别的属性上，不受这条影响。其他表达式不命中，保持原色。 */
+.cbot[data-expr="work"] .cbot-eyes-inner .cbot-eye-shape { fill: var(--pn-capsule-green); }
 /* 4.2「正在写」三档（待确认：A3 表情库只有绿色工作眼）：推测为青色，来源出错且无证据时空闲眼睛为灰色 */
-.cbot[data-expr="work"][data-certainty="inferred"] .cbot-eyes-inner > * { fill: var(--pn-capsule-cyan); }
-.cbot[data-certainty="unknown"]:is([data-expr="idle"], [data-expr="look"], [data-expr="peek"]) .cbot-eyes-inner > * { fill: var(--pn-capsule-text-3); }
+.cbot[data-expr="work"][data-certainty="inferred"] .cbot-eyes-inner .cbot-eye-shape { fill: var(--pn-capsule-cyan); }
+.cbot[data-certainty="unknown"]:is([data-expr="idle"], [data-expr="look"], [data-expr="peek"]) .cbot-eyes-inner .cbot-eye-shape { fill: var(--pn-capsule-text-3); }
 /* 运行中轮播：眼睛向上滑出，Token 数从下方滑入 */
 .cbot .cbot-eyes-slide, .cbot .cbot-tick { transition: transform .45s var(--cap-spring), opacity .25s; }
 .cbot .cbot-tick { opacity: 0; transform: translateY(calc(var(--F) * .32px)); }
