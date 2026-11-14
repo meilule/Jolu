@@ -589,12 +589,51 @@ fn scan_files(
 /// 其余视为进行中，但只在宽限期内算运行中；CLI 异常退出留下的旧行不能长期显示运行。
 pub(crate) const ZCODE_RUNNING_GRACE_MS: i64 = 10 * 60 * 1_000;
 
+/// `session.time_updated` 比 `model_usage` 最新一行新出多少才算「有新活动」。
+///
+/// ZCode 只在请求结束时写 model_usage，一轮对话进行中（下一个请求在流式跑）时，
+/// 最后一行还是上一条请求的 completed——单看行状态永远显示「已完成」。
+/// `session.time_updated` 随会话活动实时前进（新消息、流式 part 都会写），
+/// 是行数据之外唯一的运行痕迹。实测（2026-11-14）：一轮结束后 usage 行总是最后
+/// 落库，`time_updated − usage` 只有 13–33ms；正在执行的会话差值持续增长。
+/// 2 秒能干净分开这两种形态，不会把「请求刚结束的收尾写库」误判成新一轮。
+pub(crate) const ZCODE_TURN_GAP_MS: i64 = 2_000;
+
 pub(crate) fn zcode_session_state(status: &str, ts: i64, now_ms: i64) -> &'static str {
     match status {
         "completed" => "done",
         "error" | "cancelled" => "failed",
         _ if ts <= now_ms + 60_000 && now_ms - ts <= ZCODE_RUNNING_GRACE_MS => "running",
         _ => "unknown",
+    }
+}
+
+/// 在行状态之上叠加会话级信号：最新一行的状态不是 running、但 `time_updated`
+/// 比它新出 [`ZCODE_TURN_GAP_MS`] 且仍在宽限期内，说明上一条请求结束后会话又有了
+/// 新活动（新一轮已经开跑），判为 running。CLI 异常退出时 `time_updated` 一并
+/// 停走，同样被宽限期拦住，不会长期假running。
+fn zcode_boost_running(
+    state: &str,
+    latest_row_ts: i64,
+    session_updated_ms: Option<i64>,
+    now_ms: i64,
+) -> &'static str {
+    if state == "running" {
+        return "running";
+    }
+    match session_updated_ms {
+        Some(updated)
+            if updated > latest_row_ts + ZCODE_TURN_GAP_MS
+                && updated <= now_ms + 60_000
+                && now_ms - updated <= ZCODE_RUNNING_GRACE_MS =>
+        {
+            "running"
+        }
+        _ => match state {
+            "done" => "done",
+            "failed" => "failed",
+            _ => "unknown",
+        },
     }
 }
 
@@ -622,12 +661,20 @@ fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
         .map(|count| count > 0)
         .unwrap_or(false);
     let provider_expr = if has_provider { "u.provider_id" } else { "NULL" };
+    // time_updated 是会话级运行信号（见 ZCODE_TURN_GAP_MS 的说明）：旧版库缺列时
+    // 用 NULL 占位，行为退回「只看行状态」，与 directory / provider 同一套探测方式。
+    let has_time_updated: bool = input
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('session') WHERE name = 'time_updated'")
+        .and_then(|mut s| s.query_row([], |r| r.get::<_, i64>(0)))
+        .map(|count| count > 0)
+        .unwrap_or(false);
+    let time_updated_expr = if has_time_updated { "s.time_updated" } else { "NULL" };
     let mut stmt = input
         .prepare(&format!(
             "SELECT u.id,u.session_id,u.model_id,u.status,u.started_at,u.completed_at,
         u.input_tokens,u.output_tokens,u.cache_read_input_tokens,u.cache_creation_input_tokens,
         u.provider_total_tokens,u.computed_total_tokens,u.reasoning_tokens,u.raw_usage_json,s.title,{directory_expr},
-        {provider_expr}
+        {provider_expr},{time_updated_expr}
         FROM model_usage u LEFT JOIN session s ON s.id=u.session_id",
         ))
         .map_err(|e| e.to_string())?;
@@ -703,6 +750,7 @@ fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
                 row.get::<_, Option<String>>(16)?
                     .map(|p| p.trim().to_string())
                     .filter(|p| !p.is_empty()),
+                row.get::<_, Option<i64>>(17)?,
             ))
         })
         .map_err(|e| e.to_string())?
@@ -713,12 +761,13 @@ fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
     // 同一会话只需按最新一条写活动状态与标题（活动更新本身按时间只进不退）。
     // 第四个元素是会话的项目目录（ZCode 的 session.directory）；
     // 库型来源没有源文件可读 cwd，只能在这一步带出去落库，否则全归「未识别项目」。
-    let mut sessions: HashMap<String, (&'static str, i64, Option<String>, Option<String>)> = HashMap::new();
+    // 第五个元素是 session.time_updated：会话级运行信号，同一会话的所有行共享同一个值。
+    let mut sessions: HashMap<String, (&'static str, i64, Option<String>, Option<String>, Option<i64>)> = HashMap::new();
     let now_ms = chrono::Utc::now().timestamp_millis();
-    for (r, status, title, directory, _) in &rows {
+    for (r, status, title, directory, _, session_updated) in &rows {
         let Some(id) = &r.request.session_id else { continue };
         let state = zcode_session_state(status, r.request.ts, now_ms);
-        let entry = sessions.entry(id.clone()).or_insert((state, r.request.ts, None, None));
+        let entry = sessions.entry(id.clone()).or_insert((state, r.request.ts, None, None, None));
         if r.request.ts >= entry.1 {
             entry.0 = state;
             entry.1 = r.request.ts;
@@ -729,14 +778,22 @@ fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
         if entry.3.is_none() {
             entry.3 = directory.clone().filter(|d| !d.trim().is_empty());
         }
+        if entry.4.is_none() {
+            entry.4 = *session_updated;
+        }
+    }
+    // 行状态只能反映「最后一条请求」，一轮进行中时它仍是上一条的 completed。
+    // 会话级 time_updated 在这之后又有新活动、且仍在宽限期内，就是新一轮已经开跑。
+    for entry in sessions.values_mut() {
+        entry.0 = zcode_boost_running(entry.0, entry.1, entry.4, now_ms);
     }
     db.write(|conn| -> Result<usize, String> {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let records: Vec<Record> = rows.iter().map(|(r, _, _, _, _)| r.clone()).collect();
+        let records: Vec<Record> = rows.iter().map(|(r, _, _, _, _, _)| r.clone()).collect();
         let changed = source_store::write(&tx, &records).map_err(|e| e.to_string())?;
         let mut outcome = tx.prepare_cached("UPDATE requests SET native_outcome=?1 WHERE source=?2 AND dedup_key=?3 AND native_outcome IS NOT ?1")
             .map_err(|e| e.to_string())?;
-        for (r, status, _, _, _) in &rows {
+        for (r, status, _, _, _, _) in &rows {
             outcome.execute(params![match status.as_str() {"completed"=>"success","error"|"cancelled"=>"failed",_=>"unknown"},source.id,r.request.dedup_key])
                 .map_err(|e| e.to_string())?;
         }
@@ -746,13 +803,13 @@ fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
         let mut provider = tx
             .prepare_cached("UPDATE requests SET provider_key=?3 WHERE source=?1 AND dedup_key=?2 AND provider_key IS NOT ?3")
             .map_err(|e| e.to_string())?;
-        for (r, _, _, _, provider_key) in &rows {
+        for (r, _, _, _, provider_key, _) in &rows {
             provider
                 .execute(params![source.id, r.request.dedup_key, provider_key])
                 .map_err(|e| e.to_string())?;
         }
         drop(provider);
-        for (id, (state, ts, title, cwd)) in &sessions {
+        for (id, (state, ts, title, cwd, _)) in &sessions {
             if let Some(title) = title {
                 crate::db::upsert_session_title(&tx, "zcode", id, title).map_err(|e| e.to_string())?;
             }
@@ -1098,6 +1155,29 @@ mod tests {
         assert_eq!(zcode_session_state("running", now + 120_000, now), "unknown", "未来时间戳不可信");
     }
     #[test]
+    fn zcode_session_time_updated_boosts_recently_active_sessions_to_running() {
+        let now = chrono::Utc::now().timestamp_millis();
+        let row_ts = now - 60_000;
+        // 一轮结束后 time_updated 只比 usage 行新几十毫秒：不抬成 running
+        assert_eq!(zcode_boost_running("done", row_ts, Some(row_ts + 33), now), "done");
+        // 新一轮开跑：time_updated 比 usage 行新出 3.6 秒（实测形态），抬成 running
+        assert_eq!(zcode_boost_running("done", row_ts, Some(row_ts + 3_600), now), "running");
+        // 失败行的会话继续跑同样抬升
+        assert_eq!(zcode_boost_running("failed", row_ts, Some(row_ts + 3_600), now), "running");
+        // 已经是 running 的行不动
+        assert_eq!(zcode_boost_running("running", row_ts, None, now), "running");
+        // 没有会话级时间（旧版库缺列）不抬
+        assert_eq!(zcode_boost_running("done", row_ts, None, now), "done");
+        // 超出宽限期的旧活动（CLI 异常退出残留）不抬：20 分钟前完成、19 分钟前有活动
+        let stale_row_ts = now - 20 * 60_000;
+        assert_eq!(
+            zcode_boost_running("done", stale_row_ts, Some(stale_row_ts + 60_000), now),
+            "done"
+        );
+        // 未来时间戳不可信
+        assert_eq!(zcode_boost_running("done", row_ts, Some(now + 120_000), now), "done");
+    }
+    #[test]
     fn zcode_synthetic_database_yields_real_session_states_and_outcomes() {
         let root = fixture_dir("zcode");
         let folder = root.join(".zcode/cli/db");
@@ -1149,6 +1229,47 @@ mod tests {
         ];
         expected.sort();
         assert_eq!(states, expected, "残留行不在 90 秒窗口内，其余按真实状态输出");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn zcode_time_updated_marks_active_turns_running() {
+        let root = fixture_dir("zcode-time-updated");
+        let folder = root.join(".zcode/cli/db");
+        std::fs::create_dir_all(&folder).unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        {
+            let input = Connection::open(folder.join("db.sqlite")).unwrap();
+            // 带time_updated列的库（3.18 实测 schema）：一轮进行中时，最后一行
+            // model_usage 仍是上一条请求的 completed，会话级时间戳却一直在走。
+            input.execute_batch("CREATE TABLE session(id TEXT PRIMARY KEY, title TEXT, time_updated INTEGER);
+                CREATE TABLE model_usage(id TEXT PRIMARY KEY, session_id TEXT, model_id TEXT, status TEXT,
+                  started_at INTEGER, completed_at INTEGER, input_tokens INTEGER, output_tokens INTEGER,
+                  cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER, provider_total_tokens INTEGER,
+                  computed_total_tokens INTEGER, reasoning_tokens INTEGER, raw_usage_json TEXT);").unwrap();
+            let raw = r#"{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}"#;
+            // s-live：10 秒前请求 completed，但会话 2 秒前还在写（新一轮在跑）
+            input.execute("INSERT INTO session VALUES('s-live','学习中的会话',?1)", params![now - 2_000]).unwrap();
+            input.execute("INSERT INTO model_usage VALUES('u-live','s-live','glm-4.7','completed',?1,?2,100,20,0,0,120,120,5,?3)",
+                params![now - 10_000, now - 9_000, raw]).unwrap();
+            // s-idle：time_updated 只比 usage 行新 33ms，就是刚收尾，不算运行
+            input.execute("INSERT INTO session VALUES('s-idle','刚完成的会话',?1)", params![now - 3_000 + 33]).unwrap();
+            input.execute("INSERT INTO model_usage VALUES('u-idle','s-idle','glm-4.7','completed',?1,?2,100,20,0,0,120,120,5,?3)",
+                params![now - 5_000, now - 3_033, raw]).unwrap();
+            // s-gone：有新活动但已超出宽限期（CLI 异常退出），不假 running
+            input.execute("INSERT INTO session VALUES('s-gone','残留的会话',?1)", params![now - ZCODE_RUNNING_GRACE_MS - 60_000]).unwrap();
+            input.execute("INSERT INTO model_usage VALUES('u-gone','s-gone','glm-4.7','completed',?1,?2,100,20,0,0,120,120,5,?3)",
+                params![now - ZCODE_RUNNING_GRACE_MS - 70_000, now - ZCODE_RUNNING_GRACE_MS - 61_000, raw]).unwrap();
+        }
+        let mut conn = crate::db::open(Path::new(":memory:")).unwrap();
+        let result = scan_at(&mut conn, &root, &root);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let state_of = |sid: &str| -> String {
+            conn.query_row("SELECT activity_state FROM sessions WHERE platform='zcode' AND session_id LIKE ?1",
+                [format!("%:{sid}")], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(state_of("s-live"), "running", "行状态 completed 但会话仍在写：新一轮在跑");
+        assert_eq!(state_of("s-idle"), "done", "收尾写库的几十毫秒差不是新一轮");
+        assert_eq!(state_of("s-gone"), "done", "超宽限期的旧活动不假 running");
         std::fs::remove_dir_all(&root).unwrap();
     }
     /// provider_id 必须以独立字段（`requests.provider_key`）落库：它是连接归因的端点事实。

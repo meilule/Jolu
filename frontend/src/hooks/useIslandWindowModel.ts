@@ -181,10 +181,11 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
     : null
 
   // 胶囊的「正在写入」：三个信号任一为真（纯逻辑在 `lib/islandWriting.ts`，测试见同名 .test.mjs）
-  //   1. 有 state === "running" 的会话（codex / claude 的生命周期来源）；
+  //   1. 有 state === "running" 的会话（codex / claude 的生命周期来源；zcode 由后端按
+  //      session.time_updated 推导，2026-11-14 起也能给出 running）；
   //   2. 网关转发有请求在途（只有 relay 模式才有事件，直连连接恒为 0）；
-  //   3. 来源只给「最近活跃」窗口时（zcode 等原生来源），窗口内仍有写入——
-  //      ZCode 的 model_usage 只在请求结束时落行，永远不会出现 running 行，这是它唯一的运行痕迹。
+  //   3. 来源只给「最近活跃」窗口时（zcode 没有运行中会话的时刻），窗口内仍有写入——
+  //      ZCode 的 model_usage 只在请求结束时落行，这是它唯一的落库痕迹。
   // 采集源出错（`sourceFailed`）只让展示的状态变「未知」，不再把「明明有请求在途」压成 false。
   const writing = islandWriting({
     sessions: live.sessions,

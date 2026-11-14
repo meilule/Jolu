@@ -278,7 +278,12 @@ export function useLiveUsage(platform: string, enabled = true, dnd = false, paus
       if (running === 0) return `${failed} 个会话失败`
       return failed > 0 ? `${running} 个会话运行中 · ${failed} 个失败` : `${running} 个会话运行中`
     })(),
-    activityKind: (platform === "codex" || platform === "claude") ? "running" : "recent",
+    // zcode 的会话状态来自后端按 session.time_updated 推导（ZCODE_TURN_GAP_MS），
+    // 有 running 会话时与 claude / codex 同为 running 档；一个都没有就还是「最近活跃」。
+    activityKind: (platform === "codex" || platform === "claude"
+      || (platform === "zcode" && sessions.some((session) => session.state === "running")))
+      ? "running"
+      : "recent",
     todayTokenText: today === null ? null : compactTokens(today),
     activeWindowSeconds: windowSec,
     pulseSerial,
