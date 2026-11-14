@@ -63,7 +63,15 @@ pub fn list(conn: &Connection) -> rusqlite::Result<Vec<CatalogModel>> {
                 .map(|model| model.to_string())
                 .collect()
         };
+        // Qoder 的 key 是内部 id（gmodel、kmodel_latest…），人读的名字在条目的
+        // display_name 里；有配对就带上，界面显示官方名、调用仍用 key。
+        let labels = if platform == "qoder" {
+            crate::gateway::adapter::qoder::display_names(conn, &id)
+        } else {
+            Default::default()
+        };
         for model in models {
+            let label = labels.get(&model).cloned();
             out.push(CatalogModel {
                 id: format!("{slug}/{model}"),
                 source: source.clone(),
@@ -74,7 +82,7 @@ pub fn list(conn: &Connection) -> rusqlite::Result<Vec<CatalogModel>> {
                 status: status.clone(),
                 context_window: None,
                 max_output: None,
-                label: None,
+                label,
             });
         }
     }

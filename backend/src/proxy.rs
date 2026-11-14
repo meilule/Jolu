@@ -156,6 +156,37 @@ pub(crate) fn running_deps() -> Option<Arc<ProxyDeps>> {
     PROXY.lock().ok()?.as_ref().map(|runtime| runtime.deps.clone())
 }
 
+/// 不接监听的 deps：给网关外的调用方（账号卡的「拉取模型清单」）用。
+///
+/// 订阅适配器的模型路径只碰 `db` 与 `client`（缓存读写、凭证读取、
+/// `source_is_current` 的快照比对都打在真实连接上，不查池索引），所以网关没在
+/// 监听时给一份惰性 deps，拉清单就不必先开「允许接入」。转发路径不在此列——
+/// 那条路要真池索引与会话亲和表，仍只能用 [`running_deps`]。
+pub(crate) fn detached_deps(db: Arc<Mutex<rusqlite::Connection>>) -> Arc<ProxyDeps> {
+    let (shutdown_tx, _rx) = tokio::sync::watch::channel(false);
+    Arc::new(ProxyDeps {
+        client: reqwest::Client::new(),
+        db,
+        upstreams: HashMap::new(),
+        pending: Arc::new(Mutex::new(Vec::new())),
+        consecutive_failures: Arc::new(AtomicU32::new(0)),
+        fallback_enabled: false,
+        key_index: Mutex::new(KeyIndex::default()),
+        shutdown: Arc::new(shutdown_tx),
+        on_fallback: Arc::new(|_| {}),
+        pool_index: None,
+        gateway_default_connection: None,
+        affinity: None,
+        cooldowns: None,
+        claude_sessions: None,
+        circuit_threshold: u32::MAX,
+        on_circuit: Arc::new(|_| {}),
+        on_activity: Arc::new(|_, _| {}),
+        gateway_auth_relaxed: true,
+        gateway_lan_shared: false,
+    })
+}
+
 /// 运行中网关的监听端口（Claude 订阅工具桥要把自己的地址告诉客户端）。
 pub(crate) fn running_port() -> Option<u16> {
     PROXY.lock().ok()?.as_ref().map(|runtime| runtime.port)

@@ -354,6 +354,26 @@ fn keys(entries: &[Value]) -> Vec<String> {
     entries.iter().filter_map(|m| m["key"].as_str().map(str::to_owned)).collect()
 }
 
+/// 模型 key → 官方 `display_name`（"Fast" / "GLM-5.3" / "Kimi-K3.1-Pro"…）。
+///
+/// Qoder 的 `key` 是 chat 接口认的内部 id（gmodel、kmodel_latest 这类opaque 词），
+/// 人读的名字在 `display_name` 里。清单落库时两者都在条目上，这里按 key 配对取出；
+/// 没有缓存或条目缺名时配不出对，调用方退回裸 key。
+pub(crate) fn display_names(conn: &rusqlite::Connection, id: &str) -> std::collections::HashMap<String, String> {
+    stored(conn, id)
+        .map(|(_, entries)| {
+            entries
+                .iter()
+                .filter_map(|m| {
+                    let key = m["key"].as_str()?.to_owned();
+                    let name = m["display_name"].as_str()?.trim().to_owned();
+                    (!name.is_empty()).then_some((key, name))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// 模型池展示用：上次读到的账号列表，没有时为内置清单（与 `/v1/models` 一致）。
 pub(crate) fn cached_models(conn: &rusqlite::Connection, id: &str) -> Option<Vec<String>> {
     let (_, edition, _) = bound(conn, id).ok()?;
@@ -989,5 +1009,45 @@ mod tests {
         assert_eq!(machine_id("e", &legacy), machine_id("e", &legacy), "旧授权派生稳定的设备标识");
         assert!(site("ai").is_err());
         assert!(check_identity(&json!({"uid":"b"}), "a").is_err());
+    }
+
+    /// 只读 smoke：网关不在运行时（detached deps），按真实库里的 Qoder 账号拉一次模型清单。
+    /// 默认 ignored——读本机授权并向 Qoder 打真实请求，仅显式核对时执行；
+    /// 结果写回 connections.models_json（与账号卡拉取同一行为），不打印任何凭证。
+    #[tokio::test]
+    #[ignore = "读本机 Qoder 授权并向官方打真实请求；仅显式只读执行"]
+    async fn local_models_without_gateway_readonly_smoke() {
+        let db_path = crate::creds::home().unwrap().join("AppData").join("Roaming").join("dev.ningz.jolu").join("usage.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let (id, name, slug, status): (String, String, Option<String>, String) = conn
+            .query_row(
+                "SELECT id, name, slug, status FROM connections WHERE platform='qoder' AND kind='auth' LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .expect("本机没有 Qoder 登录");
+        let account_fp: Option<String> = conn.query_row("SELECT account_fp FROM connections WHERE id=?1", [&id], |r| r.get(0)).unwrap();
+        let model: Option<String> = conn.query_row("SELECT model FROM connections WHERE id=?1", [&id], |r| r.get(0)).unwrap();
+        let deps = crate::proxy::detached_deps(Arc::new(std::sync::Mutex::new(conn)));
+        let entry = crate::gateway::route::PoolEntry {
+            connection_id: id.clone(),
+            slug: slug.unwrap_or_default(),
+            name,
+            platform: "qoder".into(),
+            kind: "auth".into(),
+            protocol: "anthropic".into(),
+            base_url: None,
+            secret: None,
+            account_fp,
+            model,
+            status: status.clone(),
+        };
+        let list = models(&deps, &entry).await.unwrap_or_else(|error| panic!("Qoder 拉取失败: {error}"));
+        eprintln!("state={status} models={list:?}");
+        assert!(!list.is_empty(), "Qoder 返回了空清单");
+        // 落库校验：账号卡读的就是这份缓存
+        let stored: Option<String> = deps.db.lock().unwrap()
+            .query_row("SELECT models_json FROM connections WHERE id=?1", [&id], |r| r.get(0)).unwrap_or(None);
+        assert!(stored.is_some(), "拉到的清单应写入 connections.models_json");
     }
 }

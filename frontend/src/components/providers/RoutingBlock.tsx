@@ -16,6 +16,8 @@ import type { Connection } from "@/types"
 
 export interface RoutingIndex {
   modelsBySlug: Map<string, string[]>
+  /** 连接 slug → (key → 官方 display_name)；Qoder 等来源的 key 是内部 id，名字在这 */
+  labelsBySlug: Map<string, Map<string, string>>
   /** 连接 slug → 用到它的分组（含在分组里的位次，1 起） */
   groupsBySlug: Map<string, { slug: string; position: number }[]>
   defaultConnection: string | null
@@ -38,9 +40,15 @@ export function useRoutingIndex(): RoutingIndex {
   }, [])
   useEffect(() => { reload() }, [reload])
   const modelsBySlug = new Map<string, string[]>()
+  const labelsBySlug = new Map<string, Map<string, string>>()
   for (const model of catalog) {
     if (!model.slug) continue
     modelsBySlug.set(model.slug, [...(modelsBySlug.get(model.slug) ?? []), model.model])
+    if (model.label) {
+      const labels = labelsBySlug.get(model.slug) ?? new Map<string, string>()
+      labels.set(model.model, model.label)
+      labelsBySlug.set(model.slug, labels)
+    }
   }
   const groupsBySlug = new Map<string, { slug: string; position: number }[]>()
   for (const group of groups) {
@@ -50,7 +58,7 @@ export function useRoutingIndex(): RoutingIndex {
       groupsBySlug.set(member.slug, list)
     })
   }
-  return { modelsBySlug, groupsBySlug, defaultConnection, usage, reload }
+  return { modelsBySlug, labelsBySlug, groupsBySlug, defaultConnection, usage, reload }
 }
 
 /**
@@ -180,11 +188,10 @@ export function RoutingEditSection({ account, onChanged }: { account: Connection
   const [prefix, setPrefix] = useState(account.slug ?? "")
   const [working, setWorking] = useState(false)
   const [open, setOpen] = useState(false)
-  // 模型默认只露 4 个；点「还有 N 个」全部展开，展开区自己滚动，仍然不撑高弹窗
-  const [showAllModels, setShowAllModels] = useState(false)
   useEffect(() => setPrefix(account.slug ?? ""), [account.slug])
   const slug = account.slug ?? ""
   const models = slug ? index.modelsBySlug.get(slug) ?? [] : []
+  const labels = slug ? index.labelsBySlug.get(slug) ?? EMPTY_LABELS : EMPTY_LABELS
   const used = slug ? index.groupsBySlug.get(slug) ?? [] : []
   const usage = index.usage.find((row) => row.connection_id === account.id)
   const isDefault = index.defaultConnection === account.id
@@ -227,30 +234,30 @@ export function RoutingEditSection({ account, onChanged }: { account: Connection
                 className="h-9 min-w-0 flex-1 rounded-lg border border-jolu-border bg-jolu-bg px-2.5 font-mono text-[12px] text-jolu-text outline-none focus:border-jolu-accent" />
               <JoluButton size="sm" variant="neutral" type="submit" disabled={busy || !prefix.trim() || prefix.trim() === slug} className="h-9 shrink-0">保存</JoluButton>
             </form>
-            <span className="text-[11px] text-jolu-muted">Agent 里显示为 <code className="font-mono">{prefix.trim() || slug}/{firstModel}</code>；改前缀后旧名称继续可用（沿用现有改名记录）</span>
+            <span className="text-[11px] text-jolu-muted">Agent 里显示为 <code className="font-mono">{prefix.trim() || slug}/{firstModel}</code>；改前缀后旧名称继续可用</span>
           </Field>
           <Field label="提供的模型">
             {/* 单列清单框：模型名动辄 30 字符，散落的 chip 换行后间隙不齐、看着像一堆文字；
-                行行对齐才扫得动。容器 max-h 封死在约 4 行，折叠（只列 4 个）与展开（全量滚动）
-                的高度几乎一样——「还有 N 个」只是让框里多出可滚的行，不撑高弹窗。
-                按名字排序，同一模型的 -thinking 变体紧跟主模型。 */}
-            <div className="max-h-[104px] overflow-y-auto rounded-lg border border-jolu-border bg-jolu-bg py-1" role="list" aria-label="提供的模型">
+                行行对齐才扫得动。常驻滚动（max-h 封死、内部 overflow），滚轮上来就能滚，
+                不需要先点展开——「还有 N 个」那层交互就此拿掉，也少占一行。
+                按名字排序，同一模型的 -thinking 变体紧跟主模型。
+                Qoder 这类来源的 key 是内部 id（gmodel…），官方 display_name 在主位、
+                key 右侧小字保留——Agent 里调用的仍是 `前缀/key`。 */}
+            <div className="max-h-[88px] overflow-y-auto rounded-lg border border-jolu-border bg-jolu-bg py-1" role="list" aria-label={`提供的模型，共 ${models.length} 个`}>
               {models.length === 0 && <span className="block px-2.5 py-1 text-[12px] text-jolu-muted">还没有拉到模型清单</span>}
-              {(showAllModels ? [...models].sort() : [...models].sort().slice(0, 4)).map((model) => (
-                <div key={model} role="listitem" title={model}
-                  className="truncate px-2.5 py-[3px] font-mono text-[11px] leading-4 text-jolu-text odd:bg-jolu-side/40">
-                  {model}
-                </div>
-              ))}
+              {[...models].sort((a, b) => (labels.get(a) ?? a).localeCompare(labels.get(b) ?? b)).map((model) => {
+                const label = labels.get(model)
+                return (
+                  <div key={model} role="listitem" title={label ? `调用 id：${slug}/${model}` : model}
+                    className="flex min-w-0 items-center gap-2 px-2.5 py-[2px] text-[11px] leading-4 odd:bg-jolu-side/40">
+                    <span className="min-w-0 flex-1 truncate text-jolu-text">{label ?? model}</span>
+                    {label && <code className="shrink-0 font-mono text-[10px] text-jolu-muted">{model}</code>}
+                  </div>
+                )
+              })}
             </div>
             <div className="flex items-center gap-2">
-              {models.length > 4 && (
-                <button type="button" onClick={() => setShowAllModels(!showAllModels)} aria-expanded={showAllModels}
-                  className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-jolu-muted outline-none hover:bg-jolu-side hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-jolu-accent">
-                  <ChevronDown aria-hidden className={cn("size-3 transition-transform", showAllModels && "rotate-180")} />
-                  {showAllModels ? "收起" : `还有 ${models.length - 4} 个`}
-                </button>
-              )}
+              {models.length > 0 && <span className="text-[11px] tabular-nums text-jolu-muted">共 {models.length} 个</span>}
               <button type="button" disabled={busy} onClick={() => void act(() => gatewayApi.refreshModels(account.id), "模型清单已更新")}
                 className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-jolu-muted outline-none hover:bg-jolu-side hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-jolu-accent disabled:opacity-40">
                 <RefreshCw aria-hidden className="size-3" />按账号权限自动获取
@@ -284,6 +291,9 @@ export function RoutingEditSection({ account, onChanged }: { account: Connection
     </section>
   )
 }
+
+/** 连接 slug → (key → 官方名) 的空表：避免每个组件各建一份 */
+const EMPTY_LABELS = new Map<string, string>()
 
 /** 分区内的一个字段：label 在上、内容在下，与弹窗上半部分的表单同一套骨架 */
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
