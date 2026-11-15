@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { agentRow, agentRows, customAgentRow, customPresetFor, isCustomAgent, CUSTOM_AGENT_PRESETS, longContextMode, longContextText, parseTokens, readHidden, writeHidden, wireExplanation } from "./agentPage.ts"
+import { agentRow, agentRows, agentGridRows, customAgentRow, customPresetFor, isCustomAgent, CUSTOM_AGENT_PRESETS, longContextMode, longContextText, parseTokens, readHidden, writeHidden, wireExplanation } from "./agentPage.ts"
 
 const wiring = (patch = {}) => ({ agent: "claude-code", wired: false, config_path: "~/.claude/settings.json", notice: null, reason: null, ...patch })
 const found = (state = "installed") => ({ agent: "claude-code", name: "Claude Code", installed: state === "installed", state, evidence: "bin", cli_found: state === "installed", cli_path: null })
@@ -109,4 +109,42 @@ test("自定义工具预设：每条键名完整，未验证的必须标出来",
 test("customPresetFor 只认已知 id", () => {
   assert.equal(customPresetFor("crush")?.name, "Crush")
   assert.equal(customPresetFor("不存在的工具"), null)
+})
+
+
+test("V8 栅格筛选：blocked 恒定折叠、顺序先已接入再可接入、隐藏单独计数", () => {
+  const wired = agentRow("claude-code", { wired: true, drift: null, state: "ok" }, null, "opus")
+  const available = agentRow("codex", null, { agent: "codex", name: "Codex", state: "installed" }, null)
+  const blocked = agentRow("qwen", null, { agent: "qwen", name: "Qwen Code", state: "not_found" }, null)
+  const rows = [available, blocked, wired]
+  // 全部：栅格里只有 wired + available（blocked 走折叠区），wired 在前
+  const all = agentGridRows(rows, "all", "", [], false)
+  assert.deepEqual(all.rows.map((r) => r.agent), ["claude-code", "codex"])
+  assert.deepEqual(all.blocked.map((r) => r.agent), ["qwen"])
+  // 已接入筛选
+  assert.deepEqual(agentGridRows(rows, "wired", "", [], false).rows.map((r) => r.agent), ["claude-code"])
+  // 可接入筛选 + 搜索
+  assert.deepEqual(agentGridRows(rows, "available", "code", [], false).rows.map((r) => r.agent), ["codex"])
+  // 隐藏：默认不显示，计数返回
+  const hiddenOne = agentGridRows(rows, "all", "", ["codex"], false)
+  assert.deepEqual(hiddenOne.rows.map((r) => r.agent), ["claude-code"])
+  assert.equal(hiddenOne.hiddenCount, 1)
+  assert.deepEqual(agentGridRows(rows, "all", "", ["codex"], true).rows.map((r) => r.agent), ["claude-code", "codex"])
+})
+
+test("V8 暂不支持：非可接线且已检测的工具在栅格里、开关禁用", () => {
+  const qoder = agentRow("qoder", null, { agent: "qoder", name: "Qoder", state: "installed" }, null)
+  assert.equal(qoder.group, "available")
+  assert.equal(qoder.supported, false)
+  assert.equal(qoder.toggle, null)
+  assert.equal(qoder.subtitle, "已检测到 · 暂无专用接入")
+  // 可接线的仍是开关可用
+  const zcode = agentRow("zcode", null, { agent: "zcode", name: "ZCode", state: "installed" }, null)
+  assert.equal(zcode.supported, true)
+  assert.equal(zcode.toggle, "off")
+  // 栅格包含暂不支持卡（不走折叠区）
+  const grid = agentGridRows([qoder, zcode], "all", "", [], false)
+  // 同组保持输入顺序（都是 available）
+  assert.deepEqual(grid.rows.map((r) => r.agent), ["qoder", "zcode"])
+  assert.deepEqual(grid.blocked, [])
 })

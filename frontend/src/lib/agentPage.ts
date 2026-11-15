@@ -29,6 +29,8 @@ export interface AgentRow {
   agent: string
   name: string
   group: AgentGroup
+  /** Jolu 有这条工具的接线实现（可开关接入）；false = 只探测到、暂不支持（画板 V8「暂不支持」卡） */
+  supported: boolean
   /** 列表第二行 */
   subtitle: string
   /** 第二行语气：normal / warn（琥珀）/ danger */
@@ -70,23 +72,26 @@ export function agentRow(agent: string, wiring: WiringStatusDto | null, discover
     // 画板 V5-1：「重开后生效」与主模型被换过用琥珀色，配置被改动用红色
     const tone = wiring.drift === "model_changed" || restart ? "warn" : wiring.drift ? "danger" : "normal"
     const subtitle = drift ?? (model || (restart ? "重开后生效" : "已接入"))
-    return { agent, name, group: "wired", subtitle, tone, toggle: wiring.wired ? "on" : null, wiring, discovery }
+    return { agent, name, group: "wired", supported: true, subtitle, tone, toggle: wiring.wired ? "on" : null, wiring, discovery }
   }
   if (discovery && discovery.state === "not_found") {
-    return { agent, name, group: "blocked", subtitle: "本机没有检测到", tone: "normal", toggle: null, wiring, discovery }
+    return { agent, name, group: "blocked", supported: true, subtitle: "本机没有检测到", tone: "normal", toggle: null, wiring, discovery }
   }
   // CLI 不在 PATH：区分两种情况（这条容易一刀切错）
   // - 桌面客户端（ZCode）：本来就没有 CLI，配置在就能接入 → 留在「可以接入」
   // - 真 CLI 工具：CLI 不在说明已经卸载、只剩配置残留 → 归「暂时不能接入」，
   //   否则列表里会堆一堆用户没装的工具，分不清哪些真能用
   if (discovery && discovery.state === "cli_missing" && !DESKTOP_CLIENTS.has(agent)) {
-    return { agent, name, group: "blocked", subtitle: "检测到配置 · CLI 未找到", tone: "normal", toggle: null, wiring, discovery }
+    return { agent, name, group: "blocked", supported: true, subtitle: "检测到配置 · CLI 未找到", tone: "normal", toggle: null, wiring, discovery }
   }
   if (wiring?.reason) {
-    return { agent, name, group: "blocked", subtitle: wiring.reason, tone: "normal", toggle: null, wiring, discovery }
+    return { agent, name, group: "blocked", supported: true, subtitle: wiring.reason, tone: "normal", toggle: null, wiring, discovery }
   }
-  const subtitle = AVAILABLE_SUBTITLES[agent] ?? "可以接入"
-  return { agent, name, group: "available", subtitle, tone: "normal", toggle: "off", wiring, discovery }
+  // V8：探测到但 Jolu 没有专用接线的（Qoder / Trae 等 8 家）＝「暂不支持」卡——
+  // 在栅格里、开关禁用、详细可点（走通用接入），不算「暂不能接入」（那是没装 / 残留）。
+  const supported = (WIRABLE_AGENTS as readonly string[]).includes(agent)
+  const subtitle = supported ? AVAILABLE_SUBTITLES[agent] ?? "可以接入" : "已检测到 · 暂无专用接入"
+  return { agent, name, group: "available", supported, subtitle, tone: "normal", toggle: supported ? "off" : null, wiring, discovery }
 }
 
 /** 可接入时的第二行：说明它现在用的是什么（画板 V5-1「用它自己的 …」） */
@@ -117,9 +122,33 @@ export function agentRows(rows: AgentRow[], search: string, hidden: readonly str
   }
 }
 
+/** V8 接入状态筛选（画板 V8-01）：全部 / 已接入 / 可接入；暂不能接入固定在折叠区，不参与栅格。 */
+export type AgentFilter = "all" | "wired" | "available"
+
+export const AGENT_FILTERS: readonly { id: AgentFilter; label: string }[] = [
+  { id: "all", label: "全部" },
+  { id: "wired", label: "已接入" },
+  { id: "available", label: "可接入" },
+]
+
+/** 栅格里的工具：应用筛选 + 搜索 + 隐藏；顺序先已接入再可接入（画板示例的排列）。 */
+export function agentGridRows(rows: AgentRow[], filter: AgentFilter, search: string, hidden: readonly string[], showHidden: boolean): { rows: AgentRow[]; blocked: AgentRow[]; hiddenCount: number } {
+  const query = search.trim().toLowerCase()
+  const matched = rows.filter((row) => !query || row.name.toLowerCase().includes(query) || row.agent.includes(query))
+  const visible = showHidden ? matched : matched.filter((row) => !hidden.includes(row.agent))
+  const inScope = visible.filter((row) => row.group !== "blocked")
+  const byFilter = filter === "all" ? inScope : inScope.filter((row) => row.group === filter)
+  const order = (["wired", "available"] as const)
+  return {
+    rows: order.flatMap((group) => byFilter.filter((row) => row.group === group)),
+    blocked: visible.filter((row) => row.group === "blocked"),
+    hiddenCount: matched.filter((row) => hidden.includes(row.agent)).length,
+  }
+}
+
 /** 通用接入的自定义工具在列表里的样子（P1-1） */
 export function customAgentRow(agent: CustomAgentDto): AgentRow {
-  const base = { agent: agent.id, name: agent.name, wiring: null, discovery: null }
+  const base = { agent: agent.id, name: agent.name, supported: true, wiring: null, discovery: null }
   if (agent.wired || agent.drift) {
     const drift = agent.drift === "removed" ? "配置文件被删除，未经路由" : agent.drift ? "配置被改动，未经路由" : null
     return { ...base, group: "wired", subtitle: drift ?? (agent.model || "已接入 · 自定义"), tone: drift ? "danger" : "normal", toggle: agent.wired ? "on" : null }

@@ -4,16 +4,17 @@ import { cn } from "@/lib/utils"
 import type { CustomAgentDto, CustomAgentInputDto, WiringPreviewDto } from "@/lib/gatewayApi"
 import { CUSTOM_AGENT_PRESETS, CUSTOM_EXAMPLES, type CustomAgentPreset } from "@/lib/agentPage"
 import { Button, Modal } from "@/components/gateway/GatewayDialogs"
+import { SelectField } from "@/components/ui/SelectField"
 import { AgentBadge, Switch } from "./AgentList"
 import { DiffView } from "./DiffView"
 
-const selectClass = "h-8 min-w-0 rounded-lg border border-jolu-border bg-jolu-bg px-2.5 text-meta text-jolu-text outline-none focus:border-jolu-accent disabled:opacity-50"
 
 /**
  * 通用接入的自定义工具详情（P1-1，无画板，待确认；外壳对齐 V6 详情态，内容沿用 V5 版式）。
  * 只写三个键：地址、令牌、模型（可选）；断开时只还原仍是 Jolu 写下的值的键。
  */
-export function CustomAgentPanel({ agent, models, routing, preview, previewError, busy, model, onModel, onBack, onWire, onUnwire, onRemove }: {
+export function CustomAgentPanel({ drawer = false, agent, models, routing, preview, previewError, busy, model, onModel, onBack, onWire, onUnwire, onRemove }: {
+  drawer?: boolean
   agent: CustomAgentDto
   models: string[]
   routing: boolean
@@ -35,7 +36,7 @@ export function CustomAgentPanel({ agent, models, routing, preview, previewError
     ...(agent.model_key ? [{ label: "模型", key: agent.model_key, value: "你在下面选的模型" }] : []),
   ]
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto px-8 pb-8 pt-6">
+    <div className={cn("flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto pb-8 pt-6", drawer ? "agent-detail-drawer-content px-7" : "px-8")}>
       <div className="flex items-center gap-2">
         <button type="button" onClick={onBack}
           className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-meta text-jolu-muted outline-none hover:bg-jolu-side hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent">
@@ -71,10 +72,9 @@ export function CustomAgentPanel({ agent, models, routing, preview, previewError
           <span className="text-[13px] font-semibold text-jolu-text">接入 {agent.name}</span>
           <div className="flex flex-wrap items-center gap-2.5">
             {agent.model_key && (
-              <select aria-label="写入的模型" value={model} disabled={busy} onChange={(event) => onModel(event.target.value)} className={cn(selectClass, "w-[260px]")}>
-                <option value="">不写模型（保留工具自己的）</option>
-                {models.map((entry) => <option key={entry} value={entry}>{entry}</option>)}
-              </select>
+              <SelectField label="写入的模型" value={model} disabled={busy} onValueChange={onModel}
+                placeholder="不写模型（保留工具自己的）" className="w-[260px] rounded-[10px] px-3 text-meta"
+                options={models.map((entry) => ({ value: entry, label: entry }))} />
             )}
             <button type="button" disabled={busy || !agent.installed} onClick={onWire}
               className="flex h-8 items-center gap-1.5 rounded-lg bg-jolu-accent px-3.5 text-meta font-semibold text-[#071B10] outline-none disabled:opacity-45">
@@ -169,15 +169,13 @@ export function CustomAgentDialog({ busy, onClose, onSave }: { busy: boolean; on
       <p className="text-meta text-jolu-muted">Jolu 没有专门适配的工具，可以照它的文档填写配置文件和键名。待确认：没有画板。</p>
       <label className="flex flex-col gap-1.5">
         <span className="text-meta font-medium text-jolu-text">从已支持的工具开始</span>
-        <select
-          value={preset?.id ?? ""}
-          onChange={(event) => applyPreset(CUSTOM_AGENT_PRESETS.find((item) => item.id === event.target.value) ?? null)}
-          className="h-9 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-meta text-jolu-text outline-none focus:border-jolu-accent">
-          <option value="">自己填（不套用预设）</option>
-          {CUSTOM_AGENT_PRESETS.map((item) => (
-            <option key={item.id} value={item.id}>{item.name}{item.verified ? "" : " · 键名待核对"}</option>
-          ))}
-        </select>
+        <SelectField label="从已支持的工具开始" value={preset?.id ?? ""}
+          onValueChange={(value) => applyPreset(CUSTOM_AGENT_PRESETS.find((item) => item.id === value) ?? null)}
+          placeholder="自己填（不套用预设）" className="h-9 w-full rounded-[10px] px-3 text-meta"
+          options={[
+            { value: "", label: "自己填（不套用预设）" },
+            ...CUSTOM_AGENT_PRESETS.map((item) => ({ value: item.id, label: item.name + (item.verified ? "" : " · 键名待核对"), description: item.configPath })),
+          ]} />
         {preset && !preset.verified && (
           <span className="flex items-start gap-1.5 text-note text-[#9A5B00]">
             <TriangleAlert aria-hidden className="mt-px size-3 shrink-0" />

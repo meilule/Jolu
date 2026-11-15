@@ -8,7 +8,9 @@ import type { ProfileDto, WiringPreviewDto } from "@/lib/gatewayApi"
 import type { AgentVersionRow } from "@/lib/settingsApi"
 import { driftText, longContextMode, parseTokens, wireExplanation, type AgentRow } from "@/lib/agentPage"
 import { EFFORT_LABELS, TIERS, tierEfforts, type AutoChoice, type Tier, type TierDraft } from "@/lib/tierModels"
-import { AgentBadge, Switch } from "./AgentList"
+import { SelectField, type SelectOption } from "@/components/ui/SelectField"
+import { JoluButton } from "@/components/ui/JoluButton"
+import { AgentBadge } from "./AgentList"
 import { DiffView } from "./DiffView"
 
 export interface AgentCounts {
@@ -21,6 +23,8 @@ export interface AgentCounts {
 export type AgentLink = "skills" | "sessions" | "automation" | "routes"
 
 export interface AgentDetailProps {
+  /** V8 列表上的右侧配置抽屉；保留详情内容与列表同时可见。 */
+  drawer?: boolean
   row: AgentRow
   version: AgentVersionRow | null
   /** 模型路由是否在运行（中转模式）：没开时接入会先开启它 */
@@ -70,7 +74,7 @@ export function AgentDetail(props: AgentDetailProps) {
   const [tab, setTab] = useState<DetailTab>("model")
   const wired = row.group === "wired"
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto px-8 pb-8 pt-6">
+    <div className={cn("flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto px-7 pb-8 pt-6", props.drawer ? "agent-detail-drawer-content" : "px-8")}>
       <div className="flex items-center gap-2">
         <button type="button" onClick={props.onBack}
           className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-meta text-jolu-muted outline-none hover:bg-jolu-side hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent">
@@ -93,7 +97,7 @@ export function AgentDetail(props: AgentDetailProps) {
           {tab === "diff" && <DiffBody {...props} />}
         </>
       ) : row.group === "available" ? (
-        <PreviewBody {...props} />
+        row.supported ? <PreviewBody {...props} /> : <UnsupportedBody row={row} />
       ) : (
         <BlockedBody row={row} />
       )}
@@ -138,17 +142,16 @@ function Header({ row, version, busy, hidden, onUnwire, onToggleHidden }: AgentD
               className="w-full rounded-md px-2.5 py-1.5 text-left text-meta text-jolu-text hover:bg-jolu-side">
               {hidden ? "在列表里显示" : "从列表隐藏"}
             </button>
-            {row.toggle === "on" && (
-              <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenu(false); onUnwire() }}
-                className="w-full rounded-md px-2.5 py-1.5 text-left text-meta text-jolu-danger hover:bg-jolu-side disabled:opacity-45">
-                断开并还原
-              </button>
-            )}
           </div>
         )}
       </div>
-      {/* 画板 V5-2：未接入时头部只有「⋯」，接入按钮在下面的「选起点」里 */}
-      {row.toggle === "on" && <Switch on disabled={busy} label={`断开 ${row.name}`} onClick={onUnwire} />}
+      {/* 断开是带确认与还原的动作，不用开关表达（开关像即时启停）；未接入时头部只有「⋯」，接入按钮在下面的「选起点」里 */}
+      {row.toggle === "on" && (
+        <JoluButton size="md" variant="danger-soft" disabled={busy} onClick={onUnwire}>
+          <Undo2 aria-hidden />
+          断开并还原
+        </JoluButton>
+      )}
     </div>
   )
 }
@@ -251,7 +254,7 @@ function Banner({ tone, text, actions, busy }: { tone: "danger" | "warn"; text: 
 }
 
 function ClaudeModelSettings(props: AgentDetailProps) {
-  const { models, mainModel, row, counts, onLink, busy } = props
+  const { models, sourceNotes, mainModel, row, counts, onLink, busy } = props
   const [noticeShown, setNoticeShown] = useState(true)
   return (
     <div className="flex flex-col gap-5">
@@ -271,11 +274,9 @@ function ClaudeModelSettings(props: AgentDetailProps) {
           <p className="text-meta text-jolu-muted">更改后写入配置；已打开的会话保持原模型。</p>
         </div>
         <div className="flex w-[420px] shrink-0 flex-col gap-1.5">
-          <select aria-label="新会话默认模型" value={mainModel} disabled={busy} onChange={(event) => props.onMainModel(event.target.value)}
-            className="h-10 w-full rounded-lg border border-jolu-border bg-jolu-bg px-3 text-meta text-jolu-text outline-none focus:border-jolu-accent disabled:opacity-50">
-            {!mainModel && <option value="">未选（保留工具自己的选择）</option>}
-            {models.map((model) => <option key={model} value={model}>{model}</option>)}
-          </select>
+          <SelectField label="新会话默认模型" value={mainModel} disabled={busy} onValueChange={props.onMainModel}
+            placeholder="未选（保留工具自己的选择）" className="h-10 w-full rounded-[10px] px-3 text-meta"
+            options={modelOptions(models, sourceNotes)} />
           <span className="truncate text-note text-jolu-muted">{props.sourceNotes[mainModel] ?? (mainModel ? "来源未知（模型不在当前模型池）" : "保留工具自己的选择")}</span>
         </div>
       </section>
@@ -315,7 +316,7 @@ function ClaudeModelSettings(props: AgentDetailProps) {
 }
 
 /** 档位行（画板 iTvRW）：未选模型 = 「跟随新会话默认模型」；强度在不支持时显示说明文字。 */
-function TierRow({ tier, index, models, mainModel, subagent, draft, busy, onApplyTiers }: AgentDetailProps & { tier: Tier; index: number }) {
+function TierRow({ tier, index, models, sourceNotes, mainModel, subagent, draft, busy, onApplyTiers }: AgentDetailProps & { tier: Tier; index: number }) {
   const model = draft.models[tier]
   const efforts = model ? tierEfforts(model) : []
   const setTier = (next: string) => {
@@ -327,21 +328,17 @@ function TierRow({ tier, index, models, mainModel, subagent, draft, busy, onAppl
   return (
     <div className={cn("grid grid-cols-[160px_1fr_180px] items-center gap-4 px-5 py-3.5", index > 0 && "border-t border-jolu-table-divider")}>
       <span className="text-[15px] text-jolu-text">{tier[0].toUpperCase() + tier.slice(1)}</span>
-      <select aria-label={`${tier} 档调用模型`} value={model} disabled={busy} onChange={(event) => setTier(event.target.value)}
-        className="h-10 min-w-0 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-meta text-jolu-text outline-none focus:border-jolu-accent disabled:opacity-50">
-        <option value="">跟随新会话默认模型</option>
-        {models.map((entry) => <option key={entry} value={entry}>{entry}</option>)}
-      </select>
+      <SelectField label={`${tier} 档调用模型`} value={model} disabled={busy} onValueChange={setTier}
+        placeholder="跟随新会话默认模型" className="h-10 min-w-0 rounded-[10px] px-3 text-meta"
+        options={modelOptions(models, sourceNotes)} />
       {efforts.length === 0 ? (
         <span className="justify-self-end text-meta text-jolu-muted" title={model ? "这个模型不收思考强度" : "跟随主模型时强度由 Claude Code 决定"}>
           {model ? "模型不支持" : "由工具决定"}
         </span>
       ) : (
-        <select aria-label={`${tier} 档思考强度`} value={draft.efforts[tier] ?? ""} disabled={busy} onChange={(event) => setEffort(event.target.value)}
-          className="h-9 w-[150px] justify-self-end rounded-lg border border-jolu-border bg-jolu-bg px-2.5 text-meta text-jolu-text outline-none focus:border-jolu-accent disabled:opacity-50">
-          <option value="">默认</option>
-          {efforts.map((effort) => <option key={effort} value={effort}>{EFFORT_LABELS[effort] ?? effort}</option>)}
-        </select>
+        <SelectField label={`${tier} 档思考强度`} value={draft.efforts[tier] ?? ""} disabled={busy} onValueChange={setEffort}
+          className="h-9 w-[150px] justify-self-end rounded-[10px] px-2.5 text-meta"
+          options={[{ value: "", label: "默认" }, ...efforts.map((effort): SelectOption => ({ value: effort, label: EFFORT_LABELS[effort] ?? effort }))]} />
       )}
     </div>
   )
@@ -408,7 +405,7 @@ function CountBar({ counts, onLink }: AgentDetailProps) {
 /* ─────────────────────────── 高级（无 V6 画板，沿用 V5 内容，标「待确认」） ─────────────────────────── */
 
 function AdvancedBody(props: AgentDetailProps) {
-  const { models, mainModel, subagent, draft, busy, longContext, onApplyTiers, onLongContext } = props
+  const { models, sourceNotes, mainModel, subagent, draft, busy, longContext, onApplyTiers, onLongContext } = props
   const mode = longContextMode(longContext)
   const [custom, setCustom] = useState(mode === "custom" ? longContext : "")
   const autoValue = draft.auto.kind === "model" ? `model:${draft.auto.model}` : draft.auto.kind
@@ -432,21 +429,23 @@ function AdvancedBody(props: AgentDetailProps) {
           <h3 className="text-[15px] font-semibold text-jolu-text">子代理模型</h3>
           <p className="text-meta text-jolu-muted">Explore 等子代理用的模型；不设就由 Claude Code 自己挑选。</p>
         </div>
-        <select aria-label="子代理模型" value={subagent} disabled={busy} onChange={(event) => onApplyTiers(draft, mainModel, event.target.value)} className={cn(line, "w-[420px] shrink-0")}>
-          <option value="">由 Claude Code 自己挑选</option>
-          {models.map((model) => <option key={model} value={model}>{model}</option>)}
-        </select>
+        <SelectField label="子代理模型" value={subagent} disabled={busy}
+          onValueChange={(value) => onApplyTiers(draft, mainModel, value)}
+          placeholder="由 Claude Code 自己挑选" className={cn(line, "w-[420px] shrink-0 rounded-[10px] px-3 text-meta")}
+          options={modelOptions(models, sourceNotes)} />
       </section>
       <section className="flex items-start justify-between gap-6">
         <div className="flex flex-col gap-1.5 pt-1">
           <h3 className="text-[15px] font-semibold text-jolu-text">自动模式</h3>
           <p className="text-meta text-jolu-muted">自动模式下检查每个操作用的模型。</p>
         </div>
-        <select aria-label="自动模式模型" value={autoValue} disabled={busy} onChange={(event) => setAuto(event.target.value)} className={cn(line, "w-[420px] shrink-0")}>
-          <option value="default">默认（Claude Code 自己挑）</option>
-          <option value="subagent">跟随子代理</option>
-          {models.map((model) => <option key={model} value={`model:${model}`}>{model}</option>)}
-        </select>
+        <SelectField label="自动模式模型" value={autoValue} disabled={busy} onValueChange={setAuto}
+          className={cn(line, "w-[420px] shrink-0 rounded-[10px] px-3 text-meta")}
+          options={[
+            { value: "default", label: "默认（Claude Code 自己挑）" },
+            { value: "subagent", label: "跟随子代理" },
+            ...models.map((model): SelectOption => ({ value: `model:${model}`, label: model, description: sourceNotes[model] })),
+          ]} />
       </section>
       <section className="flex items-start justify-between gap-6">
         <div className="flex flex-col gap-1.5 pt-1">
@@ -473,7 +472,9 @@ function AdvancedBody(props: AgentDetailProps) {
           <h3 className="text-[15px] font-semibold text-jolu-text">新会话强度</h3>
           <p className="text-meta text-jolu-muted">新会话默认的思考强度。</p>
         </div>
-        <select aria-label="新会话强度" disabled title="新会话默认强度（F4）待确认" className={cn(line, "w-[420px] shrink-0")}><option>默认（待确认）</option></select>
+        <span title="新会话默认强度（F4）待确认" className="w-[420px] shrink-0"><SelectField label="新会话强度" value="default" disabled onValueChange={() => undefined}
+          className="w-full rounded-[10px] px-3 text-meta"
+          options={[{ value: "default", label: "默认（待确认）" }]} /></span>
       </section>
     </div>
   )
@@ -498,7 +499,7 @@ function DiffBody({ preview, previewError }: AgentDetailProps) {
 
 /* ─────────────────────────── 接入前预览（画板 V5-2，无 V6 画板，标「待确认」） ─────────────────────────── */
 
-function PreviewBody({ row, models, mainModel, onMainModel, routing, preview, previewError, busy, onWire }: AgentDetailProps) {
+function PreviewBody({ row, models, sourceNotes, mainModel, onMainModel, routing, preview, previewError, busy, onWire }: AgentDetailProps) {
   const claude = row.agent === "claude-code"
   const files = preview?.mode === "wire" ? preview.files : []
   const icons = { file: FilePlus2, shield: ShieldCheck, undo: Undo2 }
@@ -508,11 +509,9 @@ function PreviewBody({ row, models, mainModel, onMainModel, routing, preview, pr
         <span className="text-[15px] font-semibold text-jolu-text">{claude ? "接入后，新会话从哪个模型开始" : `接入 ${row.name}`}</span>
         <div className="flex flex-wrap items-center gap-2.5">
           {claude && (
-            <select aria-label="起点模型" value={mainModel} disabled={busy} onChange={(event) => onMainModel(event.target.value)}
-              className="h-10 w-[300px] rounded-lg border border-jolu-border bg-jolu-bg px-3 text-meta text-jolu-text outline-none focus:border-jolu-accent disabled:opacity-50">
-              <option value="">不选（保留工具自己的选择）</option>
-              {models.map((model) => <option key={model} value={model}>{model}</option>)}
-            </select>
+            <SelectField label="起点模型" value={mainModel} disabled={busy} onValueChange={onMainModel}
+              placeholder="不选（保留工具自己的选择）" className="h-10 w-[300px] rounded-[10px] px-3 text-meta"
+              options={modelOptions(models, sourceNotes)} />
           )}
           <button type="button" disabled={busy} onClick={onWire}
             className="flex h-10 items-center gap-1.5 rounded-lg bg-jolu-accent px-4 text-meta font-semibold text-[#071B10] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent disabled:opacity-45">
@@ -554,6 +553,19 @@ function PreviewBody({ row, models, mainModel, onMainModel, routing, preview, pr
   )
 }
 
+/** 暂不支持（画板 V8 Qoder 卡语义）：探测到但 Jolu 还没有专用接入；指到通用接入。 */
+function UnsupportedBody({ row }: { row: AgentRow }) {
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-jolu-border p-4">
+      <span className="text-[15px] font-semibold text-jolu-text">等待接入适配</span>
+      <span className="text-meta text-jolu-muted">
+        Jolu 检测到了 {row.name}，还没有它的专用接入；模型来源与工具接入能力会分别确认。
+      </span>
+      <span className="text-note text-jolu-muted">{row.wiring?.config_path ? <>配置位置：<code className="font-mono">{row.wiring.config_path}</code></> : row.subtitle}</span>
+    </div>
+  )
+}
+
 function BlockedBody({ row }: { row: AgentRow }) {
   const cliMissing = row.discovery?.state === "cli_missing"
   return (
@@ -565,6 +577,11 @@ function BlockedBody({ row }: { row: AgentRow }) {
       {row.wiring?.config_path && <span className="font-mono text-note text-jolu-muted">配置位置：{row.wiring.config_path}</span>}
     </div>
   )
+}
+
+/** 模型下拉的公共选项：label = 模型 id，描述 = 来源说明（V6 画板「来源：工作账号 · 订阅连接」）。 */
+function modelOptions(models: readonly string[], sourceNotes: Record<string, string>): SelectOption[] {
+  return models.map((model): SelectOption => ({ value: model, label: model, description: sourceNotes[model] }))
 }
 
 function ArrowUpRightIcon() {

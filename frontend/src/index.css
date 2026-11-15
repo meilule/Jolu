@@ -669,6 +669,93 @@ html.reduce-motion .motion-toast { transform: none; transition: none; }
 .motion-select-chevron { transition: transform 160ms var(--motion-ease); }
 [data-state="open"] > .motion-select-chevron { transform: rotate(180deg); }
 
+/* Agent V8：卡片保留在底层，详情从右侧抽屉进入，减少列表跳动并让「详细」与接入开关职责分明。 */
+.agent-card {
+  transition: transform 180ms var(--motion-ease), border-color 180ms ease,
+    box-shadow 180ms ease, background-color 180ms ease;
+}
+.agent-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--jolu-accent) 42%, var(--jolu-border));
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--jolu-text) 7%, transparent);
+}
+.agent-card-selected {
+  border-color: var(--jolu-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--jolu-accent) 22%, transparent),
+    0 8px 24px color-mix(in srgb, var(--jolu-accent) 9%, transparent);
+}
+.agent-card-summary { transition: background-color 160ms ease, transform 160ms var(--motion-ease); }
+.agent-card-summary:hover { background-color: color-mix(in srgb, var(--jolu-side) 78%, var(--jolu-accent)); }
+@keyframes agent-grid-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.agent-card-grid { animation: agent-grid-in 180ms var(--motion-ease) both; }
+.agent-switch { transition: background-color var(--motion-switch) var(--motion-ease), box-shadow var(--motion-switch) ease; }
+.agent-switch-thumb { --switch-shift: 0px; transform: translate(var(--switch-shift), -50%); transition: transform var(--motion-switch) var(--motion-ease), box-shadow var(--motion-switch) ease; }
+.agent-switch[data-on="true"] .agent-switch-thumb { --switch-shift: 16px; }
+.agent-switch[data-on="true"] .agent-switch-thumb-small { --switch-shift: 12px; }
+.agent-switch[data-on="true"] .agent-switch-thumb-large { --switch-shift: 20px; }
+/* 位移 = 轨道宽 − 2×内边距(2) − 滑块宽：36−4−16、28−4−12、44−4−20 */
+.agent-switch[data-on="true"] .agent-switch-thumb-default { --switch-shift: 16px; }
+.agent-switch:not(:disabled):active .agent-switch-thumb { transform: translate(var(--switch-shift), -50%) scale(.86); }
+.agent-drawer-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+.agent-drawer-layer[data-state="open"] { pointer-events: auto; }
+.agent-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: color-mix(in srgb, var(--jolu-text) 5%, transparent);
+  opacity: 1;
+  cursor: default;
+  transition: opacity 220ms ease;
+}
+.agent-drawer-layer[data-state="closed"] .agent-drawer-backdrop { opacity: 0; }
+.agent-drawer-panel {
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  width: min(900px, 54vw);
+  min-width: 620px;
+  overflow: hidden;
+  background: var(--jolu-bg);
+  border-left: 1px solid var(--jolu-border);
+  box-shadow: -18px 0 42px color-mix(in srgb, var(--jolu-text) 10%, transparent);
+  transform: translateX(0);
+  opacity: 1;
+  transition: transform 240ms var(--motion-ease), opacity 180ms ease;
+}
+.agent-drawer-layer[data-state="closed"] .agent-drawer-panel { transform: translateX(24px); opacity: 0; }
+.agent-detail-drawer-content { max-width: none; }
+@media (max-width: 960px) {
+  .agent-drawer-panel { width: min(760px, 92vw); min-width: 0; }
+}
+html.reduce-motion .agent-card,
+html.reduce-motion .agent-card-summary,
+html.reduce-motion .agent-switch,
+html.reduce-motion .agent-switch-thumb,
+html.reduce-motion .agent-drawer-backdrop,
+html.reduce-motion .agent-drawer-panel { transition: none; }
+html.reduce-motion .agent-card-grid { animation: none; }
+html.reduce-motion .agent-card:hover { transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .agent-card,
+  .agent-card-summary,
+  .agent-switch,
+  .agent-switch-thumb,
+  .agent-drawer-backdrop,
+  .agent-drawer-panel { transition: none; }
+  .agent-card:hover { transform: none; }
+  .agent-card-grid { animation: none; }
+}
+
 /* 统一网关：复制成功对勾的弹出（沿用模型入口旧稿 OX4b7 的 pop 曲线）。 */
 @keyframes gw-pop {
   from { opacity: 0; transform: translateY(6px) scale(0.98); }
