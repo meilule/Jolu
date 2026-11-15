@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { api, invoke, isTauri } from "@/lib/api"
-import { gatewayApi, type AgentDiscoveryDto, type CustomAgentDto, type CustomAgentInputDto, type GatewayStatusDto, type ProfileDto, type WiringPreviewDto } from "@/lib/gatewayApi"
+import { gatewayApi, type AgentDiscoveryDto, type CatalogModelDto, type CustomAgentDto, type CustomAgentInputDto, type GatewayStatusDto, type ProfileDto, type WiringPreviewDto } from "@/lib/gatewayApi"
+import type { RoutingGroupDto } from "@/components/gateway/routingGroups"
 import { settingsApi, type AgentVersionRow } from "@/lib/settingsApi"
 import { skillsApi } from "@/lib/skillsApi"
 import { automationApi } from "@/lib/automationApi"
@@ -9,15 +10,16 @@ import { emptyTierDraft, tierDraftFrom, tierModelsFrom, type TierDraft } from "@
 import type { MainPage } from "@/lib/mainNavigation"
 import { useToast } from "@/components/ui/Toast"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
-import { AgentList } from "@/components/agents/AgentList"
+import { AgentDirectory } from "@/components/agents/AgentList"
 import { AgentDetail, type AgentCounts, type AgentLink } from "@/components/agents/AgentDetail"
 import { CustomAgentDialog, CustomAgentPanel } from "@/components/agents/CustomAgentPanel"
 
 /**
- * Agent 页（Jolu.pen「统一网关 · R2 重设计」V5-1 已接入工具详情 / V5-2 接入前预览）。
+ * Agent 页（Jolu.pen「统一网关 · R2 重设计」V6：画板 Ck1N5 列表态 / iTvRW 详情态）。
  *
  * 管工具：自动检测本机工具、接入 / 断开、档位、模型菜单、方案、改动与还原。
- * 请求怎么走（路由分组、流水、对外访问）在「模型路由」页。深色稿待定稿后补。
+ * 列表态与详情态整页切换（详情页「← 全部工具」返回）；请求怎么走（路由分组、流水、
+ * 对外访问）在「模型路由」页。
  */
 
 type Applied = { model: string | null; subagent_model: string | null; tiers: import("@/lib/gatewayApi").TierModels | null }
@@ -29,9 +31,9 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
   const toast = useToast()
   const [status, setStatus] = useState<GatewayStatusDto | null>(null)
   const [discovery, setDiscovery] = useState<AgentDiscoveryDto[] | null>(null)
-  const [detectedAt, setDetectedAt] = useState<number | null>(null)
   const [versions, setVersions] = useState<AgentVersionRow[]>([])
-  const [models, setModels] = useState<string[]>([])
+  const [catalog, setCatalog] = useState<CatalogModelDto[]>([])
+  const [groups, setGroups] = useState<RoutingGroupDto[]>([])
   const [profiles, setProfiles] = useState<ProfileDto[]>([])
   const [routesByAgent, setRoutesByAgent] = useState<Record<string, number> | null>(null)
   const [longContext, setLongContext] = useState("")
@@ -57,15 +59,13 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
     if (!isTauri) return
     try {
       void gatewayApi.customAgents().then(setCustoms).catch(() => setCustoms([]))
-      const [nextStatus, catalog, groups, nextProfiles, overview, settings] = await Promise.all([
-        gatewayApi.status(), gatewayApi.catalog(), gatewayApi.groupList().catch(() => []), gatewayApi.profilesList().catch(() => []),
+      const [nextStatus, nextCatalog, nextGroups, nextProfiles, overview, settings] = await Promise.all([
+        gatewayApi.status(), gatewayApi.catalog(), gatewayApi.groupList().catch(() => [] as RoutingGroupDto[]), gatewayApi.profilesList().catch(() => []),
         gatewayApi.dayOverview().catch(() => null), invoke<{ claude_long_context?: string }>("get_settings").catch(() => null),
       ])
       setStatus(nextStatus)
-      const ids = new Set<string>()
-      for (const group of groups) ids.add(`group/${group.slug}`)
-      for (const model of catalog) if (model.slug) ids.add(`${model.slug}/${model.model}`)
-      setModels([...ids])
+      setCatalog(nextCatalog)
+      setGroups(nextGroups)
       setProfiles(nextProfiles)
       setRoutesByAgent(overview?.by_agent ?? null)
       setLongContext(settings?.claude_long_context ?? "")
@@ -82,7 +82,6 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
     ])
     setDiscovery(found)
     setVersions(nextVersions)
-    setDetectedAt(Date.now())
   }, [])
 
   useEffect(() => {
@@ -94,7 +93,7 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
 
   const rows: AgentRow[] = useMemo(() => {
     // 列表按「后端探测到谁」来建，而不是硬编码白名单：
-    // 只遍历 WIRABLE_AGENTS 时，agent_discovery 新增的 8 家永远不显示（界面上只有 5 个）。
+    // 只遍历 WIRABLE_AGENTS 时，agent_discovery 新增的工具永远不显示。
     // 顺序：先已接线能力的 5 家（有专门接线），再其余探测到的（只能走通用接入）。
     const seen = new Set<string>()
     const built: AgentRow[] = []
@@ -114,15 +113,19 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
   }, [status, discovery, applied, customs])
   const custom = selected && isCustomAgent(selected) ? customs.find((entry) => entry.id === selected) ?? null : null
 
-  // 默认选中第一个已接入的工具，没有就选第一个可接入的
-  useEffect(() => {
-    if (selected && rows.some((row) => row.agent === selected)) return
-    const first = rows.find((row) => row.group === "wired") ?? rows.find((row) => row.group === "available") ?? rows[0]
-    if (first) setSelected(first.agent)
-  }, [rows, selected])
-
   const row = rows.find((entry) => entry.agent === selected) ?? null
   const wiredState = row?.group === "wired"
+
+  /** 模型 id → 来源说明（画板 iTvRW「来源：工作账号 · 订阅连接」） */
+  const sourceNotes = useMemo(() => {
+    const notes: Record<string, string> = {}
+    for (const model of catalog) {
+      if (!model.slug) continue
+      notes[`${model.slug}/${model.model}`] = `${model.source} · ${model.kind === "auth" ? "订阅连接" : "API Key"}`
+    }
+    for (const group of groups) notes[`group/${group.slug}`] = `路由分组 · ${group.name}`
+    return notes
+  }, [catalog, groups])
 
   // Claude Code 的接线回填：主模型、子代理、档位
   useEffect(() => {
@@ -246,11 +249,6 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
     setSelected(added.id)
   }, `已添加 ${input.name}`)
 
-  const toggle = (target: AgentRow) => {
-    if (isCustomAgent(target.agent)) return target.toggle === "on" ? customUnwire(target.agent) : customWire(target.agent)
-    return target.toggle === "on" ? unwire(target.agent) : wire(target.agent)
-  }
-
   /** 档位 / 主模型 / 子代理 / 自动模式改动立即写入（已接入时）；未接入时只更新草稿，接入时一并写入 */
   const applyTiers = (nextDraft: TierDraft, main: string, sub: string) => {
     setDraft(nextDraft)
@@ -324,12 +322,9 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden bg-jolu-bg">
-      <AgentList rows={rows} selected={selected} detectedAt={detectedAt} busy={busy} search={search} onSearch={setSearch}
-        hidden={hidden} showHidden={showHidden} onShowHidden={setShowHidden} onSelect={setSelected} onToggle={toggle} onRedetect={redetect}
-        onAddCustom={() => setAdding(true)} />
       {custom ? (
-        <CustomAgentPanel agent={custom} models={models} routing={routing} preview={preview} previewError={previewError} busy={busy}
-          model={customModel} onModel={setCustomModel} onWire={() => customWire(custom.id)} onUnwire={() => customUnwire(custom.id)} onRemove={() => customRemove(custom.id)} />
+        <CustomAgentPanel agent={custom} models={modelsOf(catalog, groups)} routing={routing} preview={preview} previewError={previewError} busy={busy}
+          model={customModel} onModel={setCustomModel} onBack={() => setSelected(null)} onWire={() => customWire(custom.id)} onUnwire={() => customUnwire(custom.id)} onRemove={() => customRemove(custom.id)} />
       ) : row ? (
         <AgentDetail
           row={row}
@@ -338,7 +333,8 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
           preview={preview}
           previewError={previewError}
           counts={counts}
-          models={models}
+          models={modelsOf(catalog, groups)}
+          sourceNotes={sourceNotes}
           mainModel={mainModel}
           onMainModel={setMainModel}
           subagent={subagent}
@@ -350,6 +346,7 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
           profiles={profiles}
           hidden={hidden.includes(row.agent)}
           busy={busy}
+          onBack={() => setSelected(null)}
           onWire={() => wire(row.agent)}
           onUnwire={() => unwire(row.agent)}
           onApplyTiers={applyTiers}
@@ -363,10 +360,20 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
           onLink={link}
         />
       ) : (
-        <div className="flex flex-1 items-center justify-center text-meta text-jolu-muted">正在检测本机工具…</div>
+        <AgentDirectory rows={rows} modelsCount={modelsOf(catalog, groups).length} busy={busy} search={search} onSearch={setSearch}
+          hidden={hidden} showHidden={showHidden} onShowHidden={setShowHidden} onSelect={setSelected} onRedetect={redetect}
+          onAddCustom={() => setAdding(true)} />
       )}
       {adding && <CustomAgentDialog busy={busy} onClose={() => setAdding(false)} onSave={customAdd} />}
       {confirm && <ConfirmDialog title={confirm.title} description={confirm.description} confirmLabel={confirm.label} danger={confirm.danger} onClose={() => setConfirm(null)} onConfirm={confirm.work} />}
     </div>
   )
+}
+
+/** 可选模型 id：`<来源>/<模型>` 与 `group/<分组>`（去重、保序） */
+function modelsOf(catalog: CatalogModelDto[], groups: RoutingGroupDto[]): string[] {
+  const ids: string[] = []
+  for (const group of groups) ids.push(`group/${group.slug}`)
+  for (const model of catalog) if (model.slug) ids.push(`${model.slug}/${model.model}`)
+  return [...new Set(ids)]
 }

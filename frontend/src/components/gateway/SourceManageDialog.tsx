@@ -15,7 +15,6 @@ import {
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { useToast } from "@/components/ui/Toast"
 import { Button, Modal, orderGroups } from "./GatewayDialogs"
-import { RoutingGroupsSection } from "./RoutingGroupsSection"
 import { ZcodeChannelOption } from "./ZcodeChannelOption"
 import { StatusCapsule } from "./StatusCapsule"
 import type { Connection } from "@/types"
@@ -27,8 +26,7 @@ import type { Connection } from "@/types"
  * 右栏：搜索 + 已接入 / 未接入筛选 + 多选批量加入 / 移出 / 移动；每行显示凭据类型、菜单 id、模型数、
  * 调用能力与最近使用，「已接入 / 未接入」胶囊可直接切换，「⋯」里改名与菜单 id、查看模型、移动分组。
  * 分组与顺序只影响排列，不改变路由、接线和 Agent 菜单；切换与批量操作都先确认。
- * 底部另有折叠的「路由分组（待确认）」最小版（RoutingGroupsSection）：把多个「来源/模型」组成
- * 模型 id `group/<分组id>`，按策略分摊与失败转移；按 Jolu.pen 画板确认后移入主界面。
+ * 路由分组（group/<分组id>）自 V6 起有独立页签，不再嵌在这个弹窗里。
  */
 
 type Scope = GroupScope | { kind: "agents"; id: string | null }
@@ -352,7 +350,6 @@ export function SourceManageDialog({
           </div>
         </div>
 
-        <RoutingGroupsSection catalog={catalog} busy={busy} run={run} />
         {connections.some((connection) => connection.platformId === "zcode") && <ZcodeChannelOption busy={busy} run={run} />}
       </Modal>
 

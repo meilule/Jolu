@@ -10,10 +10,10 @@ import { DiffView } from "./DiffView"
 const selectClass = "h-8 min-w-0 rounded-lg border border-jolu-border bg-jolu-bg px-2.5 text-meta text-jolu-text outline-none focus:border-jolu-accent disabled:opacity-50"
 
 /**
- * 通用接入的自定义工具详情（P1-1，无画板，待确认；沿用 V5-1 / V5-2 的版式）。
+ * 通用接入的自定义工具详情（P1-1，无画板，待确认；外壳对齐 V6 详情态，内容沿用 V5 版式）。
  * 只写三个键：地址、令牌、模型（可选）；断开时只还原仍是 Jolu 写下的值的键。
  */
-export function CustomAgentPanel({ agent, models, routing, preview, previewError, busy, model, onModel, onWire, onUnwire, onRemove }: {
+export function CustomAgentPanel({ agent, models, routing, preview, previewError, busy, model, onModel, onBack, onWire, onUnwire, onRemove }: {
   agent: CustomAgentDto
   models: string[]
   routing: boolean
@@ -22,6 +22,7 @@ export function CustomAgentPanel({ agent, models, routing, preview, previewError
   busy: boolean
   model: string
   onModel: (model: string) => void
+  onBack: () => void
   onWire: () => void
   onUnwire: () => void
   onRemove: () => void
@@ -34,8 +35,17 @@ export function CustomAgentPanel({ agent, models, routing, preview, previewError
     ...(agent.model_key ? [{ label: "模型", key: agent.model_key, value: "你在下面选的模型" }] : []),
   ]
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-3.5 overflow-y-auto px-7 py-5">
-      <div className="flex items-center gap-3">
+    <div className="flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto px-8 pb-8 pt-6">
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={onBack}
+          className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-meta text-jolu-muted outline-none hover:bg-jolu-side hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent">
+          <svg aria-hidden viewBox="0 0 14 14" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M9 3L5 7L9 11" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          全部工具
+        </button>
+      </div>
+      <div className="flex items-center gap-4">
         <AgentBadge agent={agent.id} name={agent.name} size={40} />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex items-center gap-2">
