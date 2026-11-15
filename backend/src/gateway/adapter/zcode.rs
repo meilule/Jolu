@@ -13,6 +13,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, Method, StatusCode},
     response::Response,
 };
+use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
 use std::sync::Arc;
 /// 两个账号家族的站点根。实际使用哪一个由连接里的 `session.family()` 决定，
@@ -368,7 +369,57 @@ async fn material_at(deps: &Arc<ProxyDeps>, id: &str, origin: &str) -> Result<St
     Ok(token)
 }
 
+/// 官方客户端的模型清单：`provider_config.json` 里 coding-plan 条目的 `modelOrder`。
+///
+/// 为什么不请求上游：官方客户端自己也不调模型枚举端点——Zhipu 的 coding-plan API
+/// 没有 `/v1/models`，账号可用的模型清单由官方 **写在本配置文件里**（Models 页同源，
+/// `modelOrder` 是用户排序后的完整列表，`personalModelIds` 是个人放行的子集）。
+/// 读不到（旧版文件形状变了、清单为空）时返回 None，调用方走在线兜底链。
+fn config_model_order(home: &std::path::Path) -> Option<Vec<String>> {
+    let path = home.join(".zcode").join("v2").join("provider_config.json");
+    let value: Value = serde_json::from_str(&crate::steady::read_to_string(&path).ok()?).ok()?;
+    let rules = value.pointer("/config/providerConfigRules/providerRules")?.as_array()?;
+    // 与 coding_plan_key_at 同一选择口径：取 coding-plan access 的条目（zai 优先于 bigmodel
+    // 的优先级由官方文件自身的条目顺序承载，这里按「有清单的第一条」取）。
+    for rule in rules {
+        if rule.pointer("/config/access/type").and_then(Value::as_str) != Some("zhipu-coding-plan-api-key") {
+            continue;
+        }
+        let order = rule.pointer("/config/modelOrder")?.as_array()?;
+        let ids: Vec<String> = order
+            .iter()
+            .filter_map(|m| m.as_str().map(str::to_owned))
+            .filter(|m| !m.trim().is_empty())
+            .collect();
+        if !ids.is_empty() {
+            return Some(ids);
+        }
+    }
+    None
+}
+
 pub(crate) async fn models(deps: &Arc<ProxyDeps>, id: &str) -> Result<Vec<String>, String> {
+    // 两份「官方真实数据」并集：
+    //
+    // 1. provider_config.json 的 modelOrder——官方 Models 页的排序清单，官方客户端
+    //    发放订阅额度时会同步更新（发放的模型同时写进 personalModelIds 与余额桶）；
+    // 2. Start Plan 余额桶的实际可用模型（gift_models）——ZCode 发放的订阅额度对应
+    //    的桶列在 capabilities 里，是「现在真的能花」的权威来源；用完 / 过期自动消失。
+    //
+    // ZCode 有时候发放订阅额度（WEEKEND BUILD 这类）：发放的新模型若只出现在余额桶
+    // 或 personalModelIds、modelOrder 还没带上，并集保证它照样出现在清单里。
+    // 两份都为空（从未登录官方客户端）才走在线兜底链：coding_plan 凭证打 /v1/models。
+    let mut list = crate::creds::home().and_then(|home| config_model_order(&home)).unwrap_or_default();
+    if let Ok(Some(gifts)) = super::zcode_start::gift_models().await {
+        for gift in gifts {
+            if !list.iter().any(|m| m.eq_ignore_ascii_case(&gift)) {
+                list.push(gift);
+            }
+        }
+    }
+    if !list.is_empty() {
+        return Ok(list);
+    }
     match coding_plan_models(deps, id).await {
         Ok(list) => Ok(list),
         // C1：只有免费 Start Plan 的账号列不出 Coding Plan 模型——这时用余额里现在
@@ -456,9 +507,24 @@ impl ChannelMemory {
 
 static CHANNELS: std::sync::LazyLock<ChannelMemory> = std::sync::LazyLock::new(ChannelMemory::default);
 
+/// 手动锁通道后清掉自动记忆：锁定的通道立即可见，不受旧记忆影响。
+pub(crate) fn clear_channel_memory(id: &str) {
+    if let Ok(mut map) = CHANNELS.0.lock() {
+        map.remove(id);
+    }
+}
+
 /// 本次请求的通道顺序：有记忆先走记住的那条，否则按 `zcode_free_first`；
 /// 本机没有 ZCode 会话 JWT 时 Start Plan 不可用，只走 Coding Plan。
-fn channel_order(free_first: bool, remembered: Option<Channel>, start_available: bool) -> Vec<Channel> {
+fn channel_order(forced: Option<Channel>, free_first: bool, remembered: Option<Channel>, start_available: bool) -> Vec<Channel> {
+    // 手动锁通道：只走指定的一条（锁 Start Plan 但本机没有会话 JWT 时仍返回 Start Plan，
+    // 由 zcode_start::forward 如实报「会话凭据缺失」——不静默换成另一条）
+    if let Some(ch) = forced {
+        if ch == Channel::StartPlan && !start_available {
+            return vec![Channel::StartPlan];
+        }
+        return vec![ch];
+    }
     if !start_available {
         return vec![Channel::CodingPlan];
     }
@@ -487,13 +553,14 @@ async fn forward_channels<F, Fut>(
     free_first: bool,
     start_available: bool,
     now_ms: i64,
+    forced: Option<Channel>,
     mut send: F,
 ) -> Response
 where
     F: FnMut(Channel) -> Fut,
     Fut: std::future::Future<Output = Response>,
 {
-    let order = channel_order(free_first, memory.get(id, now_ms), start_available);
+    let order = channel_order(forced, free_first, memory.get(id, now_ms), start_available);
     let mut response = error_response(StatusCode::SERVICE_UNAVAILABLE, "ZCode 没有可用的通道");
     for (index, channel) in order.iter().copied().enumerate() {
         response = send(channel).await;
@@ -508,6 +575,23 @@ where
     response
 }
 
+/// Start Plan 通道的请求体：只说 Anthropic Messages。非 Anthropic 调用方先转换——
+/// Chat 直接转；Responses 先转 Chat 再转 Anthropic（对角线，与 API 来源矩阵同一手法）。
+/// 转换失败（残缺 JSON 等）如实报错，不拿原样请求去撞上游。
+fn start_anthropic_body(protocol: CallerProtocol, body: &Bytes) -> Result<Bytes, String> {
+    match protocol {
+        CallerProtocol::Anthropic => Ok(body.clone()),
+        CallerProtocol::Responses => {
+            let value: Value = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效：{e}"))?;
+            let chat = crate::gateway::responses_chat::request(&value).map_err(|e| format!("Responses 请求转 Chat 失败：{e}"))?;
+            crate::gateway::translate::chat_to_anthropic_request(chat.to_string().as_bytes())
+                .map_err(|e| format!("Chat 请求转 Anthropic 失败：{e}"))
+        }
+        _ => crate::gateway::translate::chat_to_anthropic_request(body)
+            .map_err(|e| format!("Chat 请求转 Anthropic 失败：{e}")),
+    }
+}
+
 pub(crate) async fn forward(
     deps: Arc<ProxyDeps>,
     entry: &PoolEntry,
@@ -515,14 +599,55 @@ pub(crate) async fn forward(
     body: Bytes,
     session: &str,
 ) -> Response {
-    // 3.4：Start Plan 只说 Anthropic；Chat / Responses 调用方只走 Coding Plan 通道的 OpenAI 兼容端点
-    let start_available = protocol == CallerProtocol::Anthropic && super::zcode_start::jwt_at().is_some();
+    // 3.4：Start Plan 通道对三种调用方协议都可用——非 Anthropic 的先转换成 Anthropic
+    // Messages 再发（回复在下方按调用方协议转回）。本机没有会话 JWT 时 Start Plan
+    // 不可用，只走 Coding Plan。
+    let start_available = super::zcode_start::jwt_at().is_some();
+    // 手动锁定的订阅通道（账号卡切换）：NULL = 自动双通道失败转移
+    let forced = match deps.db.lock() {
+        Err(_) => return error_response(StatusCode::SERVICE_UNAVAILABLE, "数据库不可用"),
+        Ok(conn) => conn
+            .query_row(
+                "SELECT start_channel FROM connections WHERE id = ?1",
+                [&entry.connection_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .and_then(|c| match c.as_deref() {
+                Some("start-plan") => Some(Channel::StartPlan),
+                Some("coding-plan") => Some(Channel::CodingPlan),
+                _ => None,
+            }),
+    };
     let now = chrono::Utc::now().timestamp_millis();
-    forward_channels(&CHANNELS, &entry.connection_id, free_first(), start_available, now, |channel| {
+    forward_channels(&CHANNELS, &entry.connection_id, free_first(), start_available, now, forced, |channel| {
         let (deps, body) = (deps.clone(), body.clone());
         async move {
             match channel {
-                Channel::StartPlan => super::zcode_start::forward(deps, entry, protocol, body, session).await,
+                Channel::StartPlan => {
+                    // 请求：调用方协议 → Anthropic Messages
+                    let requested_model = serde_json::from_slice::<Value>(&body)
+                        .ok()
+                        .and_then(|v| v["model"].as_str().map(str::to_owned))
+                        .unwrap_or_default();
+                    let anthropic = match start_anthropic_body(protocol, &body) {
+                        Ok(v) => v,
+                        Err(e) => return error_response(StatusCode::BAD_REQUEST, &e),
+                    };
+                    let response = super::zcode_start::forward(deps, entry, CallerProtocol::Anthropic, anthropic, session).await;
+                    // 回复：Anthropic Messages → 调用方协议
+                    match protocol {
+                        CallerProtocol::Chat => crate::gateway::translate::chat_response(response, &requested_model).await,
+                        CallerProtocol::Responses => {
+                            let chat_form = crate::gateway::translate::chat_response(response, &requested_model).await;
+                            let custom = crate::gateway::wire::original_custom_tools(&body);
+                            crate::gateway::responses_chat::response_body(chat_form, custom).await
+                        }
+                        _ => response,
+                    }
+                }
                 Channel::CodingPlan => coding_plan_forward(deps, entry, body, protocol).await,
             }
         }
@@ -621,6 +746,98 @@ pub(crate) fn openai_base_of(anthropic_base: &str) -> String {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+
+    /// 只读探针：同一份最小请求分别打两条通道，打印各自的真实状态与响应体。
+    /// 诊断「额度已用尽」到底出自哪条通道、上游原文是什么；消耗几枚 token。
+    #[tokio::test]
+    #[ignore = "读本机授权并向两条通道各发一次最小请求；仅显式核对时执行"]
+    async fn local_both_channels_probe() {
+        let conn = rusqlite::Connection::open(
+            crate::creds::home().unwrap().join("AppData").join("Roaming").join("dev.ningz.jolu").join("usage.db"),
+        ).unwrap();
+        let (id, slug, status): (String, String, String) = conn
+            .query_row("SELECT id, slug, status FROM connections WHERE platform='zcode' AND kind='auth' LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .expect("本机没有 ZCode 连接");
+        let deps = crate::proxy::detached_deps(Arc::new(std::sync::Mutex::new(conn)));
+        let entry = PoolEntry {
+            connection_id: id.clone(),
+            slug: slug.clone(),
+            name: slug.clone(),
+            platform: "zcode".into(),
+            kind: "auth".into(),
+            protocol: "anthropic".into(),
+            base_url: None,
+            secret: None,
+            account_fp: None,
+            model: None,
+            status: status.clone(),
+        };
+        // 模型名用清单里的全名（带来源前缀）——与 dsh / Claude Code 等真实调用方一致；
+        // Start Plan 通道要在发上游前剥掉（3006「model not allowed」曾由此而来）
+        let body = Bytes::from(json!({
+            "model": "zcode/GLM-5.3-Flash", "max_tokens": 32,
+            "messages": [{"role": "user", "content": "用一个词回答：天空是什么颜色"}]
+        }).to_string());
+        // Coding Plan 通道（Chat 协议，OpenAI 兼容端点）
+        let r1 = coding_plan_forward(deps.clone(), &entry, body.clone(), CallerProtocol::Chat).await;
+        let s1 = r1.status().as_u16();
+        let b1 = axum::body::to_bytes(r1.into_body(), 1 << 20).await.unwrap_or_default();
+        eprintln!("CodingPlan -> {} {}", s1, String::from_utf8_lossy(&b1));
+        // Start Plan 通道（Chat 调用方 → 转 Anthropic → 着装直发）
+        let r2 = crate::gateway::adapter::zcode_start::forward(deps.clone(), &entry, CallerProtocol::Anthropic, start_anthropic_body(CallerProtocol::Chat, &body).unwrap(), "").await;
+        let s2 = r2.status().as_u16();
+        let b2 = axum::body::to_bytes(r2.into_body(), 1 << 20).await.unwrap_or_default();
+        eprintln!("StartPlan  -> {} {}", s2, String::from_utf8_lossy(&b2));
+    }
+
+
+    #[test]
+    fn start_anthropic_body_converts_every_caller_protocol() {
+        let chat = Bytes::from(json!({"model":"zcode/GLM-5.3-Flash","messages":[{"role":"user","content":"hi"}]}).to_string());
+        // Anthropic 调用方原样
+        assert_eq!(start_anthropic_body(CallerProtocol::Anthropic, &chat).unwrap(), chat);
+        // Chat 调用方：转成 Anthropic Messages（system 提升为顶层、messages 形状一致）
+        let anthropic = start_anthropic_body(CallerProtocol::Chat, &chat).unwrap();
+        let value: Value = serde_json::from_slice(&anthropic).unwrap();
+        assert_eq!(value["model"], "zcode/GLM-5.3-Flash");
+        assert!(value["messages"].is_array(), "Chat 转 Anthropic 后 messages 在");
+        // Responses 调用方：Responses → Chat → Anthropic
+        let responses = Bytes::from(json!({"model":"zcode/GLM-5.3-Flash","input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]}]}).to_string());
+        let anthropic2 = start_anthropic_body(CallerProtocol::Responses, &responses).unwrap();
+        let value2: Value = serde_json::from_slice(&anthropic2).unwrap();
+        assert_eq!(value2["model"], "zcode/GLM-5.3-Flash");
+        // 残缺 JSON 如实报错
+        assert!(start_anthropic_body(CallerProtocol::Responses, &Bytes::from_static(b"{bad")).is_err());
+    }
+
+
+    #[test]
+    fn model_order_reads_the_official_provider_config() {
+        let home = std::env::temp_dir().join(format!("jolu-zcode-order-{}-{}", std::process::id(), chrono::Utc::now().timestamp_millis()));
+        std::fs::create_dir_all(home.join(".zcode").join("v2")).unwrap();
+        // 真实形状（2026-11-14 本机实测）：coding-plan 条目带 modelOrder，非 coding-plan 条目跳过
+        std::fs::write(
+            home.join(".zcode").join("v2").join("provider_config.json"),
+            json!({"config":{"providerConfigRules":{"providerRules":[
+                {"providerId":"zai-standard-api","config":{"group":"g1","personalModelIds":[],"modelOrder":[]}},
+                {"providerId":"zai-api-2","config":{"group":"g2","access":{"type":"zhipu-coding-plan-api-key","apiKey":"k"},
+                 "personalModelIds":["GLM-5.3-FlashX"],"modelOrder":["GLM-5.3","GLM-5.3-Flash","GLM-5.3-FlashX"]}}
+            ]}}}).to_string(),
+        ).unwrap();
+        let list = config_model_order(&home).unwrap();
+        assert_eq!(list, ["GLM-5.3", "GLM-5.3-Flash", "GLM-5.3-FlashX"]);
+        // 没有清单的条目不当真：全空时返回 None
+        std::fs::write(home.join(".zcode").join("v2").join("provider_config.json"),
+            json!({"config":{"providerConfigRules":{"providerRules":[
+                {"providerId":"zai-api-2","config":{"access":{"type":"zhipu-coding-plan-api-key","apiKey":"k"},"modelOrder":[]}}
+            ]}}}).to_string()).unwrap();
+        assert!(config_model_order(&home).is_none());
+        // 文件缺失同样 None（走在线兜底链）
+        std::fs::remove_file(home.join(".zcode").join("v2").join("provider_config.json")).unwrap();
+        assert!(config_model_order(&home).is_none());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
     #[tokio::test]
     async fn absent_project_key_never_creates_a_remote_key() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -803,12 +1020,15 @@ mod channel_tests {
 
     #[test]
     fn channel_order_follows_memory_then_free_first() {
-        assert_eq!(channel_order(false, None, true), vec![CodingPlan, StartPlan]);
-        assert_eq!(channel_order(true, None, true), vec![StartPlan, CodingPlan]);
-        assert_eq!(channel_order(false, Some(StartPlan), true), vec![StartPlan, CodingPlan]);
-        assert_eq!(channel_order(true, Some(CodingPlan), true), vec![CodingPlan, StartPlan]);
+        assert_eq!(channel_order(None, false, None, true), vec![CodingPlan, StartPlan]);
+        assert_eq!(channel_order(None, true, None, true), vec![StartPlan, CodingPlan]);
+        assert_eq!(channel_order(None, false, Some(StartPlan), true), vec![StartPlan, CodingPlan]);
+        assert_eq!(channel_order(None, true, Some(CodingPlan), true), vec![CodingPlan, StartPlan]);
         // 没有会话 JWT 时 Start Plan 不可用，记忆也不让它出现
-        assert_eq!(channel_order(true, Some(StartPlan), false), vec![CodingPlan]);
+        assert_eq!(channel_order(None, true, Some(StartPlan), false), vec![CodingPlan]);
+        // 手动锁定：只走指定的一条，记忆与 free_first 都不让位
+        assert_eq!(channel_order(Some(StartPlan), false, None, true), vec![StartPlan]);
+        assert_eq!(channel_order(Some(CodingPlan), true, Some(StartPlan), true), vec![CodingPlan]);
     }
 
     #[test]
@@ -848,12 +1068,12 @@ mod channel_tests {
         let memory = ChannelMemory::default();
         let answers = vec![(CodingPlan, 429), (StartPlan, 200)];
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let response = forward_channels(&memory, "c1", false, true, 1_000, canned(answers.clone(), calls.clone())).await;
+        let response = forward_channels(&memory, "c1", false, true, 1_000, None, canned(answers.clone(), calls.clone())).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(*calls.lock().unwrap(), vec![CodingPlan, StartPlan]);
         calls.lock().unwrap().clear();
         // 第二次直接走 Start Plan，不再先发一次必然失败的 Coding Plan
-        let response = forward_channels(&memory, "c1", false, true, 2_000, canned(answers, calls.clone())).await;
+        let response = forward_channels(&memory, "c1", false, true, 2_000, None, canned(answers, calls.clone())).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(*calls.lock().unwrap(), vec![StartPlan]);
     }
@@ -863,7 +1083,7 @@ mod channel_tests {
         let memory = ChannelMemory::default();
         memory.set("c1", StartPlan, 1_000);
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let response = forward_channels(&memory, "c1", false, true, 2_000,
+        let response = forward_channels(&memory, "c1", false, true, 2_000, None,
             canned(vec![(StartPlan, 429), (CodingPlan, 200)], calls.clone())).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(*calls.lock().unwrap(), vec![StartPlan, CodingPlan]);
@@ -874,13 +1094,13 @@ mod channel_tests {
     async fn failures_keep_memory_and_return_last_answer() {
         let memory = ChannelMemory::default();
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let response = forward_channels(&memory, "c1", false, true, 1_000,
+        let response = forward_channels(&memory, "c1", false, true, 1_000, None,
             canned(vec![(CodingPlan, 429), (StartPlan, 503)], calls.clone())).await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(memory.get("c1", 1_000), None);
         // 不可转移的失败（400）不换通道
         calls.lock().unwrap().clear();
-        let response = forward_channels(&memory, "c1", false, true, 1_000,
+        let response = forward_channels(&memory, "c1", false, true, 1_000, None,
             canned(vec![(CodingPlan, 400), (StartPlan, 200)], calls.clone())).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert_eq!(*calls.lock().unwrap(), vec![CodingPlan]);

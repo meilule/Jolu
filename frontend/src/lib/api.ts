@@ -124,6 +124,8 @@ export interface ConnectionDto {
   serve_enabled?: boolean
   /** 模型入口的持久化菜单 id 前缀（`<slug>/<model>`）；改名不变 */
   slug?: string | null
+  /** ZCode 订阅通道手动锁定（待确认，无画板）：start-plan / coding-plan；null = 自动双通道 */
+  start_channel?: "start-plan" | "coding-plan" | null
 }
 
 export interface FetchResult {
@@ -594,6 +596,9 @@ export const api = {
   setIslandPlatform: (platform: string) =>
     invoke<AppSettings>("set_island_platform", { platform }),
   /** island 为目标灵动岛的分身 id；null 为本体 */
+  /** 锁定 ZCode 连接的订阅通道（账号卡「订阅通道」切换）：auto = 自动双通道失败转移 */
+  setZcodeChannel: (id: string, channel: "auto" | "start-plan" | "coding-plan") =>
+    invoke<void>("zcode_set_channel", { connectionId: id, channel }),
   setIslandConnection: (id: string | null, island: string | null = null) =>
     invoke<AppSettings>("set_island_connection", { id, island }),
   setIslandSource: (id: string | null) =>

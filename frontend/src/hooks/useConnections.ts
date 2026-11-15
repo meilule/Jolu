@@ -42,6 +42,7 @@ function toConnection(d: ConnectionDto): Connection {
     protocol: d.protocol ?? null,
     serve_enabled: d.serve_enabled ?? false,
     slug: d.slug ?? null,
+    startChannel: d.start_channel ?? null,
   }
 }
 

@@ -3322,6 +3322,24 @@ fn gateway_wiring_accept(app: tauri::AppHandle, agent: String) -> Result<(), Str
 
 /* --------------------------- 连接管理（§6.3） --------------------------- */
 
+/// 锁定 ZCode 连接的订阅通道（账号卡「订阅通道」切换）。
+/// `channel`：None/"auto" = 自动双通道失败转移；"start-plan" / "coding-plan" = 只走指定通道。
+/// 锁定会清掉自动通道的记忆，下一次请求立即按新设置走。
+#[tauri::command]
+fn zcode_set_channel(
+    app: tauri::AppHandle,
+    connection_id: String,
+    channel: Option<String>,
+) -> Result<(), String> {
+    {
+        let state = app.state::<Db>();
+        let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+        connections::set_start_channel(&conn, &connection_id, channel.as_deref())?;
+    }
+    crate::gateway::adapter::zcode::clear_channel_memory(&connection_id);
+    Ok(())
+}
+
 #[tauri::command]
 async fn list_connections(db: State<'_, DbRead>) -> Result<Vec<connections::ConnectionDto>, String> {
     with_reader(db.0.clone(), move |conn| {
@@ -4922,6 +4940,7 @@ pub fn run() {
             gateway_set_mode,
             gateway_set_default_source,
             gateway_refresh_models,
+            zcode_set_channel,
             gateway_routing_group_list,
             gateway_routing_group_create,
             gateway_group_create,

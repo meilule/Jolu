@@ -63,6 +63,8 @@ export interface Connection {
   protocol: "openai" | "anthropic" | null
   /** 账号汇聚网关：是否进入模型池对外服务（旧连接默认 false） */
   serve_enabled: boolean
+  /** ZCode 订阅通道手动锁定（待确认，无画板）：start-plan / coding-plan；null = 自动双通道 */
+  startChannel?: "start-plan" | "coding-plan" | null
   /** 模型入口的持久化菜单 id 前缀（`<slug>/<model>`）；改名不变 */
   slug?: string | null
 }

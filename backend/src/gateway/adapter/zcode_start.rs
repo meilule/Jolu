@@ -258,6 +258,13 @@ fn quota_refusal(status: StatusCode, body: &str) -> bool {
         && ["\"1113\"", ":1113", "\"1005\"", ":1005", "余额不足", "insufficient balance"].iter().any(|code| body.contains(code))
 }
 
+/// 模型名剥来源前缀：`zcode/GLM-5.3-Flash` → `GLM-5.3-Flash`；无 `/` 原样返回（先去空白）。
+/// 与 [`super::zcode::coding_plan_forward`] 里的 `split_once` 同一语义。
+fn bare_model_name(model: &str) -> &str {
+    let model = model.trim();
+    model.split_once('/').map_or(model, |(_, bare)| bare.trim())
+}
+
 pub(crate) async fn forward(
     deps: std::sync::Arc<crate::proxy::ProxyDeps>,
     entry: &PoolEntry,
@@ -280,6 +287,15 @@ pub(crate) async fn forward(
         Ok(v) => v,
         Err(_) => return error_response(StatusCode::BAD_REQUEST, "请求格式无效"),
     };
+    // 模型名剥来源前缀（`zcode/GLM-5.3-Flash` → `GLM-5.3-Flash`）：调用方从 /v1/models
+    // 清单或 Agents 页的 /model 提示拿到的都是全名，前缀只用于选路；上游只认裸名，带前缀
+    // 会被 3006「model not allowed」拒。其余通道（Coding Plan）与各订阅适配器早已各自
+    // 剥过，这里是漏掉的最后一处——剥过的裸名也让着装提示用对模型名。
+    let requested = value["model"].as_str().unwrap_or_default().to_string();
+    let model = bare_model_name(&requested).to_string();
+    if !model.is_empty() && model != requested {
+        value["model"] = Value::String(model.clone());
+    }
     // 礼包外的模型如实交给上游判定（礼包清单见 [`gift_models`]）
     dress(&mut value, &device, session);
     let dressed = match serde_json::to_vec(&value) {
@@ -305,7 +321,7 @@ pub(crate) async fn forward(
     // Start Plan 通道不吃路径查询（Claude Code 的 ?beta=true 剥掉——magpie startURL 同款）。
     // 发出走忙碌重试（③3）：着装只做一次，闭包每次重用同一份着装后的请求体与同一头——
     // 重复着装会重排 cache_control 并让 prompt cache 失效。
-    let model = value["model"].as_str().unwrap_or_default().to_string();
+    // model 已在上方剥好来源前缀；缺模型名时为空串，交上游判定。
     let now = chrono::Utc::now().timestamp_millis();
     if let Some(until) = rested_until(&device, &model, now) {
         let seconds = ((until - now) / 1000).max(1) as u64;
@@ -715,6 +731,15 @@ mod tests {
 
     fn balance(plans: Value, balances: Value) -> Value {
         serde_json::json!({ "server_time": 1_000_000i64, "plans": plans, "balances": balances })
+    }
+
+    #[test]
+    fn bare_model_name_strips_source_prefix_only() {
+        assert_eq!(bare_model_name("zcode/GLM-5.3-Flash"), "GLM-5.3-Flash");
+        assert_eq!(bare_model_name("GLM-5.3-Flash"), "GLM-5.3-Flash", "裸名原样保留");
+        assert_eq!(bare_model_name(" zcode/GLM-5.3 "), "GLM-5.3", "两端空白一并去掉");
+        assert_eq!(bare_model_name(""), "");
+        assert_eq!(bare_model_name("zcode/"), "", "只有前缀时剥成空串，交上游判定");
     }
 
     #[test]

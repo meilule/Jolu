@@ -782,6 +782,9 @@ pub struct ConnectionDto {
     pub kind: String,
     pub name: String,
     pub label: String,
+    /// ZCode 订阅通道手动锁定：start-plan / coding-plan；NULL = 自动双通道
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_channel: Option<String>,
     /// 脱敏标识，如 `sk-ant-****3f9a`；Auth 连接为套餐名或空
     pub masked: String,
     pub status: String,
@@ -899,7 +902,28 @@ fn row_to_dto(r: &rusqlite::Row, now: i64) -> rusqlite::Result<ConnectionDto> {
         service: r.get("service")?,
         serve_enabled: r.get::<_, Option<i64>>("serve_enabled")?.unwrap_or(0) != 0,
         slug: r.get("slug")?,
+        start_channel: r.get("start_channel")?,
     })
+}
+
+
+/// ZCode 订阅通道手动锁定：`Some("start-plan" | "coding-plan")` 锁定单通道，
+/// `None` 回到自动双通道。只对 zcode 来源生效，其他平台原样返回（不报错，卡片不显示）。
+pub fn set_start_channel(conn: &Sql, id: &str, channel: Option<&str>) -> Result<(), String> {
+    let matched = match channel {
+        None | Some("auto") => None,
+        Some(c @ ("start-plan" | "coding-plan")) => Some(c),
+        Some(other) => return Err(format!("未知的订阅通道：{other}")),
+    };
+    let platform: String = conn
+        .query_row("SELECT platform FROM connections WHERE id = ?1", [id], |r| r.get(0))
+        .map_err(|_| "来源不存在".to_string())?;
+    if platform != "zcode" {
+        return Err("只有 ZCode 连接有订阅通道".into());
+    }
+    conn.execute("UPDATE connections SET start_channel = ?2 WHERE id = ?1", rusqlite::params![id, matched])
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 pub fn list(conn: &Sql) -> rusqlite::Result<Vec<ConnectionDto>> {
@@ -912,7 +936,7 @@ fn list_with_account_lookup(
 ) -> rusqlite::Result<Vec<ConnectionDto>> {
     let now = chrono::Local::now().timestamp_millis();
     let mut stmt = conn.prepare(
-        "SELECT id, platform, kind, name, label, masked, status, last_sync_ms, base_url, model, effort, context_1m, protocol, service, account_email, serve_enabled, secret, slug
+        "SELECT id, platform, kind, name, label, masked, status, last_sync_ms, base_url, model, effort, context_1m, protocol, service, account_email, serve_enabled, secret, slug, start_channel
          FROM connections ORDER BY created_ms ASC",
     )?;
     let rows = stmt

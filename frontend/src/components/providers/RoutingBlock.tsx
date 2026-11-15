@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { Activity, ChevronDown, LoaderCircle, RefreshCw, Route } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { isTauri } from "@/lib/api"
+import { api, isTauri } from "@/lib/api"
 import { gatewayApi, type CatalogModelDto, type GroupMemberDto, type SourceUsageDto } from "@/lib/gatewayApi"
 import { useToast } from "@/components/ui/Toast"
 import { JoluButton } from "@/components/ui/JoluButton"
@@ -149,6 +149,49 @@ function RouteSwitch({ on, busy, label, onClick }: { on: boolean; busy: boolean;
       className={cn("flex h-4 w-7 shrink-0 items-center rounded-full p-0.5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent disabled:opacity-45", on ? "justify-end bg-jolu-accent" : "justify-start bg-jolu-track")}>
       <span className="size-3 rounded-full bg-white shadow-sm" />
     </button>
+  )
+}
+
+/**
+ * ZCode 账号卡的订阅通道切换（待确认，无画板；2026-11-14 鼠鼠定的方案）。
+ *
+ * 背景：ZCode 的订阅额度分两本账——Start Plan 会话桶（官方客户端的发放额度）与
+ * Coding Plan API Key（另一本账，可能没余额）。两本账独立，任一通道都可能没额度，
+ * 所以给用户一个手动锁定：锁了就只走那条；自动 = 双通道失败转移（顺序随设置）。
+ */
+export function ZcodeChannelRow({ account, onChanged }: { account: Connection; onChanged: () => void }) {
+  const toast = useToast()
+  const [busy, setBusy] = useState(false)
+  const current = account.startChannel ?? "auto"
+  const setChannel = async (channel: "auto" | "start-plan" | "coding-plan") => {
+    if (!isTauri || busy || channel === current) return
+    setBusy(true)
+    try {
+      await api.setZcodeChannel(account.id, channel)
+      toast.success(channel === "auto" ? "订阅通道已切回自动" : channel === "start-plan" ? "已锁定 Start Plan 通道" : "已锁定 Coding Plan 通道")
+      onChanged()
+    } catch (error) {
+      toast.danger("切换失败", String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="flex shrink-0 items-center gap-2 rounded-lg bg-jolu-side px-2.5 py-2" data-channel-row>
+      <span className="shrink-0 text-[11px] text-jolu-muted">订阅通道</span>
+      <div className="ml-auto flex items-center gap-1">
+        {([["auto", "自动"], ["start-plan", "Start Plan"], ["coding-plan", "Coding Plan"]] as const).map(([channel, label]) => (
+          <button key={channel} type="button" disabled={busy || !isTauri} aria-pressed={current === channel}
+            onClick={() => void setChannel(channel)}
+            className={cn(
+              "rounded-md px-1.5 py-0.5 text-[11px] outline-none transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-jolu-accent disabled:opacity-50",
+              current === channel ? "bg-jolu-track font-medium text-jolu-text" : "text-jolu-muted hover:bg-jolu-track/60 hover:text-jolu-text",
+            )}>
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }
 

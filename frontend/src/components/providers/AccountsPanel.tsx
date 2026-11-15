@@ -19,6 +19,7 @@ import { PlatformLogo } from "@/components/brand/PlatformLogo"
 import { JoluButton } from "@/components/ui/JoluButton"
 import { ModelPicker } from "@/components/providers/ConnectDialog"
 import { ZcodeBucketQuota } from "@/components/providers/ZcodeBucketQuota"
+import { ZcodeChannelRow } from "@/components/providers/RoutingBlock"
 import { AccountBatchToolbar, BatchAccountDeleteDialog, type BatchAccountTarget } from "@/components/providers/AccountBatchControls"
 import { Tip } from "@/components/ui/Tip"
 import { useToast } from "@/components/ui/Toast"
@@ -442,6 +443,7 @@ function AccountCard({ account, current, located, selecting = false, selected = 
         </div>}
       </div>
       <RoutingCardRow account={account} index={routing} readOnly={selecting || disabled} onChanged={onRoutingChanged} />
+      {account.platformId === "zcode" && <ZcodeChannelRow account={account} onChanged={onRoutingChanged} />}
       <CardActions account={account} paused={paused} refresh={refresh} hasQuota={policy.showQuota} canPromote={canPromote} readOnly={selecting || disabled} onPromote={onPromote} onEdit={onEdit} onRemove={onRemove} onDetails={()=>setDetailsOpen(true)} />
       {detailsOpen && <ConfirmShell title="账号详情" subtitle={`${displayName(account,hidden)} · ${entry.name}`} onClose={()=>setDetailsOpen(false)} busy={false} footer={<JoluButton variant="neutral" onClick={()=>setDetailsOpen(false)}>关闭</JoluButton>}>
         <div className="flex max-h-[calc(100dvh-250px)] min-h-0 flex-col gap-4 overflow-y-auto pr-1" data-account-details>

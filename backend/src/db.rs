@@ -337,6 +337,10 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE connections ADD COLUMN serve_enabled INTEGER NOT NULL DEFAULT 0", []);
     // 会话生命周期：旧库升级后默认均为停止，避免把近期 Token 误报成正在运行。
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN is_running INTEGER NOT NULL DEFAULT 0", []);
+    // ZCode 订阅通道手动锁定（可空 = 自动双通道）：start-plan / coding-plan。
+    // ZCode 有时发放的订阅额度走 Start Plan 会话桶，Coding Plan Key 是另一本账——
+    // 用户可手动锁定走哪条，NULL 保持自动失败转移。
+    let _ = conn.execute("ALTER TABLE connections ADD COLUMN start_channel TEXT", []);
     // 3.9 意图路由：分组的判定配置（可空，旧分组不受影响）
     let _ = conn.execute("ALTER TABLE routing_groups ADD COLUMN intent_json TEXT", []);
     // 通用接入（P1-1）：新表，重复执行跳过
