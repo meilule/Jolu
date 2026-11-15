@@ -57,21 +57,22 @@ pub fn list(conn: &Connection) -> rusqlite::Result<Vec<CatalogModel>> {
             crate::gateway::adapter::qoder::cached_models(conn, &id).unwrap_or_default()
         } else if platform == "trae" {
             crate::gateway::adapter::trae_models::cached_models(conn, &id).unwrap_or_default()
+        } else if platform == "zcode" || platform == "grok" || platform == "gemini" {
+            // 这三个订阅平台的清单由「拉取模型清单 / 上游 /v1/models」写成纯数组
+            // （刷新命令与各自适配器都不自管缓存形状）；没有就如实为空，不拿内置清单冒充
+            models_json
+                .as_deref()
+                .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
+                .unwrap_or_default()
         } else {
             crate::gateway::server::builtin_subscription_models(&platform)
                 .iter()
                 .map(|model| model.to_string())
                 .collect()
         };
-        // Qoder 的 key 是内部 id（gmodel、kmodel_latest…），人读的名字在条目的
-        // display_name 里；有配对就带上，界面显示官方名、调用仍用 key。
-        let labels = if platform == "qoder" {
-            crate::gateway::adapter::qoder::display_names(conn, &id)
-        } else {
-            Default::default()
-        };
+        // Qoder 的对外模型 id 就是官方 `display_name`（`cached_models` 已返回人读名），
+        // 转发层把 display_name 归一回内部 key——catalog 不再需要 key→名字的 label 映射。
         for model in models {
-            let label = labels.get(&model).cloned();
             out.push(CatalogModel {
                 id: format!("{slug}/{model}"),
                 source: source.clone(),
@@ -82,7 +83,7 @@ pub fn list(conn: &Connection) -> rusqlite::Result<Vec<CatalogModel>> {
                 status: status.clone(),
                 context_window: None,
                 max_output: None,
-                label,
+                label: None,
             });
         }
     }
@@ -122,8 +123,13 @@ mod tests {
         conn.execute("INSERT INTO connections(id,platform,kind,name,secret,created_ms,slug,serve_enabled) VALUES('qoder-source','qoder','auth','Qoder',?1,1,'qoder-source',1)", [secret]).unwrap();
         conn.execute("INSERT INTO connections(id,platform,kind,name,created_ms,slug,serve_enabled,models_json) VALUES('trae-source','trae','auth','Trae',2,'trae-source',1,'[\"unverified-cache\"]')", []).unwrap();
         let list = super::list(&conn).unwrap();
-        // 从未读到账号列表：Qoder 国内版内置清单（magpie CN_MODELS）
-        assert_eq!(list.iter().map(|v| v.id.as_str()).collect::<Vec<_>>(), vec!["qoder-source/ultimate", "qoder-source/performance", "qoder-source/efficient", "qoder-source/lite"]);
+        // 从未读到账号列表：Qoder 国内版内置清单（2026-11-14 同步的官方阵容快照）
+        let qoder_ids: Vec<String> = list.iter().filter(|v| v.slug == "qoder-source").map(|v| v.id.clone()).collect();
+        assert_eq!(qoder_ids, vec![
+            "qoder-source/fast", "qoder-source/qmodel_latest", "qoder-source/qmodel_38max", "qoder-source/qfmodel",
+            "qoder-source/dmodel", "qoder-source/dfmodel", "qoder-source/gmodel", "qoder-source/gfmodel",
+            "qoder-source/kmodel_latest", "qoder-source/kmodel", "qoder-source/jmodel", "qoder-source/mmodel",
+        ]);
         conn.execute("UPDATE connections SET model='explicit-model' WHERE id='trae-source'", []).unwrap();
         let list = super::list(&conn).unwrap();
         assert!(!list.iter().any(|v| v.id == "trae-source/explicit-model"), "无授权不能退回手填模型冒充可用来源");

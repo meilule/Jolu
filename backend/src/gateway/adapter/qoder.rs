@@ -58,7 +58,13 @@ const CN: Site = Site {
     openapi: "https://openapi.qoder.com.cn",
     api: "https://gateway.qoder.com.cn",
     device_chat: true,
-    models: &["ultimate", "performance", "efficient", "lite"],
+    // magpie CN_MODELS 的旧快照已与官方对不上（2026-11-14 实时返回 12 条，见
+    // docs/verification/2026-11-14-qoder-model-list.md）；这里同步为当次快照，
+    // 只作「从未拉取过」的兜底——真实清单以模型端点的实时返回为准。
+    models: &[
+        "fast", "qmodel_latest", "qmodel_38max", "qfmodel", "dmodel", "dfmodel",
+        "gmodel", "gfmodel", "kmodel_latest", "kmodel", "jmodel", "mmodel",
+    ],
 };
 
 fn site(edition: &str) -> Result<&'static Site, String> {
@@ -350,34 +356,27 @@ fn stored(conn: &rusqlite::Connection, id: &str) -> Option<(i64, Vec<Value>)> {
     Some((value["fetched_ms"].as_i64()?, value["entries"].as_array()?.clone()))
 }
 
-fn keys(entries: &[Value]) -> Vec<String> {
-    entries.iter().filter_map(|m| m["key"].as_str().map(str::to_owned)).collect()
-}
-
-/// 模型 key → 官方 `display_name`（"Fast" / "GLM-5.3" / "Kimi-K3.1-Pro"…）。
+/// 对外暴露的模型 id：官方 `display_name`（人读），条目缺名时退回 key。
 ///
-/// Qoder 的 `key` 是 chat 接口认的内部 id（gmodel、kmodel_latest 这类opaque 词），
-/// 人读的名字在 `display_name` 里。清单落库时两者都在条目上，这里按 key 配对取出；
-/// 没有缓存或条目缺名时配不出对，调用方退回裸 key。
-pub(crate) fn display_names(conn: &rusqlite::Connection, id: &str) -> std::collections::HashMap<String, String> {
-    stored(conn, id)
-        .map(|(_, entries)| {
-            entries
-                .iter()
-                .filter_map(|m| {
-                    let key = m["key"].as_str()?.to_owned();
-                    let name = m["display_name"].as_str()?.trim().to_owned();
-                    (!name.is_empty()).then_some((key, name))
-                })
-                .collect()
+/// 为什么用 display_name 当 id：Qoder 的 key 是内部代号（gmodel、kmodel_latest…），
+/// 第三方 agent（dsh 等）的模型选择框只显示 `/v1/models` 的 id——用 key 当 id 会把
+/// 内部代号直接端给用户。官方名在账号列表里天然唯一（2026-11-14 的 12 条无重名），
+/// forward 按它归一回 key（两种拼写都收，旧的 key 拼写继续可用）。
+fn public_ids(entries: &[Value]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|m| {
+            let key = m["key"].as_str().unwrap_or_default();
+            m["display_name"].as_str().filter(|s| !s.trim().is_empty()).unwrap_or(key).to_owned()
         })
-        .unwrap_or_default()
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// 模型池展示用：上次读到的账号列表，没有时为内置清单（与 `/v1/models` 一致）。
 pub(crate) fn cached_models(conn: &rusqlite::Connection, id: &str) -> Option<Vec<String>> {
     let (_, edition, _) = bound(conn, id).ok()?;
-    let listed = stored(conn, id).map(|(_, entries)| keys(&entries)).filter(|k| !k.is_empty());
+    let listed = stored(conn, id).map(|(_, entries)| public_ids(&entries)).filter(|k| !k.is_empty());
     Some(listed.unwrap_or_else(|| site(&edition).map(|s| s.models.iter().map(|m| m.to_string()).collect()).unwrap_or_default()))
 }
 
@@ -438,7 +437,7 @@ async fn models_at(deps: &Arc<ProxyDeps>, entry: &PoolEntry, test_base: Option<&
         Err(_) => return Ok(fallback),
     };
     match entries(deps, entry, &chat, test_base, false).await {
-        Ok(list) if !list.is_empty() => Ok(keys(&list)),
+        Ok(list) if !list.is_empty() => Ok(public_ids(&list)),
         _ => Ok(fallback),
     }
 }
@@ -684,7 +683,10 @@ async fn forward_at(deps: Arc<ProxyDeps>, entry: &PoolEntry, protocol: CallerPro
     let mut relogged = false;
     // 账号列表里没有（或已关闭）这个模型：重新换票再读一次列表，仍没有才报未知模型
     let mut listed = match entries(&deps, entry, &auth, test_base, false).await {
-        Ok(list) => list.into_iter().find(|m| m["key"] == model.as_str()),
+        Ok(list) => list.into_iter().find(|m| {
+                    m["key"].as_str() == Some(model.as_str())
+                        || m["display_name"].as_str().filter(|s| !s.trim().is_empty()) == Some(model.as_str())
+                }),
         Err(e) => return error_response(StatusCode::BAD_GATEWAY, &e),
     };
     if listed.is_none() {
@@ -694,7 +696,10 @@ async fn forward_at(deps: Arc<ProxyDeps>, entry: &PoolEntry, protocol: CallerPro
             Err(e) => return unavailable(e),
         };
         listed = match entries(&deps, entry, &auth, test_base, true).await {
-            Ok(list) => list.into_iter().find(|m| m["key"] == model.as_str()),
+            Ok(list) => list.into_iter().find(|m| {
+                    m["key"].as_str() == Some(model.as_str())
+                        || m["display_name"].as_str().filter(|s| !s.trim().is_empty()) == Some(model.as_str())
+                }),
             Err(e) => return error_response(StatusCode::BAD_GATEWAY, &e),
         };
     }
@@ -929,14 +934,15 @@ mod tests {
                 }
             }));
         let (base, server) = serve(app).await;
-        assert_eq!(models_at(&deps, &entry, Some(&base)).await.unwrap(), ["dmodel", "gmodel"]);
+        // 对外模型 id = 官方 display_name（gmodel→GLM-5.3），缺名的条目退回 key（dmodel）
+        assert_eq!(models_at(&deps, &entry, Some(&base)).await.unwrap(), ["dmodel", "GLM-5.3"]);
         {
             let conn = deps.db.lock().unwrap();
             assert_eq!(bound(&conn, "a").unwrap().2.token, "a-new");
             assert_eq!(bound(&conn, "b").unwrap().0, before_b, "其他账号不受影响");
             let text: String = conn.query_row("SELECT models_json FROM connections WHERE id='a'", [], |r| r.get(0)).unwrap();
             assert!(!text.contains("secret-key") && !text.contains("a-job"));
-            assert_eq!(cached_models(&conn, "a").unwrap(), ["dmodel", "gmodel"]);
+            assert_eq!(cached_models(&conn, "a").unwrap(), ["dmodel", "GLM-5.3"]);
             assert_eq!(cached_models(&conn, "b").unwrap(), GLOBAL.models.iter().map(|m| m.to_string()).collect::<Vec<_>>());
         }
         let response = forward_at(deps.clone(), &entry, CallerProtocol::Chat, Bytes::from(json!({"model":"source-a/gmodel","messages":[{"role":"user","content":"hi"}]}).to_string()), Some(&base)).await;
@@ -954,6 +960,48 @@ mod tests {
         assert_eq!(chats.load(Ordering::SeqCst), 2, "任务令牌缓存后不重复换票");
         let response = forward_at(deps.clone(), &entry, CallerProtocol::Chat, Bytes::from(json!({"model":"source-a/missing","messages":[{"role":"user","content":"hi"}]}).to_string()), Some(&base)).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        server.abort();
+    }
+
+    /// 官方 display_name 也能当模型 id：请求 `source-a/GLM-5.3` 归一到 key `gmodel` 后转发。
+    /// dsh 等第三方 agent 的选择框显示的就是这个官方名（2026-11-14 鼠鼠定的方案 B）。
+    #[tokio::test]
+    async fn forward_resolves_official_display_names_to_keys() {
+        let deps = crate::proxy::test_support::bare_deps();
+        let entry = insert(&deps, "a", "global", session("a", "2000-01-01T00:00:00Z"));
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen_model = seen.clone();
+        let app = axum::Router::new()
+            .route("/api/v1/deviceToken/refresh", post(|body: String| async move {
+                assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["refresh_token"], "a-refresh");
+                json!({"token":"a-new","refresh_token":"a-refresh-new","expires_in":3600}).to_string()
+            }))
+            .route("/api/v1/userinfo", get(|headers: HeaderMap| async move {
+                assert!(matches!(headers["authorization"].to_str().unwrap(), "Bearer a-new" | "Bearer a-job"));
+                json!({"id":"a"}).to_string()
+            }))
+            .route("/api/v1/me/jobToken", post(|| async { json!({"token":"a-job","expires_in":3_600_000}).to_string() }))
+            .route(MODELS_PATH, get(|| async { listing() }))
+            .route(CHAT_PATH, post(move |headers: HeaderMap, _body: String| {
+                let seen = seen_model.clone();
+                async move {
+                    seen.lock().unwrap().push(headers["x-model-key"].to_str().unwrap_or_default().to_string());
+                    assert_eq!(headers["x-model-key"], "gmodel", "官方名必须归一回内部 key 再发上游");
+                    sse_body(&[
+                        json!({"choices":[{"delta":{"content":"答案"}}]}),
+                        json!({"choices":[{"delta":{},"finish_reason":"stop"}]}),
+                        json!({"usage":{"prompt_tokens":1,"completion_tokens":1}}),
+                    ])
+                }
+            }));
+        let (base, server) = serve(app).await;
+        for spelling in ["source-a/GLM-5.3", "source-a/gmodel"] {
+            let response = forward_at(deps.clone(), &entry, CallerProtocol::Chat, Bytes::from(json!({
+                "model": spelling, "messages":[{"role":"user","content":"hi"}]
+            }).to_string()), Some(&base)).await;
+            assert_eq!(response.status(), StatusCode::OK, "{spelling} 应能转发");
+        }
+        assert_eq!(seen.lock().unwrap().as_slice(), &["gmodel".to_string(), "gmodel".to_string()], "两种拼写都落到同一个内部 key");
         server.abort();
     }
 

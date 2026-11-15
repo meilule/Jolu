@@ -1072,22 +1072,32 @@ async fn forward_one(
                             }
                         }
                         _ => {
-                            // 只说 Chat 的来源（WorkBuddy / Qoder / Trae）：Anthropic 调用方（Claude Code）经协议转换后转发，回复再转回
-                            let anthropic = protocol == CallerProtocol::Anthropic;
-                            let converted = if anthropic {
-                                crate::gateway::translate::anthropic_request(&body).map(|b| (CallerProtocol::Chat, b))
-                            } else {
-                                Ok((protocol, body.clone()))
+                            // 只说 Chat 的来源（WorkBuddy / Qoder / Trae）：Anthropic 与 Responses 调用方
+                            // 经协议转换后以 Chat 转发，回复再转回调用方的协议（与 Gemini 分支同一手法）。
+                            // 没有这条 Responses 臂时，Responses 调用方（dsh 的 Responses provider）会被
+                            // 适配器首行的「只收 Chat」检查拒掉，而转换能力 responses_chat::request 是现成的。
+                            let converted = match protocol {
+                                CallerProtocol::Anthropic => crate::gateway::translate::anthropic_request(&body).map(|b| (CallerProtocol::Chat, b)),
+                                CallerProtocol::Responses => serde_json::from_slice::<Value>(&body)
+                                    .map_err(|e| e.to_string())
+                                    .and_then(|v| crate::gateway::responses_chat::request(&v))
+                                    .map(|chat| (CallerProtocol::Chat, axum::body::Bytes::from(chat.to_string()))),
+                                _ => Ok((protocol, body.clone())),
                             };
                             match converted {
                                 Err(e) => error_response(StatusCode::BAD_REQUEST, &e),
-                                Ok((protocol, body)) => {
+                                Ok((chat_protocol, chat_body)) => {
                                     let response = match platform {
-                                        "workbuddy" => crate::gateway::adapter::workbuddy::forward(deps.clone(), entry, protocol, body).await,
-                                        "qoder" => crate::gateway::adapter::qoder::forward(deps.clone(), entry, protocol, body).await,
-                                        _ => crate::gateway::adapter::trae::forward(deps.clone(), entry, protocol, body, session).await,
+                                        "workbuddy" => crate::gateway::adapter::workbuddy::forward(deps.clone(), entry, chat_protocol, chat_body).await,
+                                        "qoder" => crate::gateway::adapter::qoder::forward(deps.clone(), entry, chat_protocol, chat_body).await,
+                                        _ => crate::gateway::adapter::trae::forward(deps.clone(), entry, chat_protocol, chat_body, session).await,
                                     };
-                                    if anthropic { crate::gateway::translate::anthropic_response(response, requested_model).await } else { response }
+                                    match protocol {
+                                        CallerProtocol::Anthropic => crate::gateway::translate::anthropic_response(response, requested_model).await,
+                                        // body 此时仍是原始 Responses 请求体（未遮蔽）：custom tools 要从它取
+                                        CallerProtocol::Responses => crate::gateway::responses_chat::response_body(response, original_custom_tools(&body)).await,
+                                        _ => response,
+                                    }
                                 }
                             }
                         }
@@ -1134,7 +1144,7 @@ enum Conversion {
 }
 
 /// 原始 Responses 请求里的自由格式工具名。
-fn original_custom_tools(body: &axum::body::Bytes) -> Vec<String> {
+pub(crate) fn original_custom_tools(body: &axum::body::Bytes) -> Vec<String> {
     serde_json::from_slice::<Value>(body).map(|value| crate::gateway::responses_chat::custom_tool_names(&value)).unwrap_or_default()
 }
 
