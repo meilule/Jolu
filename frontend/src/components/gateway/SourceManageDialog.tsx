@@ -13,6 +13,7 @@ import {
   batchTargets, capabilityLine, filterSources, inScope, pruneSelection, serveCounts, usageLine, type GroupScope, type ServeFilter,
 } from "@/lib/gatewaySources"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
+import { SelectField } from "@/components/ui/SelectField"
 import { useToast } from "@/components/ui/Toast"
 import { Button, Modal, orderGroups } from "./GatewayDialogs"
 import { ZcodeChannelOption } from "./ZcodeChannelOption"
@@ -385,11 +386,10 @@ function AgentManageRow({ entry, groups, groupId, busy, onMove, onWire, onUnwire
           {drift && !entry.wired ? (drift === "pending" ? "上次接线未完成" : drift === "removed" ? "配置里已移除" : drift === "foreign" ? "已被另一个 Jolu 接管" : "配置被改写") : line.text}
         </span>
       </div>
-      <select value={groupId ?? ""} disabled={busy} onChange={(event) => onMove(event.target.value || null)} aria-label={`${agentLabel(entry.agent)} 所在分组`}
-        className="h-7 rounded-md border border-jolu-border bg-jolu-bg px-1.5 text-[11.5px] text-jolu-text outline-none focus-visible:border-jolu-accent">
-        <option value="">未分组</option>
-        {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-      </select>
+      <SelectField label={`${agentLabel(entry.agent)} 所在分组`} value={groupId ?? ""} disabled={busy}
+        onValueChange={(value) => onMove(value || null)}
+        className="h-7 rounded-[8px]"
+        options={[{ value: "", label: "未分组" }, ...groups.map((group) => ({ value: group.id, label: group.name }))]} />
       {entry.wired ? (
         <button type="button" disabled={busy} onClick={onUnwire} className={cn(action, "border border-jolu-border bg-jolu-bg text-jolu-danger")}>断开</button>
       ) : drift ? (

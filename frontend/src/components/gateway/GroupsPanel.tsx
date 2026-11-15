@@ -6,6 +6,7 @@ import { gatewayApi, type CatalogModelDto } from "@/lib/gatewayApi"
 import { tierEfforts } from "@/lib/tierModels"
 import { useToast } from "@/components/ui/Toast"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
+import { SelectField } from "@/components/ui/SelectField"
 import { Switch } from "@/components/agents/AgentList"
 import {
   PAUSE_CHOICES, ROUTING_STRATEGIES, hasRoutingMember, isMemberPaused, offCatalogMembers, pauseMember, pausedText,
@@ -15,7 +16,6 @@ import {
   type RoutingGroupDto, type RoutingMember,
 } from "./routingGroups"
 
-const SELECT = "h-10 min-w-0 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-meta text-jolu-text outline-none focus:border-jolu-accent disabled:opacity-50"
 const SMALL_SELECT = "h-8 min-w-0 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-note text-jolu-text outline-none focus:border-jolu-accent disabled:opacity-50"
 const INPUT = "h-9 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-meta text-jolu-text outline-none focus:border-jolu-accent"
 
@@ -136,9 +136,10 @@ export function GroupsPanel({ catalog, busy, run, onChanged }: {
           <section className="flex flex-col gap-4 rounded-xl border border-jolu-border px-5 py-4">
             <div className="flex items-center gap-3">
               <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-jolu-selected"><GitFork aria-hidden className="size-4 text-jolu-on" /></span>
-              <select aria-label="选择分组" value={current.slug} disabled={busy} onChange={(event) => select(groups!.find((group) => group.slug === event.target.value)!)} className={cn(SELECT, "w-[240px]")}>
-                {groups!.map((group) => <option key={group.slug} value={group.slug}>{group.name}</option>)}
-              </select>
+              <SelectField label="选择分组" value={current.slug} disabled={busy}
+                onValueChange={(value) => select(groups!.find((group) => group.slug === value)!)}
+                className="w-[240px] rounded-[10px] px-3 text-meta"
+                options={groups!.map((group) => ({ value: group.slug, label: group.name, description: `group/${group.slug}` }))} />
               <code className="shrink-0 font-mono text-meta font-medium text-jolu-on">{`group/${current.slug}`}</code>
               <CopyButton text={`group/${current.slug}`} label="复制分组 id" />
               <span className="flex-1" />
@@ -163,9 +164,9 @@ export function GroupsPanel({ catalog, busy, run, onChanged }: {
                 <h3 className="text-[15px] font-semibold text-jolu-text">选择策略</h3>
                 <p className="text-meta text-jolu-muted">{strategyOrderNote(strategy) ?? "按策略决定这次请求用哪个成员。"}</p>
               </div>
-              <select aria-label="选择策略" value={strategy} disabled={busy} onChange={(event) => setStrategy(event.target.value)} className={cn(SELECT, "w-[280px] shrink-0")}>
-                {strategyOptions.map((item) => <option key={item.value} value={item.value}>{item.text}</option>)}
-              </select>
+              <SelectField label="选择策略" value={strategy} disabled={busy} onValueChange={setStrategy}
+                className="h-10 w-[280px] shrink-0 rounded-[10px] px-3 text-meta"
+                options={strategyOptions.map((item) => ({ value: item.value, label: item.text, description: strategyOrderNote(item.value) || undefined }))} />
             </div>
             {strategy === "intent" && <IntentFields catalog={catalog} classifier={classifier} timeout={timeout} disabled={busy} onClassifier={setClassifier} onTimeout={setTimeoutMs} label={current.name} />}
 
@@ -196,13 +197,10 @@ export function GroupsPanel({ catalog, busy, run, onChanged }: {
                     <span className="text-note tabular-nums text-jolu-muted">{String(index + 1).padStart(2, "0")}</span>
                     <code className={cn("min-w-0 truncate font-mono text-meta", row.off ? "text-jolu-warn" : "text-jolu-text")} title={row.off ? "不在模型目录（来源下架或清单已刷新）" : id}>{id}</code>
                     {editing ? (
-                      <select aria-label={`${id} 的固定强度`} value={memberParts(row.member.model).effort ?? ""} disabled={busy}
-                        onClick={(event) => event.stopPropagation()}
-                        onChange={(event) => setMembers(setMemberEffort(members, row.member, event.target.value || null))}
-                        className={cn(SMALL_SELECT, "justify-self-start")}>
-                        <option value="">跟随请求</option>
-                        {MEMBER_EFFORTS.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
-                      </select>
+                      <SelectField label={`${id} 的固定强度`} value={memberParts(row.member.model).effort ?? ""} disabled={busy}
+                        onValueChange={(value) => setMembers(setMemberEffort(members, row.member, value || null))}
+                        className="justify-self-start rounded-[8px]"
+                        options={[{ value: "", label: "跟随请求" }, ...MEMBER_EFFORTS.map((effort) => ({ value: effort, label: effort }))]} />
                     ) : (
                       <span className="text-note text-jolu-muted" title="转发给这个成员时固定请求的思考强度">{efforts.length === 0 ? "不支持" : memberParts(row.member.model).effort ?? "跟随请求"}</span>
                     )}
@@ -354,10 +352,9 @@ function IntentFields({ catalog, classifier, timeout, disabled, onClassifier, on
     <div className="flex flex-wrap items-end gap-3 border-t border-jolu-table-divider pt-4">
       <label className="flex min-w-[200px] flex-1 flex-col gap-1">
         <span className="text-note text-jolu-muted">判意图用的模型（选便宜、快的）</span>
-        <select value={classifier} disabled={disabled} aria-label={`「${label}」判意图用的模型`} className={SELECT} onChange={(event) => onClassifier(event.target.value)}>
-          <option value="">选择模型…</option>
-          {options.map((id) => <option key={id} value={id}>{id}{ids.includes(id) ? "" : "（不在目录）"}</option>)}
-        </select>
+        <SelectField label={`「${label}」判意图用的模型`} value={classifier} disabled={disabled} onValueChange={onClassifier}
+          placeholder="选择模型…" className="rounded-[10px] px-3 text-meta"
+          options={[{ value: "", label: "选择模型…" }, ...options.map((id) => ({ value: id, label: id + (ids.includes(id) ? "" : "（不在目录）") }))]} />
       </label>
       <label className="flex flex-col gap-1">
         <span className="text-note text-jolu-muted">判定超时（毫秒，可空）</span>
@@ -393,23 +390,19 @@ function MemberPicker({ catalog, members, disabled, onChange, showTier }: {
             return (
               <>
                 {showTier && (
-                  <select value={isLightMember(current) ? "light" : "strong"} disabled={disabled} aria-label={`${routingMemberId(row.member)} 的意图档位`}
-                    title="强档答需要动脑的提问，轻档答快问题"
-                    onClick={(event) => event.stopPropagation()}
-                    onChange={(event) => onChange(setMemberTier(members, row.member, event.target.value === "light"))}
-                    className="h-7 rounded-md border border-jolu-border bg-jolu-bg px-1.5 text-note text-jolu-muted outline-none focus:border-jolu-accent">
-                    <option value="strong">强档</option>
-                    <option value="light">轻档</option>
-                  </select>
+                  <span title="强档答需要动脑的提问，轻档答快问题">
+                    <SelectField label={`${routingMemberId(row.member)} 的意图档位`} value={isLightMember(current) ? "light" : "strong"} disabled={disabled}
+                      onValueChange={(value) => onChange(setMemberTier(members, row.member, value === "light"))}
+                      className="h-7 rounded-[8px]"
+                      options={[{ value: "strong", label: "强档" }, { value: "light", label: "轻档" }]} />
+                  </span>
                 )}
-                <select value={memberParts(current.model).effort ?? ""} disabled={disabled} aria-label={`${routingMemberId(row.member)} 的固定档位`}
-                  title="固定推理档位：转发给这个成员时按此档位问上游（请求本来没要推理时不加）"
-                  onClick={(event) => event.stopPropagation()}
-                  onChange={(event) => onChange(setMemberEffort(members, row.member, event.target.value || null))}
-                  className="h-7 rounded-md border border-jolu-border bg-jolu-bg px-1.5 text-note text-jolu-muted outline-none focus:border-jolu-accent">
-                  <option value="">跟随请求</option>
-                  {MEMBER_EFFORTS.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
-                </select>
+                <span title="固定推理档位：转发给这个成员时按此档位问上游（请求本来没要推理时不加）">
+                  <SelectField label={`${routingMemberId(row.member)} 的固定档位`} value={memberParts(current.model).effort ?? ""} disabled={disabled}
+                    onValueChange={(value) => onChange(setMemberEffort(members, row.member, value || null))}
+                    className="h-7 rounded-[8px]"
+                    options={[{ value: "", label: "跟随请求" }, ...MEMBER_EFFORTS.map((effort) => ({ value: effort, label: effort }))]} />
+                </span>
                 <input type="number" min={1} max={100} value={current.weight ?? 1} disabled={disabled} aria-label={`${routingMemberId(row.member)} 的轮转权重`}
                   title="「轮转」策略下每轮出现几次"
                   onClick={(event) => event.stopPropagation()}
@@ -461,9 +454,9 @@ function CreateForm({ catalog, busy, groups, run, onCancel, onCreated }: {
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-note text-jolu-muted">策略</span>
-          <select value={strategy} disabled={busy} aria-label="新建分组的策略" className={SELECT} onChange={(event) => setStrategy(event.target.value)}>
-            {ROUTING_STRATEGIES.map((item) => <option key={item.value} value={item.value}>{item.text}</option>)}
-          </select>
+          <SelectField label="新建分组的策略" value={strategy} disabled={busy} onValueChange={setStrategy}
+            className="h-9 rounded-[10px] px-3 text-meta"
+            options={ROUTING_STRATEGIES.map((item) => ({ value: item.value, label: item.text, description: strategyOrderNote(item.value) || undefined }))} />
         </label>
       </div>
       {slugError && <span className="text-note text-jolu-danger">{slugError}</span>}

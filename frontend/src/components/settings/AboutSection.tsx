@@ -5,6 +5,7 @@ import { settingsApi } from "@/lib/settingsApi"
 import { UPDATES_ENABLED, progressPercent } from "@/lib/updateState"
 import { AppIcon } from "@/components/brand/AppIcon"
 import { Wordmark } from "@/components/brand/Wordmark"
+import { SelectField } from "@/components/ui/SelectField"
 import { REPO_URL } from "@/components/panel/PageHeader"
 import { useSettings } from "@/hooks/useSettings"
 import { useUpdate } from "@/components/panel/UpdateContext"
@@ -187,23 +188,18 @@ function UpdateIntervalPicker({
   }
 
   return (
-    <select
-      value={preset ? String(value) : "custom"}
-      disabled={disabled}
-      aria-label="检查间隔"
-      onChange={(event) => {
-        if (event.target.value === "custom") {
+    <SelectField label="检查间隔" value={preset ? String(value) : "custom"} disabled={disabled}
+      onValueChange={(next) => {
+        if (next === "custom") {
           setCustom(true)
           return
         }
-        onCommit(Number(event.target.value))
+        onCommit(Number(next))
       }}
-      className="jolu-control h-8 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-xs text-jolu-text outline-none disabled:opacity-45"
-    >
-      {PRESET_INTERVALS.map((minutes) => (
-        <option key={minutes} value={minutes}>{formatInterval(minutes)}</option>
-      ))}
-      <option value="custom">自定义…</option>
-    </select>
+      className="h-8 rounded-[10px]"
+      options={[
+        ...PRESET_INTERVALS.map((minutes) => ({ value: String(minutes), label: formatInterval(minutes) })),
+        { value: "custom", label: "自定义…" },
+      ]} />
   )
 }

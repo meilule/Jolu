@@ -6,6 +6,7 @@ import { pageForIntent, pageLabel, readSidebarCollapsed, resolveOpenPage, writeS
 import { settingsApi } from "@/lib/settingsApi"
 import { applyAppearance, normalizeDensity } from "@/lib/appearance"
 import { useSettings } from "@/hooks/useSettings"
+import { usesOwnScroll } from "@/components/panel/PanelPage"
 import { AppIcon } from "@/components/brand/AppIcon"
 import { ToastProvider, ToastViewport } from "@/components/ui/Toast"
 import { PrivacyFirstNotice } from "@/components/settings/PrivacyRecordsDialog"
@@ -264,11 +265,17 @@ export function MainPanelWindow({
         <SideNav page={page} collapsed={collapsed} onNavigate={navigate} />
         <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <PageHeader title={pageLabel(page)} collapsed={collapsed} onToggleSidebar={toggleSidebar} />
-          <div ref={scrollRef} data-panel-scroll className="min-h-0 min-w-0 flex-1 overflow-auto">
+          {/* 自带滚动的页面（Agent / 模型路由 / 供应商）用 PanelPage 钉住可视区，外层不滚。
+              判断收在 usesOwnScroll 一处，新增同类页面在那里登记即可。 */}
+          <div ref={scrollRef} data-panel-scroll className={cn(
+            "relative min-h-0 min-w-0 flex-1",
+            usesOwnScroll(page) ? "overflow-hidden" : "overflow-auto",
+          )}>
             <div ref={pageMotion} className={cn(
-              // R2 / V5：Agent 与模型路由是贴边的「清单 + 详情」双栏，不留内容区内边距
-              page === "agents" || page === "gateway" ? "h-full min-h-0" : "px-8 py-5",
-              page === "providers" && "h-full min-h-0",
+              // R2 / V5：Agent 与模型路由是贴边的「清单 + 详情」双栏，不留内容区内边距。
+              // 这三页自带滚动与右侧抽屉：外层容器 overflow-hidden，这一层必须同时给
+              // 高度（h-full）与 flex 伸展（flex-1），否则抽屉 absolute 的参照会缩成内容高。
+              usesOwnScroll(page) ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "px-8 py-5",
             )}>
               {page === "island" && <IslandView />}
               {page === "usage" && (

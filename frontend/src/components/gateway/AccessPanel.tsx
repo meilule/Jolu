@@ -6,6 +6,7 @@ import { useConnections } from "@/hooks/useConnections"
 import { useSettings } from "@/hooks/useSettings"
 import { useToast } from "@/components/ui/Toast"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
+import { SelectField } from "@/components/ui/SelectField"
 import { Switch } from "@/components/agents/AgentList"
 import {
   BUDGET_FIELDS, budgetForm, budgetFromForm, concurrencyOptions, expiresAtFrom, EXPIRY_CHOICES,
@@ -136,12 +137,10 @@ export function AccessPanel({ port, shared, busy, onSharedChange, run, models }:
                   className="h-9 w-[130px] rounded-lg border border-jolu-border bg-jolu-bg px-3 text-meta text-jolu-text outline-none focus:border-jolu-accent" />
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <select value={form.expiryDays ?? ""} aria-label="有效期" onChange={(event) => setForm({ ...form, expiryDays: event.target.value === "" ? null : Number(event.target.value) })}
-                  className="h-9 w-[120px] rounded-lg border border-jolu-border bg-jolu-bg px-2 text-meta text-jolu-text outline-none focus:border-jolu-accent">
-                  {EXPIRY_CHOICES.map((choice) => (
-                    <option key={choice.label} value={choice.days ?? ""}>{choice.days === null ? choice.label : `有效 ${choice.label}`}</option>
-                  ))}
-                </select>
+                <SelectField label="有效期" value={form.expiryDays === null ? "" : String(form.expiryDays)}
+                  onValueChange={(value) => setForm({ ...form, expiryDays: value === "" ? null : Number(value) })}
+                  className="h-9 w-[120px] rounded-[10px]"
+                  options={EXPIRY_CHOICES.map((choice) => ({ value: choice.days === null ? "" : String(choice.days), label: choice.days === null ? choice.label : `有效 ${choice.label}` }))} />
                 <input value={form.models} onChange={(event) => setForm({ ...form, models: event.target.value })} placeholder="模型白名单，逗号分隔，留空 = 全部" aria-label="模型白名单"
                   className="h-9 min-w-[180px] flex-1 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-meta text-jolu-text outline-none focus:border-jolu-accent" />
                 <label className="flex h-9 items-center gap-1.5 text-meta text-jolu-text">
@@ -239,11 +238,10 @@ export function AccessPanel({ port, shared, busy, onSharedChange, run, models }:
                           ))}
                           <label className="flex flex-col gap-0.5">
                             <span className="text-note text-jolu-muted">同时请求数</span>
-                            <select aria-label={`${row.name} 的同时请求数`} value={editing.concurrency ?? 0} disabled={busy}
-                              onChange={(event) => setEditing({ ...editing, concurrency: Number(event.target.value) || null })}
-                              className="h-8 rounded-md border border-jolu-border bg-jolu-bg px-2 text-meta text-jolu-text outline-none focus:border-jolu-accent">
-                              {concurrencyOptions(editing.concurrency).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                            </select>
+                            <SelectField label={`${row.name} 的同时请求数`} value={String(editing.concurrency ?? 0)} disabled={busy}
+                              onValueChange={(value) => setEditing({ ...editing, concurrency: Number(value) || null })}
+                              className="h-8 rounded-[8px]"
+                              options={concurrencyOptions(editing.concurrency).map((option) => ({ value: String(option.value), label: option.label }))} />
                           </label>
                         </div>
                         <span className="text-note text-jolu-muted">只能使用这些账号（全不勾 = 不限）</span>
@@ -360,11 +358,9 @@ function AddressChip({ port, shared, models, copy }: {
         <div className="flex items-center gap-2 bg-jolu-side px-4 py-2.5">
           <span className="text-[13px] font-semibold text-jolu-text">接入示例</span>
           <span className="min-w-0 flex-1 truncate text-meta text-jolu-muted">点一个模型，示例跟着变</span>
-          <select aria-label="示例模型" value={model} onChange={(event) => setModel(event.target.value)}
-            className="h-8 max-w-[220px] rounded-md border border-jolu-border bg-jolu-bg px-2 text-note text-jolu-text outline-none">
-            {models.length === 0 && <option value="">（模型池为空）</option>}
-            {models.map((entry) => <option key={entry} value={entry}>{entry}</option>)}
-          </select>
+          <SelectField label="示例模型" value={model} onValueChange={setModel}
+            className="h-8 max-w-[220px] rounded-[8px]"
+            options={models.length === 0 ? [{ value: "", label: "（模型池为空）" }] : models.map((entry) => ({ value: entry, label: entry }))} />
         </div>
         <div className="flex flex-wrap items-center gap-3 px-4 pt-3">
           {(["anthropic", "openai", "gemini"] as const).map((value) => (

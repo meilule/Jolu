@@ -2,6 +2,7 @@ import { ContentTransition, LoadingSurface } from "@/components/ui/LoadingSurfac
 import { useEffect, useState } from "react"
 import { Blocks, Code, FolderInput, Hexagon, Info, Plus, UsersRound } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { PanelPage } from "@/components/panel/PanelPage"
 import { isTauri } from "@/lib/api"
 import { PROVIDERS, canConnect, connectionBadge, connectionProviderId, type ProviderId, type ProviderEntry } from "@/lib/providerCatalog"
 import { useConnections } from "@/hooks/useConnections"
@@ -26,7 +27,7 @@ export function ProvidersView({ initialTab = "connect", accountTarget, onAccount
   useEffect(() => { if (accountTarget) setTab("accounts") }, [accountTarget])
 
   return (
-    <div className={cn("flex w-full flex-col gap-3", tab === "accounts" && "h-full min-h-0")}>
+    <PanelPage className="flex-col"><div className={cn("flex w-full min-h-0 flex-1 flex-col gap-3", tab === "accounts" && "overflow-hidden")}>
       <div className="flex h-11 items-center justify-between gap-4">
         <div role="tablist" aria-label="供应商" className="jolu-tablist h-11">
           <TabButton active={tab === "connect"} icon={<Blocks aria-hidden className="size-[17px]" />} onClick={() => setTab("connect")}>供应商连接</TabButton>
@@ -50,7 +51,10 @@ export function ProvidersView({ initialTab = "connect", accountTarget, onAccount
         )}
       </div>
 
-      <ContentTransition identity={`${tab}-${conn.loading && !conn.connections.length}`} className={cn("flex flex-col gap-3",tab === "accounts" && "min-h-0 flex-1")}>
+      {/* 连接页签：卡片栅格会超出视口，自己滚（PanelPage 是 overflow-hidden）；
+          账号管理页签：交给 DownloadPanel 内部的固定网格滚动，外层只占满高度。 */}
+      <ContentTransition identity={`${tab}-${conn.loading && !conn.connections.length}`}
+        className={cn("flex min-h-0 flex-1 flex-col gap-3", tab === "connect" && "overflow-y-auto")}>
       {conn.loading && !conn.connections.length && !conn.error ? <LoadingSurface className={tab === "accounts" ? "min-h-0 flex-1" : undefined} layout={tab === "connect" ? "providers" : "accounts"} label="正在读取供应商连接" /> : tab === "connect" ? (
         <ConnectGrid counts={countByPlatform(conn.connections)} loading={conn.loading} error={conn.error} onConnect={setConnecting} onRetry={() => void conn.reload()} />
       ) : (
@@ -68,7 +72,7 @@ export function ProvidersView({ initialTab = "connect", accountTarget, onAccount
 
       {/* 导入成功后由后端广播 connections-changed，useConnections 的既有监听会自动刷新列表 */}
       {importOpen && <ImportDialog onClose={() => setImportOpen(false)} />}
-    </div>
+    </div></PanelPage>
   )
 }
 

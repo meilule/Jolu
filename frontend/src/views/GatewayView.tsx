@@ -16,6 +16,7 @@ import { useGatewaySessions } from "@/hooks/useGatewaySessions"
 import { useToast } from "@/components/ui/Toast"
 import { ConfirmDialog as ActionConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { RouteLogPanel } from "@/components/gateway/RouteLogPanel"
+import { PanelPage } from "@/components/panel/PanelPage"
 import { OverviewPanel, type AttentionItem } from "@/components/gateway/OverviewPanel"
 import { GroupsPanel } from "@/components/gateway/GroupsPanel"
 import { PoolPanel } from "@/components/gateway/PoolPanel"
@@ -259,7 +260,7 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-jolu-bg">
+    <PanelPage className="flex-col">
       {/* 状态条（V6：所有页签共用） */}
       <div className="flex shrink-0 flex-col gap-3 px-8 pt-5">
         <div className="flex items-center gap-3.5">
@@ -357,7 +358,7 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
       )}
       {dialog?.kind === "catalog" && <CatalogDialog models={dialog.models ?? catalog} onClose={() => setDialog({ kind: "manage" })} />}
       {dialog?.kind === "confirm" && <ActionConfirmDialog title={dialog.title} description={dialog.description} confirmLabel={dialog.label} danger={dialog.danger} onClose={() => setDialog(null)} onConfirm={dialog.work} />}
-    </div>
+    </PanelPage>
   )
 }
 

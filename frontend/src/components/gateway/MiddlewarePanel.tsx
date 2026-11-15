@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils"
 import { gatewayApi, type MiddlewareDto } from "@/lib/gatewayApi"
 import { useToast } from "@/components/ui/Toast"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
+import { SelectField } from "@/components/ui/SelectField"
 import { Switch } from "@/components/agents/AgentList"
 import {
   MIDDLEWARE_KINDS,
@@ -176,10 +177,10 @@ export function MiddlewarePanel({ busy, run, onOpenPrivacy }: {
                   <div className="flex flex-wrap items-center gap-2">
                     <input value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} placeholder="名称，例如 快模型改名" aria-label="规则名称"
                       className={cn(fieldClass, "h-9 min-w-[160px] flex-1")} />
-                    <select value={editing.kind} aria-label="类型" onChange={(event) => setEditing({ ...editing, kind: event.target.value as MiddlewareKind, fields: emptyFields() })}
-                      className={cn(fieldClass, "h-9 w-[150px]")}>
-                      {MIDDLEWARE_KINDS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-                    </select>
+                    <SelectField label="规则类型" value={editing.kind}
+                      onValueChange={(value) => setEditing({ ...editing, kind: value as MiddlewareKind, fields: emptyFields() })}
+                      className="h-9 w-[150px] rounded-[10px]"
+                      options={MIDDLEWARE_KINDS.map((item) => ({ value: item.id, label: item.label, description: item.hint }))} />
                   </div>
                   <span className="text-note text-jolu-muted">{kindOf(editing.kind)?.hint}</span>
                   <KindFields kind={editing.kind} fields={editing.fields} onChange={(fields) => setEditing({ ...editing, fields })} />
@@ -201,10 +202,10 @@ export function MiddlewarePanel({ busy, run, onOpenPrivacy }: {
           <div className="flex flex-wrap items-center gap-2">
             <input autoFocus value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} placeholder="名称，例如 快模型改名" aria-label="规则名称"
               className={cn(fieldClass, "h-9 min-w-[160px] flex-1")} />
-            <select value={editing.kind} aria-label="类型" onChange={(event) => setEditing({ ...editing, kind: event.target.value as MiddlewareKind, fields: emptyFields() })}
-              className={cn(fieldClass, "h-9 w-[150px]")}>
-              {MIDDLEWARE_KINDS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
+            <SelectField label="规则类型" value={editing.kind}
+              onValueChange={(value) => setEditing({ ...editing, kind: value as MiddlewareKind, fields: emptyFields() })}
+              className="h-9 w-[150px] rounded-[10px]"
+              options={MIDDLEWARE_KINDS.map((item) => ({ value: item.id, label: item.label, description: item.hint }))} />
           </div>
           <span className="text-note text-jolu-muted">{kindOf(editing.kind)?.hint}</span>
           <KindFields kind={editing.kind} fields={editing.fields} onChange={(fields) => setEditing({ ...editing, fields })} />
@@ -271,11 +272,10 @@ function KindFields({ kind, fields, onChange }: { kind: MiddlewareKind; fields: 
       )
     case "think-tags":
       return (
-        <select value={fields.mode} aria-label="处理方式" onChange={(event) => onChange({ ...fields, mode: event.target.value as "strip" | "wrap" })}
-          className={cn(fieldClass, "h-9 w-[200px]")}>
-          <option value="strip">剥掉思考段</option>
-          <option value="wrap">包进思考标签</option>
-        </select>
+        <SelectField label="思考段处理方式" value={fields.mode}
+          onValueChange={(value) => onChange({ ...fields, mode: value as "strip" | "wrap" })}
+          className="h-9 w-[200px] rounded-[10px]"
+          options={[{ value: "strip", label: "剥掉思考段" }, { value: "wrap", label: "包进思考标签" }]} />
       )
     case "js-hook":
       return (
