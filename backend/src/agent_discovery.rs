@@ -13,9 +13,12 @@
 //! - `cli_missing`：有配置证据但 CLI 不在——配置残留（agent 卸载了），接线按钮禁用
 //! - `not_found`：全无证据——本机没装
 //!
-//! 现有 5 家的配置目录都是独占的，不存在 magpie 的 dirShared 情形（Cursor CLI 与
-//! Cursor 编辑器共用 `~/.cursor` 那种），所以没有 dirShared / sign 字段；以后新增
-//! 共用目录的 agent 时再加。
+//! 目录证据要「有内容」（`agent_dir_has_content`，magpie `agentDir`）：只剩 `logs` / `cache`
+//! 一类卸载残留、`npx skills` 建的 `skills`、登录工具写的登录文件（`Spec.sign_in`）都不算。
+//!
+//! 例外规则走 `Spec.detect`（`Detect` 枚举）：Gemini CLI 的 `~/.gemini` 也是 Antigravity 的，
+//! 只认命令行（`CliOnly`）。magpie 的 dirShared / sign / pathOwn 在现有 13 家里没有使用者，
+//! 没有加；以后新增共用目录的 agent 时再加。
 //!
 //! 只读：不创建目录、不写文件、不运行 agent 的命令（版本探测在 `agent_version.rs`）。
 
@@ -32,6 +35,57 @@ struct Spec {
     dir: fn(home: &Path) -> Option<PathBuf>,
     /// 配置文件相对 dir 的片段；空串表示没有单独文件，只看目录
     file: &'static str,
+    /// 登录工具（Jolu 的「应用到原工具」、magpie 等）会替没装过的 agent 在 dir 里写的登录文件：
+    /// 目录里只有它不算装了。空串表示没有。magpie `Agent.signIn` 同款
+    /// （Codex `auth.json`，Claude Code `.credentials.json`）。
+    sign_in: &'static str,
+    /// 判定规则（T4 例外钩子）。绝大多数是 `Standard`。
+    detect: Detect,
+}
+
+/// 一家 agent 怎么算「装了」（magpie `Agent.detect` 的 Jolu 版）。
+///
+/// 只放有真实使用者的档位：以后真有工具需要完全接管判定时，再加
+/// `Custom(fn(&Facts) -> Verdict)` 一类变体（钩子只看探测已收集的事实、不自己读盘，
+/// 保持 `discover_with` 可注入测试），不要提前铺。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Detect {
+    /// 配置文件 → 配置目录 → 命令，命中任一即算（`classify`）
+    Standard,
+    /// 只认命令行：配置目录也被别的程序用、或卸载后会留下，目录和文件都不算证据。
+    /// 命令不在 → not_found（不落到「CLI 未找到」）；命令在 → installed，证据记 `bin`。
+    /// 用例：Gemini CLI 的 `~/.gemini` 也是 Antigravity / Gemini Code Assist 的
+    /// （magpie `internal/agent/gemini.go` 的 `detect`）。
+    CliOnly,
+}
+
+/// agent 运行时写、卸载后留下的目录（magpie `agent.go::leftover`）：只剩这些不算装了。
+/// 同名的**文件**照算内容。
+const LEFTOVER_DIRS: [&str; 5] = ["logs", "log", "debug", "diagnostics", "cache"];
+
+/// 配置目录是不是 agent 自己建的、还有内容（magpie `agent.go::agentDir` 同款）：
+/// - 目录不存在 → false；存在但读不了（权限）→ true，不误判成没装
+/// - 空目录 → true（agent 可能刚建目录还没写文件）
+/// - 只剩 `skills`（`npx skills` 一类会给每家都建）、`.DS_Store`、残留目录、`sign_in` 登录文件 → false
+/// - 有任何别的条目 → true
+fn agent_dir_has_content(path: &Path, sign_in: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return path.is_dir();
+    };
+    let mut empty = true;
+    for entry in entries.flatten() {
+        empty = false;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+        let ignored = name == "skills"
+            || name == ".DS_Store"
+            || (is_dir && LEFTOVER_DIRS.contains(&name.to_ascii_lowercase().as_str()))
+            || (!is_dir && !sign_in.is_empty() && name == sign_in);
+        if !ignored {
+            return true;
+        }
+    }
+    empty
 }
 
 fn dir_claude(home: &Path) -> Option<PathBuf> {
@@ -138,20 +192,20 @@ fn dir_continue(home: &Path) -> Option<PathBuf> {
 
 /// 探测规格表。顺序即界面展示顺序，与 `agent_version::AGENTS` 一致。
 const SPECS: [Spec; 13] = [
-    Spec { agent: "claude-code", name: "Claude Code", bin: "claude", dir: dir_claude, file: "settings.json" },
-    Spec { agent: "codex", name: "Codex", bin: "codex", dir: dir_codex, file: "config.toml" },
-    Spec { agent: "zcode", name: "ZCode", bin: "zcode", dir: dir_zcode, file: "v2/provider_config.json" },
-    Spec { agent: "gemini", name: "Gemini CLI", bin: "gemini", dir: dir_gemini, file: ".env" },
-    Spec { agent: "opencode", name: "OpenCode", bin: "opencode", dir: dir_opencode, file: "opencode.json" },
+    Spec { agent: "claude-code", name: "Claude Code", bin: "claude", dir: dir_claude, file: "settings.json", sign_in: ".credentials.json", detect: Detect::Standard },
+    Spec { agent: "codex", name: "Codex", bin: "codex", dir: dir_codex, file: "config.toml", sign_in: "auth.json", detect: Detect::Standard },
+    Spec { agent: "zcode", name: "ZCode", bin: "zcode", dir: dir_zcode, file: "v2/provider_config.json", sign_in: "", detect: Detect::Standard },
+    Spec { agent: "gemini", name: "Gemini CLI", bin: "gemini", dir: dir_gemini, file: ".env", sign_in: "", detect: Detect::CliOnly },
+    Spec { agent: "opencode", name: "OpenCode", bin: "opencode", dir: dir_opencode, file: "opencode.json", sign_in: "", detect: Detect::Standard },
     // 以下 8 家只有探测（没有专门接线），接入走「通用接入」手填键名
-    Spec { agent: "qwen", name: "Qwen Code", bin: "qwen", dir: dir_qwen, file: "settings.json" },
-    Spec { agent: "kimi", name: "Kimi CLI", bin: "kimi", dir: dir_kimi, file: "config.toml" },
-    Spec { agent: "cline", name: "Cline", bin: "cline", dir: dir_cline, file: "settings/providers.json" },
-    Spec { agent: "droid", name: "Droid", bin: "droid", dir: dir_droid, file: "settings.json" },
-    Spec { agent: "zed", name: "Zed", bin: "zed", dir: dir_zed, file: "settings.json" },
-    Spec { agent: "crush", name: "Crush", bin: "crush", dir: dir_crush, file: "crush.json" },
-    Spec { agent: "goose", name: "Goose", bin: "goose", dir: dir_goose, file: "config.yaml" },
-    Spec { agent: "continue", name: "Continue", bin: "cn", dir: dir_continue, file: "config.json" },
+    Spec { agent: "qwen", name: "Qwen Code", bin: "qwen", dir: dir_qwen, file: "settings.json", sign_in: "", detect: Detect::Standard },
+    Spec { agent: "kimi", name: "Kimi CLI", bin: "kimi", dir: dir_kimi, file: "config.toml", sign_in: "", detect: Detect::Standard },
+    Spec { agent: "cline", name: "Cline", bin: "cline", dir: dir_cline, file: "settings/providers.json", sign_in: "", detect: Detect::Standard },
+    Spec { agent: "droid", name: "Droid", bin: "droid", dir: dir_droid, file: "settings.json", sign_in: "", detect: Detect::Standard },
+    Spec { agent: "zed", name: "Zed", bin: "zed", dir: dir_zed, file: "settings.json", sign_in: "", detect: Detect::Standard },
+    Spec { agent: "crush", name: "Crush", bin: "crush", dir: dir_crush, file: "crush.json", sign_in: "", detect: Detect::Standard },
+    Spec { agent: "goose", name: "Goose", bin: "goose", dir: dir_goose, file: "config.yaml", sign_in: "", detect: Detect::Standard },
+    Spec { agent: "continue", name: "Continue", bin: "cn", dir: dir_continue, file: "config.json", sign_in: "", detect: Detect::Standard },
 ];
 
 /// 一家 agent 的发现结果。
@@ -353,14 +407,19 @@ pub(crate) fn discover_with(home: &Path, bin_lookup: &dyn Fn(&str, &Path) -> Opt
         .iter()
         .map(|spec| {
             let dir = (spec.dir)(home);
-            let dir_found = dir.as_deref().is_some_and(|path| path.is_dir());
+            // 只有卸载残留 / 别人建的 skills / 登录文件的目录不算证据（T3）
+            let dir_found = dir.as_deref().is_some_and(|path| agent_dir_has_content(path, spec.sign_in));
             let file_found = !spec.file.is_empty()
                 && dir.as_deref()
                     .map(|base| base.join(spec.file))
                     .is_some_and(|path| path.is_file());
             let bin_path = bin_lookup(spec.bin, home);
             let bin_found = bin_path.is_some();
-            let (installed, state, evidence) = classify(file_found, dir_found, bin_found);
+            let (installed, state, evidence) = match spec.detect {
+                Detect::Standard => classify(file_found, dir_found, bin_found),
+                // 目录和文件都不算证据：等于只把命令交给 classify
+                Detect::CliOnly => classify(false, false, bin_found),
+            };
             AgentDiscovery {
                 agent: spec.agent.to_string(),
                 name: spec.name.to_string(),
@@ -565,6 +624,122 @@ mod tests {
         assert_eq!(found.evidence, Some("config_file"));
         assert_eq!(crate::creds::zcode_data_dir(&home), home.join(".zcode"));
         std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// T4：Gemini 只认命令行。`~/.gemini` 有 Antigravity 的东西和 settings.json、
+    /// 甚至有 `.env`，但 `gemini` 不在 → not_found（原先会判 cli_missing）；命令在 → installed，证据记 bin
+    #[test]
+    fn gemini_is_detected_by_cli_only() {
+        let home = temp_home("gemini-cli-only");
+        let gemini = home.join(".gemini");
+        std::fs::create_dir_all(gemini.join("antigravity")).unwrap();
+        std::fs::write(gemini.join("settings.json"), b"{}").unwrap();
+        std::fs::write(gemini.join(".env"), b"").unwrap();
+        let without = agent_of(&discover_with(&home, &test_bins(&home)), "gemini").clone();
+        assert_eq!(without.state, "not_found");
+        assert!(!without.installed);
+        assert_eq!(without.evidence, None);
+        std::fs::create_dir_all(home.join("bins")).unwrap();
+        std::fs::write(home.join("bins").join("gemini.exe"), b"MZ").unwrap();
+        let with = agent_of(&discover_with(&home, &test_bins(&home)), "gemini").clone();
+        assert_eq!(with.state, "installed");
+        assert_eq!(with.evidence, Some("bin"));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// T4：只有 Gemini 是 CliOnly，其他 12 家都按 Standard（行为不变）
+    #[test]
+    fn only_gemini_uses_cli_only() {
+        for spec in &SPECS {
+            let expected = if spec.agent == "gemini" { Detect::CliOnly } else { Detect::Standard };
+            assert_eq!(spec.detect, expected, "{}", spec.agent);
+        }
+        // 其他家：配置残留没有命令照旧 cli_missing
+        let home = temp_home("standard-unchanged");
+        std::fs::create_dir_all(home.join(".qwen")).unwrap();
+        std::fs::write(home.join(".qwen").join("settings.json"), b"{}").unwrap();
+        assert_eq!(agent_of(&discover_with(&home, &test_bins(&home)), "qwen").state, "cli_missing");
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// T3：目录内容甄别（magpie `agentDir` 同款）
+    #[test]
+    fn agent_dir_content_ignores_leftovers_skills_and_sign_in() {
+        let home = temp_home("dir-content");
+        let case = |tag: &str| {
+            let dir = home.join(tag);
+            std::fs::create_dir_all(&dir).unwrap();
+            dir
+        };
+        // 不存在 → 没装
+        assert!(!agent_dir_has_content(&home.join("missing"), ""));
+        // 空目录 → 算装了（刚建目录还没写文件）
+        assert!(agent_dir_has_content(&case("empty"), ""));
+        // 只有 skills（npx skills 给每家都建）→ 不算
+        let skills = case("skills-only");
+        std::fs::create_dir_all(skills.join("skills")).unwrap();
+        assert!(!agent_dir_has_content(&skills, ""));
+        // 只有运行时残留目录（大小写不敏感）→ 不算
+        let leftover = case("leftover");
+        for name in ["logs", "Cache", "debug", "diagnostics", "log"] {
+            std::fs::create_dir_all(leftover.join(name)).unwrap();
+        }
+        std::fs::write(leftover.join(".DS_Store"), b"").unwrap();
+        assert!(!agent_dir_has_content(&leftover, ""));
+        // 同名的是文件而不是目录 → 照算内容
+        let file_named = case("file-named-logs");
+        std::fs::write(file_named.join("logs"), b"").unwrap();
+        assert!(agent_dir_has_content(&file_named, ""));
+        // 只有登录工具写的登录文件 → 不算；换个 agent（没有 sign_in）就算
+        let signed = case("sign-in-only");
+        std::fs::write(signed.join("auth.json"), b"{}").unwrap();
+        assert!(!agent_dir_has_content(&signed, "auth.json"));
+        assert!(agent_dir_has_content(&signed, ""));
+        // 有配置文件或任何未知条目 → 算
+        let real = case("real");
+        std::fs::create_dir_all(real.join("logs")).unwrap();
+        std::fs::write(real.join("settings.json"), b"{}").unwrap();
+        assert!(agent_dir_has_content(&real, ""));
+        let unknown = case("unknown");
+        std::fs::write(unknown.join("history.jsonl"), b"").unwrap();
+        assert!(agent_dir_has_content(&unknown, ""));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// T3 接进探测：卸载残留、登录文件、skills 只会让工具消失（not_found），
+    /// 不再落到「暂不能接入」；真有配置时照旧 cli_missing / installed
+    #[test]
+    fn residue_only_dirs_are_not_found() {
+        let home = temp_home("residue");
+        // Qwen 卸载后只剩 logs + cache
+        std::fs::create_dir_all(home.join(".qwen").join("logs")).unwrap();
+        std::fs::create_dir_all(home.join(".qwen").join("cache")).unwrap();
+        // 没装过 Codex，只是被「应用到原工具」写了 auth.json
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(home.join(".codex").join("auth.json"), b"{}").unwrap();
+        // Droid 只有 npx skills 建的 skills
+        std::fs::create_dir_all(home.join(".factory").join("skills")).unwrap();
+        // Kimi 有真实的历史文件
+        std::fs::create_dir_all(home.join(".kimi")).unwrap();
+        std::fs::write(home.join(".kimi").join("history.jsonl"), b"").unwrap();
+        let results = discover_with(&home, &test_bins(&home));
+        for agent in ["qwen", "codex", "droid"] {
+            assert_eq!(agent_of(&results, agent).state, "not_found", "{agent} 只有残留不该算装了");
+        }
+        let kimi = agent_of(&results, "kimi");
+        assert_eq!(kimi.state, "cli_missing");
+        assert_eq!(kimi.evidence, Some("config_dir"));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// 真机只读探测（默认不跑）：打印 13 家的状态与证据，不打印路径。
+    /// `cargo test --manifest-path backend/Cargo.toml --lib discover_real_machine -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn discover_real_machine_readonly_smoke() {
+        for found in discover() {
+            println!("{:<12} {:<12} evidence={:?} cli={}", found.agent, found.state, found.evidence, found.cli_found);
+        }
     }
 
     /// 真机只读核对（默认不跑）：不经 PATH 与 npm，只靠固定落点能否找到本机的 Codex 桌面版 CLI。

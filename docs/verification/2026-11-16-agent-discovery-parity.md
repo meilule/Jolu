@@ -5,8 +5,10 @@
 | 任务 | 状态 |
 |---|---|
 | T1 桌面版 / 官方安装器落点 | 已完成 |
-| T2 ZCode 数据目录跟随 | 已完成 |
-| T3–T9 | 未开始 |
+| T2 ZCode 数据目录跟随 | 已完成，已扩展到额度 / 账号导入 / 归因 / 本机来源 |
+| T3 目录内容甄别 | 已完成 |
+| T4 例外规则钩子 | 已完成（Gemini `CliOnly`） |
+| T5–T9 | 未开始 |
 
 ---
 
@@ -54,6 +56,58 @@
   - `zcode_without_data_base_dir_stays_at_home`：没有 `dataBaseDir` 时与改动前一致。
 - 真机：本机 ZCode 的 `setting.json` 里没有 `dataBaseDir`，搬家场景只有单测覆盖，**未做真机验证**。
 
-### 已知范围外
+### 扩展：其余读 `v2` 的地方（鼠鼠 2026-11-16 决定一并改）
 
-`zcode_quota.rs`、`gateway/adapter/zcode.rs`、`attribution.rs`、`native_sources.rs` 读 `v2` 数据时仍写死 `~/.zcode/v2`。搬过家的用户在额度查询、账号导入、来源归因上仍读不到，是否改待鼠鼠决定（见执行文档 T2 核对第 5 条）。
+- `zcode_quota.rs`：本机额度入口读 `provider_config.json`；`coding_plan_key_at` / `coding_plan_jwt_at` / `read_account` / 团队套餐读 `credentials.json`；Windows 凭据库条目名（`sha256(credentials.json 路径)`）。以上都改走 `creds::zcode_data_dir`。
+- 团队套餐的 `setting.json` 改从 `creds::zcode_home` 读，和 magpie `zcode_team.go` 一致，不跟 `dataBaseDir` 搬。
+- `credential_secret` 不变：口令按系统用户目录派生，和 magpie `zcodeSecret` 一致。
+- `gateway/adapter/zcode.rs` 的模型清单、`attribution.rs` 的来源归因读 `provider_config.json`；`native_sources.rs` 的「ZCode 账号」来源读 `credentials.json`。这三处都改走 `creds::zcode_data_dir`。会话库 `cli/db/db.sqlite` 保持在原位。
+- 验证：
+  - 新增 `zcode_quota::tests::credentials_follow_data_base_dir`：凭据只放在 `dataBaseDir` 下，用原 home 派生的口令能解出 Key。
+  - 相关模块测试 155 passed。
+  - 真机只读 `local_v2_credentials_decrypt_readonly_smoke`：本机没搬家，5 个条目全部解密，coding-plan Key 和 JWT 都能读到，行为不变。
+
+---
+
+## T3 · 目录内容甄别
+
+### 改动
+
+- `agent_dir_has_content(path, sign_in)`，对应 magpie `agentDir`：
+  - 目录不存在 → 没有内容；存在但读不了 → 算有内容；空目录 → 算有内容。
+  - 只剩 `skills`、`.DS_Store`、残留目录 `logs` / `log` / `debug` / `diagnostics` / `cache`（只认目录，大小写不敏感），或者只剩 `sign_in` 登录文件 → 不算有内容。
+- `Spec.sign_in`：Codex 为 `auth.json`，Claude Code 为 `.credentials.json`。Jolu 的「应用到原工具」会替没装过的工具写这两个文件，magpie `signIn` 也是这么处理的。
+- `discover_with` 的目录证据改用这个判定。配置文件证据不变：文件在就算。
+
+### 验证
+
+- 单元测试 `agent_dir_content_ignores_leftovers_skills_and_sign_in`，覆盖：不存在、空目录、只有 skills、只有残留目录与 `.DS_Store`、同名文件、只有登录文件（有 / 没有 sign_in 两种）、有配置文件、有未知文件。
+- 单元测试 `residue_only_dirs_are_not_found`：Qwen 只剩 logs + cache、Codex 只有 `auth.json`、Droid 只有 skills，都是 `not_found`；Kimi 有历史文件时照旧 `cli_missing`。
+- 真机：本机各工具的配置目录里都有真实配置，**没有卸载残留样本，未做真机验证**。真机只读探测结果见文末。
+
+## T4 · 例外规则钩子
+
+### 改动
+
+- `Spec.detect: Detect`，枚举 `Standard` / `CliOnly`。API 形态由鼠鼠 2026-11-16 选定，不提前加 `Custom`。
+- Gemini 设为 `CliOnly`：目录和文件都不算证据；命令不在 → `not_found`，命令在 → `installed`，证据记 `bin`。依据是 magpie `gemini.go` 的 `detect`：`~/.gemini` 卸载后会留下，Antigravity 也用这个目录。其他 12 家为 `Standard`，行为不变。
+
+### 验证
+
+- 单元测试 `gemini_is_detected_by_cli_only`：`~/.gemini` 里有 antigravity、settings.json、`.env`，但没有命令 → `not_found`；有命令 → `installed` / `bin`。
+- 单元测试 `only_gemini_uses_cli_only`：13 行规格里只有 Gemini 是 `CliOnly`；Qwen 配置残留照旧 `cli_missing`。
+- 真机：本机 `~/.gemini` 里有 Antigravity 的目录，同时装了 npm 版 Gemini CLI，所以结果仍是 `installed`（证据从 `config_file` 变为 `bin`）。「没装 CLI」的分支只有单测覆盖。
+
+## 全量与真机只读探测（2026-11-16）
+
+- 全量 `cargo test --manifest-path backend/Cargo.toml`：1403 passed / 0 failed / 49 ignored，没有编译警告。
+- 真机只读探测 `discover_real_machine_readonly_smoke`（`#[ignore]`）的结果：
+
+  | agent | 状态 | 证据 |
+  |---|---|---|
+  | claude-code / codex / opencode | installed | config_file |
+  | gemini | installed | bin |
+  | zcode | cli_missing | config_file |
+  | 其余 8 家 | not_found | — |
+
+  ZCode 是桌面应用，没有 `zcode` 命令。它显示为 `cli_missing` 是原有行为：前端 `agentPage.ts` 的 `DESKTOP_CLIENTS` 已把 ZCode / Zed 的 `cli_missing` 当成可接入，本次未改。

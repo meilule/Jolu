@@ -1,7 +1,7 @@
 # Agent 探测修改执行文档
 
 日期：2026-11-16
-状态：执行中（T1、T2 已完成，见 `docs/verification/2026-11-16-agent-discovery-parity.md`；T3–T9 未开始）
+状态：执行中（T1–T4 已完成，T2 已扩展到额度 / 账号导入 / 归因 / 本机来源，见 `docs/verification/2026-11-16-agent-discovery-parity.md`；T5–T9 未开始）
 范围：只动 `backend/src/agent_discovery.rs`（及必要的 `agent_version.rs`、前端调用节奏），不动接线（`gateway/wiring.rs`）、不动模型路由。
 读者：接手执行的同事。
 
@@ -120,7 +120,7 @@ magpie **也是每次调用都全量探测**。`internal/gui/api.go` 的 `state(
 2. **上文漏了 HOME 这一步**：magpie `agent/zcode.go` 用的是 `ZCodeDataIn(ZCodeHomeOn(home))`。Windows 上用户自己设了绝对路径的 `HOME`、且默认 home 就是 `USERPROFILE` 时，ZCode（Node 程序）读的是 `HOME`。Jolu 的 `library/mod.rs` 已有同款 `zcode_home`，公共函数一并沿用。
 3. **不是所有 ZCode 文件都跟着搬**（magpie 注释）：搬走的只有 `.zcode/v2`（provider、config、登录凭据、tasks-index）；Skills、`AGENTS.md`、CLI 的 `cli/config.json` 留在 HOME 下，`cli/db/db.sqlite` 会话库留在 `USERPROFILE` 下（`sessions/zcode.go` 的 `ZCodeDir`）。所以公共函数只给 `v2` 数据用，`skills.rs`、`library`、`session_threads`、`native_sources` 的会话库不改。
 4. Jolu 现有 `ZCODE_HOME` 覆盖（值就是 `.zcode` 目录本身）magpie 没有，保留为最高优先级；`wiring::zcode_dir` 原先不过滤空值，统一后空值视为未设置。
-5. **范围之外、同样读 `v2` 的地方**：`zcode_quota.rs`（`credentials.json` / `setting.json` / `config.json`）、`gateway/adapter/zcode.rs`（`provider_config.json`）、`attribution.rs`（`provider_config.json`）、`native_sources.rs`（账号来源 `credentials.json`）仍写死 `~/.zcode/v2`。本次按范围只改探测与接线；搬过家的用户在额度查询、账号导入、来源归因上仍会读不到，改不改另行由鼠鼠决定。
+5. **范围之外、同样读 `v2` 的地方**：`zcode_quota.rs`（`credentials.json` / `setting.json` / `config.json`）、`gateway/adapter/zcode.rs`（`provider_config.json`）、`attribution.rs`（`provider_config.json`）、`native_sources.rs`（账号来源 `credentials.json`）原先写死 `~/.zcode/v2`。**鼠鼠 2026-11-16 决定一并改**：凭据、provider 规则、config 都走 `creds::zcode_data_dir`；团队套餐读的 `setting.json` 照 magpie `zcode_team.go` 从 ZCode 主目录读（`creds::zcode_home`）；凭据解密口令仍按系统用户目录派生（magpie `zcodeSecret` 用 `os.UserHomeDir`，不随搬家）；Windows 凭据库条目名按 `credentials.json` 的实际路径算，跟着搬家。
 
 ---
 
@@ -149,6 +149,12 @@ magpie **也是每次调用都全量探测**。`internal/gui/api.go` 的 `state(
 - 单元测试覆盖：空目录 / 只有 `skills` / 只有 `logs`+`cache` / 有 `settings.json` / 有未知文件。
 - 真机：找一个卸载过的工具，确认它从「已接入」或「暂不能接入」变成不出现或「未安装」。
 
+**执行前核对（2026-11-16，magpie `40f7de24`）**
+
+1. `agentDir(p, own...)` 与上文一致：读不了目录时返回 `isDir(p)`（存在但读不了算有内容，不存在算没有）；空目录算有内容；忽略 `skills`（不论文件还是目录）、`.DS_Store`、`leftover` 里的**目录**（大小写不敏感），以及 `own` 里的**文件**。
+2. **上文漏了 `own` 参数**：它是 `Agent.signIn`，即 magpie 替没装过的 agent 写进 Dir 的登录文件（Codex `auth.json`，Claude Code 在非 Mac 上的 `.credentials.json`）。Jolu 的 `cli_apply.rs`（应用到原工具）同样会写这两个文件，所以一并加进 `Spec.sign_in`，其余 11 家为空。
+3. 同名的**文件**（例如叫 `logs` 的文件）仍算内容，和 magpie 一致。
+
 ---
 
 ### T4 · 例外规则钩子（P2，为以后新增铺路）
@@ -175,6 +181,13 @@ magpie **也是每次调用都全量探测**。`internal/gui/api.go` 的 `state(
 
 - Gemini 在「`~/.gemini` 存在但 `gemini` 命令不在」时判为未装（现状会判 `cli_missing`）。
 - 其他 12 家行为不变。
+
+**执行前核对与决定（2026-11-16，magpie `40f7de24`）**
+
+1. magpie 的 `detect` 仍是 `func() bool`，在 `Detected()` 第一行生效、完全接管判定。Gemini 的实现是「`~/.gemini` 没被同名文件占用，且 `proc.Look("gemini")` 找得到」，注释写明 `~/.gemini` 卸载后会留下（#230），而且 Antigravity 也用这个目录（#330）。
+2. 在 Jolu 的 13 家里，magpie 只给 Gemini 配了 `detect`。`dirShared` / `sign` / `pathOwn` / `binNot` 在这 13 家里都没有使用者。
+3. **API 形态（鼠鼠 2026-11-16 选定）**：枚举 `Detect { Standard, CliOnly }`，作为 `Spec.detect` 字段，13 行逐个填值，只有 Gemini 是 `CliOnly`。不提前加 `Custom` 变体：以后真有工具需要完全接管时，再加 `Custom(fn(&Facts) -> Verdict)`，钩子只看探测已收集的事实、不自己读盘，保持可注入测试。
+4. `CliOnly` 的语义：目录和文件都不算证据。命令不在 → `not_found`；命令在 → `installed`，证据记 `bin`。路径被同名文件占用（magpie 的 `Taken`）属于 T9，本次不做。
 
 ---
 
