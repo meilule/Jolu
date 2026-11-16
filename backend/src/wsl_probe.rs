@@ -12,7 +12,7 @@
 
 use serde::Serialize;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// 探测超时：`wsl.exe -l` 在 WSL 服务未启动时要等一会儿，给足 8 秒。
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -127,22 +127,10 @@ fn run_wsl(exe: &std::path::Path, args: &[&str]) -> Result<Vec<u8>, String> {
     wait_with_timeout(child, PROBE_TIMEOUT).ok_or_else(|| "wsl.exe 执行超时".to_string())
 }
 
+/// 超时结束整棵进程树：System32 的 `wsl.exe` 会再起 Program Files 的 `wsl.exe` 并等它，
+/// 只杀外层就每次留一个（magpie #2341，见 `crate::proc`）。
 fn wait_with_timeout(mut child: std::process::Child, timeout: Duration) -> Option<Vec<u8>> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-                std::thread::sleep(Duration::from_millis(30));
-            }
-            Err(_) => return None,
-        }
-    }
+    crate::proc::wait_or_kill_tree(&mut child, timeout, Duration::from_millis(30))?;
     let mut stdout = Vec::new();
     use std::io::Read;
     child.stdout.take()?.read_to_end(&mut stdout).ok()?;

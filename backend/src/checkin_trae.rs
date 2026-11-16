@@ -352,7 +352,6 @@ fn hardware_uuid() -> Result<String, Outcome> {
     use std::{
         os::windows::process::CommandExt,
         process::{Command, Stdio},
-        time::Instant,
     };
     let path = std::env::var_os("SystemRoot")
         .map(PathBuf::from)
@@ -371,20 +370,10 @@ fn hardware_uuid() -> Result<String, Outcome> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|_| device_error())?;
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => break,
-            Ok(Some(_)) => return Err(device_error()),
-            Ok(None) if started.elapsed() < Duration::from_secs(5) => {
-                std::thread::sleep(Duration::from_millis(20))
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(device_error());
-            }
-        }
+    // 超时结束整棵进程树（见 `crate::proc`）
+    match crate::proc::wait_or_kill_tree(&mut child, Duration::from_secs(5), Duration::from_millis(20)) {
+        Some(status) if status.success() => {}
+        _ => return Err(device_error()),
     }
     let output = child.wait_with_output().map_err(|_| device_error())?;
     let uuid = std::str::from_utf8(&output.stdout)

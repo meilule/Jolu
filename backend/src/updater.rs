@@ -185,15 +185,20 @@ pub async fn download_app_update(
             .await
             .map_err(|e| e.to_string())?
             .ok_or("当前已是最新版本")?;
-        // 插件把检查和下载超时分别存储；安装包允许更长的传输时间。
-        update.timeout = Some(std::time::Duration::from_secs(600));
+        // 插件把检查和下载超时分别存储，下载的超时会设成 reqwest 的「整个请求总时长」。
+        // 安装包不设总时长，改为只掐真正停住的下载（`stall`：连续 60 秒没收到数据）：
+        // 慢但一直在走的链路能下完，断了的连接也不用白等满总时长。
+        update.timeout = None;
         let info = update_check(&update);
         let progress_app = app.clone();
         let mut downloaded: u64 = 0;
         let mut last_progress: Option<std::time::Instant> = None;
-        let bytes = update
+        let watch = crate::stall::Watch::new();
+        let feeder = watch.clone();
+        let download = update
             .download(
                 move |chunk, total| {
+                    feeder.touch();
                     downloaded = downloaded.saturating_add(chunk as u64);
                     let now = std::time::Instant::now();
                     if last_progress.is_none_or(|last| now.duration_since(last).as_millis() >= 100)
@@ -207,8 +212,11 @@ pub async fn download_app_update(
                     }
                 },
                 || {},
-            )
+            );
+        let bytes = watch
+            .run(crate::stall::DOWNLOAD_STALL, download)
             .await
+            .map_err(|stalled| format!("下载更新失败：{stalled}"))?
             .map_err(|e| format!("下载更新失败：{e}"))?;
         *state.prepared.lock().map_err(|e| e.to_string())? =
             Some(PreparedUpdate { update, bytes });

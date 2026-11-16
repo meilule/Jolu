@@ -1776,20 +1776,9 @@ fn cleanup_checkout(temp_root: &Path, checkout_dir: &str) -> Result<(), String> 
     }
 }
 
-/// 结束 git 及其子进程（git-remote-https 等）
+/// 结束 git 及其子进程（git-remote-https 等），见 `crate::proc`
 fn kill_tree(child: &mut std::process::Child) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let _ = std::process::Command::new("taskkill")
-            .args(["/PID", &child.id().to_string(), "/T", "/F"])
-            .creation_flags(0x0800_0000)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-    }
-    let _ = child.kill();
-    let _ = child.wait();
+    crate::proc::kill_child_tree(child);
 }
 
 /// 把 git 的报错翻成用户能处理的说明，附上原文最后一行

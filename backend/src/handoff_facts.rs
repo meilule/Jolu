@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -1056,21 +1056,11 @@ fn run_git(cwd: &Path, args: &[&str]) -> Option<String> {
         let _ = std::io::Read::read_to_string(&mut stdout, &mut text);
         text
     });
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let text = reader.join().ok()?;
-                return status.success().then_some(text);
-            }
-            Ok(None) if started.elapsed() < GIT_TIMEOUT => std::thread::sleep(Duration::from_millis(20)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    }
+    // 超时结束整棵进程树（git 会起 git-remote-https 等子进程；只杀 git 的话子进程还拿着
+    // stdout 管道，读线程就一直挂着，见 `crate::proc`）
+    let status = crate::proc::wait_or_kill_tree(&mut child, GIT_TIMEOUT, Duration::from_millis(20))?;
+    let text = reader.join().ok()?;
+    status.success().then_some(text)
 }
 
 /// 只读获取分支、HEAD 和未提交的文件（最多 50 项）；不是 Git 仓库或 git 不可用时为 None

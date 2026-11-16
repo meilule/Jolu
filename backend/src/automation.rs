@@ -2024,17 +2024,9 @@ fn kill_run(run_id: i64) {
     if let Some(pid) = pid { kill_tree(pid); }
 }
 
-/// 结束整个进程树（执行器会再拉起子进程）
+/// 结束整个进程树（执行器会再拉起子进程），见 `crate::proc`
 fn kill_tree(pid: u32) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let _ = Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).creation_flags(0x0800_0000).status();
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).status();
-    }
+    crate::proc::kill_tree(pid);
 }
 
 /* ─────────────────────────── 命令 ─────────────────────────── */

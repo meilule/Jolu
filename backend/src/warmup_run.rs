@@ -8,7 +8,7 @@
 
 use serde::Serialize;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// warm-up 单次执行超时：只是发一条「回 ok」，超过 90 秒没有结果就不再等。
 const RUN_TIMEOUT: Duration = Duration::from_secs(90);
@@ -116,23 +116,11 @@ struct ChildOutput {
     status_success: bool,
 }
 
-/// 等子进程结束；超时杀掉并返回 None。
+/// 等子进程结束；超时结束整棵进程树并返回 None。本机找到的常是 npm 的 `.cmd` 垫片，
+/// 只杀外层的话 node / codex 会把这次 warm-up 请求照样发完（见 `crate::proc`）。
 fn wait_with_timeout(child: &mut std::process::Child, timeout: Duration) -> Option<ChildOutput> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Some(ChildOutput { status_success: status.success() }),
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(_) => return None,
-        }
-    }
+    crate::proc::wait_or_kill_tree(child, timeout, Duration::from_millis(100))
+        .map(|status| ChildOutput { status_success: status.success() })
 }
 
 #[cfg(test)]

@@ -140,16 +140,22 @@
   - [ ] 平台能力「未验证」三态与验证日期：**待鼠鼠拍板**。多数能力是「部分验证」（如 Trae 免费档通过、付费 / 企业缺样本），哪些算已验证、日期取哪份记录、在哪里显示（无画板，界面目前不单独展示能力）都需要定，不能由小的推断
 - [ ] 4.8 ZCode 余额遗留：账号卡解释免费档、经典灵动岛日额度、「BigModel 套餐剩余」文案
 - [ ] 4.9 P2-1 `stall` 下载超时；P2-2 `netguard` 下载地址校验；P2-3 `proc` 统一子进程封装；N10 `filelock` 跨进程文件锁；N13 `beat` 时钟对齐
+  - [x] P2-1（2026-11-16）：新模块 `stall.rs`（照 magpie `internal/stall`），下载只在连续 60 秒没收到数据时才掐断，不设总时长。接在更新安装包下载上：原来是插件 `timeout` 设成的 reqwest 总时长 600 秒，慢链路会半路被截断，断了的连接又要白等 10 分钟。其余流式读取都是网关转发，各自已有空闲超时；`web_fetch` 读小网页、有正文上限，不需要
+  - [x] P2-2（2026-11-16 核对，无需改代码）：Jolu 去下载「自己没选过的地址」的只有 `web_fetch` 与搜索 API 解析出的地址，两处都已过 `gateway/net_guard.rs`；对照文档提到的「图标代理」在 Jolu 里不存在；后端不替调用方下载远程图片（Gemini 明确不下载，Qoder 原样转给上游）；其余请求是用户自己配的上游地址或固定厂商端点，按 `net_guard` 的设计不归它管
+  - [x] P2-3（2026-11-16）：新模块 `proc.rs`（`kill_tree` / `kill_child_tree` / `wait_or_kill_tree`），Windows 用 `taskkill /T /F` 结束整棵树。替换了 3 份重复的 `kill_tree`（自动化、会话交接、Skills）和 5 处各写各的「超时就杀」循环：版本探测、warm-up、WSL 探测、Trae 签到、交接事实里的 git。实际修掉的问题有三个：warm-up 在本机找到的是 npm 的 `codex.cmd` 垫片，超时只杀 `cmd.exe`，node / codex 会把请求发完；WSL 探测每次超时多留一个 `wsl.exe`（magpie #2341）；git 超时后子进程拿着管道，读线程一直挂着。不改的两处：官方登录进程（它打开的浏览器归用户，取消时不能关）；网关的 Claude 一次性进程与桥接（只认原生 `claude.exe`、工具与 MCP 关闭，没有子进程）。单测用「外层 cmd 起内层 cmd」三条互相印证：不打断时孙进程会写标记文件；只杀外层时照样写出来；`wait_or_kill_tree` 超时后不会写
+  - [ ] N10（暂缓，并入 5.5）：magpie 的 `filelock` 防的是同一台电脑上多个 magpie 进程同时改同一文件。Jolu 是单实例应用，`jolu_cli` 只读，现在没有第二个写入方，先做出来也没有调用方。第一个用户是 5.5 的 CLI 写命令，和它一起做
+  - [ ] N13（跳过）：对照文档原话是「Jolu 的自动化是单线程 `wait_timeout`，无此问题」，属于可选的小优化
 - [ ] 4.10 `lib.rs` 拆分：命令按模块迁到 `service/` 与各 `commands` 文件
 - [ ] 4.11 早期路线图遗留：P0 基线文档、P1 契约文档
 
 ## 阶段 5 · 大模块
 
 - [ ] 5.1 Library（G4 / N3）：指令、MCP server、skills、subagents 按各 agent 格式写入，移除只删自己写的
+  - **部分完成（2026-11-16 核对）**：MCP stdio server 的安装 / 卸载 / 清单已有（`backend/src/library/`：按各 agent 自己的文件与格式写，Jolu 写的记在 `library_applied` 表，只删自己写的，不覆盖别人的同名条目，首批只有「Jolu 搜索」）；skills 由模块 F（`skills.rs`）按工具管理。**未做**：指令（AGENTS.md / CLAUDE.md 一类）与 subagents 的写入、远程（http / sse）MCP（依赖 5.2）
 - [ ] 5.2 远程 MCP OAuth 集中登录（N1）
-- [ ] 5.3 Web 搜索 MCP（G1：九个后端、多 Key 轮转、`web_search` + `web_fetch`）
+- [x] 5.3 Web 搜索 MCP（G1：九个后端、多 Key 轮转、`web_search` + `web_fetch`）——2026-11-16 核对已完成，此前漏勾：九个后端 tavily / brave / exa / firecrawl / you / deepseek / doubao / wsa / searxng（`gateway/search/backends.rs`）；多 Key 依次使用、被拒的排到最后（`search/mod.rs`）；`web_fetch` 逐跳过 netguard 并把连接钉在检查过的地址上（`search/fetch.rs`）；两个工具经 `library/mcp_search.rs` 以 stdio MCP 暴露给 agent；设置页「联网搜索 / 搜索插件」入口见 `2b2807c`（提交 `db2f13c`、`2b2807c`）
 - [ ] 5.4 图像 / 视频生成 MCP（G2 / G3 / N11）
-- [ ] 5.5 CLI 写命令（G5：`provider add` / `claude <model>` / `group add` / `save` / `use` / `settings set` / `serve`，走跨进程锁）
+- [ ] 5.5 CLI 写命令（G5：`provider add` / `claude <model>` / `group add` / `save` / `use` / `settings set` / `serve`，走跨进程锁）——跨进程锁（4.9 的 N10 `filelock`）随本项一起做
 - [ ] 5.6 WSL 接线写入（G10 剩余 / P2-6）
 - [ ] 5.7 TUI 与 Web 管理界面（G6）
 - [ ] 5.8 远程网关（G7）、Docker 镜像（G8）、系统服务（N12）

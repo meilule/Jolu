@@ -109,23 +109,10 @@ fn read_version(executable: &std::path::Path) -> Option<String> {
     Some(first)
 }
 
-/// 等子进程结束并取 stdout；超时则杀掉子进程返回 None。
+/// 等子进程结束并取 stdout；超时则结束整棵进程树返回 None
+/// （npm 装的 CLI 是 `.cmd` 垫片，只杀外层会留下 node，见 `crate::proc`）。
 fn wait_with_timeout(mut child: std::process::Child, timeout: Duration) -> Option<Vec<u8>> {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Err(_) => return None,
-        }
-    }
+    crate::proc::wait_or_kill_tree(&mut child, timeout, Duration::from_millis(20))?;
     let mut stdout = Vec::new();
     use std::io::Read;
     child.stdout.take()?.read_to_end(&mut stdout).ok()?;
