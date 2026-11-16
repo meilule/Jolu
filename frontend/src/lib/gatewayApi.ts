@@ -348,8 +348,8 @@ export const gatewayApi = {
   accessKey: (refresh: boolean) => invoke<string>("gateway_access_key", { refresh }),
   copyKey: () => invoke<void>("gateway_copy_key"),
   status: () => invoke<GatewayStatusDto>("gateway_status"),
-  /** Agent 自动发现（A1/A2，只读）：本机装了哪些 agent */
-  agentDiscovery: () => invoke<AgentDiscoveryDto[]>("agent_discover"),
+  /** Agent 自动发现（A1/A2，只读）：本机装了哪些 agent。`force`（「重新检测」）丢掉后端的命令查找缓存再找 */
+  agentDiscovery: (force = false) => invoke<AgentDiscoveryDto[]>("agent_discover", { force }),
   /** 切换模式；切回 observe 时后端会先还原全部接线 */
   setMode: (mode: GatewayMode, defaultConnection: string | null) =>
     invoke<unknown>("gateway_set_mode", { mode, defaultConnection }),

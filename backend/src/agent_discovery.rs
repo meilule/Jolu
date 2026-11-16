@@ -362,18 +362,169 @@ fn hashed_bin_dirs(root: &Path, name: &str) -> Vec<PathBuf> {
     found.into_iter().map(|(_, dir)| dir).collect()
 }
 
+// ---------- T5：命令查找缓存（magpie `internal/proc/look.go` 同款） ----------
+//
+// 贵的是「找不到」：每个命令要在 PATH 的几十个目录 × PATHEXT 的每个扩展名里各 stat 一次
+// （2026-11-16 本机 release 实测约 10–12ms 一个，13 家里 9 家没装，一次探测约 100ms）。
+// 便宜的是「目录戳」：每个查找目录 stat 一次。答案按戳缓存：戳不变就直接给；装上或卸掉一个
+// 工具会改所在目录的修改时间，戳跟着变，答案自动作废。2 秒窗口只是「多久重新取一次戳」。
+// 注册表 PATH 只在取戳时读一次（0.09ms），未命中的查找复用这份目录清单，不再各读一遍（T6）。
+
+/// 多久重新取一次目录戳（magpie `lookFresh`）
+const LOOK_FRESH: std::time::Duration = std::time::Duration::from_secs(2);
+/// 目录在这段时间内刚变过：时钟粒度粗，同一刻的下一次变化可能不改时间，戳不可信、答案不留
+/// （magpie `lookSettle`）
+const LOOK_SETTLE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// 一次取戳：戳文本、顺手算好的兜底目录（通用兜底 + 注册表 PATH，供未命中的查找复用）、是否稳定
+struct Stamp {
+    text: String,
+    fallback: Vec<PathBuf>,
+    settled: bool,
+}
+
+#[derive(Default)]
+struct LookCache {
+    /// 取戳时的环境（PATH、PATHEXT、几个目录变量、home）：变了立即重取
+    env: String,
+    /// 空串 = 当前没有可信的戳，什么都不留
+    stamp: String,
+    fallback: Vec<PathBuf>,
+    checked: Option<std::time::Instant>,
+    /// 每次 forget 加一：跨过 forget 问到的答案不留
+    generation: u64,
+    answers: std::collections::HashMap<String, Option<PathBuf>>,
+}
+
+impl LookCache {
+    fn forget(&mut self) {
+        self.answers.clear();
+        self.stamp.clear();
+        self.fallback.clear();
+        self.checked = None;
+        self.generation += 1;
+    }
+}
+
+static LOOKS: std::sync::LazyLock<std::sync::Mutex<LookCache>> = std::sync::LazyLock::new(Default::default);
+
+fn lock_looks(cache: &std::sync::Mutex<LookCache>) -> std::sync::MutexGuard<'_, LookCache> {
+    cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// 缓存核心（纯逻辑，时间、取戳、查找都由调用方给，测试直接覆盖）。
+/// 照 magpie `looked`：取戳和查找都不在锁里做；跨过 forget、戳变了或戳不稳时问到的答案不留。
+fn looked(
+    cache: &std::sync::Mutex<LookCache>,
+    key: &str,
+    env: &str,
+    now: std::time::Instant,
+    take_stamp: impl FnOnce() -> Stamp,
+    ask: impl FnOnce(&[PathBuf]) -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    let mut state = lock_looks(cache);
+    let stale = state.env != env || state.checked.is_none_or(|checked| now.saturating_duration_since(checked) >= LOOK_FRESH);
+    if stale {
+        drop(state);
+        let stamp = take_stamp();
+        state = lock_looks(cache);
+        let text = if stamp.settled { stamp.text } else { String::new() };
+        // 环境变了（PATHEXT 不在戳文本里）、戳变了、戳不稳：之前的答案都不算数
+        if text != state.stamp || text.is_empty() || state.env != env {
+            state.answers.clear();
+            state.stamp = text;
+        }
+        state.fallback = stamp.fallback;
+        state.env = env.to_string();
+        state.checked = stamp.settled.then_some(now);
+    }
+    if let Some(answer) = state.answers.get(key) {
+        return answer.clone();
+    }
+    let (generation, stamp, fallback) = (state.generation, state.stamp.clone(), state.fallback.clone());
+    drop(state);
+    let answer = ask(&fallback);
+    let mut state = lock_looks(cache);
+    if state.generation == generation && state.stamp == stamp && !stamp.is_empty() {
+        state.answers.insert(key.to_string(), answer.clone());
+    }
+    answer
+}
+
+/// 目录戳：每个目录「路径@修改时间」拼起来；不存在的只记路径（出现即变）。
+/// 有目录在 `LOOK_SETTLE` 内刚改过 → 不稳定。修改时间在将来的照算稳定（下一次变化会把它拨回现在）。
+fn stamp_of(dirs: &[PathBuf], now: std::time::SystemTime) -> (String, bool) {
+    let mut text = String::new();
+    let mut settled = true;
+    for dir in dirs {
+        text.push('\0');
+        text.push_str(&dir.to_string_lossy());
+        if let Ok(modified) = std::fs::metadata(dir).and_then(|meta| meta.modified()) {
+            let nanos = modified.duration_since(std::time::UNIX_EPOCH).map(|age| age.as_nanos()).unwrap_or_default();
+            text.push('@');
+            text.push_str(&nanos.to_string());
+            if now.duration_since(modified).is_ok_and(|age| age < LOOK_SETTLE) {
+                settled = false;
+            }
+        }
+    }
+    (text, settled)
+}
+
+/// 取戳时的环境：这些变了，查找目录就变了
+fn look_env(home: &Path) -> String {
+    ["PATH", "PATHEXT", "APPDATA", "LOCALAPPDATA"]
+        .iter()
+        .map(|name| std::env::var_os(name).map(|value| value.to_string_lossy().into_owned()).unwrap_or_default())
+        .chain(std::iter::once(home.to_string_lossy().into_owned()))
+        .collect::<Vec<_>>()
+        .join("\0")
+}
+
+fn local_app_data() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+}
+
+/// 真机取戳：进程 PATH、通用兜底、注册表 PATH（只读这一次）、各家固定落点及桌面版哈希目录的根
+fn take_stamp(home: &Path) -> Stamp {
+    let mut fallback = user_bin_dirs(home);
+    #[cfg(windows)]
+    fallback.extend(registry_path_dirs());
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
+    dirs.extend(fallback.iter().cloned());
+    let local = local_app_data();
+    for spec in &SPECS {
+        dirs.extend(vendor_bin_dirs(spec.bin, home, local.as_deref()));
+    }
+    if let Some(local) = &local {
+        // 桌面版升级会在这里新建哈希子目录，根目录的修改时间跟着变
+        dirs.push(local.join("OpenAI").join("Codex").join("bin"));
+    }
+    let (text, settled) = stamp_of(&dirs, std::time::SystemTime::now());
+    Stamp { text, fallback, settled }
+}
+
+/// 丢掉全部缓存的查找结果，下一次重新找（「重新检测」用，magpie `Forget`）。
+pub(crate) fn forget_bin_lookups() {
+    lock_looks(&LOOKS).forget();
+}
+
 /// 命令查找：进程 PATH 失败后，依次在 Windows 兜底目录、注册表 PATH、各家固定落点里找
 /// `name.exe` / `name.cmd` / `name.bat`。固定落点放最后：它是兜底，PATH 上有的优先。
+/// 结果按目录戳缓存（见上方 T5 说明）；「找不到」同样缓存。
 /// 非 Windows 只有进程 PATH（magpie 的 binAt 在非 Windows 也只补 Homebrew，这里没有）。
 pub(crate) fn find_bin(name: &str, home: &Path) -> Option<PathBuf> {
+    let key = format!("{name}\0{}", home.to_string_lossy());
+    looked(&LOOKS, &key, &look_env(home), std::time::Instant::now(), || take_stamp(home), |fallback| find_bin_fresh(name, home, fallback))
+}
+
+/// 不经缓存的一次查找；`fallback` 是取戳时算好的通用兜底 + 注册表 PATH。
+fn find_bin_fresh(name: &str, home: &Path, fallback: &[PathBuf]) -> Option<PathBuf> {
     if let Some(found) = bin_on_path(name) {
         return Some(found);
     }
-    let mut dirs = user_bin_dirs(home);
-    #[cfg(windows)]
-    dirs.extend(registry_path_dirs());
-    #[cfg(windows)]
-    dirs.extend(vendor_bin_dirs(name, home, std::env::var_os("LOCALAPPDATA").map(PathBuf::from).as_deref()));
+    let mut dirs = fallback.to_vec();
+    dirs.extend(vendor_bin_dirs(name, home, local_app_data().as_deref()));
     find_bin_in(name, &dirs)
 }
 
@@ -626,6 +777,91 @@ mod tests {
         std::fs::remove_dir_all(&home).ok();
     }
 
+    // ---------- T5 / T6：命令查找缓存 ----------
+
+    use std::cell::Cell;
+    use std::time::{Duration, Instant, SystemTime};
+
+    fn stamp(text: &str) -> Stamp {
+        Stamp { text: text.into(), fallback: vec![PathBuf::from("fallback")], settled: true }
+    }
+
+    /// 13 家一轮查找：戳只取一次（注册表 PATH 跟着只读一次），找不到也缓存；
+    /// 过了窗口重取戳、戳没变 → 一次查找都不重做
+    #[test]
+    fn lookups_share_one_stamp_and_cache_misses() {
+        let cache = std::sync::Mutex::new(LookCache::default());
+        let (stamps, asks) = (Cell::new(0), Cell::new(0));
+        let start = Instant::now();
+        let round = |now: Instant| {
+            for spec in &SPECS {
+                let found = looked(&cache, spec.bin, "env", now, || { stamps.set(stamps.get() + 1); stamp("s1") }, |fallback| {
+                    asks.set(asks.get() + 1);
+                    assert_eq!(fallback, [PathBuf::from("fallback")], "未命中的查找复用取戳时的兜底目录");
+                    (spec.bin == "claude").then(|| PathBuf::from("claude.exe"))
+                });
+                assert_eq!(found.is_some(), spec.bin == "claude");
+            }
+        };
+        round(start);
+        assert_eq!((stamps.get(), asks.get()), (1, SPECS.len()), "第一轮：取戳 1 次，13 家各找 1 次");
+        round(start + Duration::from_millis(500));
+        assert_eq!((stamps.get(), asks.get()), (1, SPECS.len()), "窗口内：不取戳、不查找");
+        round(start + LOOK_FRESH);
+        assert_eq!((stamps.get(), asks.get()), (2, SPECS.len()), "过了窗口：重取一次戳，戳没变就不重找");
+    }
+
+    /// 目录变了（戳变）、PATH 等环境变了、手动 forget → 答案作废，重新查找
+    #[test]
+    fn stamp_env_change_and_forget_invalidate_answers() {
+        let cache = std::sync::Mutex::new(LookCache::default());
+        let asks = Cell::new(0);
+        let start = Instant::now();
+        let ask = |_: &[PathBuf]| { asks.set(asks.get() + 1); None };
+        looked(&cache, "codex", "env", start, || stamp("s1"), ask);
+        looked(&cache, "codex", "env", start + LOOK_FRESH, || stamp("s2"), ask);
+        assert_eq!(asks.get(), 2, "装了 / 卸了工具（目录修改时间变了）要重找");
+        looked(&cache, "codex", "env-with-new-path", start + LOOK_FRESH, || stamp("s2"), ask);
+        assert_eq!(asks.get(), 3, "PATH 变了立即重找，不等窗口");
+        lock_looks(&cache).forget();
+        looked(&cache, "codex", "env-with-new-path", start + LOOK_FRESH, || stamp("s2"), ask);
+        assert_eq!(asks.get(), 4, "「重新检测」forget 后立即重找");
+        looked(&cache, "codex", "env-with-new-path", start + LOOK_FRESH, || stamp("s2"), ask);
+        assert_eq!(asks.get(), 4, "forget 之后的答案照常缓存");
+    }
+
+    /// 戳不稳（目录刚改过）→ 什么都不留，下一次立即重取
+    #[test]
+    fn unsettled_stamp_keeps_nothing() {
+        let cache = std::sync::Mutex::new(LookCache::default());
+        let (stamps, asks) = (Cell::new(0), Cell::new(0));
+        let now = Instant::now();
+        for _ in 0..2 {
+            looked(&cache, "codex", "env", now, || {
+                stamps.set(stamps.get() + 1);
+                Stamp { text: "s1".into(), fallback: Vec::new(), settled: false }
+            }, |_| { asks.set(asks.get() + 1); None });
+        }
+        assert_eq!((stamps.get(), asks.get()), (2, 2));
+    }
+
+    /// 目录戳：刚建的目录不稳；过了 LOOK_SETTLE 稳定；不存在的目录只记路径，建出来后戳会变
+    #[test]
+    fn stamp_of_marks_recent_changes_unsettled() {
+        let home = temp_home("stamp");
+        let dir = home.join("bin");
+        let missing = home.join("later");
+        std::fs::create_dir_all(&dir).unwrap();
+        let (_, settled_now) = stamp_of(&[dir.clone()], SystemTime::now());
+        assert!(!settled_now, "刚改过的目录戳不可信");
+        let (before, settled_later) = stamp_of(&[dir.clone(), missing.clone()], SystemTime::now() + Duration::from_secs(1));
+        assert!(settled_later);
+        std::fs::create_dir_all(&missing).unwrap();
+        let (after, _) = stamp_of(&[dir.clone(), missing.clone()], SystemTime::now() + Duration::from_secs(1));
+        assert_ne!(before, after, "目录出现后戳要变");
+        std::fs::remove_dir_all(&home).ok();
+    }
+
     /// T4：Gemini 只认命令行。`~/.gemini` 有 Antigravity 的东西和 settings.json、
     /// 甚至有 `.env`，但 `gemini` 不在 → not_found（原先会判 cli_missing）；命令在 → installed，证据记 bin
     #[test]
@@ -737,8 +973,36 @@ mod tests {
     #[test]
     #[ignore]
     fn discover_real_machine_readonly_smoke() {
-        for found in discover() {
-            println!("{:<12} {:<12} evidence={:?} cli={}", found.agent, found.state, found.evidence, found.cli_found);
+        for round in 1..=3 {
+            let started = std::time::Instant::now();
+            let results = discover();
+            println!("第 {round} 次 discover：{:?}", started.elapsed());
+            if round == 1 {
+                for found in &results {
+                    println!("{:<12} {:<12} evidence={:?} cli={}", found.agent, found.state, found.evidence, found.cli_found);
+                }
+            }
+        }
+        // 过了取戳窗口：重取一次戳（stat 各目录 + 读一次注册表），戳没变就不重找
+        std::thread::sleep(LOOK_FRESH + std::time::Duration::from_millis(100));
+        let started = std::time::Instant::now();
+        discover();
+        println!("过窗口后 discover：{:?}", started.elapsed());
+        let started = std::time::Instant::now();
+        forget_bin_lookups();
+        discover();
+        println!("forget 后 discover：{:?}", started.elapsed());
+        let home = crate::creds::home().unwrap();
+        for spec in &SPECS {
+            let started = std::time::Instant::now();
+            let found = find_bin(spec.bin, &home).is_some();
+            println!("find_bin {:<9} {:>10?} found={found}", spec.bin, started.elapsed());
+        }
+        #[cfg(windows)]
+        {
+            let started = std::time::Instant::now();
+            let dirs = registry_path_dirs();
+            println!("registry_path_dirs：{:?}，{} 个目录", started.elapsed(), dirs.len());
         }
     }
 

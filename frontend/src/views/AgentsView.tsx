@@ -29,11 +29,19 @@ type Confirm = { title: string; description: string; label: string; danger?: boo
 
 const EMPTY_COUNTS: AgentCounts = { skills: null, sessions: null, automation: null, routes: null }
 
+/**
+ * 跨挂载记住上次的探测与版本结果（T7）：切走页面会卸载组件，切回来先显示上次的结果，
+ * 再在后台刷新一次（后端命令查找按目录戳缓存，单次约几毫秒），不节流——别处刚装好的工具
+ * 切回来就能看到。查询失败时清掉，不拿过期结果冒充当前状态。
+ */
+let lastDiscovery: AgentDiscoveryDto[] | null = null
+let lastVersions: AgentVersionRow[] = []
+
 export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => void }) {
   const toast = useToast()
   const [status, setStatus] = useState<GatewayStatusDto | null>(null)
-  const [discovery, setDiscovery] = useState<AgentDiscoveryDto[] | null>(null)
-  const [versions, setVersions] = useState<AgentVersionRow[]>([])
+  const [discovery, setDiscovery] = useState<AgentDiscoveryDto[] | null>(() => lastDiscovery)
+  const [versions, setVersions] = useState<AgentVersionRow[]>(() => lastVersions)
   const [catalog, setCatalog] = useState<CatalogModelDto[]>([])
   const [groups, setGroups] = useState<RoutingGroupDto[]>([])
   const [profiles, setProfiles] = useState<ProfileDto[]>([])
@@ -76,14 +84,18 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
     }
   }, [toast])
 
-  const detect = useCallback(async () => {
+  // 探测与版本查询分开落地：探测几毫秒就回来，不再等 `--version`（启动后第一次最多 3 秒）
+  const detect = useCallback(async (force = false) => {
     if (!isTauri) return
-    const [found, nextVersions] = await Promise.all([
-      gatewayApi.agentDiscovery().catch(() => null),
-      settingsApi.agentVersions().catch(() => [] as AgentVersionRow[]),
-    ])
-    setDiscovery(found)
-    setVersions(nextVersions)
+    const found = gatewayApi.agentDiscovery(force).catch(() => null).then((next) => {
+      lastDiscovery = next
+      setDiscovery(next)
+    })
+    const versioned = settingsApi.agentVersions().catch(() => [] as AgentVersionRow[]).then((next) => {
+      lastVersions = next
+      setVersions(next)
+    })
+    await Promise.all([found, versioned])
   }, [])
 
   useEffect(() => {
@@ -327,7 +339,7 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
 
   const redetect = () => {
     setBusy(true)
-    void Promise.all([detect(), loadCore()]).finally(() => setBusy(false))
+    void Promise.all([detect(true), loadCore()]).finally(() => setBusy(false))
   }
 
   if (!isTauri) {

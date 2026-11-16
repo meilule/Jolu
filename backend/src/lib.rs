@@ -1369,9 +1369,15 @@ async fn agent_versions() -> Result<Vec<agent_version::AgentVersion>, String> {
 
 /// Agent 自动发现（A1/A2，只读）：探测本机装了哪些 agent。
 /// 状态 installed / cli_missing / not_found 与命中的证据都如实返回，不猜。
+/// 命令查找按目录戳缓存；`force`（「重新检测」）先丢掉缓存再找。
 #[tauri::command]
-async fn agent_discover() -> Result<Vec<agent_discovery::AgentDiscovery>, String> {
-    tauri::async_runtime::spawn_blocking(agent_discovery::discover)
+async fn agent_discover(force: Option<bool>) -> Result<Vec<agent_discovery::AgentDiscovery>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if force.unwrap_or(false) {
+            agent_discovery::forget_bin_lookups();
+        }
+        agent_discovery::discover()
+    })
         .await
         .map_err(|error| format!("探测本机 Agent 失败：{error}"))
 }

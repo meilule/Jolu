@@ -8,7 +8,10 @@
 | T2 ZCode 数据目录跟随 | 已完成，已扩展到额度 / 账号导入 / 归因 / 本机来源 |
 | T3 目录内容甄别 | 已完成 |
 | T4 例外规则钩子 | 已完成（Gemini `CliOnly`） |
-| T5–T9 | 未开始 |
+| T5 命令查找缓存 | 已完成 |
+| T6 注册表 PATH | 已完成（并入 T5：每次取戳只读一次，不单独缓存） |
+| T7 页面不重复等待 | 已完成（方案 B：先显示上次结果、后台刷新、不节流） |
+| T8 / T9 | 可选，未开始 |
 
 ---
 
@@ -98,7 +101,57 @@
 - 单元测试 `only_gemini_uses_cli_only`：13 行规格里只有 Gemini 是 `CliOnly`；Qwen 配置残留照旧 `cli_missing`。
 - 真机：本机 `~/.gemini` 里有 Antigravity 的目录，同时装了 npm 版 Gemini CLI，所以结果仍是 `installed`（证据从 `config_file` 变为 `bin`）。「没装 CLI」的分支只有单测覆盖。
 
+## T5 / T6 · 命令查找缓存
+
+### 改动
+
+- `agent_discovery.rs`：
+  - 新增 `LookCache` 与纯逻辑 `looked`，照 magpie `proc/look.go`。答案按「目录戳」缓存，「找不到」也缓存。
+  - 每 2 秒（`LOOK_FRESH`）最多重取一次戳；戳没变答案照用。目录 100ms 内刚改过（`LOOK_SETTLE`）时戳不稳，这时什么都不留。
+  - 环境（PATH、PATHEXT、APPDATA、LOCALAPPDATA、home）一变就清空答案。
+  - 取戳和查找都不在锁里做；跨过 forget、戳变了时问到的答案不留。
+- `take_stamp`：
+  - 戳覆盖进程 PATH、通用兜底目录、注册表 PATH、各家固定落点，以及 Codex 桌面版哈希目录的根。
+  - 注册表只在这里读一次，算好的兜底目录存进缓存，未命中的查找直接复用（T6）。
+- `forget_bin_lookups()`；`agent_discover` 命令新增可选参数 `force`，为 true 时先清空缓存。
+- `agent_version` 也走 `find_bin`，同样受益。
+
+### 验证
+
+- 单元测试：
+  - `lookups_share_one_stamp_and_cache_misses`：一轮 13 家只取 1 次戳（注册表只读 1 次），各找 1 次；窗口内再来一轮，不取戳也不查找；过了窗口重取 1 次戳，戳没变不重找。
+  - `stamp_env_change_and_forget_invalidate_answers`：戳变、PATH 等环境变、forget 都会重找；forget 之后的答案照常缓存。
+  - `unsettled_stamp_keeps_nothing`：戳不稳时不缓存。
+  - `stamp_of_marks_recent_changes_unsettled`：刚改过的目录不稳；目录出现后戳会变。
+- 真机 release 实测（`discover_real_machine_readonly_smoke`）：
+
+  | 场景 | 改动前 | 改动后 |
+  |---|---|---|
+  | 首次 `discover()` | 约 100–115ms | 约 120ms（要先取戳） |
+  | 2 秒窗口内再次 | 约 100ms | 约 0.6–0.8ms |
+  | 过了窗口（重取戳、戳没变） | 约 100ms | 约 3.7ms |
+  | 「重新检测」（forget 后） | — | 约 115ms，全量重找 |
+  | 单个命令查找（命中缓存） | 4–12ms | 约 7µs |
+  | `registry_path_dirs()` | 约 0.09ms | 约 0.1ms（不是瓶颈） |
+
+## T7 · Agent 页不重复等待
+
+### 改动
+
+- `views/AgentsView.tsx`：
+  - 用模块级变量 `lastDiscovery` / `lastVersions` 跨挂载记住上次结果，组件挂载时用它们初始化，再在后台刷新，不节流。
+  - 探测和版本查询分开落地，探测结果不再等 `--version`。查询失败时清空，不拿旧结果冒充。
+  - 「重新检测」调 `detect(true)`。
+- `lib/gatewayApi.ts`：`agentDiscovery(force = false)` 把 `force` 传给后端。`GatewayView` 的调用不变。
+
+### 验证
+
+- `pnpm --dir frontend typecheck` 通过；`node --test frontend/src/lib/*.test.mjs frontend/src/hooks/*.test.mjs` 445 passed / 0 failed。
+- **未做真实桌面验证**：没有在 `pnpm tauri dev` 里实际来回切页面看效果；后端调用耗时以上表的真机实测为准。
+
 ## 全量与真机只读探测（2026-11-16）
+
+- T5–T7 完成后全量 `cargo test --manifest-path backend/Cargo.toml`：1407 passed / 0 failed / 50 ignored，没有编译警告。
 
 - 全量 `cargo test --manifest-path backend/Cargo.toml`：1403 passed / 0 failed / 49 ignored，没有编译警告。
 - 真机只读探测 `discover_real_machine_readonly_smoke`（`#[ignore]`）的结果：
