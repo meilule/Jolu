@@ -18,7 +18,15 @@
 
 `*.e2e.mjs` 用 Playwright 的 `connectOverCDP` 直接连接 9337，不经过 playwright-cli，公共部分在 `cdp.mjs`（操作前核验数据库位于 `<仓库>/output/acceptance/profile/` 下，且所在目录有 `.acceptance-profile` 标记，否则直接退出）。仓库不依赖 Playwright：先在 output 下准备一个目录，例如 `output/acceptance/node` 里执行 `npm install playwright-core`，再在该目录里用绝对路径运行脚本。可选环境变量：`JOLU_CDP`（默认 `http://127.0.0.1:9337`）、`JOLU_DEV_URL`（默认 `http://localhost:5173`）。
 
-- `main-window-smoke.e2e.mjs`：经托盘同一路径（`menu_action open_main`）打开主窗口，依次点击侧栏七个页面。每页要求「正在读取」10 秒内消失、不出现「读取失败」「扫描失败」「刷新失败」（包括 toast）、控制台没有 error 且没有未捕获异常；截图保存到 output/acceptance/main-window/<页面>.png。任一页失败时退出码为 1，输出里列出每页的问题。
+- `main-window-smoke.e2e.mjs`：经托盘同一路径（`menu_action open_main`）打开主窗口，依次点击侧栏八个页面。每页要求：
+  - 加载提示在 10 秒内消失，结束后不再出现。加载提示指懒加载占位「正在加载<页名>」和页面骨架「正在读取…」，两段都算；连续 400ms 看不到才算结束。
+  - 不出现「读取失败」「扫描失败」「刷新失败」（包括 toast）。
+  - 控制台没有 error，也没有未捕获异常。
+
+  其他说明：
+  - 失败说明里写明是哪一行加载提示、是否骨架屏的无障碍标签，以及本页每个 IPC 的耗时；加载超过 3 秒标「偏慢」（不判失败）。
+  - 截图保存到 `output/acceptance/main-window/<页面>.png`。任一页失败时退出码为 1，输出里列出每页的问题。
+  - `JOLU_SMOKE_LATENCY_MS=<毫秒>` 模拟慢环境：拦截页面懒加载的代码延迟后放行，用来确认判定在慢的时候也不误报。CDP 网络限速对 WebView2 不生效，Tauri IPC 也拦不到，所以只放慢页面代码这一段。
 - `app-notices-desktop.e2e.mjs`：需要隔离桌面及 `gateway.py`，验证真实余额查询→金额卡片→账号定位、持续低余额不重复、仅主窗口读取通知、免打扰抑制及结束后不补弹。只创建并清理本机合成网关连接、只修改隔离阈值；截图在 `output/acceptance/app-notices/`。不运行真实自动化或发送模型请求。
 - `reset-window-layout.e2e.mjs`：点击主面板「重置位置」，再经菜单与主面板命令重复重置，检查本体与分身解除停靠、隐藏主面板后仍可重置、默认尺寸恢复，以及窗口与 IPC 持续响应。仅在带标记的隔离实例运行；原生操作限时 8 秒，死锁时明确失败。
 - `four-connection-cost.e2e.mjs`：新建指向 `gateway.py` 的 Claude API 连接并设为灵动岛连接，把灵动岛切到自由位置，向隔离数据库 `requests` 表写入两条合成记录（每条 claude-sonnet-4 输入 100 万 Token，按价目表估算 $3.00）。每次写入后「恢复连接」，触发一次全局 `refresh-requested`（导入完成时发出的也是这个事件）。核对费用在同一个 DOM 节点上依次增加 $3.00；断开连接后显示「连接已断开，当前仅显示本机统计」，且仍保留所选连接。写库不经过导入代码：`import_data_file` 会弹系统文件框，无法自动化。所以「本机今日 Token」不会随之变化，脚本也不检查它。
