@@ -253,7 +253,7 @@ pub(crate) type ProviderRules = HashMap<String, ProviderRule>;
 /// 文件名与 apiKey 无关：这里只关心规则里的地址与模型清单，凭据字段整体跳过。
 fn provider_config_path() -> Option<PathBuf> {
     let home = crate::creds::home()?;
-    Some(home.join(".zcode").join("v2").join("provider_config.json"))
+    Some(crate::creds::zcode_data_dir(&home).join("v2").join("provider_config.json"))
 }
 
 /// 文件指纹：mtime（秒）+ 长度。文件不存在时是 `None`，将来出现即视为变化。

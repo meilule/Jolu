@@ -114,7 +114,7 @@ pub(crate) fn local_zcode_quota() -> QuotaState {
     let Some(home) = crate::creds::home() else {
         return QuotaState::Unauthorized { reason: "无法定位本机 ZCode 配置目录".into() };
     };
-    let dir = home.join(".zcode").join("v2");
+    let dir = crate::creds::zcode_data_dir(&home).join("v2");
     let config = match std::fs::read_to_string(dir.join("provider_config.json")) {
         Ok(config) => config,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -231,7 +231,8 @@ fn os_credential_key() -> Result<Vec<u8>, ()> {
     use windows_sys::Win32::Security::Credentials::{
         CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
     };
-    let path = crate::creds::home().ok_or(())?.join(".zcode").join("v2").join("credentials.json");
+    // 与 ZCode 一致：按 credentials.json 的实际位置（跟 dataBaseDir 走）算条目名
+    let path = crate::creds::zcode_data_dir(&crate::creds::home().ok_or(())?).join("v2").join("credentials.json");
     let account = hex_of(&sha256_bytes(path_display(&path).as_bytes()));
     let target: Vec<u16> = format!("{account}.{OS_KEY_SERVICE}").encode_utf16().chain(std::iter::once(0)).collect();
     let mut raw: *mut CREDENTIALW = std::ptr::null_mut();
@@ -300,7 +301,7 @@ fn hex_of(bytes: &[u8]) -> String {
 /// 解密复用本模块的 [`decrypt_credential`]（对明文直通），不重写一套。
 /// 只读纪律同模块说明：不写 `~/.zcode`，Key 原文不进日志与错误文案。
 pub(crate) fn coding_plan_key_at(home: &Path) -> Result<(String, &'static str), String> {
-    let dir = home.join(".zcode").join("v2");
+    let dir = crate::creds::zcode_data_dir(home).join("v2");
     let raw = std::fs::read_to_string(dir.join("credentials.json")).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             "未找到本机 ZCode 登录凭据".to_string()
@@ -389,7 +390,7 @@ fn coding_plan_key_from_config(dir: &Path, secret: &str) -> Option<(String, &'st
 /// 它只用来表达登录态（例如判定「本机确有 ZCode 登录」），不当转发凭据；
 /// 读不到或解不开都返回 None。
 pub(crate) fn coding_plan_jwt_at(home: &Path) -> Option<String> {
-    let raw = std::fs::read_to_string(home.join(".zcode").join("v2").join("credentials.json")).ok()?;
+    let raw = std::fs::read_to_string(crate::creds::zcode_data_dir(home).join("v2").join("credentials.json")).ok()?;
     let credentials: Value = serde_json::from_str(&raw).ok()?;
     let secret = credential_secret(home);
     let value = credentials.get("zcodejwttoken")?.as_str()?;
@@ -421,11 +422,12 @@ pub(crate) struct TeamSelection {
 /// 相同视为陈旧缓存，跳过（magpie 同款）。
 pub(crate) fn team_selection_at(home: &Path) -> Option<TeamSelection> {
     let setting: Value = serde_json::from_str(
-        &std::fs::read_to_string(home.join(".zcode").join("v2").join("setting.json")).ok()?,
+        // setting.json 留在 ZCode 主目录（magpie zcode_team.go 同款）；凭据跟 dataBaseDir 走
+        &std::fs::read_to_string(crate::creds::zcode_home(home).join(".zcode").join("v2").join("setting.json")).ok()?,
     )
     .ok()?;
     let credentials: Value = serde_json::from_str(
-        &std::fs::read_to_string(home.join(".zcode").join("v2").join("credentials.json")).ok()?,
+        &std::fs::read_to_string(crate::creds::zcode_data_dir(home).join("v2").join("credentials.json")).ok()?,
     )
     .ok()?;
     let secret = credential_secret(home);
@@ -510,7 +512,7 @@ fn masked_account_email(credentials: &Value, secret: &str, family: &str) -> Opti
 }
 
 fn read_account(home: &Path) -> Result<ZcodeAccount, QuotaState> {
-    let raw = std::fs::read_to_string(home.join(".zcode/v2/credentials.json")).map_err(|error| {
+    let raw = std::fs::read_to_string(crate::creds::zcode_data_dir(home).join("v2").join("credentials.json")).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             QuotaState::Unauthorized { reason: "未找到 ZCode 登录，请先在原工具登录".into() }
         } else { QuotaState::Failed { reason: "读取 ZCode 登录失败".into() } }
@@ -904,7 +906,7 @@ mod tests {
     #[ignore = "读本机 ZCode 登录与系统凭据库；仅显式只读执行"]
     fn local_v2_credentials_decrypt_readonly_smoke() {
         let home = crate::creds::home().expect("需要 USERPROFILE");
-        let raw = std::fs::read_to_string(home.join(".zcode/v2/credentials.json")).expect("未找到本机 ZCode 登录");
+        let raw = std::fs::read_to_string(crate::creds::zcode_data_dir(&home).join("v2").join("credentials.json")).expect("未找到本机 ZCode 登录");
         let credentials: Value = serde_json::from_str(&raw).unwrap();
         let secret = credential_secret(&home);
         let mut total = 0;
@@ -1238,6 +1240,25 @@ mod tests {
         assert_eq!(key, "zai-key.id-secret");
         assert_eq!(family, crate::zcode_browser_auth::FAMILY_ZAI);
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// 用户在 ZCode 设置里改过「数据存储路径」：原位置 setting.json 记着 dataBaseDir，
+    /// credentials.json 只在新位置。登录凭据要跟过去读；解密口令仍按原 home 派生（magpie
+    /// `zcodeSecret` 用的是系统用户目录，不随数据搬家）。
+    #[test]
+    fn credentials_follow_data_base_dir() {
+        let home = temp_home("moved-home");
+        let moved = temp_home("moved-data");
+        let value = serde_json::to_string(&moved.to_string_lossy()).unwrap();
+        std::fs::write(home.join(".zcode").join("v2").join("setting.json"), format!(r#"{{"dataBaseDir":{value}}}"#)).unwrap();
+        let secret = credential_secret(&home);
+        write_credentials(&moved, &serde_json::json!({
+            "account-provider:coding-plan:account:zai-individual-coding-plan:account:11111111-2222-3333-4444-555555555555:api-key": envelope(&secret, "moved-key.id-secret"),
+        }));
+        let (key, _) = coding_plan_key_at(&home).expect("凭据在 dataBaseDir 下也要读到");
+        assert_eq!(key, "moved-key.id-secret");
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&moved);
     }
 
     #[test]

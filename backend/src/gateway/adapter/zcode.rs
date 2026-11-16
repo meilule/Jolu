@@ -376,7 +376,7 @@ async fn material_at(deps: &Arc<ProxyDeps>, id: &str, origin: &str) -> Result<St
 /// `modelOrder` 是用户排序后的完整列表，`personalModelIds` 是个人放行的子集）。
 /// 读不到（旧版文件形状变了、清单为空）时返回 None，调用方走在线兜底链。
 fn config_model_order(home: &std::path::Path) -> Option<Vec<String>> {
-    let path = home.join(".zcode").join("v2").join("provider_config.json");
+    let path = crate::creds::zcode_data_dir(home).join("v2").join("provider_config.json");
     let value: Value = serde_json::from_str(&crate::steady::read_to_string(&path).ok()?).ok()?;
     let rules = value.pointer("/config/providerConfigRules/providerRules")?.as_array()?;
     // 与 coding_plan_key_at 同一选择口径：取 coding-plan access 的条目（zai 优先于 bigmodel

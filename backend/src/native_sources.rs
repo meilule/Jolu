@@ -49,7 +49,8 @@ pub fn sources_at(home: &Path, app: &Path) -> Vec<Source> {
         ),
         ("trae", "ide", "Trae IDE", app.join("Trae")),
         ("trae", "cn", "Trae 国内版", app.join("Trae CN")),
-        ("zcode", "account", "ZCode 账号", home.join(".zcode/v2/credentials.json")),
+        // 登录凭据跟 dataBaseDir 走；上面的会话库 cli/db 留在原位（见 creds::zcode_data_dir）
+        ("zcode", "account", "ZCode 账号", crate::creds::zcode_data_dir(home).join("v2").join("credentials.json")),
         (
             "qoder",
             "global",
