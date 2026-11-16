@@ -199,10 +199,19 @@ fn dir_qwen(home: &Path) -> Option<PathBuf> {
 }
 
 fn dir_kimi(home: &Path) -> Option<PathBuf> {
-    // magpie kimi.go：优先 `~/.kimi`，新版在 `~/.kimi-code`
+    // magpie kimi.go `kimiDir`：新版 Kimi Code（TypeScript 2.x）读 `~/.kimi-code`
+    // （`KIMI_CODE_HOME` 覆盖）；旧版 Python kimi-cli 读 `~/.kimi`（`KIMI_SHARE_DIR` 覆盖）。
+    // 新版目录存在时旧的不再被读（kimi-cli 1.50 起移交并只认新版，magpie #290），
+    // 所以「新版目录存在」的优先级高于旧版的环境变量。
+    if let Some(dir) = std::env::var_os("KIMI_CODE_HOME").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
     let code = home.join(".kimi-code");
     if code.is_dir() {
         return Some(code);
+    }
+    if let Some(dir) = std::env::var_os("KIMI_SHARE_DIR").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(dir));
     }
     Some(home.join(".kimi"))
 }
@@ -311,19 +320,7 @@ fn dir_vscode(home: &Path) -> Option<PathBuf> {
     Some(xdg.join("Code").join("User"))
 }
 
-// ---------- 批 2（2026-11-16）：magpie 纯声明 / 环境变量覆盖型，Standard 判定 ----------
-
-fn xdg_config(home: &Path) -> PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".config"))
-}
-
-/// Antigravity CLI：`~/.gemini/antigravity-cli`（与 Gemini 共父目录但独占子目录）。
-fn dir_agy(home: &Path) -> Option<PathBuf> {
-    Some(home.join(".gemini").join("antigravity-cli"))
-}
+// ---------- 常用 20 家补充（2026-11-16 收敛）：只保留高频工具的探测 ----------
 
 fn env_or_home(env: &str, home: &Path, dot: &str) -> Option<PathBuf> {
     Some(
@@ -334,45 +331,16 @@ fn env_or_home(env: &str, home: &Path, dot: &str) -> Option<PathBuf> {
     )
 }
 
-fn dir_atomcode(home: &Path) -> Option<PathBuf> { env_or_home("ATOMCODE_HOME", home, ".atomcode") }
-fn dir_ante(home: &Path) -> Option<PathBuf> { env_or_home("ANTE_HOME", home, ".ante") }
-fn dir_jcode(home: &Path) -> Option<PathBuf> { env_or_home("JCODE_HOME", home, ".jcode") }
-fn dir_minimax(home: &Path) -> Option<PathBuf> { env_or_home("MINIMAX_DATA_DIR", home, ".minimax") }
-fn dir_empryo(home: &Path) -> Option<PathBuf> { Some(home.join(".empryo")) }
-fn dir_commandcode(home: &Path) -> Option<PathBuf> { Some(home.join(".commandcode")) }
-fn dir_muse(home: &Path) -> Option<PathBuf> { Some(xdg_config(home).join("muse")) }
+fn dir_qoder(home: &Path) -> Option<PathBuf> { env_or_home("QODER_CONFIG_DIR", home, ".qoder") }
+fn dir_qoder_cn(home: &Path) -> Option<PathBuf> { env_or_home("QODERCN_CONFIG_DIR", home, ".qoder-cn") }
+fn dir_workbuddy(home: &Path) -> Option<PathBuf> { env_or_home("WORKBUDDY_CONFIG_DIR", home, ".workbuddy") }
 
-/// mothx：`MOTHX_DIR` 覆盖；Windows 缺省 `%APPDATA%\mothx`（用 home 推导），其余 `~/.mothx`。
-fn dir_mothx(home: &Path) -> Option<PathBuf> {
-    if let Some(d) = std::env::var_os("MOTHX_DIR").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(d));
-    }
-    #[cfg(windows)]
-    {
-        let app = home.join("AppData").join("Roaming").join("mothx");
-        if app.is_dir() { return Some(app); }
-    }
-    Some(home.join(".mothx"))
-}
-
-/// Devin：Windows `%APPDATA%\devin`，其余 XDG `devin`。
-fn dir_devin(home: &Path) -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        let app = home.join("AppData").join("Roaming").join("devin");
-        if app.is_dir() { return Some(app); }
-    }
-    Some(xdg_config(home).join("devin"))
-}
-
-/// 探测规格表。顺序即界面展示顺序，与 `agent_version::AGENTS` 一致。
-const SPECS: [Spec; 27] = [
+const SPECS: [Spec; 20] = [
     Spec { agent: "claude-code", name: "Claude Code", bin: "claude", dir: dir_claude, file: "settings.json", sign_in: ".credentials.json", detect: Detect::Standard, bin_not: None },
     Spec { agent: "codex", name: "Codex", bin: "codex", dir: dir_codex, file: "config.toml", sign_in: "auth.json", detect: Detect::Standard, bin_not: None },
     Spec { agent: "zcode", name: "ZCode", bin: "zcode", dir: dir_zcode, file: "v2/provider_config.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "gemini", name: "Gemini CLI", bin: "gemini", dir: dir_gemini, file: ".env", sign_in: "", detect: Detect::CliOnly, bin_not: None },
     Spec { agent: "opencode", name: "OpenCode", bin: "opencode", dir: dir_opencode, file: "opencode.json", sign_in: "", detect: Detect::Standard, bin_not: None },
-    // 以下 8 家只有探测（没有专门接线），接入走「通用接入」手填键名
     Spec { agent: "qwen", name: "Qwen Code", bin: "qwen", dir: dir_qwen, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "kimi", name: "Kimi CLI", bin: "kimi", dir: dir_kimi, file: "config.toml", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "cline", name: "Cline", bin: "cline", dir: dir_cline, file: "settings/providers.json", sign_in: "", detect: Detect::Standard, bin_not: None },
@@ -381,23 +349,13 @@ const SPECS: [Spec; 27] = [
     Spec { agent: "crush", name: "Crush", bin: "crush", dir: dir_crush, file: "crush.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "goose", name: "Goose", bin: "goose", dir: dir_goose, file: "config.yaml", sign_in: "", detect: Detect::Standard, bin_not: Some(go_program) },
     Spec { agent: "continue", name: "Continue", bin: "cn", dir: dir_continue, file: "config.yaml", sign_in: "", detect: Detect::Standard, bin_not: None },
-    // 批 1（2026-11-16）：magpie 能探测、本机也存在；只探测，接入走通用接入。
-    // Pencil / VS Code 无 CLI 属正常（桌面应用），配置在即可接入。
     Spec { agent: "pencil", name: "Pencil", bin: "", dir: dir_pencil, file: "models.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "dsh", name: "DeepSeek Harness", bin: "dsh", dir: dir_dsh, file: "config.yaml", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "copilot", name: "Copilot CLI", bin: "copilot", dir: dir_copilot, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "vscode", name: "VS Code", bin: "", dir: dir_vscode, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
-    // 批 2（2026-11-16）：magpie 纯声明 / 环境变量覆盖型
-    Spec { agent: "agy", name: "Antigravity CLI", bin: "agy", dir: dir_agy, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
-    Spec { agent: "atomcode", name: "AtomCode", bin: "atomcode", dir: dir_atomcode, file: "config.toml", sign_in: "", detect: Detect::Standard, bin_not: None },
-    Spec { agent: "ante", name: "Ante", bin: "ante", dir: dir_ante, file: "catalog.json", sign_in: "", detect: Detect::Standard, bin_not: None },
-    Spec { agent: "jcode", name: "jcode", bin: "jcode", dir: dir_jcode, file: "config.toml", sign_in: "", detect: Detect::Standard, bin_not: None },
-    Spec { agent: "minimax", name: "MiniMax Code", bin: "mcode", dir: dir_minimax, file: "config.yaml", sign_in: "", detect: Detect::Standard, bin_not: None },
-    Spec { agent: "empryo", name: "Empryo", bin: "empryo", dir: dir_empryo, file: "config.json", sign_in: "", detect: Detect::Standard, bin_not: None },
-    Spec { agent: "commandcode", name: "Command Code", bin: "command-code", dir: dir_commandcode, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
-    Spec { agent: "muse", name: "Muse", bin: "muse", dir: dir_muse, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
-    Spec { agent: "mothx", name: "Mothx", bin: "mothx", dir: dir_mothx, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
-    Spec { agent: "devin", name: "Devin", bin: "devin", dir: dir_devin, file: "config.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "qoder", name: "Qoder", bin: "qodercli", dir: dir_qoder, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "qoder-cn", name: "Qoder CN", bin: "qoderclicn", dir: dir_qoder_cn, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "workbuddy", name: "WorkBuddy", bin: "", dir: dir_workbuddy, file: "models.json", sign_in: "", detect: Detect::Standard, bin_not: None },
 ];
 
 /// 一家 agent 的发现结果。

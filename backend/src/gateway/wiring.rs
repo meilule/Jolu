@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use crate::gateway::wiring_store::{Applied, TierModels, WiringRecord};
 
 /// 支持的 agent 标识（与 `providerCatalog` 的平台 id 对齐）。
-pub const AGENTS: [&str; 5] = ["claude-code", "codex", "zcode", "gemini", "opencode"];
+pub const AGENTS: [&str; 6] = ["claude-code", "codex", "zcode", "gemini", "opencode", "kimi"];
 
 pub fn is_agent(agent: &str) -> bool {
     AGENTS.contains(&agent)
@@ -1017,6 +1017,247 @@ fn zcode_current_token(text: &str) -> Option<String> {
     zcode_rule(text)?.pointer("/config/access/apiKey")?.as_str().map(str::to_string)
 }
 
+/* ─────────────────────────── Kimi CLI / Kimi Code（config.toml） ───────────────────────────
+ * 参照 magpie `internal/agent/kimi.go`。Kimi 的 config.toml 里：
+ *   - `providers.<名字>`：上游供应商（base_url / api_key / type 等）；
+ *   - `models."<本地名>"`：模型表——`provider` 指到上面的供应商、`model` 是发给上游的模型名、
+ *     `max_context_size` 告诉 Kimi 什么时候压缩上下文；`/model` 选择器与状态栏显示的是本地名。
+ * 接线 = 写 `providers.jolu` + 一组 `models."jolu/<网关模型 id>"` 表 + `default_model`。
+ * 本地名带 `jolu/` 前缀只是为了断开时能按前缀找到我们写的表（用户不会起这种名字），
+ * 发给上游的 `model` 用的是表里的 `model` 字段（网关可路由的 `来源/模型`），前缀不出本机。
+ */
+
+/// Kimi 的 provider 段名与模型表前缀（同 magpie 的 magpieID）。
+const KIMI_PROVIDER: &str = "jolu";
+/// 上下文不知道时写的值：Kimi 必须要一个数，超了它会压缩会话（magpie kimiContext）。
+const KIMI_DEFAULT_CONTEXT: i64 = 128_000;
+
+/// Kimi 的配置目录，附带是否旧版：新版 Kimi Code（TypeScript 2.x）读 `~/.kimi-code`
+/// （`KIMI_CODE_HOME` 覆盖），旧版 Python kimi-cli 读 `~/.kimi`（`KIMI_SHARE_DIR` 覆盖）；
+/// 新版目录存在时旧的不再被读（magpie #290）。两处都不存在时默认写到 `~/.kimi-code`
+/// （首次接线时代码会建目录）；探测侧 [`crate::agent_discovery`] 的同名逻辑保持一致。
+/// 与 [`zcode_dir`] 同理：接线需要「legacy」这个探测规格表没有的信息（旧版 kimi-cli
+/// 不认 `capabilities` 里的 `tool_use`，写了会拒绝启动），所以单独再算一遍目录。
+fn kimi_dir(home: &Path) -> (PathBuf, bool) {
+    if let Some(dir) = std::env::var_os("KIMI_CODE_HOME").filter(|value| !value.is_empty()) {
+        return (PathBuf::from(dir), false);
+    }
+    let code = home.join(".kimi-code");
+    if code.is_dir() {
+        return (code, false);
+    }
+    if let Some(dir) = std::env::var_os("KIMI_SHARE_DIR").filter(|value| !value.is_empty()) {
+        return (PathBuf::from(dir), true);
+    }
+    (home.join(".kimi"), true)
+}
+
+/// 读 `providers.jolu` 表（只读；状态判定用）；不存在或不是表时返回 None。
+fn kimi_provider_read<'a>(document: &'a toml_edit::DocumentMut) -> Option<&'a toml_edit::Table> {
+    document.get("providers")?.as_table()?.get(KIMI_PROVIDER)?.as_table()
+}
+
+fn kimi_current_base(text: &str) -> Option<String> {
+    let document = text.parse::<toml_edit::DocumentMut>().ok()?;
+    let base = kimi_provider_read(&document)?.get("base_url")?.as_str()?.trim().to_string();
+    (!base.is_empty()).then_some(base)
+}
+
+fn kimi_current_token(text: &str) -> Option<String> {
+    let document = text.parse::<toml_edit::DocumentMut>().ok()?;
+    let token = kimi_provider_read(&document)?.get("api_key")?.as_str()?.trim().to_string();
+    (!token.is_empty()).then_some(token)
+}
+
+/// 顶层 default_model 是否指向我们的模型表（`jolu/` 前缀）。
+fn kimi_default_ours(document: &toml_edit::DocumentMut) -> bool {
+    document
+        .get("default_model")
+        .and_then(|value| value.as_str())
+        .is_some_and(|model| model.trim().starts_with(&format!("{KIMI_PROVIDER}/")))
+}
+
+/// 接线：写 providers.jolu（就地更新，保留用户自加的 custom_headers 等）+ 重建全部
+/// `models."jolu/..."` 表 + 设 default_model。返回新文件内容；快照见 [`kimi_snapshot`]。
+/// 参照 magpie `kimiIn` 的 writeMagpie / kimiModelTables / setDefault。
+/// 与 magpie 的差异：magpie 用 stash 记住「上次写过的值」来区分用户手改（kimiOwn），
+/// Jolu 第一版简化为「表里已有的 display_name / max_output_size 一律保留」——
+/// 效果是用户手改不丢，代价是目录改名后旧显示名会留着，直到断开重接。
+fn kimi_wire(
+    text: &str,
+    base: &str,
+    token: &str,
+    model: Option<&str>,
+    models: &[ZcodeModel],
+    legacy: bool,
+) -> Result<String, String> {
+    if models.is_empty() {
+        return Err("网关模型清单为空；先在「模型池」里启用要提供给 Kimi 的模型".into());
+    }
+    let mut document = parse_toml_document(text, "config.toml")?;
+    // 快照：接线前用户自己的 default_model（断开时还原；magpie 同款 stash 语义）
+    let saved_default = document
+        .get("default_model")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|model| !model.is_empty() && !model.starts_with(&format!("{KIMI_PROVIDER}/")))
+        .map(str::to_string);
+    // providers.jolu：段是表时就地更新（magpie kimiProvider：整表重写会把
+    // 用户设的 custom_headers、env 以及挂在 provider 上的 default_model 冲掉，magpie #2030）；
+    // jolu 键本身不是表（配置写坏）则换成表；providers 段整个不在（首次接线）才重建段。
+    // 写坏的场景文件在磁盘上有备份（commit_plan 的 backup），不会丢数据
+    if document.get("providers").map(|value| value.is_table()).unwrap_or(false) {
+        let providers = document.get_mut("providers").and_then(|value| value.as_table_mut()).expect("上面判定过是表");
+        if !providers.get(KIMI_PROVIDER).map(|value| value.is_table()).unwrap_or(false) {
+            providers.insert(KIMI_PROVIDER, toml_edit::Item::Table(toml_edit::Table::new()));
+        }
+        let table = providers.get_mut(KIMI_PROVIDER).and_then(|value| value.as_table_mut()).expect("上一步刚换成表");
+        table["type"] = toml_edit::value("kimi");
+        table["base_url"] = toml_edit::value(base);
+        table["api_key"] = toml_edit::value(token);
+    } else {
+        let mut table = toml_edit::Table::new();
+        table["type"] = toml_edit::value("kimi");
+        table["base_url"] = toml_edit::value(base);
+        table["api_key"] = toml_edit::value(token);
+        let mut providers = toml_edit::Table::new();
+        providers.insert(KIMI_PROVIDER, toml_edit::Item::Table(table));
+        document.insert("providers", toml_edit::Item::Table(providers));
+    }
+    let prefix = format!("{KIMI_PROVIDER}/");
+    // 旧 `jolu/` 表里用户保留值（display_name / max_output_size）先收走——下面要整表删掉重写
+    let mut kept: std::collections::HashMap<String, (Option<String>, Option<i64>)> = std::collections::HashMap::new();
+    if let Some(models_table) = document.get_mut("models").and_then(|value| value.as_table_mut()) {
+        for (name, item) in models_table.iter() {
+            if !name.starts_with(&prefix) {
+                continue;
+            }
+            let display = item.get("display_name").and_then(|value| value.as_str()).map(str::to_string).filter(|value| !value.is_empty());
+            let output = item.get("max_output_size").and_then(|value| value.as_str()).and_then(|value| value.trim().replace('_', "").parse::<i64>().ok()).filter(|value| *value > 0);
+            kept.insert(name.to_string(), (display, output));
+        }
+    }
+    // 模型表：删掉全部旧 `jolu/` 表再重写——目录里模型改名或停用后，旧表不能残留
+    if let Some(models_table) = document.get_mut("models").and_then(|value| value.as_table_mut()) {
+        let ours: Vec<String> = models_table
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .filter(|name| name.starts_with(&prefix))
+            .collect();
+        for name in ours {
+            models_table.remove(&name);
+        }
+    }
+    // `models` 段不存在就建；是别的类型（配置写坏）时整体换成表
+    if !document.get("models").map(|value| value.is_table()).unwrap_or(false) {
+        document.insert("models", toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+    let models_table = document.get_mut("models").and_then(|value| value.as_table_mut()).expect("上一步刚建成表");
+    for entry in models {
+        // 本地名 = `jolu/<网关模型 id>`；发给上游的 model 字段 = 网关模型 id 本身，
+        // Kimi 按 model 字段发请求，网关按 `来源/模型` 选路。表键的引号交给 toml_edit 处理
+        let name = format!("{prefix}{}", entry.id);
+        let old = kept.get(&name).cloned().unwrap_or((None, None));
+        let mut table = toml_edit::Table::new();
+        table["provider"] = toml_edit::value(KIMI_PROVIDER);
+        table["model"] = toml_edit::value(&entry.id);
+        table["max_context_size"] = toml_edit::value(if entry.context > 0 { entry.context } else { KIMI_DEFAULT_CONTEXT });
+        // /model 选择器与状态栏显示的名字：目录给了别称才写（等于 id 时 Kimi 自己会显示 id）；
+        // 旧表里已有值（用户手改或上次接线写的）优先保留，见函数头注释的 magpie 差异
+        if entry.name != entry.id {
+            let display = old.0.unwrap_or_else(|| entry.name.clone());
+            table["display_name"] = toml_edit::value(display);
+        }
+        // capabilities：旧版 kimi-cli 不认 tool_use（写了拒绝启动）；Jolu 目录暂无 thinking
+        // 档数据，所以不写 thinking（magpie 会在模型有推理档位时加）
+        let mut capabilities: Vec<String> = Vec::new();
+        if entry.image {
+            capabilities.push("image_in".into());
+        }
+        if !legacy {
+            capabilities.push("tool_use".into());
+        }
+        if !capabilities.is_empty() {
+            let mut array = toml_edit::Array::new();
+            for item in &capabilities {
+                array.push(item.as_str());
+            }
+            table["capabilities"] = toml_edit::Item::Value(toml_edit::Value::Array(array));
+        }
+        // 输出上限：新版 Kimi Code 会拿它发 max_completion_tokens（kimi-cli 没有这个键）。
+        // 旧表里已有合法整数就保留；别的值（字符串等）按没设处理，写我们的（magpie kimiInt）
+        if !legacy && entry.output > 0 {
+            table["max_output_size"] = toml_edit::value(old.1.unwrap_or(entry.output));
+        }
+        models_table.insert(&name, toml_edit::Item::Table(table));
+    }
+    // default_model：UI 指定的优先（`jolu/<id>`）；其次保留仍在我们清单里的旧值；
+    // 都没有（首次接线、或用户原来指着自己的供应商）就用第一个——接线就是把流量引到网关
+    let chosen = model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(|model| format!("{prefix}{model}"))
+        .or_else(|| {
+            let current = document.get("default_model").and_then(|value| value.as_str()).map(str::trim).map(str::to_string);
+            current.filter(|value| value.starts_with(&prefix) && models.iter().any(|entry| format!("{prefix}{}", entry.id) == *value))
+        })
+        .unwrap_or_else(|| format!("{prefix}{}", models[0].id));
+    document["default_model"] = toml_edit::value(chosen);
+    Ok(document.to_string())
+}
+
+/// 断开：删全部 `jolu/` 模型表与 providers.jolu；default_model 是我们的才还原成
+/// 快照里的原值，且原模型表还在才写回（表没了会变成悬空引用，magpie ownModel 同款判断）。
+/// 当前 default_model 已被用户改成别的（非 `jolu/`）时不动——外部意图优先。
+fn kimi_restore(text: &str, saved: Option<&serde_json::Value>) -> Result<String, String> {
+    let mut document = parse_toml_document(text, "config.toml")?;
+    if let Some(models_table) = document.get_mut("models").and_then(|value| value.as_table_mut()) {
+        let ours: Vec<String> = models_table
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .filter(|name| name.starts_with(&format!("{KIMI_PROVIDER}/")))
+            .collect();
+        for name in ours {
+            models_table.remove(&name);
+        }
+    }
+    if let Some(providers) = document.get_mut("providers").and_then(|value| value.as_table_mut()) {
+        providers.remove(KIMI_PROVIDER);
+    }
+    if kimi_default_ours(&document) {
+        let original = saved.and_then(|saved| saved.get("default_model")).and_then(|value| value.as_str()).map(str::trim).filter(|value| !value.is_empty());
+        // 原来的默认模型得还有表可指（用户可能已把那张表删了）
+        let exists = original
+            .map(|model| document.get("models").and_then(|value| value.get(model)).is_some())
+            .unwrap_or(false);
+        match (original, exists) {
+            (Some(model), true) => document["default_model"] = toml_edit::value(model),
+            _ => {
+                document.remove("default_model");
+            }
+        }
+    }
+    Ok(document.to_string())
+}
+
+/// 快照：接线前用户自己的 default_model（是我们的值则不用存，断开时按「原来没有」处理）。
+fn kimi_snapshot(text: &str) -> Option<serde_json::Value> {
+    let document = text.parse::<toml_edit::DocumentMut>().ok()?;
+    if kimi_default_ours(&document) {
+        return None;
+    }
+    let model = document.get("default_model").and_then(|value| value.as_str()).map(str::trim).filter(|value| !value.is_empty())?;
+    Some(serde_json::json!({ "default_model": model }))
+}
+
+/// TOML 解析的公共入口：空文件按空文档处理（首次接线还没生成 config.toml）。
+fn parse_toml_document(text: &str, what: &str) -> Result<toml_edit::DocumentMut, String> {
+    if text.trim().is_empty() {
+        return Ok(toml_edit::DocumentMut::new());
+    }
+    text.parse::<toml_edit::DocumentMut>().map_err(|error| format!("{what} 格式无效：{error}"))
+}
+
 /// dotenv 键值写入：保留其它行与注释，只替换目标键（不存在则追加）。
 fn wire_dotenv(text: &str, key: &str, value: Option<&str>) -> String {
     let prefix = format!("{key}=");
@@ -1091,6 +1332,8 @@ fn config_path(agent: &str) -> Option<PathBuf> {
             .unwrap_or_else(|| home.join(".config"))
             .join("opencode")
             .join("opencode.json"),
+        // Kimi CLI / Kimi Code（magpie kimi.go kimiDir：新版 `~/.kimi-code`，旧版 `~/.kimi`）
+        "kimi" => kimi_dir(&home).0.join("config.toml"),
         _ => return None,
     })
 }
@@ -1181,6 +1424,7 @@ fn foreign_marker(agent: &str, text: &str, instance_short: &str) -> Option<Strin
         "gemini" => gemini_current_token(text),
         "opencode" => opencode_current_token(text),
         "zcode" => zcode_current_token(text),
+        "kimi" => kimi_current_token(text),
         _ => None,
     }?;
     if !token.starts_with("jolu-") {
@@ -1219,6 +1463,16 @@ fn ours_with(agent: &str, text: &str, port: u16, instance_short: &str, kept: Opt
         }
         "opencode" => opencode_current_base(text).is_some_and(|base| points_at_gateway(&base, port)),
         "zcode" => zcode_current_base(text).is_some_and(|base| points_at_gateway(&base, port)),
+        // Kimi：provider 指到网关还不够——default_model 还得是我们的模型表（`jolu/` 前缀），
+        // 否则流量根本不经过我们（magpie Check：models 表或 provider 表不在都算「不再走网关」）
+        "kimi" => {
+            let base = kimi_current_base(text).unwrap_or_default();
+            let token = kimi_current_token(text).unwrap_or_default();
+            points_at_gateway(&base, port)
+                && (token == token_for("kimi", instance_short)
+                    || kept.is_some_and(|kept| !kept.is_empty() && token == kept))
+                && text.parse::<toml_edit::DocumentMut>().map(|document| kimi_default_ours(&document)).unwrap_or(false)
+        }
         _ => false,
     }
 }
@@ -1377,6 +1631,7 @@ fn restart_notice(agent: &str) -> &'static str {
         "codex" => "保留 ChatGPT 登录时只改请求地址；需重启 Codex 后生效",
         "opencode" => "需重启该工具后生效",
         "zcode" => "需重启 ZCode 后生效",
+        "kimi" => "需重启 Kimi 后生效",
         _ => "需重启后生效",
     }
 }
@@ -1430,7 +1685,8 @@ pub(crate) fn plan_wire(
     tier_about: &dyn Fn(&str) -> (Option<String>, Option<String>),
     extras: &ClaudeExtras,
     holds: &dyn Fn(&str) -> bool,
-    zcode_models: &[ZcodeModel],
+    // 网关模型目录（zcode / kimi 用）：写进对方配置的模型清单来自这里
+    catalog_models: &[ZcodeModel],
 ) -> Result<WirePlan, String> {
     let path = config_path(agent).ok_or("未找到用户目录")?;
     let base = format!("http://127.0.0.1:{port}");
@@ -1480,8 +1736,14 @@ pub(crate) fn plan_wire(
             let home = crate::creds::home().ok_or("未找到用户目录")?;
             let config_path = zcode_dir(&home).join("v2").join("config.json");
             let config_text = crate::steady::read_optional(&config_path).map_err(|error| format!("读取 {} 失败：{error}", config_path.display()))?.unwrap_or_default();
-            extra_files.push((config_path, zcode_config_wire(&config_text, &base, &token, zcode_models)?.into_bytes()));
-            (zcode_rules_wire(&original, &base, &token, zcode_models)?, None)
+            extra_files.push((config_path, zcode_config_wire(&config_text, &base, &token, catalog_models)?.into_bytes()));
+            (zcode_rules_wire(&original, &base, &token, catalog_models)?, None)
+        }
+        "kimi" => {
+            // 旧版 kimi-cli（~/.kimi）不认 tool_use 等新键；写哪个目录按 kimi_dir 的判定
+            let home = crate::creds::home().ok_or("未找到用户目录")?;
+            let legacy = kimi_dir(&home).1;
+            (kimi_wire(&original, &base, &token, model, catalog_models, legacy)?, kimi_snapshot(&original))
         }
         _ => return Err("该工具不在接线范围".into()),
     };
@@ -1492,7 +1754,7 @@ pub(crate) fn plan_wire(
         token: if agent == "codex" {
             (!codex_oauth).then(|| token.clone())
         } else {
-            matches!(agent, "claude-code" | "gemini" | "opencode" | "zcode").then(|| token.clone())
+            matches!(agent, "claude-code" | "gemini" | "opencode" | "zcode" | "kimi").then(|| token.clone())
         },
         provider: (agent == "codex" && !codex_oauth).then(|| CODEX_PROVIDER.to_string()),
         mode: (agent == "codex").then(|| if codex_oauth { "oauth" } else { "provider" }.to_string()),
@@ -1663,6 +1925,14 @@ pub(crate) fn plan_unwire(agent: &str, port: u16, record: Option<&WiringRecord>)
                 return Ok(None);
             }
             opencode_restore(&original, saved.as_ref())?
+        }
+        "kimi" => {
+            let base_ours = kimi_current_base(&original).is_some_and(|base| is_gateway_value(&base));
+            let token_ours = kimi_current_token(&original).is_some_and(|token| token.starts_with("jolu-"));
+            if !base_ours && !token_ours {
+                return Ok(None);
+            }
+            kimi_restore(&original, saved.as_ref())?
         }
         _ => return Err("该工具不在接线范围".into()),
     };
@@ -2268,6 +2538,130 @@ mod tests {
         assert!(wired["provider"].get("builtin:zai").is_some());
         let restored: serde_json::Value = serde_json::from_str(&zcode_config_restore(&wired.to_string()).unwrap()).unwrap();
         assert!(restored["provider"].get("jolu").is_none() && restored["provider"].get("builtin:zai").is_some());
+    }
+
+    // ---------- Kimi（config.toml；参照 magpie kimi.go 的行为） ----------
+
+    fn kimi_models() -> Vec<ZcodeModel> {
+        vec![
+            ZcodeModel { id: "zcode/GLM-5.3".into(), name: "GLM-5.3".into(), context: 200_000, output: 32_768, image: true },
+            ZcodeModel { id: "grok/grok-4".into(), name: "grok/grok-4".into(), context: 0, output: 0, image: false },
+        ]
+    }
+
+    /// 读接线后 config.toml 里 `models."jolu/<id>"` 表（不存在时 panic，便于断言）。
+    fn kimi_table(text: &str, id: &str) -> toml_edit::Table {
+        text.parse::<toml_edit::DocumentMut>()
+            .unwrap()
+            .get("models")
+            .and_then(|models| models.get(&format!("jolu/{id}")))
+            .and_then(|item| item.as_table())
+            .cloned()
+            .unwrap_or_else(|| panic!("缺少 models.\"jolu/{id}\" 表：{text}"))
+    }
+
+    fn kimi_str(table: &toml_edit::Table, key: &str) -> String {
+        table.get(key).and_then(|value| value.as_str()).unwrap_or_default().to_string()
+    }
+
+    #[test]
+    fn kimi_wire_writes_provider_tables_default_and_round_trips() {
+        let models = kimi_models();
+        // 空配置首次接线：目录不存在也要能写成完整 config.toml
+        let (wired, snapshot) = (kimi_wire("", "http://127.0.0.1:12731", "jolu-kimi.abcd1234", None, &models, false).unwrap(), kimi_snapshot(""));
+        assert!(snapshot.is_none(), "原来没有 default_model 就不用存");
+        let document = wired.parse::<toml_edit::DocumentMut>().unwrap();
+        let provider = kimi_provider_read(&document).unwrap();
+        assert_eq!(kimi_str(provider, "type"), "kimi");
+        assert_eq!(kimi_str(provider, "base_url"), "http://127.0.0.1:12731");
+        assert_eq!(kimi_str(provider, "api_key"), "jolu-kimi.abcd1234");
+        // 第一个模型：全字段；上下文/输出/图片都来自目录
+        let first = kimi_table(&wired, "zcode/GLM-5.3");
+        assert_eq!(kimi_str(&first, "provider"), "jolu");
+        assert_eq!(kimi_str(&first, "model"), "zcode/GLM-5.3", "发给上游的是网关模型 id，网关按它选路");
+        assert_eq!(kimi_str(&first, "display_name"), "GLM-5.3", "目录给了别称");
+        assert_eq!(first.get("max_context_size").and_then(|v| v.as_integer()), Some(200_000));
+        assert_eq!(first.get("max_output_size").and_then(|v| v.as_integer()), Some(32_768));
+        let caps: Vec<String> = first.get("capabilities").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+        assert!(caps.contains(&"image_in".to_string()) && caps.contains(&"tool_use".to_string()), "{caps:?}");
+        // 第二个模型：目录缺上下文退 128000（magpie kimiContext）、无输出上限、名字等于 id 就不写 display_name
+        let second = kimi_table(&wired, "grok/grok-4");
+        assert_eq!(second.get("max_context_size").and_then(|v| v.as_integer()), Some(128_000));
+        assert!(second.get("display_name").is_none());
+        assert!(second.get("max_output_size").is_none());
+        let caps: Vec<String> = second.get("capabilities").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+        assert_eq!(caps, vec!["tool_use".to_string()], "{caps:?}");
+        // 默认模型 = 清单第一个
+        assert_eq!(document.get("default_model").and_then(|v| v.as_str()), Some("jolu/zcode/GLM-5.3"));
+        // 状态判定：base + token + default_model 都是才算已接入
+        assert!(ours_with("kimi", &wired, 12731, "abcd1234", None));
+        // 断开：原来没有 default_model → 连键一起删；我们的表与 provider 不留残余
+        let restored = kimi_restore(&wired, None).unwrap();
+        let document = restored.parse::<toml_edit::DocumentMut>().unwrap();
+        assert!(kimi_provider_read(&document).is_none());
+        assert!(document.get("default_model").is_none());
+        let leftover = document.get("models").map(|models| models.as_table().map(|t| t.iter().any(|(name, _)| name.starts_with("jolu/"))).unwrap_or(false)).unwrap_or(false);
+        assert!(!leftover, "不能留下 jolu 模型表：{restored}");
+    }
+
+    #[test]
+    fn kimi_wire_keeps_user_keys_and_restore_brings_back_their_default() {
+        let original = "default_model = \"mine/m1\"\n\
+            \n\
+            [providers.jolu]\n\
+            base_url = \"https://direct\"\n\
+            api_key = \"user-key\"\n\
+            custom_headers = { X-Flag = \"1\" }\n\
+            \n\
+            [models.\"mine/m1\"]\n\
+            provider = \"mine\"\n\
+            model = \"m1\"\n";
+        let snapshot = kimi_snapshot(original).unwrap();
+        assert_eq!(snapshot["default_model"], "mine/m1", "用户自己的 default_model 要存快照");
+        let wired = kimi_wire(original, "http://127.0.0.1:12731", "jolu-kimi.abcd1234", None, &kimi_models(), false).unwrap();
+        let document = wired.parse::<toml_edit::DocumentMut>().unwrap();
+        let provider = kimi_provider_read(&document).unwrap();
+        assert_eq!(kimi_str(provider, "base_url"), "http://127.0.0.1:12731");
+        assert_eq!(kimi_str(provider, "api_key"), "jolu-kimi.abcd1234");
+        assert_eq!(provider.get("custom_headers").and_then(|h| h.get("X-Flag")).and_then(|v| v.as_str()), Some("1"), "用户自加的键不能丢（magpie #2030）");
+        assert!(document.get("models").and_then(|models| models.get("mine/m1")).is_some(), "用户自己的模型表不能动");
+        assert_eq!(document.get("default_model").and_then(|v| v.as_str()), Some("jolu/zcode/GLM-5.3"), "接线就把默认模型引到网关");
+        // 断开：default_model 还原回用户原值（那张表还在），其余同上
+        let restored = kimi_restore(&wired, Some(&snapshot)).unwrap();
+        let document = restored.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(document.get("default_model").and_then(|v| v.as_str()), Some("mine/m1"));
+        assert!(kimi_provider_read(&document).is_none());
+        assert!(document.get("models").and_then(|models| models.get("mine/m1")).is_some());
+    }
+
+    #[test]
+    fn kimi_wire_legacy_omits_the_keys_old_kimi_cli_cannot_read() {
+        let wired = kimi_wire("", "http://127.0.0.1:12731", "t", None, &kimi_models(), true).unwrap();
+        // 旧版仍认 image_in（magpie 同款），但不写 tool_use；max_output_size 是新版键
+        let first = kimi_table(&wired, "zcode/GLM-5.3");
+        let caps: Vec<String> = first.get("capabilities").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+        assert_eq!(caps, vec!["image_in".to_string()], "{caps:?}");
+        assert!(first.get("max_output_size").is_none(), "旧版没有这个键");
+        // 不带图片的模型在旧版下连 capabilities 都不写
+        let second = kimi_table(&wired, "grok/grok-4");
+        assert!(second.get("capabilities").is_none());
+    }
+
+    #[test]
+    fn kimi_restore_leaves_a_default_the_user_switched_to() {
+        let wired = kimi_wire("", "http://127.0.0.1:12731", "t", None, &kimi_models(), false).unwrap();
+        // 接线后用户在 Kimi 里把默认模型换成自己的：断开不能改回去（外部意图优先）
+        let user_changed = wired.replace("default_model = \"jolu/zcode/GLM-5.3\"", "default_model = \"mine/m1\"");
+        let restored = kimi_restore(&user_changed, Some(&serde_json::json!({"default_model": "mine/m1"}))).unwrap();
+        assert_eq!(restored.parse::<toml_edit::DocumentMut>().unwrap().get("default_model").and_then(|v| v.as_str()), Some("mine/m1"));
+    }
+
+    #[test]
+    fn kimi_restore_drops_a_default_whose_table_is_gone() {
+        // 快照里的默认模型指向一张已经不存在的表：不能写出悬空引用（magpie ownModel 判断）
+        let wired = kimi_wire("", "http://127.0.0.1:12731", "t", None, &kimi_models(), false).unwrap();
+        let restored = kimi_restore(&wired, Some(&serde_json::json!({"default_model": "mine/gone"}))).unwrap();
+        assert!(restored.parse::<toml_edit::DocumentMut>().unwrap().get("default_model").is_none());
     }
 
     #[test]

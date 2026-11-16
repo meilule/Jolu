@@ -7,7 +7,7 @@
 import type { AgentDiscoveryDto, CustomAgentDto, WiringStatusDto } from "./gatewayApi.ts"
 
 /** Jolu 能接线的工具（与后端 `wiring::AGENTS` 一致） */
-export const WIRABLE_AGENTS = ["claude-code", "codex", "gemini", "opencode", "zcode"] as const
+export const WIRABLE_AGENTS = ["claude-code", "codex", "gemini", "opencode", "zcode", "kimi"] as const
 
 /** 自定义工具（没有官方 logo）的首字母小方块；Jolu 支持的工具用官方 logo，见 `AgentBadge` */
 export function agentBadge(_agent: string, name: string): { bg: string; glyph: string } {
@@ -21,6 +21,7 @@ export const AGENT_PLATFORM: Readonly<Record<string, string>> = {
   gemini: "gemini",
   opencode: "opencode",
   zcode: "zcode",
+  kimi: "kimi",
 }
 
 export type AgentGroup = "wired" | "available" | "blocked"
@@ -103,10 +104,15 @@ const AVAILABLE_SUBTITLES: Readonly<Record<string, string>> = {
 }
 
 function wiringName(agent: string): string {
-  return ({ "claude-code": "Claude Code", codex: "Codex", gemini: "Gemini CLI", opencode: "OpenCode", zcode: "ZCode",
+  return ({ "claude-code": "Claude Code", codex: "Codex", gemini: "Gemini CLI", opencode: "OpenCode", zcode: "ZCode", kimi: "Kimi CLI",
     pencil: "Pencil", dsh: "DeepSeek Harness", copilot: "Copilot CLI", vscode: "VS Code",
     agy: "Antigravity CLI", atomcode: "AtomCode", ante: "Ante", jcode: "jcode", minimax: "MiniMax Code",
-    empryo: "Empryo", commandcode: "Command Code", muse: "Muse", mothx: "Mothx", devin: "Devin" } as Record<string, string>)[agent] ?? agent
+    empryo: "Empryo", commandcode: "Command Code", muse: "Muse", mothx: "Mothx", devin: "Devin",
+    codebuddy: "CodeBuddy Code", grok: "Grok Build", hanako: "OpenHanako", snow: "Snow CLI", astrbot: "AstrBot",
+    morph: "Mister Morph", openchamber: "OpenChamber", "grok-app": "Grok App", qoder: "Qoder", "qoder-cn": "Qoder CN",
+    pi: "Pi", workbuddy: "WorkBuddy", hermes: "Hermes Agent", fx: "fx", stepcode: "StepCode", newmax: "NewMax",
+    raycast: "Raycast", penguin: "Penguin", omo: "Omo", prime: "Prime Agent", air: "JetBrains Air", reasonix: "Reasonix",
+    openpencil: "OpenPencil", alma: "Alma", cindy: "Cindy", aionui: "AionUi", "vscode-insiders": "VS Code Insiders", vscodium: "VSCodium" } as Record<string, string>)[agent] ?? agent
 }
 
 export const GROUP_LABELS: Record<AgentGroup, string> = { wired: "已接入", available: "可以接入", blocked: "暂时不能接入" }
@@ -240,6 +246,12 @@ export function wireExplanation(agent: string): { icon: "file" | "shield" | "und
       return [
         { icon: "file", text: "在 ZCode 的模型配置里新增一个指向本机模型路由的 provider" },
         { icon: "shield", text: "你原有的 provider 原样保留；新版与旧版 ZCode 的两份配置都会写" },
+        undo,
+      ]
+    case "kimi":
+      return [
+        { icon: "file", text: "在 Kimi 的 config.toml 里新增 provider「jolu」与一组「jolu/」开头的模型表，默认模型指向网关" },
+        { icon: "shield", text: "你原有的 provider 与模型表原样保留；旧版 kimi-cli 会少写它不认识的键" },
         undo,
       ]
     default:

@@ -194,7 +194,9 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
         CREATE TABLE IF NOT EXISTS agents (
             id TEXT PRIMARY KEY
         );
-        INSERT OR IGNORE INTO agents(id) VALUES ('claude-code'),('codex'),('zcode'),('gemini'),('opencode');
+        -- 接线记录（agent_wiring）外键指向这张表；INSERT OR IGNORE 每次开库都会跑，
+        -- 新加的 agent 补一行即可让老库也能接（wiring.rs 的 AGENTS 是真正的开关清单）
+        INSERT OR IGNORE INTO agents(id) VALUES ('claude-code'),('codex'),('zcode'),('gemini'),('opencode'),('kimi');
         CREATE TABLE IF NOT EXISTS agent_wiring (
             agent_id      TEXT PRIMARY KEY REFERENCES agents(id),
             instance_id   TEXT NOT NULL,
@@ -2366,6 +2368,22 @@ pub fn request_log_at_scoped(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 接线记录（agent_wiring）外键指向 agents 种子表：每加一个可接线 agent 都要补种子行，
+    /// 否则真机接线在「保存接线记录」一步报 FOREIGN KEY constraint failed（2026-11-17 Kimi 踩过）。
+    /// 开库路径（[`open`]）会开 foreign_keys，这里照做，保证约束真的在拦。
+    #[test]
+    fn every_wirable_agent_has_a_seed_row_for_the_wiring_foreign_key() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        init(&conn).unwrap();
+        for agent in crate::gateway::wiring::AGENTS {
+            conn.execute(
+                "INSERT INTO agent_wiring(agent_id, instance_id, owner, state) VALUES(?1, 'test', 'none', 'idle')",
+                [agent],
+            ).unwrap_or_else(|error| panic!("agent {agent} 的接线记录写不进去（agents 种子表缺行）：{error}"));
+        }
+    }
 
     #[test]
     fn failed_record_insert_does_not_advance_scan_checkpoint_or_titles() {

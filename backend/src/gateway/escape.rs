@@ -207,7 +207,9 @@ fn plan_agent(
             let Ok(conn) = state.0.lock() else { return false };
             crate::gateway::access::is_client_key(&conn, token)
         },
-        &if agent == "zcode" { zcode_models(app) } else { Vec::new() },
+        // Kimi 与 ZCode 共用网关模型目录（serve 中启用的全部 `来源/模型`）；magpie 按工具
+        // 过滤清单（magpieModels("kimi")），Jolu 目录暂无按工具的能力标记，先全量给
+        &if matches!(agent, "zcode" | "kimi") { zcode_models(app) } else { Vec::new() },
     )
 }
 
