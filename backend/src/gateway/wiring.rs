@@ -834,9 +834,10 @@ const ZCODE_PROVIDER: &str = "jolu";
 /// 上下文不知道时写的值：ZCode 要一个数，magpie 同样退回 200000。
 const ZCODE_DEFAULT_CONTEXT: i64 = 200_000;
 
-/// ZCode 的数据目录：`ZCODE_HOME` 指定的，否则 `~/.zcode`。
+/// ZCode 的数据目录：与 Agent 探测同源（`creds::zcode_data_dir`：`ZCODE_HOME` 覆盖 →
+/// ZCode 主目录 → 设置里改过的「数据存储路径」`dataBaseDir`），保证探测到的就是写的。
 fn zcode_dir(home: &Path) -> PathBuf {
-    std::env::var_os("ZCODE_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".zcode"))
+    crate::creds::zcode_data_dir(home)
 }
 
 fn parse_object(text: &str, what: &str) -> Result<serde_json::Value, String> {
@@ -984,7 +985,8 @@ fn zcode_config_restore(text: &str) -> Result<String, String> {
 
 /// 旧版 Jolu 在 `~/.zcode/provider.json` 顶层写过 `jolu` 键（ZCode 从不读这个文件）：断开时顺带删掉。
 fn zcode_clean_legacy(home: &Path) {
-    let legacy = zcode_dir(home).join("provider.json");
+    // 旧版 Jolu 写在原位置（`ZCODE_HOME` 或 `~/.zcode`），不随 dataBaseDir 找
+    let legacy = std::env::var_os("ZCODE_HOME").filter(|value| !value.is_empty()).map(PathBuf::from).unwrap_or_else(|| home.join(".zcode")).join("provider.json");
     let Ok(Some(text)) = crate::steady::read_optional(&legacy) else { return };
     let Ok(mut root) = serde_json::from_str::<serde_json::Value>(&text) else { return };
     let Some(object) = root.as_object_mut() else { return };

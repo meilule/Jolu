@@ -1,7 +1,7 @@
 # Agent 探测修改执行文档
 
 日期：2026-11-16
-状态：待执行
+状态：执行中（T1、T2 已完成，见 `docs/verification/2026-11-16-agent-discovery-parity.md`；T3–T9 未开始）
 范围：只动 `backend/src/agent_discovery.rs`（及必要的 `agent_version.rs`、前端调用节奏），不动接线（`gateway/wiring.rs`）、不动模型路由。
 读者：接手执行的同事。
 
@@ -80,6 +80,16 @@ magpie **也是每次调用都全量探测**。`internal/gui/api.go` 的 `state(
 - 本机 Codex 的探测结果从 `cli_missing` 变成 `installed`，`cli_path` 指向真实 exe。
 - 单元测试：用 `discover_with` 注入临时目录，断言「哈希子目录里的 exe 能被找到」。
 
+**执行前核对（2026-11-16，magpie `40f7de24`，比调查时的 `e9dd8e8` 新 3572 个提交）**
+
+与上文不符的地方，按 §0 第 3 条先记在这里：
+
+1. **本机现状变了**：`%APPDATA%\npm` 下 11-14 10:58 装上了完整的 npm 版 Codex（`codex` / `codex.cmd` / `codex.ps1` 加 `node_modules/@openai/codex`），而 npm 目录本来就在 `user_bin_dirs` 里，所以本机 Codex 现在已经能探测到，「从 `cli_missing` 变成 `installed`」在本机复现不出来。改为验证「去掉 PATH 与 npm 后，只靠桌面版目录也能找到 `codex.exe`」。
+2. **本机桌面版落点核实与上文一致**：`%LOCALAPPDATA%\OpenAI\Codex\bin\5449c1f0f26f1f98\codex.exe`；同级另一个哈希目录 `a7d4c4900eafc659` 里只有 `rg.exe`，所以要逐个子目录找，有多个时取 `codex.exe` 最新的那份。MSIX 虚拟化目录 `%LOCALAPPDATA%\Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache` 里没有 `codex.exe`，这条不加。
+3. **magpie 不靠找这个 exe 识别桌面版**：`desktopapp.go` 的 `desktopApps["codex"]` 用 AppX 注册表里的 Store 包（`OpenAI.Codex`，发布者 `2p2nqsd0c76g0`）判断桌面应用在不在（`HasApp`），只把它当成「目录不是残留」的证据，不当 CLI。Jolu 的三态里没有「桌面应用」这一档，所以按本文的做法走 CLI 查找，把桌面版自带的 `codex.exe` 当 CLI（`agent_version` 用它跑 `--version` 也能拿到版本）。
+4. **magpie 记的官方安装器落点**（`gone.go` 的 `cliHeld()` 与 `cliupdate.go` 的注释）：Claude `~\.claude\local\claude.exe`；OpenCode `~\.opencode\bin\opencode.exe`；Codex 官方 `install.ps1` 的 `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`（目录联接到 `~\.codex\packages\standalone\current\bin`）。这些都不在 PATH 也不在现有兜底目录里，一并加进按工具的兜底清单。
+5. `%LOCALAPPDATA%\Programs\<App>\`：magpie 只给 Jolu 没有的那几家桌面应用（DeepSeek Harness 等）配了这类路径，Jolu 的 13 家里没有能从源码确认的，不加。
+
 ---
 
 ### T2 · ZCode 数据目录跟随（P0）
@@ -103,6 +113,14 @@ magpie **也是每次调用都全量探测**。`internal/gui/api.go` 的 `state(
 
 - 造一个临时 home：`setting.json` 里 `dataBaseDir` 指向临时目录，`.zcode/v2/provider_config.json` 放在那个目录 → 探测为 `installed`。
 - 不带 `dataBaseDir` 时行为与现在一致。
+
+**执行前核对（2026-11-16，magpie `40f7de24`）**
+
+1. `dataBaseDir` 是 **`.zcode` 的上一级**：magpie `appdir/zcode.go` 的 `ZCodeDataIn` 返回的是要再拼 `.zcode` 的目录；`setting.json` 从**原位置**的 `.zcode/v2/setting.json` 读（ZCode 主进程启动时先读它）。字段不是字符串、去掉空白后为空、不是绝对路径、文件缺失或 JSON 不合法，一律回退原 home。
+2. **上文漏了 HOME 这一步**：magpie `agent/zcode.go` 用的是 `ZCodeDataIn(ZCodeHomeOn(home))`。Windows 上用户自己设了绝对路径的 `HOME`、且默认 home 就是 `USERPROFILE` 时，ZCode（Node 程序）读的是 `HOME`。Jolu 的 `library/mod.rs` 已有同款 `zcode_home`，公共函数一并沿用。
+3. **不是所有 ZCode 文件都跟着搬**（magpie 注释）：搬走的只有 `.zcode/v2`（provider、config、登录凭据、tasks-index）；Skills、`AGENTS.md`、CLI 的 `cli/config.json` 留在 HOME 下，`cli/db/db.sqlite` 会话库留在 `USERPROFILE` 下（`sessions/zcode.go` 的 `ZCodeDir`）。所以公共函数只给 `v2` 数据用，`skills.rs`、`library`、`session_threads`、`native_sources` 的会话库不改。
+4. Jolu 现有 `ZCODE_HOME` 覆盖（值就是 `.zcode` 目录本身）magpie 没有，保留为最高优先级；`wiring::zcode_dir` 原先不过滤空值，统一后空值视为未设置。
+5. **范围之外、同样读 `v2` 的地方**：`zcode_quota.rs`（`credentials.json` / `setting.json` / `config.json`）、`gateway/adapter/zcode.rs`（`provider_config.json`）、`attribution.rs`（`provider_config.json`）、`native_sources.rs`（账号来源 `credentials.json`）仍写死 `~/.zcode/v2`。本次按范围只改探测与接线；搬过家的用户在额度查询、账号导入、来源归因上仍会读不到，改不改另行由鼠鼠决定。
 
 ---
 

@@ -9,7 +9,7 @@
 
 use serde::Serialize;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize)]
 pub struct ConnectionInfo {
@@ -34,6 +34,54 @@ pub(crate) fn codex_dir() -> Option<PathBuf> {
 pub(crate) fn claude_dir() -> Option<PathBuf> {
     std::env::var_os("CLAUDE_CONFIG_DIR").filter(|value| !value.is_empty()).map(PathBuf::from)
         .or_else(|| home().map(|path| path.join(".claude")))
+}
+
+/// 绝对路径，或 Windows 上以 `\` / `/` 开头的根路径（magpie `appdir/env.go::rooted` 同款）。
+fn rooted(text: &str) -> bool {
+    Path::new(text).is_absolute() || (cfg!(windows) && (text.starts_with('\\') || text.starts_with('/')))
+}
+
+/// ZCode 读的主目录：Windows 上 `HOME` 已设、是根路径、且默认主目录就是 `USERPROFILE` 时用
+/// `HOME`（ZCode 是 Node 程序，先认 `HOME`），否则原样用 `home`。测试的临时 home 不是
+/// `USERPROFILE`，不受影响。参照 magpie `appdir/zcode.go::ZCodeHomeOn`。
+pub(crate) fn zcode_home(home: &Path) -> PathBuf {
+    if !cfg!(windows) {
+        return home.to_path_buf();
+    }
+    let from_env = std::env::var("HOME").ok().map(|value| value.trim().to_string()).filter(|value| !value.is_empty() && rooted(value));
+    let is_profile = std::env::var_os("USERPROFILE").is_some_and(|profile| profile.eq_ignore_ascii_case(home.as_os_str()));
+    match from_env {
+        Some(dir) if is_profile => PathBuf::from(dir),
+        _ => home.to_path_buf(),
+    }
+}
+
+/// ZCode 数据（`.zcode`）所在的上一级目录：用户在 ZCode 设置里改过「数据存储路径」时，
+/// 选择记在原位置 `.zcode/v2/setting.json` 的 `dataBaseDir`，ZCode 把 `.zcode/v2` 整体搬过去。
+/// 文件缺失、JSON 不合法、字段不是字符串、为空或不是根路径，一律回退 `home`，不报错。
+/// 参照 magpie `appdir/zcode.go::ZCodeDataIn`。
+fn zcode_data_base(home: &Path) -> PathBuf {
+    let setting = home.join(".zcode").join("v2").join("setting.json");
+    let moved = crate::steady::read_to_string(&setting)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| value.get("dataBaseDir").and_then(Value::as_str).map(|dir| dir.trim().to_string()))
+        .filter(|dir| !dir.is_empty() && rooted(dir));
+    moved.map(PathBuf::from).unwrap_or_else(|| home.to_path_buf())
+}
+
+/// ZCode 的 `.zcode` 数据目录（`v2` 的 provider、config、登录凭据都在这里）。
+/// 优先 Jolu 的 `ZCODE_HOME` 覆盖（值就是 `.zcode` 目录本身，空值视为未设），
+/// 否则 `<ZCode 主目录或 dataBaseDir>/.zcode`。探测与接线共用这一个函数，保证探测到的
+/// 目录就是接线写的目录。
+///
+/// 只给 `v2` 数据用：Skills、`AGENTS.md`、`cli/config.json` 留在 ZCode 主目录下，
+/// `cli/db/db.sqlite` 会话库留在 `USERPROFILE` 下，都不跟 `dataBaseDir` 搬（magpie 注释）。
+pub(crate) fn zcode_data_dir(home: &Path) -> PathBuf {
+    if let Some(dir) = std::env::var_os("ZCODE_HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    zcode_data_base(&zcode_home(home)).join(".zcode")
 }
 
 fn read_json(path: &PathBuf) -> Option<Value> {
@@ -362,6 +410,82 @@ pub fn local_connections(platform: &str, kind: &str) -> Result<Vec<crate::connec
         out.push(crate::connections::NewConnection { service: None, platform: platform.into(), kind: kind.into(), name: "Codex API Key".into(), secret: Some(secret), base_url, model: None, effort: None, context_1m: None, protocol: None, slug_base: None });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod zcode_dir_tests {
+    use super::*;
+
+    fn temp_home(tag: &str) -> PathBuf {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("jolu-zcode-dir-{tag}-{}-{stamp}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".zcode").join("v2")).unwrap();
+        dir
+    }
+
+    fn write_setting(home: &Path, text: &str) {
+        std::fs::write(home.join(".zcode").join("v2").join("setting.json"), text).unwrap();
+    }
+
+    /// 没有 setting.json、或没有 dataBaseDir → 仍是 `<home>/.zcode`（与改动前一致）
+    #[test]
+    fn data_dir_defaults_to_home() {
+        let home = temp_home("default");
+        assert_eq!(zcode_data_base(&home), home);
+        write_setting(&home, r#"{"locale":"zh-CN"}"#);
+        assert_eq!(zcode_data_base(&home), home);
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// dataBaseDir 是绝对路径 → 数据目录跟过去；首尾空白去掉
+    #[test]
+    fn data_dir_follows_absolute_data_base_dir() {
+        let home = temp_home("moved");
+        let moved = temp_home("moved-target");
+        let value = serde_json::to_string(&format!("  {}  ", moved.display())).unwrap();
+        write_setting(&home, &format!(r#"{{"dataBaseDir":{value}}}"#));
+        assert_eq!(zcode_data_base(&home), moved);
+        std::fs::remove_dir_all(&home).ok();
+        std::fs::remove_dir_all(&moved).ok();
+    }
+
+    /// 任何异常都回退 home：相对路径、空串、数字、null、JSON 坏掉
+    #[test]
+    fn data_dir_ignores_unusable_values() {
+        let home = temp_home("bad");
+        for text in [
+            r#"{"dataBaseDir":"relative\\dir"}"#,
+            r#"{"dataBaseDir":"   "}"#,
+            r#"{"dataBaseDir":42}"#,
+            r#"{"dataBaseDir":null}"#,
+            "{not json",
+        ] {
+            write_setting(&home, text);
+            assert_eq!(zcode_data_base(&home), home, "{text} 应回退 home");
+        }
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// 测试的临时 home 不是 USERPROFILE：HOME 设没设都不挪
+    #[test]
+    fn zcode_home_keeps_non_profile_home() {
+        let home = temp_home("not-profile");
+        assert_eq!(zcode_home(&home), home);
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn rooted_accepts_absolute_and_windows_root_paths() {
+        assert!(!rooted("relative/dir"));
+        assert!(!rooted(""));
+        if cfg!(windows) {
+            assert!(rooted("D:\\ZCodeData"));
+            assert!(rooted("\\ZCodeData"));
+            assert!(rooted("/ZCodeData"));
+        } else {
+            assert!(rooted("/var/zcode"));
+        }
+    }
 }
 
 #[cfg(test)]

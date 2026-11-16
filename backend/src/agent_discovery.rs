@@ -49,11 +49,8 @@ fn dir_codex(home: &Path) -> Option<PathBuf> {
 }
 
 fn dir_zcode(home: &Path) -> Option<PathBuf> {
-    // 与 wiring::zcode_dir 同款：ZCODE_HOME 覆盖，缺省 ~/.zcode
-    std::env::var_os("ZCODE_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| Some(home.join(".zcode")))
+    // 与 wiring::zcode_dir 同源：ZCODE_HOME 覆盖 → ZCode 主目录 → 设置里改过的 dataBaseDir
+    Some(crate::creds::zcode_data_dir(home))
 }
 
 fn dir_gemini(home: &Path) -> Option<PathBuf> {
@@ -232,9 +229,9 @@ fn registry_path_dirs() -> Vec<PathBuf> {
         // RegGetValueW 对 REG_EXPAND_SZ 的展开用的是当前进程环境，SystemRoot 一般在；
         // 展开不了的（极少见的受限环境）至少把 %SystemRoot% 补上，别的变量不猜
         let text = text.replace("%SystemRoot%", &std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()));
-        // 返回的字节数含结尾的 NUL：不剥掉的话最后一段是 " "，会被当成一个（相对的）目录
+        // 返回的字节数含结尾的 NUL：不剥掉的话最后一段是 "\0"，会被当成一个（相对的）目录
         for part in text.split(';') {
-            let part = part.trim_matches(|c: char| c == ' ' || c.is_whitespace());
+            let part = part.trim_matches(|c: char| c == '\0' || c.is_whitespace());
             if part.is_empty() {
                 continue;
             }
@@ -263,7 +260,56 @@ fn user_bin_dirs(home: &Path) -> Vec<PathBuf> {
     dirs.into_iter().flatten().collect()
 }
 
-/// 命令查找：进程 PATH 失败后，在 Windows 兜底目录里找 `name.exe` / `name.cmd` / `name.bat`。
+/// 各家官方安装器 / 桌面版的固定落点：装完不在 PATH 里，也不在通用兜底目录里。
+/// 只按已知厂商目录逐个拼，不递归扫 `%LOCALAPPDATA%`。来源：
+/// - Claude `~/.claude/local`、OpenCode `~/.opencode/bin`、Codex `~/.codex/packages/standalone`：
+///   magpie `internal/agent/gone.go::cliHeld()` 的官方安装器落点
+/// - Codex `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`：官方 `install.ps1` 的目录联接，指向
+///   `~/.codex/packages/standalone/current/bin`（magpie `cliupdate.go` 的注释）
+/// - Codex 桌面版（MSIX）：自带的 CLI 在 `%LOCALAPPDATA%\OpenAI\Codex\bin\<哈希>\codex.exe`
+///   （2026-11-16 本机实测；magpie 不找这个 exe，改认 Store 包，见执行文档 T1 核对记录）
+fn vendor_bin_dirs(name: &str, home: &Path, local_app_data: Option<&Path>) -> Vec<PathBuf> {
+    match name {
+        "claude" => vec![home.join(".claude").join("local")],
+        "opencode" => vec![home.join(".opencode").join("bin")],
+        "codex" => {
+            let mut dirs = Vec::new();
+            if let Some(local) = local_app_data {
+                dirs.push(local.join("Programs").join("OpenAI").join("Codex").join("bin"));
+            }
+            dirs.push(home.join(".codex").join("packages").join("standalone").join("current").join("bin"));
+            if let Some(local) = local_app_data {
+                dirs.extend(hashed_bin_dirs(&local.join("OpenAI").join("Codex").join("bin"), name));
+            }
+            dirs
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// 桌面版把 CLI 放在 `<root>\<哈希>\` 子目录里：只看一层，只留含该命令的子目录
+/// （同级还有只装 `rg.exe` 这类工具的哈希目录），有多个时按命令文件的修改时间新到旧。
+/// `root` 不存在或读不了时为空。
+fn hashed_bin_dirs(root: &Path, name: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .filter_map(|dir| {
+            let bin = find_bin_in(name, std::slice::from_ref(&dir))?;
+            let modified = std::fs::metadata(&bin).and_then(|meta| meta.modified()).unwrap_or(std::time::UNIX_EPOCH);
+            Some((modified, dir))
+        })
+        .collect();
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.into_iter().map(|(_, dir)| dir).collect()
+}
+
+/// 命令查找：进程 PATH 失败后，依次在 Windows 兜底目录、注册表 PATH、各家固定落点里找
+/// `name.exe` / `name.cmd` / `name.bat`。固定落点放最后：它是兜底，PATH 上有的优先。
 /// 非 Windows 只有进程 PATH（magpie 的 binAt 在非 Windows 也只补 Homebrew，这里没有）。
 pub(crate) fn find_bin(name: &str, home: &Path) -> Option<PathBuf> {
     if let Some(found) = bin_on_path(name) {
@@ -272,6 +318,8 @@ pub(crate) fn find_bin(name: &str, home: &Path) -> Option<PathBuf> {
     let mut dirs = user_bin_dirs(home);
     #[cfg(windows)]
     dirs.extend(registry_path_dirs());
+    #[cfg(windows)]
+    dirs.extend(vendor_bin_dirs(name, home, std::env::var_os("LOCALAPPDATA").map(PathBuf::from).as_deref()));
     find_bin_in(name, &dirs)
 }
 
@@ -424,6 +472,114 @@ mod tests {
         for dir in dirs {
             assert!(dir.is_absolute(), "注册表 PATH 展开后应是绝对路径：{dir:?}");
         }
+    }
+
+    /// T1：Codex 桌面版的 CLI 在 `%LOCALAPPDATA%\OpenAI\Codex\bin\<哈希>\codex.exe`，
+    /// 同级还有只放 rg.exe 的哈希目录。只靠固定落点（不经 PATH）也要判 installed，
+    /// 且 cli_path 指向哈希目录里的 exe。
+    #[test]
+    fn codex_desktop_cli_in_hashed_dir_is_found() {
+        let home = temp_home("codex-desktop");
+        let local = home.join("AppData").join("Local");
+        let bin_root = local.join("OpenAI").join("Codex").join("bin");
+        std::fs::create_dir_all(bin_root.join("a7d4c4900eafc659")).unwrap();
+        std::fs::write(bin_root.join("a7d4c4900eafc659").join("rg.exe"), b"MZ").unwrap();
+        std::fs::create_dir_all(bin_root.join("5449c1f0f26f1f98")).unwrap();
+        std::fs::write(bin_root.join("5449c1f0f26f1f98").join("codex.exe"), b"MZ").unwrap();
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(home.join(".codex").join("config.toml"), "").unwrap();
+        let lookup = |name: &str, base: &Path| find_bin_in(name, &vendor_bin_dirs(name, base, Some(&local)));
+        let results = discover_with(&home, &lookup);
+        let found = agent_of(&results, "codex");
+        assert_eq!(found.state, "installed");
+        assert_eq!(found.evidence, Some("config_file"));
+        let cli = found.cli_path.as_deref().expect("要找到 codex.exe");
+        assert!(cli.contains("5449c1f0f26f1f98") && cli.to_lowercase().ends_with("codex.exe"), "{cli}");
+        // 别家不受影响：rg 所在的哈希目录不会被当成任何工具的命令目录
+        assert_eq!(agent_of(&results, "claude-code").state, "not_found");
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// 多个哈希目录都有 codex.exe（桌面版升级后旧目录没删）→ 取命令最新的那个；
+    /// 根目录不存在 → 空
+    #[test]
+    fn hashed_bin_dirs_prefer_newest_and_skip_missing_root() {
+        let home = temp_home("hashed");
+        let root = home.join("bin");
+        for (dir, age) in [("old", 3600u64), ("new", 0)] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+            let exe = root.join(dir).join("codex.exe");
+            std::fs::write(&exe, b"MZ").unwrap();
+            let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age);
+            std::fs::File::options().write(true).open(&exe).unwrap().set_modified(when).unwrap();
+        }
+        std::fs::create_dir_all(root.join("tools")).unwrap();
+        std::fs::write(root.join("tools").join("rg.exe"), b"MZ").unwrap();
+        let dirs = hashed_bin_dirs(&root, "codex");
+        assert_eq!(dirs, vec![root.join("new"), root.join("old")]);
+        assert!(hashed_bin_dirs(&home.join("missing"), "codex").is_empty());
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// 官方安装器落点：Claude `~/.claude/local`、OpenCode `~/.opencode/bin`、
+    /// Codex `install.ps1` 的 `Programs\OpenAI\Codex\bin` 与 standalone；其他家没有固定落点
+    #[test]
+    fn vendor_bin_dirs_cover_official_installers() {
+        let home = PathBuf::from("H");
+        let local = PathBuf::from("L");
+        assert_eq!(vendor_bin_dirs("claude", &home, Some(&local)), vec![home.join(".claude").join("local")]);
+        assert_eq!(vendor_bin_dirs("opencode", &home, None), vec![home.join(".opencode").join("bin")]);
+        let codex = vendor_bin_dirs("codex", &home, Some(&local));
+        assert!(codex.contains(&local.join("Programs").join("OpenAI").join("Codex").join("bin")));
+        assert!(codex.contains(&home.join(".codex").join("packages").join("standalone").join("current").join("bin")));
+        assert!(vendor_bin_dirs("gemini", &home, Some(&local)).is_empty());
+    }
+
+    /// T2：ZCode 在设置里改过「数据存储路径」→ 原位置 `.zcode/v2/setting.json` 记着
+    /// `dataBaseDir`，provider_config.json 在新位置；探测要跟过去拿到 config_file 证据
+    #[test]
+    fn zcode_follows_data_base_dir() {
+        let home = temp_home("zcode-moved");
+        let moved = temp_home("zcode-moved-target");
+        std::fs::create_dir_all(home.join(".zcode").join("v2")).unwrap();
+        let value = serde_json::to_string(&moved.to_string_lossy()).unwrap();
+        std::fs::write(home.join(".zcode").join("v2").join("setting.json"), format!(r#"{{"dataBaseDir":{value}}}"#)).unwrap();
+        std::fs::create_dir_all(moved.join(".zcode").join("v2")).unwrap();
+        std::fs::write(moved.join(".zcode").join("v2").join("provider_config.json"), "{}").unwrap();
+        let found = agent_of(&discover_with(&home, &test_bins(&home)), "zcode").clone();
+        assert!(found.installed);
+        assert_eq!(found.evidence, Some("config_file"), "provider_config.json 在 dataBaseDir 下，要能找到");
+        // 接线写的就是探测看的这个目录
+        assert_eq!(crate::creds::zcode_data_dir(&home), moved.join(".zcode"));
+        std::fs::remove_dir_all(&home).ok();
+        std::fs::remove_dir_all(&moved).ok();
+    }
+
+    /// T2：没有 dataBaseDir 时与改动前一致：看 `~/.zcode`
+    #[test]
+    fn zcode_without_data_base_dir_stays_at_home() {
+        let home = temp_home("zcode-home");
+        std::fs::create_dir_all(home.join(".zcode").join("v2")).unwrap();
+        std::fs::write(home.join(".zcode").join("v2").join("provider_config.json"), "{}").unwrap();
+        let found = agent_of(&discover_with(&home, &test_bins(&home)), "zcode").clone();
+        assert_eq!(found.evidence, Some("config_file"));
+        assert_eq!(crate::creds::zcode_data_dir(&home), home.join(".zcode"));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// 真机只读核对（默认不跑）：不经 PATH 与 npm，只靠固定落点能否找到本机的 Codex 桌面版 CLI。
+    /// `cargo test --manifest-path backend/Cargo.toml --lib vendor_codex_real_machine -- --ignored --nocapture`
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn vendor_codex_real_machine_readonly_smoke() {
+        let home = crate::creds::home().expect("用户目录");
+        let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+        let dirs = vendor_bin_dirs("codex", &home, local.as_deref());
+        let found = find_bin_in("codex", &dirs);
+        println!("固定落点：{dirs:#?}\n找到：{found:?}");
+        println!("完整查找（含 PATH / npm）：{:?}", find_bin("codex", &home));
+        assert!(found.is_some(), "本机没在固定落点找到 codex");
     }
 
     /// 全无证据 → not_found；结果覆盖全部 5 家且不重不漏

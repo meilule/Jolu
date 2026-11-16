@@ -118,20 +118,6 @@ pub fn install_note(agent: &str) -> Option<&'static str> {
     }
 }
 
-/// ZCode 在 Windows 上读的主目录：`HOME` 已设、是绝对路径、且默认主目录就是
-/// `USERPROFILE` 时用 `HOME`（与 ZCode 的 Node 运行时一致），否则用用户目录。
-/// 参照 magpie `appdir/zcode.go::ZCodeHomeOn`。
-fn zcode_home(home: &std::path::Path) -> std::path::PathBuf {
-    let from_env = std::env::var_os("HOME").map(std::path::PathBuf::from).filter(|h| h.is_absolute());
-    let is_profile = std::env::var_os("USERPROFILE")
-        .map(std::path::PathBuf::from)
-        .is_some_and(|profile| profile.as_os_str().eq_ignore_ascii_case(home.as_os_str()));
-    match from_env {
-        Some(h) if cfg!(windows) && is_profile => h,
-        _ => home.to_path_buf(),
-    }
-}
-
 /// 各 agent 的用户级 MCP 配置文件。与接线（`wiring::config_path_for`）是两回事：
 /// 接线改的是模型地址，MCP server 各家放在别的文件里。
 pub fn mcp_config_path(agent: &str) -> Option<std::path::PathBuf> {
@@ -142,7 +128,8 @@ pub fn mcp_config_path(agent: &str) -> Option<std::path::PathBuf> {
         "codex" => crate::creds::codex_dir()?.join("config.toml"),
         "gemini" => home.join(".gemini").join("settings.json"),
         "opencode" => env_dir("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config")).join("opencode").join("opencode.json"),
-        "zcode" => zcode_home(&home).join(".zcode").join("cli").join("config.json"),
+        // CLI 的 config.json 留在 ZCode 主目录下，不跟 dataBaseDir 搬（见 creds::zcode_data_dir）
+        "zcode" => crate::creds::zcode_home(&home).join(".zcode").join("cli").join("config.json"),
         "qoder" => env_dir("QODER_CONFIG_DIR").unwrap_or_else(|| home.join(".qoder")).join("settings.json"),
         "qoder-cn" => env_dir("QODERCN_CONFIG_DIR").unwrap_or_else(|| home.join(".qoder-cn")).join("settings.json"),
         "workbuddy" => env_dir("WORKBUDDY_CONFIG_DIR").unwrap_or_else(|| home.join(".workbuddy")).join("mcp.json"),
