@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react"
+import { EVENTS } from "@/lib/events"
 import { api, isTauri, listenEvent } from "@/lib/api"
 import { noticeToast, parseAppNotice, type NoticeTarget } from "@/lib/appNotices"
 import { useToast } from "@/components/ui/Toast"
@@ -45,7 +46,7 @@ export function AppNotices({ onOpenAccount, onOpenTask, deferredTarget, onDeferr
       } catch { /* 待读队列保留在后端，下次唤醒或主窗口重新挂载时补读。 */ }
       finally { reading = false }
     }
-    void listenEvent("app-notice", () => { if (!stopped) void flush() }).then(off => {
+    void listenEvent(EVENTS.APP_NOTICE, () => { if (!stopped) void flush() }).then(off => {
       if (stopped) off()
       else { unlisten = off; void flush() }
     }).catch(() => {})

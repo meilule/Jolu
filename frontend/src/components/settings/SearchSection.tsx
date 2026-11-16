@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { EVENTS } from "@/lib/events"
 import { Globe, Plus, Plug, Search, Trash2 } from "lucide-react"
 import { isTauri, listenEvent } from "@/lib/api"
 import { settingsApi } from "@/lib/settingsApi"
@@ -11,6 +12,7 @@ import {
   type LibraryAgentDto, type SearchDraft, type SearchHitDto, type SearchVendorDto,
 } from "@/lib/searchSettings"
 import { ActionButton, Notice, SettingsGroup, SettingsRow, Switch } from "./settingsUi"
+import { useLatestGate } from "@/hooks/useLatestGate"
 
 /**
  * 联网搜索与搜索插件。
@@ -194,16 +196,21 @@ function SearchPluginGroup() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
+  // 挂载与 library-changed 事件都会调 load：只认最新一次的结果（见 lib/latestGate.ts）
+  const loadGate = useLatestGate()
   const load = useCallback(() => {
     if (!isTauri) return
-    settingsApi.libraryList().then((next) => { setRows(next); setError(null) }).catch((reason) => setError(String(reason)))
-  }, [])
+    const isLatest = loadGate.begin()
+    settingsApi.libraryList()
+      .then((next) => { if (isLatest()) { setRows(next); setError(null) } })
+      .catch((reason) => { if (isLatest()) setError(String(reason)) })
+  }, [loadGate])
 
   useEffect(() => {
     load()
     let stop = () => {}
     let stopped = false
-    listenEvent("library-changed", load).then((unlisten) => { if (stopped) unlisten(); else stop = unlisten })
+    listenEvent(EVENTS.LIBRARY_CHANGED, load).then((unlisten) => { if (stopped) unlisten(); else stop = unlisten })
     return () => { stopped = true; stop() }
   }, [load])
 

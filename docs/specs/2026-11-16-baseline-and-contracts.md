@@ -32,10 +32,10 @@ P0「开发基线」和 P1「统一契约」原本是开工前要先写的两份
 
 | 检查项 | 现在的去向 |
 |---|---|
-| 冻结对象与接口字段；事件带实体标识、序号与错误码 | 对象定义在 `frontend/src/types.ts`、各 `*Api.ts` 的 DTO 与后端对应结构体；事件目录见本文 §4。**未统一**：事件没有统一的序号与错误码字段，只有网关在途事件带序号（`gateway/activity.rs` 的 `live_snapshot`） |
+| 冻结对象与接口字段；事件带实体标识、序号与错误码 | 对象定义在 `frontend/src/types.ts`、各 `*Api.ts` 的 DTO 与后端对应结构体；事件目录见本文 §4。**2026-11-16 起**（鼠鼠选定「集中管理名字 + 快照修订号」）：事件名集中在后端 `events.rs` 与前端 `lib/events.ts`，前端 `listenEvent` 按名字推断载荷类型，后端测试核对两边名字集合一致；会乱序覆盖的整份快照 `settings-changed` 带修订号（见 §5）；网关在途事件仍按自己的序号（`gateway/activity.rs`）；错误码不加（只有 `startup-error` 带错误，本就是一段文字） |
 | 区分「能力支持」与「本机已配置」；未知平台不回落其他平台 | 后端 `platforms::supports` / `known`；额度路线集中在 `quota_registry.rs`（目录声明了订阅额度的平台都要有路线，有一致性测试）；前端 `PlatformId` 放宽为「已知 id 或任意字符串」，`fictionalProvider.test.mjs` 让未登记平台走一遍全部纯函数，不补假数据 |
 | 可重复执行的迁移与备份恢复 | 数据库在 `db.rs` 用 `CREATE TABLE IF NOT EXISTS` 与可重复执行的 `ALTER TABLE … ADD COLUMN`（失败即已存在，忽略）；数据导出 / 导入带 `schema_version`（1 / 2），不认识的版本明确拒绝。AGENTS.md §4 要求「数据结构变更提供可恢复的迁移」 |
-| 新 UI 查询加请求身份，防切换筛选后旧响应回填 | **分散实现，未统一**：`hooks/useQuota.ts` 用 `owner.current !== queryKey` 丢弃旧结果，另有约 15 处用 `cancelled` / `alive` 标志；计划中的 `lib/queryIdentity.ts` 没有建。`lib/queryCache.ts` 只做 30 秒展示缓存 |
+| 新 UI 查询加请求身份，防切换筛选后旧响应回填 | **2026-11-16 起**（鼠鼠选定「建工具并迁移会切换的查询」）：`lib/latestGate.ts`（`hooks/useLatestGate.ts`）每次请求领号、只认最新一号，见 §5 第 4 条的迁移范围。effect 内靠清理函数置 `cancelled` / `alive` 的 16 处本就能防切换后的旧响应，保持原写法 |
 | 凭证存储后端隔离；迁移、日志、导出不泄露原值 | AGENTS.md §4「API Key 和认证信息只在后端处理，前端只返回掩码；不得写入普通日志、统计导出和诊断报告」；各凭据模块按此实现 |
 | 用旧版数据副本验证升级、注入迁移失败 | 旧版数据部分**作废**（新仓库）；本仓库自身的加列迁移由各模块测试覆盖 |
 
@@ -67,15 +67,15 @@ P0「开发基线」和 P1「统一契约」原本是开工前要先写的两份
 | `tray_summary.rs` / `service/mod.rs` / `net.rs` | 各 2 | 托盘摘要 / 服务层 / 联网方式 |
 | `storage_stats.rs` / `notify.rs` | 各 1 | 存储统计 / 通知 |
 
-## 4. 事件目录（后端 → 前端，共 30 个）
+## 4. 事件目录（后端 → 前端，共 28 个）
 
-前端统一用 `lib/api.ts` 的 `listenEvent(name, handler)` 订阅（启动页 `startup.ts`、右键菜单 `ContextMenuWindow.tsx` 等少数地方直接 `listen`）。「载荷」列是后端 `emit` 的第二个参数。
+名字与载荷类型的唯一来源：后端 `backend/src/events.rs`（常量与 `settings_changed` / `refresh_requested` / `catalog_changed` 三个带类型的发送函数），前端 `frontend/src/lib/events.ts`（`EVENTS` 与 `EventPayloads`）。前端统一用 `listenEvent(EVENTS.X, handler)` 订阅，载荷类型按名字推断；启动页 `startup.ts` 与压缩对话 `CompressDialog.tsx` 直接 `listen`，名字同样取自 `EVENTS`。「载荷」列是后端发送的内容，没有载荷的前端收到 `null`。
 
 | 事件 | 载荷 | 主要发送方 | 前端监听方 | 含义 |
 |---|---|---|---|---|
-| `settings-changed` | `Settings`（整份） | 各设置命令、`proxy.rs`、`net.rs`、`updater.rs`、`automation.rs` | 主窗口、灵动岛 | 设置变了，用新值替换本地副本 |
-| `connections-changed` | `()` | `commands/providers.rs`、`commands/quotas.rs`、`watcher.rs`、浏览器授权 | 供应商、灵动岛 | 连接增删改，重拉列表 |
-| `refresh-requested` | `()` 或连接 id（**两种都有**） | 设置、供应商命令、`watcher.rs`、`data_files.rs`、`lib.rs` | 灵动岛、用量 | 请求刷新；带 id 时只刷该连接 |
+| `settings-changed` | 整份设置 + `revision`（发送时现读快照） | `events::settings_changed`：各设置命令、`proxy.rs`、`net.rs`、`updater.rs`、`automation.rs`、`gateway/escape.rs` | `useSettings`（丢弃修订更小的）、`useGatewayActivity` | 设置变了，用新值替换本地副本 |
+| `connections-changed` | `null` | `commands/providers.rs`、`commands/quotas.rs`、`watcher.rs`、浏览器授权 | 供应商、签到、灵动岛、Agent 页、模型路由页、账号卡模型路由区块 | 连接增删改，重拉列表（模型目录也跟着重读） |
+| `refresh-requested` | `null`（全部）或连接 id（只刷该连接） | `events::refresh_requested`：设置、供应商命令、`watcher.rs`、`data_files.rs`、`lib.rs` | 灵动岛、`useQuota` | 请求刷新 |
 | `collection-status` | `CollectionStatus` | `lib.rs::emit_collection_status` | 主窗口 | 本机日志采集是否连续失败 |
 | `live-usage` | `LiveUsageDto` | 实时用量监听（`EVENT_LIVE`） | 灵动岛、`usageChanges.ts` | jsonl 有新写入，推增量 |
 | `gateway-route-start` / `gateway-route` | 在途开始 / 结束记录 | `gateway/activity.rs`（`START_EVENT` / `END_EVENT`） | `useGatewayActivity`、`useGatewaySessions`、路由流水 | 网关请求开始 / 结束 |
@@ -96,18 +96,23 @@ P0「开发基线」和 P1「统一契约」原本是开工前要先写的两份
 | `menu-reopen` / `menu-state-changed` | `MenuSource` / `()` | `context_menu.rs`、`lib.rs` | `ContextMenuWindow.tsx` | 右键菜单重开 / 状态变化 |
 | `tray-summary-open` / `tray-summary-close` | `()` | `tray_summary.rs` | 托盘摘要窗口 | 托盘摘要显隐 |
 | `startup-error` | 错误文本 | `lib.rs::report_startup_error` | `startup.ts` | 启动失败 |
-| `dnd-changed` | `bool` | `commands/preferences.rs`、`lib.rs` | **无** | 见 §5 |
-| `island-platform-changed` | 平台 id | `commands/island_window.rs` | **无** | 见 §5 |
-| `gateway-catalog-changed` | `()` | `commands/routing.rs`、`commands/providers.rs` | **无** | 见 §5 |
-| `warmup-finished` | `WarmupOutcome` | `automation.rs` | **无** | 见 §5 |
+| `gateway-catalog-changed` | `null` | `events::catalog_changed`：路由分组增删改、刷新模型清单、改来源名、开关供网关使用（含批量） | Agent 页、模型路由页、账号卡模型路由区块 | 模型目录可能变了，重读 `gateway_catalog` |
+| `warmup-finished` | 结果 + `finished_ms` | `automation.rs`（`warmup_run::remember`） | 设置页运维区 | warm-up 结束（成功 / 跳过 / 失败） |
 
-## 5. 核对中发现的待查问题（本次不改代码）
+## 5. 核对发现的问题与处理（2026-11-16，鼠鼠要求全部改代码）
 
 1. **四个事件没有前端监听**：
-   - `dnd-changed`、`island-platform-changed`：已核对全部 4 处发送点（`commands/preferences.rs`、`lib.rs`、`commands/island_window.rs` 两处），每处都同时发 `settings-changed`，前端靠后者已能拿到新值，是遗留的重复事件，可删；
-   - `gateway-catalog-changed`：来源改名、刷新模型清单后发出。前端模型池 / 模型菜单是否因此没有即时刷新，需在 Agent 页与模型路由页实测；
-   - `warmup-finished`：warm-up 结束后发出，界面上是否需要反馈待确认。
-2. **`refresh-requested` 的载荷不统一**：有的发 `()`，有的发连接 id。监听方需要同时处理两种形状。
-3. **事件没有统一的序号 / 错误码**（P1 原计划要求），只有网关在途快照带序号。
-4. **防旧响应回填没有统一模块**（P1 原计划的 `queryIdentity`），各页面各自用 `owner` 判断或 `cancelled` 标志。
-5. 全页面冒烟脚本里，会话线程、自动化、Skills 管理三页报「『正在读取』再次出现」（重构前同样失败），见 `docs/plans/2026-11-09-complete-remaining-work.md` 4.10。
+   - `dnd-changed`、`island-platform-changed`：全部 4 处发送点都同时发 `settings-changed`，是遗留的重复事件，**已删除**（不再登记在事件表里）。
+   - `gateway-catalog-changed`：**已补监听，并补齐发送方**。原来只有路由分组增删改与刷新模型清单发；改来源名（目录里 `来源/模型` 全变）只发了接线变化，开关「供网关使用」什么都不发，现在都发。账号卡上的模型路由区块原来只在挂载时读一次，Agent 页要等 15 秒轮询，模型路由页要等 5 秒；现在三处都在收到它或 `connections-changed` 时立即重读。
+   - `warmup-finished`：**已接到设置页**。失败不记日期、会在下一次检查重试，原来界面上完全看不到。后端 `warmup_run::remember` 记住最近一次结果与完成时间，新增命令 `warmup_last_outcome`；设置页运维区挂载时读一次，之后跟事件更新，在「当前状态」里显示「今天 HH:MM 尝试失败：原因，下一次检查时会重试」或「今天 HH:MM 跳过：原因」（无画板，**待确认**）。
+2. **`refresh-requested` 的载荷**：JSON 层面本来就是 `null` 或字符串（Rust 的 `()` 序列化为 `null`），只是 Rust 侧写法两种。**已统一**为 `events::refresh_requested(app, Option<&str>)`。
+3. **事件序号 / 错误码**：**已按「集中管理名字 + 快照修订号」做**：
+   - 名字集中在 `events.rs` / `lib/events.ts`，前端按名字推断载荷类型，写错名字或载荷编译失败；后端测试 `names_match_frontend_table` 核对两边名字集合一致。迁移中顺带发现右键菜单把没有载荷的 `menu-state-changed` 标成了 `MenuSourceEvent`，已拆成两个监听；
+   - `settings::Store` 每次保存成功修订号加一（在写锁内），`snapshot()` 在同一把锁里取设置与修订号；`settings-changed` 一律发送时现读快照，`get_settings` 也返回快照；`useSettings` 丢弃修订号更小的推送与读取结果（`lib/settingsRevision.ts`）；
+   - 错误码不加。
+4. **防旧响应回填**：**已建工具并迁移**。`lib/latestGate.ts` 与 `hooks/useLatestGate.ts`（卸载时作废）。补上保护：账号卡 `useRoutingIndex.reload`、Agent 页 `loadCore` / `detect`（过期结果也不写跨挂载缓存）、模型路由页 `refresh`、对外访问与中间件面板的 `load`、搜索设置 `load`。手写计数改用它：`useQuota` 三个 hook 的 `requestId`、`useConnections` 的 `loadRevision`。不改的：effect 内靠清理置 `cancelled` / `alive` 的 16 处（本就正确）、`useLiveQuery`（已有 `revision` 计数）、单飞写法的 `useGatewaySessions.load` / 签到页 `refresh` / 路由流水 `load`、只调一次的导入对话框与数据分区。
+5. 全页面冒烟脚本里，会话线程、自动化、Skills 管理三页报「『正在读取』再次出现」（重构前同样失败），仍待查，见 `docs/plans/2026-11-09-complete-remaining-work.md` 4.10。
+
+验证：
+- 后端全量 1425 passed / 0 failed / 无警告；前端类型检查通过、456 passed / 0 failed。新增的测试有：修订号递增与失败不加（含掩码）、前后端事件名一致、`settingsRevision` / `latestGate` 单测、`useSettings` 推送乱序与读取晚到；`opsSettings` 的 warm-up 文案覆盖今天失败 / 跳过、昨天不提、完成优先。
+- 隔离桌面跑 `scripts/acceptance/events-contract.e2e.mjs` 通过：`get_settings` 修订号 3 → 保存一次 → 4；停在 Agent 页建一个路由分组后约 86ms 内重读 `gateway_catalog`；`warmup_last_outcome` 返回 null。全页面冒烟与改动前一致（5 页通过，上面第 5 条的 3 页仍是原有问题），`agents-discovery-cache.e2e.mjs` 通过。

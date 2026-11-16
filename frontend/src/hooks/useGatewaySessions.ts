@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { EVENTS } from "@/lib/events"
 import { isTauri, listenEvent } from "@/lib/api"
 import { gatewayApi, type SessionsOverviewDto } from "@/lib/gatewayApi"
-import type { RouteEndEvent, RouteStartEvent } from "@/lib/gatewayActivity"
 import {
   applyLiveEvent, buildSessionViews, emptyLive, liveBySession, liveFromSnapshot, liveUnattributed, nextPriorityExpiry, sessionKey,
   updatePriority, type LiveEvent, type LiveState, type PriorityState, type SessionView, type SourceLive, type TokenFreshness,
@@ -84,12 +84,12 @@ export function useGatewaySessions(): GatewaySessionsState {
       buffer.current = [...buffer.current, item].slice(-BUFFER_LIMIT)
       setLive((state) => applyLiveEvent(state, item))
     }
-    listen(listenEvent<RouteStartEvent>("gateway-route-start", (event) => {
+    listen(listenEvent(EVENTS.GATEWAY_ROUTE_START, (event) => {
       push({ kind: "start", event })
       // 新会话第一次出现：尽快补全显示信息
       if (event.session_platform && event.session_id && !known.current.has(sessionKey(event.session_platform, event.session_id))) scheduleFollowUp(600)
     }))
-    listen(listenEvent<RouteEndEvent>("gateway-route", (event) => {
+    listen(listenEvent(EVENTS.GATEWAY_ROUTE, (event) => {
       push({ kind: "end", event })
       if (event.session_id) scheduleFollowUp(3000)
     }))

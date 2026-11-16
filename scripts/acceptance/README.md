@@ -56,6 +56,8 @@ Remove-Item Env:JOLU_DEV_URL                                 # 验收结束后�
 
   `window.__TAURI_INTERNALS__.invoke` 不可写，所以次数靠监听 `http://ipc.localhost/<命令>` 请求来统计。Playwright 网络事件的时间戳有上百毫秒延迟，不能用来计时。报告与截图在 `output/acceptance/agents-discovery-cache/`。
 
+- `events-contract.e2e.mjs`：真实桌面验收事件契约（`docs/specs/2026-11-16-baseline-and-contracts.md` §5）。核对三件事：`get_settings` 带修订号，保存一次（把主题写回原值）后修订号加一；停在 Agent 页时建一个路由分组（会发 `gateway-catalog-changed`），前端在 1.5 秒内重读 `gateway_catalog`，验收后删掉这个分组；`warmup_last_outcome` 可调用。只在隔离目录里写：建 / 删一个名为 `jolu-acceptance-events` 的分组、写回主题。报告与截图在 `output/acceptance/events-contract/`。
+
 ## 档位面板与联网搜索设置
 
 - `gateway-tiers-search.e2e.mjs`：浏览器预览，挂载真实的接线弹窗（含档位面板）与设置页「联网搜索 / 搜索插件」分区（**档位部分待改挂 Agent 页**：接线弹窗已随 R2 删除，档位改在 `components/agents/AgentDetail.tsx`；搜索设置部分仍有效），原生调用全部合成（不读写任何工具配置）。核对：Opus 4.5 只给到 high、Haiku 不给 effort、只有一个 effort 被选中、「跟随子代理」在子代理跟随主模型时填主模型；搜索 Key 只显示掩码、保存时掩码原样交回、新 Key 原文只交一次、试搜结果展示、Trae 标为不支持。先 `pnpm dev`，再 `JOLU_PREVIEW_URL=http://localhost:5173 node scripts/acceptance/gateway-tiers-search.e2e.mjs`；截图在 `output/acceptance/gateway-tiers-search/`。

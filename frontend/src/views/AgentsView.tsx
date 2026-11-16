@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { api, invoke, isTauri } from "@/lib/api"
+import { api, invoke, isTauri, listenEvent } from "@/lib/api"
+import { EVENTS } from "@/lib/events"
+import { useLatestGate } from "@/hooks/useLatestGate"
 import { gatewayApi, type AgentDiscoveryDto, type CatalogModelDto, type CustomAgentDto, type CustomAgentInputDto, type GatewayStatusDto, type ProfileDto, type WiringPreviewDto } from "@/lib/gatewayApi"
 import type { RoutingGroupDto } from "@/components/gateway/routingGroups"
 import { settingsApi, type AgentVersionRow } from "@/lib/settingsApi"
@@ -65,14 +67,20 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
   const [adding, setAdding] = useState(false)
   const lock = useRef(false)
 
+  // loadCore 由挂载、15 秒轮询、目录 / 连接事件、重新检测共同触发；detect 由挂载与重新检测触发。
+  // 前一次没回来又发了一次时，只认最新一次的结果
+  const coreGate = useLatestGate()
+  const detectGate = useLatestGate()
   const loadCore = useCallback(async () => {
     if (!isTauri) return
+    const isLatest = coreGate.begin()
     try {
-      void gatewayApi.customAgents().then(setCustoms).catch(() => setCustoms([]))
+      void gatewayApi.customAgents().then((next) => { if (isLatest()) setCustoms(next) }).catch(() => { if (isLatest()) setCustoms([]) })
       const [nextStatus, nextCatalog, nextGroups, nextProfiles, overview, settings] = await Promise.all([
         gatewayApi.status(), gatewayApi.catalog(), gatewayApi.groupList().catch(() => [] as RoutingGroupDto[]), gatewayApi.profilesList().catch(() => []),
         gatewayApi.dayOverview().catch(() => null), invoke<{ claude_long_context?: string }>("get_settings").catch(() => null),
       ])
+      if (!isLatest()) return
       setStatus(nextStatus)
       setCatalog(nextCatalog)
       setGroups(nextGroups)
@@ -80,29 +88,40 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
       setRoutesByAgent(overview?.by_agent ?? null)
       setLongContext(settings?.claude_long_context ?? "")
     } catch (error) {
-      toast.danger("读取 Agent 状态失败", String(error))
+      if (isLatest()) toast.danger("读取 Agent 状态失败", String(error))
     }
-  }, [toast])
+  }, [toast, coreGate])
 
   // 探测与版本查询分开落地：探测几毫秒就回来，不再等 `--version`（启动后第一次最多 3 秒）
   const detect = useCallback(async (force = false) => {
     if (!isTauri) return
+    const isLatest = detectGate.begin()
+    // 过期的结果既不显示，也不写进跨挂载的缓存
     const found = gatewayApi.agentDiscovery(force).catch(() => null).then((next) => {
+      if (!isLatest()) return
       lastDiscovery = next
       setDiscovery(next)
     })
     const versioned = settingsApi.agentVersions().catch(() => [] as AgentVersionRow[]).then((next) => {
+      if (!isLatest()) return
       lastVersions = next
       setVersions(next)
     })
     await Promise.all([found, versioned])
-  }, [])
+  }, [detectGate])
 
   useEffect(() => {
     void loadCore()
     void detect()
     const timer = window.setInterval(() => { if (!document.hidden) void loadCore() }, 15_000)
-    return () => window.clearInterval(timer)
+    // 模型目录或连接变了立即重读（模型菜单不用等下一次 15 秒轮询）；轮询保留作兜底
+    let disposed = false
+    const offs: Array<() => void> = []
+    const keep = (off: () => void) => { if (disposed) off(); else offs.push(off) }
+    const reload = () => { void loadCore() }
+    void listenEvent(EVENTS.GATEWAY_CATALOG_CHANGED, reload).then(keep)
+    void listenEvent(EVENTS.CONNECTIONS_CHANGED, reload).then(keep)
+    return () => { window.clearInterval(timer); disposed = true; offs.forEach((off) => off()) }
   }, [loadCore, detect])
 
   const rows: AgentRow[] = useMemo(() => {

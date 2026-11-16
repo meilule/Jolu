@@ -124,7 +124,7 @@ const UPDATES_DISABLED: &str = "检查更新暂时停用";
 #[tauri::command]
 pub fn set_auto_check_updates(app: AppHandle, on: bool) -> Result<crate::settings::Settings, String> {
     let next = app.state::<crate::Cfg>().0.try_update(|settings| settings.auto_check_updates = on)?;
-    let _ = app.emit("settings-changed", &next);
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -136,7 +136,7 @@ pub fn set_update_interval(app: AppHandle, minutes: u32) -> Result<crate::settin
         return Err("检查间隔需在 5 到 1440 分钟之间".into());
     }
     let next = app.state::<crate::Cfg>().0.try_update(|settings| settings.update_interval_minutes = minutes)?;
-    let _ = app.emit("settings-changed", &next);
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -206,7 +206,7 @@ pub async fn download_app_update(
                     {
                         last_progress = Some(now);
                         let _ = progress_app.emit(
-                            "update-download-progress",
+                            crate::events::UPDATE_DOWNLOAD_PROGRESS,
                             UpdateDownloadProgress { downloaded, total },
                         );
                     }

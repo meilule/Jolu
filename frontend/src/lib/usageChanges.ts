@@ -1,4 +1,5 @@
-import { listenEvent, type LiveUsageDto } from "./api"
+import { listenEvent } from "./api"
+import { EVENTS } from "@/lib/events"
 import { isUsageChange, throttleTrailing, USAGE_REFRESH_THROTTLE_MS } from "./usageRefresh"
 
 /**
@@ -9,7 +10,7 @@ export function onUsageChanged(platform: string, refresh: () => void, wait = USA
   const throttled = throttleTrailing(refresh, wait)
   let stopped = false
   let off: (() => void) | null = null
-  void listenEvent<LiveUsageDto>("live-usage", (usage) => {
+  void listenEvent(EVENTS.LIVE_USAGE, (usage) => {
     if (!stopped && isUsageChange(usage, platform)) throttled()
   }).then((unlisten) => {
     if (stopped) unlisten()

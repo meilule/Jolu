@@ -59,7 +59,7 @@ pub fn open(app: &tauri::AppHandle, island: bool, clone: Option<String>) -> Resu
     let clone = if island { clone } else { None };
     *TARGET.lock().map_err(|e| e.to_string())? = clone.clone();
     if let Some(window) = app.get_webview_window(LABEL) {
-        window.emit("menu-reopen", MenuSource { island, clone }).map_err(|e| e.to_string())?;
+        window.emit(crate::events::MENU_REOPEN, MenuSource { island, clone }).map_err(|e| e.to_string())?;
         // 前端切回根菜单并完成布局后再更新尺寸，避免先撑大再收缩。
         return Ok(());
     }

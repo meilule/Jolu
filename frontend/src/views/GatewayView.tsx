@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Activity, GitFork, Layers, ListFilter, Network } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { api, invoke, isTauri } from "@/lib/api"
+import { api, invoke, isTauri, listenEvent } from "@/lib/api"
+import { EVENTS } from "@/lib/events"
+import { useLatestGate } from "@/hooks/useLatestGate"
 import {
   gatewayApi, type AgentDiscoveryDto, type CatalogModelDto, type DayOverviewDto, type GatewayGroupsDto,
   type GatewayStatusDto, type RouteLogDto, type SourceCapabilityDto,
@@ -104,8 +106,11 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
   const [dialog, setDialog] = useState<Dialog>(null)
   const operationLock = useRef(false)
 
+  // 挂载、5 秒轮询、目录 / 连接事件、操作后都会调 refresh：只认最新一次的结果
+  const refreshGate = useLatestGate()
   const refresh = useCallback(async () => {
     if (!isTauri) return
+    const isLatest = refreshGate.begin()
     try {
       const [nextStatus, nextGroups, nextCatalog, nextCapabilities, nextSettings, nextDay, nextRows, nextMiddlewares, nextRouting] = await Promise.all([
         gatewayApi.status(), gatewayApi.groups(), gatewayApi.catalog(), gatewayApi.sourceCapabilities(),
@@ -115,6 +120,7 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
         gatewayApi.middlewares().catch(() => null),
         gatewayApi.groupList().catch(() => [] as RoutingGroupDto[]),
       ])
+      if (!isLatest()) return
       if (nextSettings) setSharedLan(Boolean(nextSettings.gateway_shared_lan))
       setStatus(nextStatus)
       setGroups(nextGroups)
@@ -126,9 +132,9 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
       setUpdatedAt(Date.now())
       setRoutingGroups(nextRouting)
     } catch (error) {
-      toast.danger("读取模型路由失败", String(error))
+      if (isLatest()) toast.danger("读取模型路由失败", String(error))
     }
-  }, [toast])
+  }, [toast, refreshGate])
 
   useEffect(() => {
     void refresh()
@@ -138,7 +144,14 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
       void refresh()
       setTick((value) => value + 1)
     }, 5_000)
-    return () => window.clearInterval(timer)
+    // 模型目录或连接变了立即重读；5 秒轮询保留作兜底
+    let disposed = false
+    const offs: Array<() => void> = []
+    const keep = (off: () => void) => { if (disposed) off(); else offs.push(off) }
+    const reload = () => { void refresh() }
+    void listenEvent(EVENTS.GATEWAY_CATALOG_CHANGED, reload).then(keep)
+    void listenEvent(EVENTS.CONNECTIONS_CHANGED, reload).then(keep)
+    return () => { window.clearInterval(timer); disposed = true; offs.forEach((off) => off()) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

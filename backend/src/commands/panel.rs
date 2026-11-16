@@ -42,7 +42,7 @@ pub(crate) fn open_main_usage(app: tauri::AppHandle, platform: Option<String>, c
 pub(crate) fn set_default_page(app: tauri::AppHandle, page: String) -> Result<settings::Settings, String> {
     settings::validate_default_page(&page)?;
     let next = app.state::<Cfg>().0.try_update(|settings| settings.default_page = page)?;
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -123,7 +123,7 @@ pub(crate) fn set_appearance_preferences(app: tauri::AppHandle, zoom: u16, densi
         settings.list_density = density;
         settings.reduce_motion = reduce_motion;
     })?;
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     if let Some(window) = app.get_webview_window(MAIN) {
         apply_main_zoom(&window, zoom).map_err(|error| format!("界面缩放已保存，但应用到主窗口失败：{error}"))?;
     }

@@ -6,6 +6,7 @@
  * - `otlp::metrics_url`：端点在保存前就补好 `/v1/metrics`
  * - `warmup::should_fire`：每天一次，失败不算已发
  */
+import type { WarmupOutcomeDto } from "./events.ts"
 
 export interface AgentVersionRow {
   agent: string
@@ -40,10 +41,29 @@ export function hasRunnableUpdate(row: Pick<AgentVersionRow, "update_command">):
  */
 export function warmupStateText(
   enabled: boolean, lastDate: string | null | undefined, today: string,
+  last: WarmupOutcomeDto | null = null,
 ): string {
   if (!enabled) return "未开启（开启后会真实消耗额度）"
   if (lastDate === today) return "今天已完成"
+  // 失败 / 跳过不会记日期、会在下一次检查重试：只说今天这次尝试，昨天的不提
+  if (last && last.status !== "ok" && localDate(last.finished_ms) === today) {
+    const at = localTime(last.finished_ms)
+    return last.status === "failed"
+      ? `今天 ${at} 尝试失败：${last.detail}，下一次检查时会重试`
+      : `今天 ${at} 跳过：${last.detail}`
+  }
   return "等待今天的时间点"
+}
+
+/** 本地日期 `YYYY-MM-DD`（与设置页的 `today` 同一口径） */
+function localDate(ms: number): string {
+  return new Date(ms).toLocaleDateString("sv-SE")
+}
+
+/** 本地时刻 `HH:MM` */
+function localTime(ms: number): string {
+  const date = new Date(ms)
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`
 }
 
 /** 该小时是否合法（后端按 0–23 截断）。 */

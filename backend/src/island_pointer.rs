@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 
-pub(crate) const EVENT: &str = "island-pointer";
+pub(crate) const EVENT: &str = crate::events::ISLAND_POINTER;
 const ACTIVE_INTERVAL: Duration = Duration::from_millis(33);
 const IDLE_INTERVAL: Duration = Duration::from_secs(1);
 const SETTINGS_RECHECK: Duration = Duration::from_secs(1);

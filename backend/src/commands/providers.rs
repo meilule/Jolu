@@ -22,7 +22,7 @@ pub(crate) async fn providers_import_apply(
         crate::gateway::import_sources::apply(conn, &references)
     })
     .await?;
-    let _ = app.emit("connections-changed", ());
+    let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ());
     Ok(created)
 }
 
@@ -137,7 +137,7 @@ pub(crate) async fn gateway_refresh_models(app: tauri::AppHandle, connection_id:
         )
         .map_err(|error| format!("保存模型清单失败：{error}"))?;
     }
-    let _ = app.emit("gateway-catalog-changed", ());
+    crate::events::catalog_changed(&app);
     Ok(fetched)
 }
 
@@ -187,14 +187,14 @@ pub(crate) async fn enable_connection(app: tauri::AppHandle, db: State<'_, Db>, 
         let key=id.clone();
         with_database(db.0.clone(),move |conn|connections::set_paused(conn,&key,false)).await?;
         invalidate_network_cache(&id);
-        let _=app.emit("connections-changed",());
+        let _=app.emit(crate::events::CONNECTIONS_CHANGED,());
         return Ok("官方 Key 检测通过；仅保存连接，不修改外部应用登录或授予余额权限".into());
     }
     if matches!(info.platform.as_str(),"zcode"|"opencode") && info.kind=="api" {
         let secret=info.secret.clone().ok_or("该连接没有保存 API Key")?;
         tauri::async_runtime::spawn_blocking(move || quota::validate_connection(&info.platform,"api",&secret,info.base_url.as_deref(),info.model.as_deref())).await.map_err(|e|e.to_string())??;
         let key=id.clone();with_database(db.0.clone(),move|conn|connections::set_paused(conn,&key,false)).await?;
-        invalidate_network_cache(&id);let _=app.emit("connections-changed",());let _=app.emit("refresh-requested",id);
+        invalidate_network_cache(&id);let _=app.emit(crate::events::CONNECTIONS_CHANGED,());crate::events::refresh_requested(&app, Some(id.as_str()));
         return Ok("已恢复连接查询，原工具配置保持原样".into());
     }
     if info.kind=="auth" && (platforms::native(&info.platform)||provider_browser_auth::is_browser(info.secret.as_deref())) {
@@ -202,8 +202,8 @@ pub(crate) async fn enable_connection(app: tauri::AppHandle, db: State<'_, Db>, 
         let key=id.clone();
         with_database(db.0.clone(),move |conn|connections::set_paused(conn,&key,false)).await?;
         invalidate_network_cache(&id);
-        let _=app.emit("connections-changed",());
-        let _=app.emit("refresh-requested",id);
+        let _=app.emit(crate::events::CONNECTIONS_CHANGED,());
+        crate::events::refresh_requested(&app, Some(id.as_str()));
         return Ok("已验证并恢复账号查询".into());
     }
     let secret = info.secret.clone().ok_or("该连接没有保存凭证，无法写入 CLI 配置")?;
@@ -239,7 +239,7 @@ pub(crate) async fn enable_connection(app: tauri::AppHandle, db: State<'_, Db>, 
         Ok(note)
     })).await.map_err(|e| e.to_string())??;
     invalidate_network_cache(&id);
-    let _ = app.emit("connections-changed", ());
+    let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ());
     Ok(note.message)
 }
 
@@ -324,18 +324,18 @@ pub(crate) async fn update_connection(
         })
         .await?;
         if key_changed {
-            let _ = app.emit("refresh-requested", id.clone());
+            crate::events::refresh_requested(&app, Some(id.as_str()));
         }
     }
     // 名称若是任一灵动岛的当前连接，同步快照（与 rename_connection 命令同一套逻辑）
     let mut renamed = false;
-    let next = cfg.0.try_update(|s| { renamed = island_clones::rename_connection(s, &id, &trimmed_name); })?;
+    cfg.0.try_update(|s| { renamed = island_clones::rename_connection(s, &id, &trimmed_name); })?;
     if renamed {
-        let _ = app.emit("settings-changed", &next);
+        crate::events::settings_changed(&app);
         refresh_tray_menu(&app);
     }
     invalidate_network_cache(&id);
-    let _ = app.emit("connections-changed", ());
+    let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ());
     Ok(())
 }
 
@@ -370,7 +370,7 @@ pub(crate) async fn add_connection(app: tauri::AppHandle, db: State<'_, Db>, inp
     })
     .await?;
     invalidate_network_cache(&id);
-    let _ = app.emit("connections-changed", ());
+    let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ());
     Ok(id)
 }
 
@@ -383,7 +383,7 @@ pub(crate) async fn remove_connection(app: tauri::AppHandle, db: State<'_, Db>, 
     })
     .await?;
     invalidate_network_cache(&id);
-    let _ = app.emit("connections-changed", ());
+    let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ());
     Ok(())
 }
 
@@ -402,11 +402,11 @@ pub(crate) async fn set_connection_paused(app: tauri::AppHandle, db: State<'_, D
     if app.state::<Cfg>().0.get().island_connection_id.as_deref() == Some(id.as_str()) {
         update_tray_icon(&app);
     }
-    let _ = app.emit("connections-changed", ());
+    let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ());
     // 重新连接后立刻取数，否则界面要停在「等待连接数据更新」直到下一轮轮询。
     // 断开则不必：此时界面本就该显示已断开，多发一次查询只是白跑。
     if !paused {
-        let _ = app.emit("refresh-requested", id);
+        crate::events::refresh_requested(&app, Some(id.as_str()));
     }
     Ok(())
 }
@@ -427,8 +427,8 @@ pub(crate) async fn fetch_credentials(app: tauri::AppHandle, db: State<'_, Db>, 
             Ok(())
         }).await?;
         invalidate_network_cache(&id);
-        let _=app.emit("connections-changed",());
-        let _=app.emit("refresh-requested",id);
+        let _=app.emit(crate::events::CONNECTIONS_CHANGED,());
+        crate::events::refresh_requested(&app, Some(id.as_str()));
         return Ok(connections::FetchResult {ok:true,masked:None,message:"已核实所选账号的查询授权".into(),scanned:vec![],changed:false});
     }
     let claude_prepared = if info.platform == "claude" && info.kind == "auth" {
@@ -455,12 +455,12 @@ pub(crate) async fn fetch_credentials(app: tauri::AppHandle, db: State<'_, Db>, 
     .await?;
     if result.ok {
         invalidate_network_cache(&id);
-        let _ = app.emit("connections-changed", ());
+        let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ());
         // 缓存刚被清空，无论凭证是否变化都立即重查。用户按「更新」的意图是
         // 「我要最新数据」：凭证没变时同样该看到刷新，而不是毫无动静——
         // 只在 changed 时通知，会让「本机凭证未变化」这条最常见的路径彻底没反馈。
         // 携带目标连接 ID：只有这条连接被灵动岛/总览选中时才重查，避免更新一行广播刷新另一条。
-        let _ = app.emit("refresh-requested", id);
+        crate::events::refresh_requested(&app, Some(id.as_str()));
     }
     Ok(result)
 }
@@ -492,10 +492,10 @@ pub(crate) async fn replace_api_key(
     let replace_id = id.clone();
     with_database(db.0.clone(), move |conn| connections::replace_api_key(conn, &replace_id, &secret)).await?;
     invalidate_network_cache(&id);
-    let _ = app.emit("connections-changed", ());
+    let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ());
     // 换了 Key 必然要用新凭证重查，否则界面会一直停在旧 Key 的结果上
     // 更换 API Key 同样只刷新目标连接；全局刷新入口仍发送空 payload。
-    let _ = app.emit("refresh-requested", id);
+    crate::events::refresh_requested(&app, Some(id.as_str()));
     Ok(())
 }
 
@@ -541,12 +541,12 @@ pub(crate) async fn rename_connection(
         connections::rename_connection(conn, &rename_id, &rename_name)
     }).await?;
     let mut renamed = false;
-    let next = cfg.0.try_update(|s| { renamed = island_clones::rename_connection(s, &id, &name); })?;
+    cfg.0.try_update(|s| { renamed = island_clones::rename_connection(s, &id, &name); })?;
     if renamed {
-        let _ = app.emit("settings-changed", &next);
+        crate::events::settings_changed(&app);
         refresh_tray_menu(&app);
     }
-    let _ = app.emit("connections-changed", ());
+    let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ());
     Ok(())
 }
 
@@ -566,7 +566,7 @@ pub(crate) async fn read_local_connections(app: tauri::AppHandle, db: State<'_, 
             };
             result.map(|(added,existing,warnings)|LocalReadSummary {added,existing,warnings})
         }).await?;
-        let _=app.emit("connections-changed",());
+        let _=app.emit(crate::events::CONNECTIONS_CHANGED,());
         return Ok(result);
     }
     let (inputs, claude_prepared) = tauri::async_runtime::spawn_blocking(move || {
@@ -591,7 +591,7 @@ pub(crate) async fn read_local_connections(app: tauri::AppHandle, db: State<'_, 
         tx.commit().map_err(|e| e.to_string())?;
         Ok(summary)
     }).await?;
-    let _ = app.emit("connections-changed", ());
+    let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ());
     Ok(result)
 }
 

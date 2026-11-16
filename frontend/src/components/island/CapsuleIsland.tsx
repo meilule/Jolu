@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { EVENTS } from "@/lib/events"
 import { PlatformLogo } from "@/components/brand/PlatformLogo"
 import { ZcodeBucketQuota } from "@/components/providers/ZcodeBucketQuota"
 import { Bot, type BotRing } from "./Bot"
@@ -402,7 +403,7 @@ export function CapsuleIsland({
     window.addEventListener("blur", onBlur)
     // 原生窗口失焦：点主窗口、托盘或别的应用
     const self = islandIdFromSearch(window.location.search)
-    void listenEvent<string | null>("island-blur", (id) => { if ((id ?? null) === self) onBlur() }).then((un) => { if (disposed) un(); else off = un }).catch(() => {})
+    void listenEvent(EVENTS.ISLAND_BLUR, (id) => { if ((id ?? null) === self) onBlur() }).then((un) => { if (disposed) un(); else off = un }).catch(() => {})
     return () => {
       disposed = true
       off?.()

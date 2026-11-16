@@ -1,4 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog"
+import { EVENTS } from "@/lib/events"
 import { useEffect, useState } from "react"
 import { X } from "lucide-react"
 import { listenEvent } from "@/lib/api"
@@ -105,7 +106,7 @@ export function PrivacyFirstNotice() {
   useEffect(() => {
     let off: (() => void) | null = null
     let stopped = false
-    void listenEvent("privacy-first-mask", () => toast.success("隐私脱敏已生效", "请求离开本机前已把敏感值换成占位符，可在设置 › 隐私脱敏查看记录"))
+    void listenEvent(EVENTS.PRIVACY_FIRST_MASK, () => toast.success("隐私脱敏已生效", "请求离开本机前已把敏感值换成占位符，可在设置 › 隐私脱敏查看记录"))
       .then((unlisten) => { if (stopped) unlisten(); else off = unlisten })
       .catch(() => {})
     return () => { stopped = true; off?.() }

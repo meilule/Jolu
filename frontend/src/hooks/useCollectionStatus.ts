@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { EVENTS } from "@/lib/events"
 import { api, isTauri, listenEvent, type CollectionStatusDto } from "@/lib/api"
 
 export function useCollectionStatus() {
@@ -7,7 +8,7 @@ export function useCollectionStatus() {
     if (!isTauri) return
     let stopped = false
     let off: (() => void) | undefined
-    void listenEvent<CollectionStatusDto>("collection-status", (next) => {
+    void listenEvent(EVENTS.COLLECTION_STATUS, (next) => {
       if (!stopped) setStatus(next)
     }).then((unlisten) => {
       if (stopped) unlisten()

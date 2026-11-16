@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react"
 import { AppWindow, BellOff, Check, ChevronRight, CopyMinus, CopyPlus, Info, LayoutGrid, LogOut, Move, PanelBottom, PanelLeft, PanelRight, PanelTop, PanelTopOpen, Pin, RefreshCw, Settings } from "lucide-react"
-import { api, isTauri, listenEvent, type MenuSourceEvent } from "@/lib/api"
+import { api, isTauri, listenEvent } from "@/lib/api"
+import { EVENTS } from "@/lib/events"
 import { cloneActions, islandCount, islandIdFromSearch, islandProfile } from "@/lib/islandProfile"
 import { useSettings } from "@/hooks/useSettings"
 import { useConnections } from "@/hooks/useConnections"
@@ -34,21 +35,19 @@ export function ContextMenuWindow() {
     const offs: Array<() => void> = []
     const refresh = () => { void api.menuRefreshing().then((v) => { if (!disposed) setRefreshing(v) }).catch(() => {}) }
     refresh()
-    for (const name of ["menu-state-changed", "menu-reopen"]) {
-      void listenEvent<MenuSourceEvent>(name, (source) => {
-        refresh()
-        if (name === "menu-reopen") {
-          setIslandMenu(source.island)
-          setCloneId(source.island ? source.clone : null)
-          setPage("root")
-          setBusy(false)
-          setError(null)
-          setDestroying(false)
-          setReopenRequest((value) => value + 1)
-        }
-      })
-        .then((off) => { if (disposed) off(); else offs.push(off) })
-    }
+    const keep = (off: () => void) => { if (disposed) off(); else offs.push(off) }
+    // menu-state-changed 没有载荷，只需重读刷新状态；menu-reopen 带菜单来源，要把菜单复位到根页
+    void listenEvent(EVENTS.MENU_STATE_CHANGED, refresh).then(keep)
+    void listenEvent(EVENTS.MENU_REOPEN, (source) => {
+      refresh()
+      setIslandMenu(source.island)
+      setCloneId(source.island ? source.clone : null)
+      setPage("root")
+      setBusy(false)
+      setError(null)
+      setDestroying(false)
+      setReopenRequest((value) => value + 1)
+    }).then(keep)
     return () => { disposed = true; offs.forEach((off) => off()) }
   }, [])
   useLayoutEffect(() => {

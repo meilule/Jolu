@@ -251,7 +251,7 @@ pub(crate) async fn finish_quota_query(
     let unauthorized = matches!(state, quota::QuotaState::Unauthorized { .. });
     let outcome = (success || unauthorized).then_some(success);
     let changed = with_database(pool, move |conn| connections::record_query_result(conn, &update_id, &expected, outcome)).await?;
-    if changed { let _ = app.emit("connections-changed", ()); }
+    if changed { let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ()); }
     // 额度快照（路由分组 smart / pace / cap hold 的数据源）：成功查询把最早的重置时间
     // 与「是否已用满」记入注册表。重置时间缺省的来源两样都不写，路由层如实降权/不降权。
     if let quota::QuotaState::Ok { windows, .. } = &state {
@@ -347,7 +347,7 @@ pub(crate) async fn connection_api_usage(app: tauri::AppHandle, db: State<'_, Db
     let unauthorized = matches!(state, quota::ApiUsageState::Unauthorized { .. });
     let outcome = (valid || unauthorized).then_some(valid);
     let changed = with_database(pool, move |conn| connections::record_query_result(conn, &id, &expected, outcome)).await?;
-    if changed { let _ = app.emit("connections-changed", ()); }
+    if changed { let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ()); }
     Ok(state)
 }
 
@@ -401,7 +401,7 @@ pub(crate) async fn connection_balance(app: tauri::AppHandle, db: State<'_, Db>,
     let outcome = (success || unauthorized).then_some(success);
     let update_id = id.clone();
     let changed = with_database(pool, move |conn| connections::record_query_result(conn, &update_id, &expected, outcome)).await?;
-    if changed { let _ = app.emit("connections-changed", ()); }
+    if changed { let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ()); }
     // 仅仍属于当前凭证的余额可以触发提醒。
     if let quota::BalanceState::Ok { balance, currency, .. } = &state { notify::check_balance(&app, &id, &c.name, &c.platform, *balance, currency); }
     Ok(state)

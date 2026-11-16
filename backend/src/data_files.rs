@@ -1,6 +1,6 @@
 use std::{fs, io::{Read, Write}, path::Path, sync::Mutex, time::{Duration, Instant}};
 use super::db::{ImportPreview, ImportSummary, ParsedBackup};
-use tauri::{Emitter, Manager, State};
+use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 fn read_backup(path: &Path) -> Result<String, String> {
@@ -100,7 +100,7 @@ pub fn discard_import(token: String) -> Result<(), String> {
 pub async fn confirm_import(app: tauri::AppHandle, db: State<'_, super::Db>, token: String) -> Result<ImportSummary, String> {
     let parsed = take_pending(&PENDING, &token, Instant::now())?;
     let result = super::with_database(db.0.clone(), move |conn| super::db::import_parsed(conn, &parsed)).await?;
-    let _ = app.emit("refresh-requested", ());
+    crate::events::refresh_requested(&app, None);
     Ok(result)
 }
 

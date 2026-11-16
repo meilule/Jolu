@@ -1,4 +1,5 @@
 import { useEffect, useRef, type RefObject } from "react"
+import { EVENTS } from "@/lib/events"
 import { gazeSpringStep, gazeTarget, sphereEyeTransform, type Vec } from "@/lib/botGaze"
 import { isTauri, listenEvent } from "@/lib/api"
 import { reducedMotion } from "@/lib/motion"
@@ -68,7 +69,7 @@ async function installGlobal() {
   void win.onMoved(() => { geoRev++; void refresh() })
   void win.onScaleChanged(() => { geoRev++; void refresh() })
   window.addEventListener("resize", () => { geoRev++; void refresh() })
-  void listenEvent<{ x: number; y: number }>("island-pointer", (physical) => {
+  void listenEvent(EVENTS.ISLAND_POINTER, (physical) => {
     const now = performance.now()
     lastGlobal = now
     // 光标在本窗口内（刚有过窗口内 pointermove）：窗口事件是即时真值，

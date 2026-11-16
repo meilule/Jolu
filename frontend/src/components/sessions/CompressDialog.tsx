@@ -8,7 +8,8 @@ import { dialogMode, handoffFileName, fileNameError, formatTokens, HANDOFF_TARGE
 import { projectName, sessionTitle } from '@/lib/sessionThreads'
 import { HandoffShell, HandoffNotice, handoffButton, handoffInput, handoffPrimary } from './handoffParts'
 import { CompressChat } from './CompressChat'
-type Envelope={job_id:string;event:ChatEventDto}
+import { EVENTS, type HandoffChatEvent } from '@/lib/events'
+type Envelope=HandoffChatEvent
 export function CompressDialog({session,onClose,onResult}: {session:SessionItemDto;onClose:()=>void;onResult:(result:HandoffResult,name:string,target:string)=>void}) {
   const [state,setState]=useState<HandoffState|null>(null)
   const [accounts,setAccounts]=useState<(AutomationAccountDto&{platform:string})[]>([])
@@ -46,7 +47,7 @@ export function CompressDialog({session,onClose,onResult}: {session:SessionItemD
     if(isTauri){
       void reload()
       void Promise.all((['claude','codex'] as const).map(async platform=>(await automationApi.accounts(platform)).map(a=>({...a,platform})))).then(rows=>{if(!alive.current)return;const all=rows.flat();setAccounts(all);setConnection(all.find(a=>a.current&&a.status==='connected')?.id??'')}).catch(e=>{if(alive.current)setError(String(e))})
-      ready.current=listen<Envelope>('handoff-chat',({payload})=>{if(!alive.current)return;if(payload.job_id===job.current)accept(payload.event);else if(starting.current)buffer.current.push(payload)})
+      ready.current=listen<Envelope>(EVENTS.HANDOFF_CHAT,({payload})=>{if(!alive.current)return;if(payload.job_id===job.current)accept(payload.event);else if(starting.current)buffer.current.push(payload)})
     }else{
       setState({readable:session.has_source,total:24,latest:null,digest_covered_to:0,digest_range:null,new_range:[1,24],reusable:false,estimate_tokens:12400})
     }

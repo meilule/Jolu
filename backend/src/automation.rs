@@ -26,7 +26,7 @@ use crate::quota::QuotaState;
 pub(crate) type Shared = Arc<Mutex<Connection>>;
 
 /// 前端订阅的变化事件：任务或运行状态变化后发出
-pub const CHANGED: &str = "automation-changed";
+pub const CHANGED: &str = crate::events::AUTOMATION_CHANGED;
 const TICK: Duration = Duration::from_secs(30);
 /// 定时触发超过这个时长才被发现（休眠、关机、Jolu 未运行）时标「已错过」，由用户补跑
 const MISSED_GRACE_MS: i64 = 10 * 60_000;
@@ -1809,9 +1809,9 @@ fn warmup_tick(app: &AppHandle) {
             let _ = app.state::<crate::Cfg>().0.try_update(|settings| {
                 settings.warmup_last_date = Some(crate::warmup::local_today());
             });
-            let _ = app.emit("settings-changed", app.state::<crate::Cfg>().0.get());
+            crate::events::settings_changed(&app);
         }
-        let _ = app.emit("warmup-finished", &outcome);
+        let _ = app.emit(crate::events::WARMUP_FINISHED, crate::warmup_run::remember(outcome));
         RUNNING.store(false, std::sync::atomic::Ordering::Release);
     });
     if spawned.is_err() { RUNNING.store(false, std::sync::atomic::Ordering::Release); }

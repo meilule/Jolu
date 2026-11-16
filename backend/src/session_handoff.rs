@@ -32,7 +32,7 @@ pub const DIGEST_ROLLUP_TOKENS: usize = 60_000;
 pub const MAX_REFINE_ROUNDS: u32 = 10;
 pub const PROMPT_VERSION: &str = "handoff-v2";
 /// 对话弹窗订阅的事件：`{ job_id, event: ChatEvent }`
-pub const CHAT_EVENT: &str = "handoff-chat";
+pub const CHAT_EVENT: &str = crate::events::HANDOFF_CHAT;
 const NATIVE_NOTE: &str = "来自原工具压缩摘要，未经 Jolu 复核";
 /// 新纪要输出的估计（约 1,500 字），只用于「预计发送」
 const DIGEST_OUTPUT_ESTIMATE: usize = 500;

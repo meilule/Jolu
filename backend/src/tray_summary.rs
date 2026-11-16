@@ -316,7 +316,7 @@ fn park(app: &tauri::AppHandle, generation: u64) {
     let Some(window) = app.get_webview_window(LABEL) else { return };
     let _ = window.hide();
     // 广播即可：只有摘要页监听这两个事件名
-    let _ = app.emit("tray-summary-close", ());
+    let _ = app.emit(crate::events::TRAY_SUMMARY_CLOSE, ());
     // 保温期内没有新的悬停才销毁；期间任何 enter / close 都会换代，旧计时作废。
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -351,7 +351,7 @@ pub fn enter(app: &tauri::AppHandle, x: f64, y: f64) {
             if GENERATION.load(Ordering::SeqCst) != generation { return; }
             if app.get_webview_window(LABEL).is_some() {
                 // 保温中的窗口：通知页面重读摘要并按内容尺寸重新定位、显示。
-                let _ = app.emit("tray-summary-open", ());
+                let _ = app.emit(crate::events::TRAY_SUMMARY_OPEN, ());
                 return;
             }
             match WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("index.html?window=tray-summary".into()))

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { EVENTS } from "@/lib/events"
 import { invoke } from "@tauri-apps/api/core"
 import { TrayTooltip } from "@/components/tray/TrayMenu"
 import { isTauri, listenEvent } from "@/lib/api"
@@ -43,8 +44,8 @@ export function TraySummaryWindow() {
     open()
     const offs: Array<() => void> = []
     const listen = (promise: Promise<() => void>) => void promise.then((off) => { if (active) offs.push(off); else off() }).catch(() => {})
-    listen(listenEvent("tray-summary-open", open))
-    listen(listenEvent("tray-summary-close", stop))
+    listen(listenEvent(EVENTS.TRAY_SUMMARY_OPEN, open))
+    listen(listenEvent(EVENTS.TRAY_SUMMARY_CLOSE, stop))
     return () => { active = false; stop(); offs.forEach((off) => off()) }
   }, [])
   // 保温窗口重新打开时内容尺寸可能不变，ResizeObserver 不会回调，这里主动定位并显示一次。

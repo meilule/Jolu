@@ -83,7 +83,7 @@ pub(crate) fn gateway_long_context_set(app: tauri::AppHandle, value: String) -> 
     match applied {
         Some(applied) if applied.model.is_some() => {
             gateway_wiring_set_inner(&app, "claude-code".into(), true, applied.model.as_deref(), applied.subagent_model.as_deref(), applied.tiers.as_ref())?;
-            let _ = app.emit("gateway-wiring-changed", ());
+            let _ = app.emit(crate::events::GATEWAY_WIRING_CHANGED, ());
             Ok("已保存，并已更新 Claude Code 的配置".into())
         }
         _ => Ok("已保存；下次接入 Claude Code 时生效".into()),
@@ -131,7 +131,7 @@ pub(crate) fn gateway_wiring_set(
         crate::gateway::profiles::set_active(&conn, None);
     }
     let result = gateway_wiring_set_inner(&app, agent, wired, model.as_deref(), subagent_model.as_deref(), tiers.as_ref());
-    let _ = app.emit("gateway-wiring-changed", ());
+    let _ = app.emit(crate::events::GATEWAY_WIRING_CHANGED, ());
     result
 }
 
@@ -176,7 +176,7 @@ pub(crate) fn gateway_wiring_set_inner(
 #[tauri::command]
 pub(crate) fn gateway_escape(app: tauri::AppHandle) -> String {
     let summary = crate::gateway::escape::manual(&app).summary();
-    let _ = app.emit("gateway-wiring-changed", ());
+    let _ = app.emit(crate::events::GATEWAY_WIRING_CHANGED, ());
     summary
 }
 
@@ -214,7 +214,7 @@ pub(crate) fn custom_agents_wire(app: tauri::AppHandle, id: String, model: Optio
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
     let view = crate::custom_agents::wire(&conn, &id, settings.proxy_port, &settings.instance_id, model.as_deref(), &backup)?;
     drop(conn);
-    let _ = app.emit("gateway-wiring-changed", ());
+    let _ = app.emit(crate::events::GATEWAY_WIRING_CHANGED, ());
     Ok(view)
 }
 
@@ -225,7 +225,7 @@ pub(crate) fn custom_agents_unwire(app: tauri::AppHandle, id: String) -> Result<
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
     let changed = crate::custom_agents::unwire(&conn, &id, &backup)?;
     drop(conn);
-    let _ = app.emit("gateway-wiring-changed", ());
+    let _ = app.emit(crate::events::GATEWAY_WIRING_CHANGED, ());
     Ok(changed)
 }
 
@@ -247,7 +247,7 @@ pub(crate) fn gateway_wiring_accept(app: tauri::AppHandle, agent: String) -> Res
     let _ = app.state::<Cfg>().0.try_update(|settings| {
         settings.gateway_wiring.remove(&agent);
     });
-    let _ = app.emit("gateway-wiring-changed", ());
+    let _ = app.emit(crate::events::GATEWAY_WIRING_CHANGED, ());
     Ok(())
 }
 

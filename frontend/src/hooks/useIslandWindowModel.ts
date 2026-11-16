@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { EVENTS } from "@/lib/events"
 import type { DeltaPhase } from "@/components/island/TokenDelta"
 import type { IslandData } from "@/components/island/UsageIsland"
 import { CLAUDE_QUOTAS, LOCAL_SOURCE, RUNNING_SESSION_TEXT, SESSIONS, TOTAL_DELTA_TEXT } from "@/mock/data"
@@ -128,10 +129,10 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
       })
     }
     // 右键“立即刷新”：连同本机会话一起重扫。
-    listen(listenEvent("island-refresh", () => refreshNetwork(true)))
+    listen(listenEvent(EVENTS.ISLAND_REFRESH, () => refreshNetwork(true)))
     // 连接管理“更新”凭证/网关、平台切换、监听器发现凭证变化：只需重查网络额度，
     // 会话由采集器/watcher 单独维护，不必在此重扫。
-    listen(listenEvent<string | null>("refresh-requested", (connectionId) => {
+    listen(listenEvent(EVENTS.REFRESH_REQUESTED, (connectionId) => {
       if (shouldRefreshConnection(connectionId, active?.id)) refreshNetwork(false)
     }))
     // 主面板「启用」完成后 settings-changed 与连接列表可能先后到达。

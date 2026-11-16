@@ -23,6 +23,32 @@ pub struct WarmupOutcome {
     pub detail: String,
 }
 
+/// 最近一次 warm-up 的结果与完成时间（毫秒）。只在内存里：设置页挂载时读一次，之后靠
+/// `warmup-finished` 事件更新；失败不会记日期、会在下一个检查周期重试，所以要单独记住
+/// 「上次为什么没成」，否则失败在界面上完全看不到。
+#[derive(Debug, Clone, Serialize)]
+pub struct LastWarmup {
+    #[serde(flatten)]
+    pub outcome: WarmupOutcome,
+    pub finished_ms: i64,
+}
+
+static LAST: std::sync::Mutex<Option<LastWarmup>> = std::sync::Mutex::new(None);
+
+/// 记下这次结果并返回带完成时间的那份（随 `warmup-finished` 发给前端）。
+pub(crate) fn remember(outcome: WarmupOutcome) -> LastWarmup {
+    let last = LastWarmup { outcome, finished_ms: chrono::Utc::now().timestamp_millis() };
+    if let Ok(mut slot) = LAST.lock() {
+        *slot = Some(last.clone());
+    }
+    last
+}
+
+/// 最近一次结果；本次启动后还没跑过时为 None。
+pub(crate) fn last() -> Option<LastWarmup> {
+    LAST.lock().ok().and_then(|slot| slot.clone())
+}
+
 /// 在已接线的 agent 里挑一个当前账号匹配的。
 ///
 /// 顺序固定（claude-code → codex），保证行为可预测；用户想换就断开前一个的接线。

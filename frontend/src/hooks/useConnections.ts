@@ -1,4 +1,6 @@
 import { queryCache } from "@/lib/queryCache"
+import { EVENTS } from "@/lib/events"
+import { useLatestGate } from "@/hooks/useLatestGate"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { api, isTauri, listenEvent, type Candidate, type ConnectionDto } from "@/lib/api"
 import type { Connection, ConnectionKind, PlatformId } from "@/types"
@@ -53,7 +55,8 @@ export function useConnections() {
   const [candidateLoading, setCandidateLoading] = useState(false)
   const [live, setLive] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const loadRevision = useRef(0)
+  // 挂载、连接变化事件、操作后都会调 reload：只认最新一次的结果（见 lib/latestGate.ts）
+  const loadGate = useLatestGate()
   const initialized = useRef(queryCache.get<Connection[]>("connections") !== null)
   /** 每行「获取」的独立状态，按连接 id 索引 */
   const [fetchState, setFetchState] = useState<Record<string, FetchState>>({})
@@ -62,11 +65,11 @@ export function useConnections() {
 
   const reload = useCallback(async () => {
     if (!isTauri) return
-    const revision = ++loadRevision.current
+    const isLatest = loadGate.begin()
     if (!initialized.current) setLoading(true)
     try {
       const list = await api.listConnections()
-      if (revision !== loadRevision.current) return
+      if (!isLatest()) return
       const mapped = list.map(toConnection)
       queryCache.set("connections", mapped)
       initialized.current = true
@@ -74,13 +77,13 @@ export function useConnections() {
       setLive(true)
       setError(null)
     } catch (reason) {
-      if (revision !== loadRevision.current) return
+      if (!isLatest()) return
       setLive(false)
       setError(String(reason))
     } finally {
-      if (revision === loadRevision.current) setLoading(false)
+      if (isLatest()) setLoading(false)
     }
-  }, [])
+  }, [loadGate])
 
   const refreshCandidates = useCallback(async () => {
     if (!isTauri) return
@@ -95,7 +98,7 @@ export function useConnections() {
   useEffect(() => {
     let disposed = false
     let off: (() => void) | undefined
-    void listenEvent("connections-changed", () => { if (!disposed) void reload() }).then((un) => {
+    void listenEvent(EVENTS.CONNECTIONS_CHANGED, () => { if (!disposed) void reload() }).then((un) => {
       if (disposed) un()
       else {
         off = un
@@ -107,7 +110,7 @@ export function useConnections() {
     })
     return () => {
       disposed = true
-      loadRevision.current++
+      loadGate.invalidate()
       off?.()
     }
   }, [reload, refreshCandidates])

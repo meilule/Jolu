@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
+import { EVENTS, type EventPayloads } from "./lib/events"
 
 // 主题由后端经 ?theme= 传入（light / dark / system），设好后再显示，避免深色主题闪浅色
 const theme = new URLSearchParams(location.search).get("theme")
@@ -18,7 +19,7 @@ const showError = (message: string) => {
   failure.hidden = false
 }
 
-void listen<string>("startup-error", (event) => showError(event.payload))
+void listen<EventPayloads["startup-error"]>(EVENTS.STARTUP_ERROR, (event) => showError(event.payload))
 void invoke<string | null>("startup_error").then((error) => { if (error) showError(error) }).catch(() => {})
 
 document.getElementById("retry")!.addEventListener("click", () => {

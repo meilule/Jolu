@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { EVENTS } from "@/lib/events"
 import { SNAP_ZONE } from "@/components/island/PreviewControls"
-import { api, isTauri, listenEvent, type DockChangedEvent, type DockHintEvent } from "@/lib/api"
+import { api, isTauri, listenEvent } from "@/lib/api"
 import { isOwnIslandEvent, islandIdFromSearch, islandProfile } from "@/lib/islandProfile"
 import { collapseExpandedView, snapIndicatorVisible } from "@/lib/islandViewState"
 import { useSettings } from "@/hooks/useSettings"
@@ -58,7 +59,7 @@ export function useIslandWindowShell(menuBusy: IslandMenuBusy) {
   useEffect(() => {
     let disposed = false
     let off: (() => void) | undefined
-    void listenEvent<DockHintEvent>("dock-hint", (event) => {
+    void listenEvent(EVENTS.DOCK_HINT, (event) => {
       if (isOwnIslandEvent(event, cloneId)) setSnapHint(event.hint)
     }).then((un) => {
       if (disposed) un(); else off = un
@@ -133,7 +134,7 @@ export function useIslandWindowShell(menuBusy: IslandMenuBusy) {
   useEffect(() => {
     let disposed = false
     let off: (() => void) | undefined
-    void listenEvent<DockChangedEvent>("dock-changed", (event) => {
+    void listenEvent(EVENTS.DOCK_CHANGED, (event) => {
       if (isOwnIslandEvent(event, cloneId)) resetDockView(event.dock.edge)
     }).then((un) => { if (disposed) un(); else off = un })
     return () => {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { EVENTS } from "@/lib/events"
 import { Link2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { listenEvent } from "@/lib/api"
@@ -58,7 +59,7 @@ export function RouteLogPanel({ desktop, connections, tick }: { desktop: boolean
     let stopped = false
     let timer: number | null = null
     let off: (() => void) | null = null
-    void listenEvent("gateway-route", () => {
+    void listenEvent(EVENTS.GATEWAY_ROUTE, () => {
       if (timer) window.clearTimeout(timer)
       timer = window.setTimeout(() => {
         if (!current.current || current.current.page === 1) void load(1, null, true)

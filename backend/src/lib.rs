@@ -74,6 +74,7 @@ mod warmup;
 mod warmup_run;
 mod commands;
 use commands::*;
+mod events;
 mod proc;
 mod settings;
 mod stall;
@@ -1031,7 +1032,7 @@ pub(crate) fn emit_collection_status(app: &tauri::AppHandle, result: &collector:
     } else {
         CollectionStatus { ok: false, errors: vec!["采集状态锁不可用".into()], last_success_ms: None, failed_sources: Vec::new(), consecutive_failures: 0 }
     };
-    let _ = app.emit("collection-status", status);
+    let _ = app.emit(crate::events::COLLECTION_STATUS, status);
 }
 
 const ISLAND: &str = "island";
@@ -1184,7 +1185,7 @@ fn report_startup_error(app: &tauri::AppHandle, error: String) {
     if let Ok(mut current) = STARTUP_ERROR.lock() { *current = Some(error.clone()); }
     if STARTUP_REQUESTED.load(Ordering::Acquire) {
         let _ = show_startup(app);
-        let _ = app.emit("startup-error", error);
+        let _ = app.emit(crate::events::STARTUP_ERROR, error);
     }
 }
 
@@ -1283,8 +1284,8 @@ fn create_island_clone(app: &tauri::AppHandle, source: Option<&str>) -> Result<(
         window.show().map_err(|e| e.to_string())?;
         let _ = window.set_focus();
     }
-    let _ = app.emit("settings-changed", store.get());
-    let _ = app.emit("menu-state-changed", ());
+    crate::events::settings_changed(&app);
+    let _ = app.emit(crate::events::MENU_STATE_CHANGED, ());
     Ok(())
 }
 
@@ -1315,8 +1316,8 @@ fn destroy_island(app: &tauri::AppHandle, target: Option<&str>) -> Result<(), St
             refresh_tray_menu(app);
         }
     }
-    let _ = app.emit("settings-changed", store.get());
-    let _ = app.emit("menu-state-changed", ());
+    crate::events::settings_changed(&app);
+    let _ = app.emit(crate::events::MENU_STATE_CHANGED, ());
     Ok(())
 }
 
@@ -1362,7 +1363,7 @@ fn show_main_with_intent(app: &tauri::AppHandle, intent: MainIntent) {
     }
     show_main(app);
     // 已存在窗口会立即消费；新窗口若此时尚未加载，会在挂载后主动 take。
-    let _ = app.emit("main-intent", ());
+    let _ = app.emit(crate::events::MAIN_INTENT, ());
 }
 
 fn start_initialization(app: tauri::AppHandle, data_dir: std::path::PathBuf) {
@@ -1374,8 +1375,8 @@ fn start_initialization(app: tauri::AppHandle, data_dir: std::path::PathBuf) {
             Ok(()) => {
                 STARTUP_READY.store(true, Ordering::Release);
                 // 灵动岛 WebView 可能早于后台数据库初始化完成，通知它重读已保存的选择和连接。
-                let _ = app.emit("settings-changed", app.state::<Cfg>().0.get());
-                let _ = app.emit("connections-changed", ());
+                crate::events::settings_changed(&app);
+                let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ());
                 if STARTUP_REQUESTED.load(Ordering::Acquire) { show_main(&app); }
             }
             Err(error) => report_startup_error(&app, error),
@@ -1496,7 +1497,7 @@ fn initialize_app(app: &tauri::AppHandle, data_dir: &std::path::Path) -> Result<
                 }).await {
                     Ok(result) if result.requests > 0 => {
                         println!("[数据] 自动清理 {} 条过期请求", result.requests);
-                        let _ = cleanup_app.emit("refresh-requested", ());
+                        crate::events::refresh_requested(&cleanup_app, None);
                     }
                     Ok(_) => {}
                     Err(error) => eprintln!("[数据] 自动清理失败：{error}"),
@@ -1523,8 +1524,8 @@ fn set_island_visible(app: &tauri::AppHandle, visible: bool) -> Result<(), Strin
     } else {
         for w in island_windows(app) { w.hide().map_err(|e| e.to_string())?; }
     }
-    let next = app.state::<Cfg>().0.update(|s| s.island_visible = visible);
-    let _ = app.emit("settings-changed", next);
+    app.state::<Cfg>().0.update(|s| s.island_visible = visible);
+    crate::events::settings_changed(&app);
     refresh_tray_menu(app);
     Ok(())
 }
@@ -1549,7 +1550,7 @@ fn reset_window_layout(app: &tauri::AppHandle) {
             s.dock = Default::default();
             for clone in &mut s.island_clones { clone.dock = Default::default(); clone.position = None; }
         });
-        let _ = app.emit("settings-changed", &next);
+        crate::events::settings_changed(&app);
         for id in island_ids(&next) { emit_dock_changed(app, id.as_deref(), &Default::default()); }
         let _ = w.set_size(tauri::LogicalSize::new(428.0, 124.0));
         let _ = w.center();
@@ -1591,7 +1592,7 @@ fn platform_name(id: &str) -> &str {
 /// 勾选项用 CheckMenuItem，状态取自持久化设置，与设置界面是同一个值。
 fn refresh_tray_menu(app: &tauri::AppHandle) {
     update_tray_icon(app);
-    let _ = app.emit("menu-state-changed", ());
+    let _ = app.emit(crate::events::MENU_STATE_CHANGED, ());
 }
 
 /// 托盘图标按系统实际索取的尺寸原生渲染（SM_CXSMICON = 16 × DPI/96）。
@@ -1733,8 +1734,8 @@ fn handle_tray_menu(app: &tauri::AppHandle, id: &str, island: Option<&str>) -> R
         "island_refresh" => {
             if TRAY_REFRESHING.swap(true, Ordering::Relaxed) { return Ok(()); }
             refresh_tray_menu(app);
-            let _ = app.emit("island-refresh", ());
-            let _ = app.emit("refresh-requested", ());
+            let _ = app.emit(crate::events::ISLAND_REFRESH, ());
+            crate::events::refresh_requested(&app, None);
             finish_tray_refresh_after_cooldown(app.clone());
         }
         "topmost" => { let _ = island_topmost(app.clone(), !app.state::<Cfg>().0.get().always_on_top); }
@@ -1750,8 +1751,8 @@ fn handle_tray_menu(app: &tauri::AppHandle, id: &str, island: Option<&str>) -> R
             refresh_tray_menu(app);
             if validation::isolated() {
                 // 保留合成网关与界面的刷新，只跳过本机日志采集。
-                let _ = app.emit("island-refresh", ());
-                let _ = app.emit("refresh-requested", ());
+                let _ = app.emit(crate::events::ISLAND_REFRESH, ());
+                crate::events::refresh_requested(&app, None);
                 finish_tray_refresh_after_cooldown(app.clone());
                 return Ok(());
             }
@@ -1764,8 +1765,8 @@ fn handle_tray_menu(app: &tauri::AppHandle, id: &str, island: Option<&str>) -> R
                     Ok(r) => println!("[托盘] 立即刷新：新增 {} 条", r.records_inserted),
                     Err(e) => eprintln!("[托盘] 刷新失败: {e}"),
                 }
-                let _ = app.emit("island-refresh", ());
-                let _ = app.emit("refresh-requested", ());
+                let _ = app.emit(crate::events::ISLAND_REFRESH, ());
+                crate::events::refresh_requested(&app, None);
                 finish_tray_refresh_after_cooldown(app);
             });
         }
@@ -1776,10 +1777,9 @@ fn handle_tray_menu(app: &tauri::AppHandle, id: &str, island: Option<&str>) -> R
         }
         "dnd" => {
             if let Some(c) = app.try_state::<Cfg>() {
-                let next = c.0.update(|s| s.dnd = !s.dnd);
+                c.0.update(|s| s.dnd = !s.dnd);
                 // 免打扰只影响展示，采集继续
-                let _ = app.emit("dnd-changed", next.dnd);
-                let _ = app.emit("settings-changed", &next);
+                crate::events::settings_changed(&app);
             }
             refresh_tray_menu(app);
         }
@@ -1910,6 +1910,7 @@ pub fn run() {
             search_try,
             set_keep_awake,
             set_warmup,
+            warmup_last_outcome,
             set_otlp_endpoint,
             resize_island,
             live_usage,
@@ -2213,7 +2214,7 @@ pub fn run() {
                 if let WindowEvent::Focused(false) = event {
                     // 按岛 id 广播：前端 listen 注册的是「任意来源」，emit_to(标签) 匹配不上
                     let id = crate::island_clones::id_from_label(window.label()).flatten();
-                    let _ = window.app_handle().emit("island-blur", id);
+                    let _ = window.app_handle().emit(crate::events::ISLAND_BLUR, id);
                 }
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
@@ -2242,14 +2243,14 @@ pub fn run() {
                             let dock_state = island_dock(&cfg, id.as_deref());
                             if dock::DRAGGING.load(Ordering::Relaxed) {
                                 let hint = if cfg.dock_enabled { dock::hover_hint(&webview) } else { None };
-                                let _ = app.emit("dock-hint", DockHintEvent { island: id.clone(), hint });
+                                let _ = app.emit(crate::events::DOCK_HINT, DockHintEvent { island: id.clone(), hint });
                             } else if dock_state.edge.is_some()
                                 && (scale_changed || !dock::monitor_exists(&webview, dock_state.monitor.as_deref())) {
                                 if let Some(monitor) = dock::restore_dock(&webview, &dock_state) {
-                                    let next = store.0.update(|settings| {
+                                    store.0.update(|settings| {
                                         island_clones::set_dock(settings, id.as_deref(), dock::DockState { monitor: Some(monitor), ..dock_state.clone() });
                                     });
-                                    let _ = app.emit("settings-changed", next);
+                                    crate::events::settings_changed(&app);
                                 }
                             }
                         }

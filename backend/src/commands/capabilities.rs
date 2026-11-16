@@ -14,7 +14,7 @@ pub(crate) fn privacy_masking_set(app: tauri::AppHandle, on: bool) -> Result<set
         .try_update(|settings| settings.privacy_masking = on)
         .map_err(|error| format!("保存隐私脱敏设置失败：{error}"))?;
     crate::gateway::mask::set_enabled(next.privacy_masking);
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -43,7 +43,7 @@ pub(crate) fn privacy_policy_set(
         })
         .map_err(|error| format!("保存隐私脱敏设置失败：{error}"))?;
     crate::gateway::mask::set_policy(policy);
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -64,10 +64,10 @@ pub(crate) fn privacy_first_notice(app: &tauri::AppHandle) {
     if cfg.get().privacy_first_noticed {
         return;
     }
-    if let Ok(next) = cfg.try_update(|settings| settings.privacy_first_noticed = true) {
-        let _ = app.emit("settings-changed", next);
+    if cfg.try_update(|settings| settings.privacy_first_noticed = true).is_ok() {
+        crate::events::settings_changed(&app);
     }
-    let _ = app.emit("privacy-first-mask", ());
+    let _ = app.emit(crate::events::PRIVACY_FIRST_MASK, ());
     use tauri_plugin_notification::NotificationExt;
     let _ = app
         .notification()
@@ -93,7 +93,7 @@ pub(crate) fn search_apis_set(app: tauri::AppHandle, apis: Vec<crate::gateway::s
         .0
         .try_update(|settings| settings.search_apis = merged)
         .map_err(|error| format!("保存搜索后端失败：{error}"))?;
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -121,7 +121,7 @@ pub(crate) fn library_install(app: tauri::AppHandle, agent: String) -> Result<li
         library::install(&conn, &agent, &item).map_err(|error| error.to_string())
     })
     .map_err(|error| format!("另一实例正在修改工具配置：{error}"))?;
-    let _ = app.emit("library-changed", ());
+    let _ = app.emit(crate::events::LIBRARY_CHANGED, ());
     Ok(outcome)
 }
 
@@ -134,7 +134,7 @@ pub(crate) fn library_remove(app: tauri::AppHandle, agent: String, name: String)
         library::remove(&conn, &agent, &name).map_err(|error| error.to_string())
     })
     .map_err(|error| format!("另一实例正在修改工具配置：{error}"))?;
-    let _ = app.emit("library-changed", ());
+    let _ = app.emit(crate::events::LIBRARY_CHANGED, ());
     Ok(removed)
 }
 

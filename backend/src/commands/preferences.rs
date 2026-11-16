@@ -108,6 +108,13 @@ pub(crate) fn set_autostart(on: bool) -> Result<bool, String> {
 }
 
 /// 每日 warm-up 设置（批次 G §3.12）：开关与触发小时。
+/// 最近一次 warm-up 的结果（成功 / 跳过 / 失败及原因、完成时间）；本次启动后还没跑过为 None。
+/// 设置页挂载时读一次，之后跟 `warmup-finished` 事件更新。
+#[tauri::command]
+pub(crate) fn warmup_last_outcome() -> Option<crate::warmup_run::LastWarmup> {
+    crate::warmup_run::last()
+}
+
 /// 打开时清掉上次日期，让今天就能按新设置跑一次。
 #[tauri::command]
 pub(crate) fn set_warmup(app: tauri::AppHandle, enabled: bool, hour: u32) -> Result<settings::Settings, String> {
@@ -118,7 +125,7 @@ pub(crate) fn set_warmup(app: tauri::AppHandle, enabled: bool, hour: u32) -> Res
         settings.warmup_hour = hour;
         if turning_on { settings.warmup_last_date = None; }
     })?;
-    let _ = app.emit("settings-changed", &next);
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -131,7 +138,7 @@ pub(crate) fn set_otlp_endpoint(app: tauri::AppHandle, endpoint: Option<String>)
         None => None,
     };
     let next = app.state::<Cfg>().0.try_update(|settings| settings.otlp_endpoint = normalized)?;
-    let _ = app.emit("settings-changed", &next);
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -149,7 +156,7 @@ pub(crate) fn set_dock_enabled(app: tauri::AppHandle, on: bool) -> Result<settin
         for window in island_windows(&app) { dock::undock(&window); }
     }
     for id in island_ids(&next) { emit_dock_changed(&app, id.as_deref(), &island_dock(&next, id.as_deref())); }
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -160,7 +167,7 @@ pub(crate) fn set_silent_startup(app: tauri::AppHandle, on: bool) -> Result<sett
         set_autostart(true)?;
     }
     let next = app.state::<Cfg>().0.try_update(|settings| settings.silent_startup = on)?;
-    let _ = app.emit("settings-changed", &next);
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -170,7 +177,7 @@ pub(crate) fn set_silent_startup(app: tauri::AppHandle, on: bool) -> Result<sett
 pub(crate) fn set_keep_awake(app: tauri::AppHandle, on: bool) -> Result<settings::Settings, String> {
     let applied = keep_awake::set(on)?;
     let next = app.state::<Cfg>().0.try_update(|settings| settings.keep_awake = applied)?;
-    let _ = app.emit("settings-changed", &next);
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -180,7 +187,7 @@ pub(crate) fn set_theme(app: tauri::AppHandle, theme: String) -> Result<settings
         return Err("主题必须是 light、dark 或 system".into());
     }
     let next = app.state::<Cfg>().0.try_update(|settings| settings.theme = theme)?;
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -193,7 +200,7 @@ pub(crate) fn set_display_preferences(app: tauri::AppHandle, opacity: u8, scale:
         settings.island_shrink_scale = shrink_scale;
         settings.refresh_minutes = refresh_minutes;
     })?;
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -207,7 +214,7 @@ pub(crate) fn set_balance_alert(app: tauri::AppHandle, threshold: Option<f64>, c
         settings.balance_alert_threshold = threshold;
         settings.balance_alert_currency = currency;
     })?;
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -222,7 +229,7 @@ pub(crate) fn retention_cutoff(days: u32) -> Result<i64, String> {
 pub(crate) fn set_retention_days(app: tauri::AppHandle, days: Option<u32>) -> Result<settings::Settings, String> {
     if let Some(days) = days { retention_cutoff(days)?; }
     let next = app.state::<Cfg>().0.try_update(|settings| settings.retention_days = days)?;
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -240,21 +247,21 @@ pub(crate) async fn cleanup_history(app: tauri::AppHandle, db: State<'_, Db>, da
     let result = with_database(db.0.clone(), move |conn| {
         db::cleanup_history(conn, cutoff).map_err(|error| error.to_string())
     }).await?;
-    let _ = app.emit("refresh-requested", ());
+    crate::events::refresh_requested(&app, None);
     Ok(result)
 }
 
 #[tauri::command]
-pub(crate) fn get_settings(cfg: State<Cfg>) -> settings::Settings {
-    // 搜索 Key 在序列化时自动掩码（gateway::search::secret_keys），明文不出后端
-    cfg.0.get()
+pub(crate) fn get_settings(cfg: State<Cfg>) -> settings::Snapshot {
+    // 搜索 Key 在序列化时自动掩码（gateway::search::secret_keys），明文不出后端；
+    // 带修订号，前端以它为基准丢弃更旧的 settings-changed
+    cfg.0.snapshot()
 }
 
 #[tauri::command]
 pub(crate) fn set_dnd(app: tauri::AppHandle, cfg: State<Cfg>, on: bool) -> Result<settings::Settings, String> {
     let next = cfg.0.try_update(|s| s.dnd = on)?;
-    let _ = app.emit("dnd-changed", on);
-    let _ = app.emit("settings-changed", &next);
+    crate::events::settings_changed(&app);
     refresh_tray_menu(&app);
     Ok(next)
 }
@@ -292,7 +299,7 @@ pub(crate) fn set_cost_currency(app: tauri::AppHandle, currency: String) -> Resu
         return Err("币种只支持 USD 或 CNY".into());
     }
     let next = app.state::<Cfg>().0.try_update(|settings| settings.cost_currency = currency.clone())?;
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -320,6 +327,6 @@ pub(crate) fn set_task_notify(app: tauri::AppHandle, resumed: Option<bool>, fini
         if let Some(on) = finished { settings.notify_task_finished = on; }
         if let Some(on) = quota { settings.notify_quota_alerts = on; }
     })?;
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }

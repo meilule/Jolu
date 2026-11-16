@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { Coffee, Moon, Send, Terminal } from "lucide-react"
-import { isTauri } from "@/lib/api"
+import { isTauri, listenEvent } from "@/lib/api"
+import { EVENTS, type WarmupOutcomeDto } from "@/lib/events"
 import { settingsApi, type AgentVersionRow } from "@/lib/settingsApi"
 import { useSettings } from "@/hooks/useSettings"
 import { useToast } from "@/components/ui/Toast"
@@ -42,6 +43,19 @@ export function OpsSection() {
     setHourDraft(String(settings.warmup_hour ?? 9))
     setEndpointDraft(settings.otlp_endpoint ?? "")
   }, [settings.warmup_hour, settings.otlp_endpoint])
+
+  // 最近一次 warm-up 结果：挂载时读一次，之后跟 warmup-finished 更新。失败不记日期、会重试，
+  // 不单独记就在界面上完全看不到（无画板，状态文案标「待确认」）
+  const [lastWarmup, setLastWarmup] = useState<WarmupOutcomeDto | null>(null)
+  useEffect(() => {
+    if (!isTauri) return
+    let disposed = false
+    let off: (() => void) | null = null
+    void settingsApi.warmupLastOutcome().then((last) => { if (!disposed) setLastWarmup(last) }).catch(() => {})
+    void listenEvent(EVENTS.WARMUP_FINISHED, (last) => { if (!disposed) setLastWarmup(last) })
+      .then((un) => { if (disposed) un(); else off = un })
+    return () => { disposed = true; off?.() }
+  }, [])
 
   const loadVersions = () => {
     if (!isTauri) return
@@ -155,7 +169,7 @@ export function OpsSection() {
         <SettingsRow
           className="min-h-[76px]"
           title="启用每日 warm-up"
-          desc={`会真实消耗额度：每天到点通过已接线的 Claude Code 或 Codex 发一句「Reply with just: ok」，跑成功才记为已完成，失败会留到下一次检查重试。当前状态：${warmupStateText(settings.warmup_enabled === true, settings.warmup_last_date, today)}。`}
+          desc={`会真实消耗额度：每天到点通过已接线的 Claude Code 或 Codex 发一句「Reply with just: ok」，跑成功才记为已完成，失败会留到下一次检查重试。当前状态：${warmupStateText(settings.warmup_enabled === true, settings.warmup_last_date, today, lastWarmup)}。`}
           control={
             <Switch
               label="启用每日 warm-up"

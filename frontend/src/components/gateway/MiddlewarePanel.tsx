@@ -6,6 +6,7 @@ import { useToast } from "@/components/ui/Toast"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { SelectField } from "@/components/ui/SelectField"
 import { Switch } from "@/components/agents/AgentList"
+import { useLatestGate } from "@/hooks/useLatestGate"
 import {
   MIDDLEWARE_KINDS,
   emptyFields,
@@ -48,12 +49,16 @@ export function MiddlewarePanel({ busy, run, onOpenPrivacy }: {
   const [editing, setEditing] = useState<{ original: string | null; name: string; kind: MiddlewareKind; fields: MiddlewareFields } | null>(null)
   const [removing, setRemoving] = useState<string | null>(null)
 
+  // 挂载与每次操作之后都会调 load：只认最新一次的结果（见 lib/latestGate.ts）
+  const loadGate = useLatestGate()
   const load = async () => {
+    const isLatest = loadGate.begin()
     setError(null)
     try {
-      setRows(await gatewayApi.middlewares())
+      const next = await gatewayApi.middlewares()
+      if (isLatest()) setRows(next)
     } catch (reason) {
-      setError(String(reason))
+      if (isLatest()) setError(String(reason))
     }
   }
   useEffect(() => { void load() }, [])

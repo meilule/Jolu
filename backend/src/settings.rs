@@ -346,6 +346,17 @@ impl Default for Settings {
 pub struct Store {
     path: PathBuf,
     inner: Mutex<Settings>,
+    /// 每次写入成功加一（在 `inner` 的锁内改），随 `settings-changed` 发给前端：
+    /// 多个线程发出的整份快照可能乱序到达，前端丢弃修订号更小的那份
+    revision: std::sync::atomic::AtomicU64,
+}
+
+/// 发给前端的设置快照：设置本身（字段平铺，搜索 Key 照常在序列化时掩码）加修订号。
+#[derive(Debug, Clone, Serialize)]
+pub struct Snapshot {
+    #[serde(flatten)]
+    pub settings: Settings,
+    pub revision: u64,
 }
 
 impl Store {
@@ -383,11 +394,23 @@ impl Store {
         Self {
             path,
             inner: Mutex::new(inner),
+            revision: std::sync::atomic::AtomicU64::new(1),
         }
     }
 
     pub fn get(&self) -> Settings {
         self.inner.lock().map(|s| s.clone()).unwrap_or_default()
+    }
+
+    /// 设置副本与修订号在同一把锁里取出，保证两者对应。
+    pub fn snapshot(&self) -> Snapshot {
+        match self.inner.lock() {
+            Ok(guard) => Snapshot {
+                settings: guard.clone(),
+                revision: self.revision.load(std::sync::atomic::Ordering::Acquire),
+            },
+            Err(_) => Snapshot { settings: Settings::default(), revision: 0 },
+        }
     }
 
     /// 系统窗口回调使用：失败保留原快照并记录日志。
@@ -424,6 +447,7 @@ impl Store {
         // 保存成功后留一份上一版好的；它写失败不影响本次保存（只是少了一层兜底）
         let _ = std::fs::write(self.path.with_extension("json.lastgood"), &json);
         *guard = next.clone();
+        self.revision.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         Ok(next)
     }
 }
@@ -453,6 +477,31 @@ mod tests {
         assert_eq!(value["search_apis"][0]["keys"][0], "tvly••••5678", "长 Key 保留前 4 后 4");
         assert_eq!(value["search_apis"][0]["keys"][1], "••••••••", "短 Key 全遮");
         assert_eq!(value["search_apis"][0]["vendor"], "tavily", "非敏感字段原样");
+    }
+
+    /// settings-changed 的快照：每次保存成功修订号加一，保存失败不加；序列化后字段平铺、
+    /// 带 revision，搜索 Key 照常掩码
+    #[test]
+    fn snapshot_revision_tracks_successful_saves_and_keeps_masking() {
+        let dir = std::env::temp_dir().join(format!("jolu-settings-revision-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = super::Store::load(&dir);
+        let first = store.snapshot().revision;
+        store.try_update(|s| s.search_apis = with_search_keys().search_apis).unwrap();
+        let after_one = store.snapshot();
+        assert_eq!(after_one.revision, first + 1);
+        store.try_update(|s| s.dnd = !s.dnd).unwrap();
+        assert_eq!(store.snapshot().revision, first + 2);
+        let json = serde_json::to_value(store.snapshot()).unwrap();
+        assert_eq!(json["revision"], first + 2);
+        assert!(json.get("dnd").is_some(), "设置字段平铺在顶层：{json}");
+        assert_eq!(json["search_apis"][0]["keys"][0], "tvly••••5678", "快照同样掩码");
+        // 保存失败（目标路径被目录占住、写不进去）：修订号不变
+        std::fs::remove_file(dir.join("settings.json")).unwrap();
+        std::fs::create_dir_all(dir.join("settings.json")).unwrap();
+        assert!(store.try_update(|s| s.dnd = !s.dnd).is_err());
+        assert_eq!(store.snapshot().revision, first + 2, "没保存成功就不算新修订");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

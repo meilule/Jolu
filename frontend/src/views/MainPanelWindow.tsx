@@ -1,4 +1,5 @@
 import { useContentMotion, useExitPresence } from "@/lib/motion"
+import { EVENTS } from "@/lib/events"
 import { useCallback, useEffect, useId, useRef, useState } from "react"
 import { api, isTauri, listenEvent, openUrl, type MainIntentDto } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -183,7 +184,7 @@ export function MainPanelWindow({
       savedPage.current = settings.last_page
       if (!stopped && initialPending.current) setPage(resolveOpenPage(settings.default_page, settings.last_page))
     }).catch((error) => console.error("读取默认打开页面失败", error)).finally(finishInitial)
-    void listenEvent("main-intent", consumeIntent).then((un) => {
+    void listenEvent(EVENTS.MAIN_INTENT, consumeIntent).then((un) => {
       if (stopped) un()
       else {
         offs.push(un)

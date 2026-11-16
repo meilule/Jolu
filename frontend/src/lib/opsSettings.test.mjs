@@ -30,6 +30,17 @@ test("warm-up 状态区分未开启、今天已完成与等待时间点", () => 
   assert.equal(warmupStateText(true, null, "2026-11-09"), "等待今天的时间点")
 })
 
+test("warm-up 今天的失败与跳过要说出来，昨天的不提，已完成优先", () => {
+  const at = new Date(2026, 10, 9, 9, 5).getTime()
+  const failed = { status: "failed", platform: "codex", detail: "Codex 超时未结束", finished_ms: at }
+  const skipped = { status: "skipped", platform: null, detail: "没有可用的已接线 Agent", finished_ms: at }
+  assert.equal(warmupStateText(true, null, "2026-11-09", failed), "今天 09:05 尝试失败：Codex 超时未结束，下一次检查时会重试")
+  assert.equal(warmupStateText(true, null, "2026-11-09", skipped), "今天 09:05 跳过：没有可用的已接线 Agent")
+  assert.equal(warmupStateText(true, null, "2026-11-10", failed), "等待今天的时间点", "昨天的失败不再提")
+  assert.equal(warmupStateText(true, "2026-11-09", "2026-11-09", failed), "今天已完成", "后来又跑成功了，以完成为准")
+  assert.match(warmupStateText(false, null, "2026-11-09", failed), /未开启/, "关掉之后不提上次结果")
+})
+
 test("小时越界被夹到 0–23，非法值退回默认 9", () => {
   assert.equal(normalizeWarmupHour(99), 23)
   assert.equal(normalizeWarmupHour(-5), 0)

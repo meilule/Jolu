@@ -8,6 +8,7 @@ import { useToast } from "@/components/ui/Toast"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { SelectField } from "@/components/ui/SelectField"
 import { Switch } from "@/components/agents/AgentList"
+import { useLatestGate } from "@/hooks/useLatestGate"
 import {
   BUDGET_FIELDS, budgetForm, budgetFromForm, concurrencyOptions, expiresAtFrom, EXPIRY_CHOICES,
   isExhausted, isExpired, KEY_ONCE_NOTICE, lastUsedText, limitText, parseModelList, TOKENS_LIMIT_NOTICE,
@@ -42,12 +43,16 @@ export function AccessPanel({ port, shared, busy, onSharedChange, run, models }:
   const [editing, setEditing] = useState<{ name: string; form: BudgetForm; accounts: string[]; concurrency: number | null; error: string | null } | null>(null)
   const [revoking, setRevoking] = useState<string | null>(null)
 
+  // 挂载与每次操作之后都会调 load：只认最新一次的结果（见 lib/latestGate.ts）
+  const loadGate = useLatestGate()
   const load = async () => {
+    const isLatest = loadGate.begin()
     setError(null)
     try {
-      setRows(await gatewayApi.clientKeys())
+      const next = await gatewayApi.clientKeys()
+      if (isLatest()) setRows(next)
     } catch (reason) {
-      setError(String(reason))
+      if (isLatest()) setError(String(reason))
     }
   }
   useEffect(() => { void load() }, [])

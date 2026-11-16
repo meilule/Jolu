@@ -295,11 +295,11 @@ pub fn manual(app: &tauri::AppHandle) -> EscapeOutcome {
     let outcome = crate::cli_switch::with_switch(|| Ok::<_, String>(restore_all(app)))
         .unwrap_or_else(|error| EscapeOutcome { failed: vec![error], ..empty_outcome() });
     crate::proxy::stop();
-    let next = app.state::<crate::Cfg>().0.update(|settings| {
+    app.state::<crate::Cfg>().0.update(|settings| {
         settings.proxy_enabled = false;
         // 保留 proxy_mode 与接线快照：再次开启时按已有意图恢复
     });
-    let _ = tauri::Emitter::emit(app, "settings-changed", next);
+    crate::events::settings_changed(app);
     EscapeOutcome { stopped: true, ..outcome }
 }
 
@@ -436,10 +436,10 @@ pub fn startup(app: &tauri::AppHandle) {
     }
     if !wired_any {
         eprintln!("[网关] 启动自愈：没有工具仍指向网关，关闭网关并保持直连");
-        let next = app.state::<crate::Cfg>().0.update(|settings| {
+        app.state::<crate::Cfg>().0.update(|settings| {
             settings.proxy_enabled = false;
         });
-        let _ = tauri::Emitter::emit(app, "settings-changed", next);
+        crate::events::settings_changed(app);
         crate::proxy::stop();
     }
 }

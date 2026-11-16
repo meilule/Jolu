@@ -1,5 +1,6 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { api, isTauri, listenEvent, type UpdateCheckDto, type UpdateProgressDto } from "@/lib/api"
+import { EVENTS } from "@/lib/events"
+import { api, isTauri, listenEvent, type UpdateCheckDto } from "@/lib/api"
 import {
   AUTO_CHECK_INTERVAL_MS,
   UPDATES_ENABLED,
@@ -106,7 +107,7 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
     }
     setProgress({ downloaded: 0, total: null })
     let off: (() => void) | undefined
-    const unlisten = listenEvent<UpdateProgressDto>("update-download-progress", (p) => {
+    const unlisten = listenEvent(EVENTS.UPDATE_DOWNLOAD_PROGRESS, (p) => {
       setProgress({ downloaded: p.downloaded, total: p.total })
     })
     void unlisten

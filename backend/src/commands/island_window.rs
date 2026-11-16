@@ -37,7 +37,7 @@ pub(crate) struct DockChangedEvent { pub(crate) island: Option<String>, pub(crat
 pub(crate) struct DockHintEvent { pub(crate) island: Option<String>, pub(crate) hint: Option<dock::SnapHint> }
 
 pub(crate) fn emit_dock_changed(app: &tauri::AppHandle, id: Option<&str>, dock: &dock::DockState) {
-    let _ = app.emit("dock-changed", DockChangedEvent { island: id.map(str::to_string), dock: dock.clone() });
+    let _ = app.emit(crate::events::DOCK_CHANGED, DockChangedEvent { island: id.map(str::to_string), dock: dock.clone() });
 }
 
 pub(crate) fn store_island_dock(app: &tauri::AppHandle, id: Option<&str>, dock: dock::DockState) -> settings::Settings {
@@ -96,11 +96,11 @@ pub(crate) fn island_drag(app: tauri::AppHandle, window: WebviewWindow) -> Resul
     dock::DRAGGING.store(true, std::sync::atomic::Ordering::Relaxed);
     let result = dock::drag(&w);
     dock::DRAGGING.store(false, std::sync::atomic::Ordering::Relaxed);
-    let _ = app.emit("dock-hint", DockHintEvent { island: id.clone(), hint: None });
+    let _ = app.emit(crate::events::DOCK_HINT, DockHintEvent { island: id.clone(), hint: None });
     result?;
     let snapped = dock_release_for(&app, &w, id.as_deref());
     if let (Some(id), None) = (id.as_deref(), snapped) { remember_clone_position(&app, id, &w); }
-    let _ = app.emit("settings-changed", app.state::<Cfg>().0.get());
+    crate::events::settings_changed(&app);
     Ok(())
 }
 
@@ -115,7 +115,7 @@ pub(crate) fn island_topmost(app: tauri::AppHandle, on: bool) -> Result<settings
         Ok(next) => next,
         Err(error) => { for w in &windows { let _ = w.set_always_on_top(previous); } return Err(error); }
     };
-    let _ = app.emit("settings-changed", &next);
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -135,7 +135,7 @@ pub(crate) fn island_position(app: tauri::AppHandle, edge: Option<dock::Edge>, i
         dock_undock_for(&app, &w, id);
     }
     let settings = app.state::<Cfg>().0.get();
-    let _ = app.emit("settings-changed", &settings);
+    crate::events::settings_changed(&app);
     emit_dock_changed(&app, id, &island_dock(&settings, id));
 }
 
@@ -143,7 +143,7 @@ pub(crate) fn island_position(app: tauri::AppHandle, edge: Option<dock::Edge>, i
 pub(crate) fn set_island_style(app: tauri::AppHandle, style: String) -> Result<settings::Settings, String> {
     settings::validate_island_style(&style)?;
     let next = app.state::<Cfg>().0.try_update(|settings| settings.island_style = style)?;
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -182,8 +182,8 @@ pub(crate) fn dock_undock(app: tauri::AppHandle, window: WebviewWindow) -> Resul
 
 pub(crate) fn dock_undock_for(app: &tauri::AppHandle, w: &WebviewWindow, id: Option<&str>) {
     dock::undock(w);
-    let next = app.state::<Cfg>().0.update(|settings| { island_clones::set_dock(settings, id, Default::default()); });
-    let _ = app.emit("settings-changed", &next);
+    app.state::<Cfg>().0.update(|settings| { island_clones::set_dock(settings, id, Default::default()); });
+    crate::events::settings_changed(&app);
     emit_dock_changed(app, id, &Default::default());
 }
 
@@ -203,8 +203,7 @@ pub(crate) fn set_island_platform(
         s.island_connection_name = None;
         s.island_source_id = Some(format!("local:{platform}"));
     })?;
-    let _ = app.emit("island-platform-changed", &platform);
-    let _ = app.emit("settings-changed", &next);
+    crate::events::settings_changed(&app);
     refresh_tray_menu(&app);
     Ok(next)
 }
@@ -221,7 +220,7 @@ pub(crate) fn set_island_source(
         return Err("所选统计来源不存在或不属于当前平台".into());
     }
     let next = cfg.0.try_update(|settings| settings.island_source_id = id)?;
-    let _ = app.emit("settings-changed", &next);
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -250,9 +249,8 @@ pub(crate) async fn set_island_connection(
     let mut found = false;
     let next = cfg.0.try_update(|s| { found = island_clones::apply_connection(s, island.as_deref(), selected.as_ref()); })?;
     if !found { return Err("目标灵动岛不存在".into()); }
-    let _ = app.emit("settings-changed", &next);
+    crate::events::settings_changed(&app);
     if island.is_none() {
-        let _ = app.emit("island-platform-changed", &next.island_platform);
         refresh_tray_menu(&app);
     }
     Ok(next)

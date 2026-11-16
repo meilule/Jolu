@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react"
 import { Activity, ChevronDown, LoaderCircle, RefreshCw, Route } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { api, isTauri } from "@/lib/api"
+import { api, isTauri, listenEvent } from "@/lib/api"
+import { EVENTS } from "@/lib/events"
+import { useLatestGate } from "@/hooks/useLatestGate"
 import { gatewayApi, type CatalogModelDto, type GroupMemberDto, type SourceUsageDto } from "@/lib/gatewayApi"
 import { useToast } from "@/components/ui/Toast"
 import { JoluButton } from "@/components/ui/JoluButton"
@@ -31,14 +33,28 @@ export function useRoutingIndex(): RoutingIndex {
   const [groups, setGroups] = useState<{ slug: string; members: GroupMemberDto[] }[]>([])
   const [defaultConnection, setDefault] = useState<string | null>(null)
   const [usage, setUsage] = useState<SourceUsageDto[]>([])
+  // 挂载、目录变化事件、连接变化事件都会调 reload：只认最新一次的结果
+  const gate = useLatestGate()
   const reload = useCallback(() => {
     if (!isTauri) return
-    void gatewayApi.catalog().then(setCatalog).catch(() => setCatalog([]))
-    void gatewayApi.groupList().then(setGroups).catch(() => setGroups([]))
-    void gatewayApi.status().then((status) => setDefault(status.default_connection)).catch(() => undefined)
-    void gatewayApi.sourceUsage().then(setUsage).catch(() => setUsage([]))
-  }, [])
+    const isLatest = gate.begin()
+    const take = <T,>(apply: (value: T) => void) => (value: T) => { if (isLatest()) apply(value) }
+    void gatewayApi.catalog().then(take(setCatalog)).catch(() => { if (isLatest()) setCatalog([]) })
+    void gatewayApi.groupList().then(take(setGroups)).catch(() => { if (isLatest()) setGroups([]) })
+    void gatewayApi.status().then(take((status) => setDefault(status.default_connection))).catch(() => undefined)
+    void gatewayApi.sourceUsage().then(take(setUsage)).catch(() => { if (isLatest()) setUsage([]) })
+  }, [gate])
   useEffect(() => { reload() }, [reload])
+  // 模型目录变了（刷新模型清单、改来源名、开关供网关使用、分组增删改）或连接增删改：重读，
+  // 否则账号卡上的模型路由区块一直停在挂载时那份
+  useEffect(() => {
+    let disposed = false
+    const offs: Array<() => void> = []
+    const keep = (off: () => void) => { if (disposed) off(); else offs.push(off) }
+    void listenEvent(EVENTS.GATEWAY_CATALOG_CHANGED, reload).then(keep)
+    void listenEvent(EVENTS.CONNECTIONS_CHANGED, reload).then(keep)
+    return () => { disposed = true; offs.forEach((off) => off()) }
+  }, [reload])
   const modelsBySlug = new Map<string, string[]>()
   const labelsBySlug = new Map<string, Map<string, string>>()
   for (const model of catalog) {

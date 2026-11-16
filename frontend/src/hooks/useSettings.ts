@@ -1,8 +1,10 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from "react"
+import { EVENTS } from "@/lib/events"
 import { api, isTauri, listenEvent, type AppSettings, type IslandStyle } from "@/lib/api"
 import type { DefaultPage } from "@/lib/mainNavigation"
 import { settingsApi } from "@/lib/settingsApi"
 import { normalizeDensity } from "@/lib/appearance"
+import { acceptsRevision, nextApplied } from "@/lib/settingsRevision"
 import type { NetworkMode } from "@/lib/networkSettings"
 
 /**
@@ -67,6 +69,8 @@ interface SharedSettings {
 let shared: SharedSettings = { settings: DEFAULTS, ready: !isTauri, loading: isTauri, error: null }
 /** 每收到一次推送递增；读取或保存期间若有更新的推送，较旧的响应不能覆盖它。 */
 let revision = 0
+/** 已应用快照的后端修订号：推送乱序到达时丢弃更小的（见 `lib/settingsRevision.ts`）。 */
+let appliedRevision = 0
 let reloadRevision = 0
 let subscribed = false
 const listeners = new Set<() => void>()
@@ -84,7 +88,10 @@ async function reloadShared() {
   publish({ loading: true })
   try {
     const next = await api.getSettings()
-    if (current()) publish({ settings: next, error: null, ready: true })
+    if (current() && acceptsRevision(appliedRevision, next.revision)) {
+      appliedRevision = nextApplied(appliedRevision, next.revision)
+      publish({ settings: next, error: null, ready: true })
+    }
   } catch (reason) {
     if (current()) publish({ error: `设置读取失败：${String(reason)}` })
   } finally {
@@ -96,7 +103,10 @@ function ensureSubscribed() {
   if (subscribed || !isTauri) return
   subscribed = true
   // 先订阅再读初值；读取期间收到的新快照不能被较旧的响应覆盖。
-  void listenEvent<AppSettings>("settings-changed", (next) => {
+  void listenEvent(EVENTS.SETTINGS_CHANGED, (next) => {
+    // 多线程发出的整份快照可能乱序到达：后到的旧快照不能盖掉新的
+    if (!acceptsRevision(appliedRevision, next.revision)) return
+    appliedRevision = nextApplied(appliedRevision, next.revision)
     revision++
     publish({ settings: next, ready: true, error: null, loading: false })
   }).then(() => reloadShared()).catch((reason) => {

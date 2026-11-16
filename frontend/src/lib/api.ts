@@ -5,6 +5,8 @@
  * 调用方回落到 `mock/data.ts` 的设计示例——预览页因此仍然可用。
  */
 
+import type { EventName, EventPayloads } from "@/lib/events"
+
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 
 /**
@@ -361,6 +363,8 @@ export type IslandStyle = "classic" | "capsule"
 
 /** 持久化设置（§2.6 / §7.3）。托盘与设置界面共享同一份值 */
 export interface AppSettings {
+  /** 后端每次保存成功加一；`get_settings` 与 `settings-changed` 都带。乱序到达时丢弃更小的 */
+  revision?: number
   silent_startup: boolean
   /** Claude Code 长对话压缩（B5）："" = 272K 时压缩，"full" = 完整窗口，其余为自定义大小 */
   claude_long_context?: string
@@ -495,14 +499,17 @@ export interface UpdateProgressDto {
   total: number | null
 }
 
-/** 通用事件订阅。返回取消订阅函数 */
-export async function listenEvent<T>(
-  name: string,
-  handler: (payload: T) => void,
+/**
+ * 事件订阅：名字只能是 `lib/events.ts` 里登记的，载荷类型按名字推断。返回取消订阅函数。
+ * 用法：`listenEvent(EVENTS.CONNECTIONS_CHANGED, reload)`。
+ */
+export async function listenEvent<K extends EventName>(
+  name: K,
+  handler: (payload: EventPayloads[K]) => void,
 ): Promise<() => void> {
   if (!isTauri) return () => {}
   const { listen } = await import("@tauri-apps/api/event")
-  return listen<T>(name, (e) => handler(e.payload))
+  return listen<EventPayloads[K]>(name, (e) => handler(e.payload))
 }
 
 /**
@@ -512,7 +519,7 @@ export async function listenEvent<T>(
 export async function listenLiveUsage(
   handler: (u: LiveUsageDto) => void,
 ): Promise<() => void> {
-  return listenEvent<LiveUsageDto>("live-usage", handler)
+  return listenEvent("live-usage", handler)
 }
 
 export const api = {

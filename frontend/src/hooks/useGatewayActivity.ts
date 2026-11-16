@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react"
+import { EVENTS } from "@/lib/events"
 import { isTauri, listenEvent } from "@/lib/api"
 import { gatewayApi, type GatewayStatusDto } from "@/lib/gatewayApi"
 import {
   activityFromLog, dayKey, emptyActivity, mergeSnapshot, nextTickAt, onEnd, onStart, onTick,
-  type ActivityState, type RouteEndEvent, type RouteStartEvent,
+  type ActivityState, type RouteEndEvent,
 } from "@/lib/gatewayActivity"
 
 export interface GatewayActivity {
@@ -31,8 +32,8 @@ export function useGatewayActivity(enabled: boolean): GatewayActivity {
     load()
     const offs: Array<() => void> = []
     const listen = (promise: Promise<() => void>) => void promise.then((off) => { if (stopped) off(); else offs.push(off) }).catch(() => {})
-    listen(listenEvent("settings-changed", load))
-    listen(listenEvent("gateway-wiring-changed", load))
+    listen(listenEvent(EVENTS.SETTINGS_CHANGED, load))
+    listen(listenEvent(EVENTS.GATEWAY_WIRING_CHANGED, load))
     return () => { stopped = true; offs.forEach((off) => off()) }
   }, [enabled])
 
@@ -44,8 +45,8 @@ export function useGatewayActivity(enabled: boolean): GatewayActivity {
     let early: RouteEndEvent[] | null = []
     const offs: Array<() => void> = []
     const listen = (promise: Promise<() => void>) => void promise.then((off) => { if (stopped) off(); else offs.push(off) }).catch(() => {})
-    listen(listenEvent<RouteStartEvent>("gateway-route-start", (event) => setActivity((s) => onStart(s, event, Date.now()))))
-    listen(listenEvent<RouteEndEvent>("gateway-route", (event) => {
+    listen(listenEvent(EVENTS.GATEWAY_ROUTE_START, (event) => setActivity((s) => onStart(s, event, Date.now()))))
+    listen(listenEvent(EVENTS.GATEWAY_ROUTE, (event) => {
       early?.push(event)
       setActivity((s) => onEnd(s, event, Date.now()))
     }))

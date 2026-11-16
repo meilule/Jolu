@@ -14,7 +14,7 @@ use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 /// 代理地址格式错误时的提示（D-24）。
 pub const PROXY_URL_HINT: &str = "请输入 http:// 或 https:// 开头、带端口的代理地址";
@@ -395,7 +395,7 @@ pub fn set_network(app: AppHandle, mode: String, proxy_url: Option<String>) -> R
     })?;
     // 先落盘再切换，保存失败时运行中的联网方式保持不变。
     set_mode(next_mode);
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 

@@ -1,4 +1,5 @@
 import { useSettings } from "@/hooks/useSettings"
+import { EVENTS } from "@/lib/events"
 import { refreshDelay } from "@/lib/displayPreferences"
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
@@ -17,6 +18,7 @@ import {
 } from "@/lib/api"
 import { onUsageChanged } from "@/lib/usageChanges"
 import type { LocalQuotaMode } from "@/lib/providers/types"
+import { useLatestGate } from "@/hooks/useLatestGate"
 
 /**
  * 定时刷新的新鲜度：后端缓存比刷新间隔略新就复用。灵动岛、总览与设置预览各自按间隔轮询
@@ -65,7 +67,8 @@ export interface QuotaResult {
  */
 export function useQuota(connectionId: string | null, local: LocalQuotaMode | false = false, enabled = true): QuotaResult {
   const interval = refreshDelay(useSettings().settings.refresh_minutes)
-  const requestId = useRef(0)
+  // 挂载、换查询、定时刷新、手动刷新都会发请求：只认最新一次（见 lib/latestGate.ts）
+  const gate = useLatestGate()
   const queryKey = `${connectionId}:${local}`
   const owner = useRef(queryKey)
   const [state, setState] = useState<QuotaStateDto | null>(null)
@@ -76,7 +79,7 @@ export function useQuota(connectionId: string | null, local: LocalQuotaMode | fa
 
   const run = useCallback(async (force: Freshness = false) => {
     if (!isTauri || (!connectionId && !local)) return
-    const current = ++requestId.current
+    const isLatest = gate.begin()
     setLoading(true)
     try {
       const r = local === "codex"
@@ -86,7 +89,7 @@ export function useQuota(connectionId: string | null, local: LocalQuotaMode | fa
           : local === "zcode"
             ? await localZcodeQuota(force)
           : await api.connectionQuota(connectionId!, force)
-      if (current !== requestId.current) return
+      if (!isLatest()) return
       if (r.state === "ok") {
         setState(r)
         setFetchedAt(new Date())
@@ -109,7 +112,7 @@ export function useQuota(connectionId: string | null, local: LocalQuotaMode | fa
         })
       }
     } catch (e) {
-      if (current !== requestId.current) return
+      if (!isLatest()) return
       const failed = { state: "failed", reason: String(e) } as const
       setState((prev) => {
         const keep = prev?.state === "ok"
@@ -118,7 +121,7 @@ export function useQuota(connectionId: string | null, local: LocalQuotaMode | fa
         return keep ? prev : failed
       })
     } finally {
-      if (current === requestId.current) setLoading(false)
+      if (isLatest()) setLoading(false)
     }
   }, [connectionId, local])
 
@@ -129,14 +132,14 @@ export function useQuota(connectionId: string | null, local: LocalQuotaMode | fa
     setFetchedAt(null)
     setStale(false)
     setFailure(null)
-    return () => { ++requestId.current }
+    return () => { gate.invalidate() }
   }, [queryKey])
 
   useEffect(() => {
     if (!enabled || !isTauri || (!connectionId && !local)) { setLoading(false); return }
     void run(false)
     const timer = window.setInterval(() => void run(periodic(interval)), interval)
-    return () => { ++requestId.current; window.clearInterval(timer) }
+    return () => { gate.invalidate(); window.clearInterval(timer) }
   }, [run, local, connectionId, interval, enabled])
 
   useEffect(() => {
@@ -175,7 +178,8 @@ export interface BalanceResult {
 
 export function useBalance(connectionId: string | null, enabled = true): BalanceResult {
   const interval = refreshDelay(useSettings().settings.refresh_minutes)
-  const requestId = useRef(0)
+  // 挂载、换查询、定时刷新、手动刷新都会发请求：只认最新一次（见 lib/latestGate.ts）
+  const gate = useLatestGate()
   const queryKey = connectionId
   const owner = useRef(queryKey)
   const [state, setState] = useState<BalanceStateDto | null>(null)
@@ -186,11 +190,11 @@ export function useBalance(connectionId: string | null, enabled = true): Balance
 
   const run = useCallback(async (force: Freshness = false) => {
     if (!isTauri || !connectionId) return
-    const current = ++requestId.current
+    const isLatest = gate.begin()
     setLoading(true)
     try {
       const r = await api.connectionBalance(connectionId, force)
-      if (current !== requestId.current) return
+      if (!isLatest()) return
       if (r.state === "ok") {
         setState(r)
         setFetchedAt(new Date())
@@ -215,7 +219,7 @@ export function useBalance(connectionId: string | null, enabled = true): Balance
         })
       }
     } catch (e) {
-      if (current !== requestId.current) return
+      if (!isLatest()) return
       const failed = { state: "failed", reason: String(e) } as const
       setState((prev) => {
         const keep = prev?.state === "ok"
@@ -224,7 +228,7 @@ export function useBalance(connectionId: string | null, enabled = true): Balance
         return keep ? prev : failed
       })
     } finally {
-      if (current === requestId.current) setLoading(false)
+      if (isLatest()) setLoading(false)
     }
   }, [connectionId])
 
@@ -235,14 +239,14 @@ export function useBalance(connectionId: string | null, enabled = true): Balance
     setFetchedAt(null)
     setStale(false)
     setFailure(null)
-    return () => { ++requestId.current }
+    return () => { gate.invalidate() }
   }, [queryKey])
 
   useEffect(() => {
     if (!enabled || !isTauri || !connectionId) { setLoading(false); return }
     void run(false)
     const timer = window.setInterval(() => void run(periodic(interval)), interval)
-    return () => { ++requestId.current; window.clearInterval(timer) }
+    return () => { gate.invalidate(); window.clearInterval(timer) }
   }, [run, connectionId, interval, enabled])
 
   const refresh = useCallback(() => run(true), [run])
@@ -260,7 +264,8 @@ export interface ApiUsageResult {
 /** Admin Key 优先读取官方组织用量；普通 Key 的 forbidden 由调用方回退到本机统计。 */
 export function useApiUsage(connectionId: string | null, enabled = true): ApiUsageResult {
   const interval = refreshDelay(useSettings().settings.refresh_minutes)
-  const requestId = useRef(0)
+  // 挂载、换查询、定时刷新、手动刷新都会发请求：只认最新一次（见 lib/latestGate.ts）
+  const gate = useLatestGate()
   const queryKey = connectionId
   const owner = useRef(queryKey)
   const [state, setState] = useState<ApiUsageStateDto | null>(null)
@@ -269,17 +274,17 @@ export function useApiUsage(connectionId: string | null, enabled = true): ApiUsa
 
   const run = useCallback(async (force: Freshness = false) => {
     if (!isTauri || !connectionId) return
-    const current = ++requestId.current
+    const isLatest = gate.begin()
     setLoading(true)
     try {
       const result = await api.connectionApiUsage(connectionId, force)
-      if (current !== requestId.current) return
+      if (!isLatest()) return
       setState(result)
       if (result.state === "ok") setFetchedAt(new Date())
     } catch (error) {
-      if (current === requestId.current) setState({ state: "failed", reason: String(error) })
+      if (isLatest()) setState({ state: "failed", reason: String(error) })
     } finally {
-      if (current === requestId.current) setLoading(false)
+      if (isLatest()) setLoading(false)
     }
   }, [connectionId])
 
@@ -288,14 +293,14 @@ export function useApiUsage(connectionId: string | null, enabled = true): ApiUsa
     setState(null)
     setLoading(false)
     setFetchedAt(null)
-    return () => { ++requestId.current }
+    return () => { gate.invalidate() }
   }, [queryKey])
 
   useEffect(() => {
     if (!enabled || !isTauri || !connectionId) { setLoading(false); return }
     void run(false)
     const timer = window.setInterval(() => void run(periodic(interval)), interval)
-    return () => { ++requestId.current; window.clearInterval(timer) }
+    return () => { gate.invalidate(); window.clearInterval(timer) }
   }, [run, connectionId, interval, enabled])
 
   const refresh = useCallback(() => run(true), [run])
@@ -340,7 +345,7 @@ export function useCostEstimate(
       // 只有本平台统计真有变化才重查，连续变化合并；续期心跳不触发。
       offs.push(onUsageChanged(platform, refresh))
       // 带连接 ID 的行内更新不影响费用汇总；只有全局刷新才重查。
-      listen(listenEvent<string | null>("refresh-requested", connectionId => { if (connectionId == null) refresh() }))
+      listen(listenEvent(EVENTS.REFRESH_REQUESTED, connectionId => { if (connectionId == null) refresh() }))
     }
     return () => {
       cancelled = true

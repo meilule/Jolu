@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// 事件名：前端 listen 这个名字即可拿到实时用量
-pub const EVENT_LIVE: &str = "live-usage";
+pub const EVENT_LIVE: &str = crate::events::LIVE_USAGE;
 
 /// 写事件合并窗口。一次响应的多次写抖动合并成一次采集
 const DEBOUNCE: Duration = Duration::from_millis(120);
@@ -300,8 +300,8 @@ fn sync_connections_and_emit(app: &AppHandle) {
     match synced {
         Ok(true) => {
             println!("[连接] 本机配置有变化，已自动更新连接并触发重查");
-            let _ = app.emit("connections-changed", ());
-            let _ = app.emit("refresh-requested", ());
+            let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ());
+            crate::events::refresh_requested(&app, None);
         }
         Ok(false) => {}
         Err(error) => eprintln!("[连接] 本机配置同步失败: {error}"),

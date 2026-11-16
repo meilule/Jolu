@@ -3,6 +3,7 @@
  * Token 缺失为 null，不以 0 代替；时间均为毫秒时间戳。
  */
 import { invoke } from "./api"
+import { EVENTS } from "./events"
 
 export type AutomationPlatform = "claude" | "codex"
 export type LaunchMode = "now" | "schedule" | "quota"
@@ -205,8 +206,8 @@ export interface SkillOptionDto {
   project: string | null
 }
 
-/** 后端在任务或运行状态变化后发出 */
-export const AUTOMATION_CHANGED = "automation-changed"
+/** 后端在任务或运行状态变化后发出（名字登记在 `lib/events.ts`） */
+export const AUTOMATION_CHANGED = EVENTS.AUTOMATION_CHANGED
 
 export const automationApi = {
   overview: () => invoke<AutomationOverviewDto>("automation_overview"),

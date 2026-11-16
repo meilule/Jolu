@@ -509,7 +509,7 @@ async fn execute(
     .await;
     if claim && attempted {
         crate::invalidate_network_cache(&id);
-        let _ = app.emit("daily-checkin-changed", id.clone());
+        let _ = app.emit(crate::events::DAILY_CHECKIN_CHANGED, id.clone());
     }
     let update = finish_update(
         id,

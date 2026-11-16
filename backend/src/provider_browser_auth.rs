@@ -391,7 +391,7 @@ pub(crate) async fn save_browser_connection(app: tauri::AppHandle, window: Webvi
     }).await?;
     ATTEMPTS.lock().map_err(|_| "授权状态不可用")?.remove(&id);
     crate::invalidate_network_cache(&output);
-    let _ = app.emit("connections-changed",());
+    let _ = app.emit(crate::events::CONNECTIONS_CHANGED,());
     Ok(output)
 }
 

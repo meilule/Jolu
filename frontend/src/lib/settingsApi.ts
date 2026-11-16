@@ -1,5 +1,6 @@
 import { invoke, isTauri, type AppSettings } from "./api"
 import type { DefaultPage, MainPage } from "./mainNavigation"
+import type { WarmupOutcomeDto } from "./events"
 import type { Density } from "./appearance"
 import type { NetworkDiagnosisDto, NetworkMode } from "./networkSettings"
 import type { LibraryAgentDto, SearchApiDto, SearchHitDto, SearchVendorDto } from "./searchSettings"
@@ -57,6 +58,8 @@ export const settingsApi = {
   setKeepAwake: (on: boolean) => invoke<AppSettings>("set_keep_awake", { on }),
   /** 批次 G：每日 warm-up 开关与触发小时（后端按 0–23 截断） */
   setWarmup: (enabled: boolean, hour: number) => invoke<AppSettings>("set_warmup", { enabled, hour }),
+  /** 最近一次 warm-up 的结果；本次启动后还没跑过为 null */
+  warmupLastOutcome: () => invoke<WarmupOutcomeDto | null>("warmup_last_outcome"),
   /** 批次 G：OTLP 导出端点；传 null 关闭导出，保存前后端会校验协议并补 /v1/metrics */
   setOtlpEndpoint: (endpoint: string | null) => invoke<AppSettings>("set_otlp_endpoint", { endpoint }),
   /** 批次 G：按天导出聚合用量到 OTLP 端点（不含会话与凭据） */

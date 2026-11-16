@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { EVENTS } from "@/lib/events"
 import { CalendarCheck2, Check, Eye, EyeOff, Info, LoaderCircle, Plus, RefreshCw } from "lucide-react"
 import { api, isTauri, listenEvent } from "@/lib/api"
 import { checkinApi, type CheckinRecordDto, type CheckinUpdate } from "@/lib/checkinApi"
@@ -113,7 +114,7 @@ export function CheckinView({ active = true }: { active?: boolean }) {
     alive.current = true
     void refresh()
     let off: (() => void) | undefined
-    void listenEvent("connections-changed", () => {
+    void listenEvent(EVENTS.CONNECTIONS_CHANGED, () => {
       if (!alive.current) return
       if (operating.current) pendingRefresh.current = true
       else if (activeRef.current) void refresh()

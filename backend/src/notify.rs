@@ -210,7 +210,7 @@ fn dispatch(app: &AppHandle, body: NoticeBody) {
     deliver(foreground, || {
         if let Ok(mut pending) = PENDING_NOTICES.lock() { pending.push(notice.clone()); } else { return false; }
         // 不持队列锁调用窗口接口，避免与主窗口读取互相等待。
-        if app.emit_to(crate::MAIN, "app-notice", ()).is_ok() { return true; }
+        if app.emit_to(crate::MAIN, crate::events::APP_NOTICE, ()).is_ok() { return true; }
         if let Ok(mut pending) = PENDING_NOTICES.lock() { pending.retain(|item| item.id != notice.id); }
         false
     }, || native_notice(app, &notice));

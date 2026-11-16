@@ -674,7 +674,7 @@ fn set_proxy_locked(
                 settings.proxy_port = port;
                 settings.proxy_fallback_direct = fallback_direct;
             })?;
-            let _ = app.emit("settings-changed", next.clone());
+            crate::events::settings_changed(&app);
             if !outcome.failed.is_empty() {
                 eprintln!("[模型入口] 关闭时部分工具还原失败：{}", outcome.summary());
             }
@@ -687,11 +687,11 @@ fn set_proxy_locked(
             settings.proxy_fallback_direct = fallback_direct;
         })?;
         if let Err(error) = start(app) {
-            let rolled = app.state::<crate::Cfg>().0.update(|settings| settings.proxy_enabled = false);
-            let _ = app.emit("settings-changed", rolled);
+            app.state::<crate::Cfg>().0.update(|settings| settings.proxy_enabled = false);
+            crate::events::settings_changed(&app);
             return Err(error);
         }
-        let _ = app.emit("settings-changed", next.clone());
+        crate::events::settings_changed(&app);
         return Ok(next);
     }
 
@@ -710,7 +710,7 @@ fn set_proxy_locked(
                 // 刻意保留 upstream：它是「最近已知网关」，供常驻自愈修复
                 // CC Switch 等工具之后的回写残留（下次开启时会被重新探测覆盖）
             })?;
-        let _ = app.emit("settings-changed", next.clone());
+        crate::events::settings_changed(&app);
         return Ok(next);
     }
 
@@ -764,7 +764,7 @@ fn set_proxy_locked(
     }
 
     let next = app.state::<crate::Cfg>().0.get();
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     if actual_port != port {
         eprintln!("[代理] 端口 {port} 已被占用，实际监听 127.0.0.1:{actual_port}，CLI 已按实际端口接管");
     } else {
@@ -783,7 +783,7 @@ fn rollback(app: &tauri::AppHandle) {
         settings.proxy_claude_upstream = None;
         settings.proxy_codex_upstream = None;
     });
-    let _ = app.emit("settings-changed", app.state::<crate::Cfg>().0.get());
+    crate::events::settings_changed(&app);
 }
 
 /// 启动监听（接管已完成，上游来自设置）。幂等：先停旧实例。
@@ -837,11 +837,11 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
         if let Err(error) = crate::proxy_config::restore_all_saved(&app_for_fallback) {
             eprintln!("[代理] 回退还原 CLI 配置失败：{error}");
         }
-        let next = app_for_fallback.state::<crate::Cfg>().0.update(|settings| {
+        app_for_fallback.state::<crate::Cfg>().0.update(|settings| {
             settings.proxy_enabled = false;
             // 保留 upstream：与手动关闭同理，常驻自愈需要它修复后续回写残留
         });
-        let _ = app_for_fallback.emit("settings-changed", next);
+        crate::events::settings_changed(&app_for_fallback);
         if let Ok(mut guard) = PROXY.lock() {
             *guard = None;
         }
@@ -1084,7 +1084,7 @@ fn on_config_changed_locked(app: &tauri::AppHandle) {
         return;
     };
     if follow_external_configs(&app.state::<crate::Cfg>().0, &runtime) {
-        let _ = app.emit("settings-changed", app.state::<crate::Cfg>().0.get());
+        crate::events::settings_changed(&app);
     }
 }
 

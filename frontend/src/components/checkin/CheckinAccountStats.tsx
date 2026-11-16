@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from "react"
+import { EVENTS } from "@/lib/events"
 import * as Dialog from "@radix-ui/react-dialog"
 import { X } from "lucide-react"
 import { useQuota } from "@/hooks/useQuota"
@@ -33,7 +34,7 @@ export function CheckinAccountStats({ accountId, statistics, active, identityKey
     if (!enabled) return
     let stopped = false
     let off: (() => void) | undefined
-    void listenEvent<string>("daily-checkin-changed", id => {
+    void listenEvent(EVENTS.DAILY_CHECKIN_CHANGED, id => {
       if (!stopped && id === accountId) void refresh()
     }).then(unlisten => {
       if (stopped) unlisten()

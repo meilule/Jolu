@@ -2,6 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { stripTypeScriptTypes } from "node:module"
+import { acceptsRevision, nextApplied } from "../lib/settingsRevision.ts"
 
 // 执行实际 hook 的窗口级存储逻辑；不模拟其 publish/revision/reload 实现。
 // React hook 以下的 UI 绑定不参与此测试，API 与事件只以可控 Promise 注入。
@@ -11,8 +12,9 @@ function settingsStore(load) {
     .replace(/^import [^\r\n]*\r?\n/gm, "")
   const code = stripTypeScriptTypes(source, { mode: "strip" })
   let pushed
-  const make = new Function("api", "isTauri", "listenEvent", `${code}\nreturn { reload: reloadShared, start: ensureSubscribed, snapshot: () => shared };`)
-  const store = make({ getSettings: load }, true, async (_event, receive) => { pushed = receive; return () => {} })
+  // 修订号把关用真实实现（不替身），事件名只需要设置这一个
+  const make = new Function("api", "isTauri", "listenEvent", "EVENTS", "acceptsRevision", "nextApplied", `${code}\nreturn { reload: reloadShared, start: ensureSubscribed, snapshot: () => shared };`)
+  const store = make({ getSettings: load }, true, async (_event, receive) => { pushed = receive; return () => {} }, { SETTINGS_CHANGED: "settings-changed" }, acceptsRevision, nextApplied)
   return { ...store, push: (value) => pushed(value) }
 }
 
@@ -70,4 +72,26 @@ test("最新设置先返回时，迟到的旧成功结果仍不能倒退状态",
   old.resolve({ theme: "old" })
   await first
   assert.equal(store.snapshot().settings.theme, "latest")
+})
+
+test("推送乱序到达：后到的旧修订快照不能盖掉新的", async () => {
+  const store = settingsStore(() => new Promise(() => {}))
+  store.start()
+  await settle()
+  store.push({ theme: "dark", revision: 7 })
+  store.push({ theme: "light", revision: 6 })
+  assert.equal(store.snapshot().settings.theme, "dark")
+  store.push({ theme: "system", revision: 8 })
+  assert.equal(store.snapshot().settings.theme, "system", "更新的修订照常接受")
+})
+
+test("初次读取晚于推送返回、且修订更旧时，不能倒退", async () => {
+  const request = Promise.withResolvers()
+  const store = settingsStore(() => request.promise)
+  store.start()
+  await settle()
+  store.push({ theme: "dark", revision: 5 })
+  request.resolve({ theme: "light", revision: 4 })
+  await settle()
+  assert.equal(store.snapshot().settings.theme, "dark")
 })

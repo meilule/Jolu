@@ -35,14 +35,14 @@ pub(crate) fn gateway_set_default_source(app: tauri::AppHandle, connection_id: O
             }
         }
     }
-    let next = app
+    app
         .state::<Cfg>()
         .0
         .try_update(|settings| {
             settings.gateway_default_connection = connection_id.clone();
         })
         .map_err(|error| format!("保存默认来源失败：{error}"))?;
-    let _ = app.emit("settings-changed", next);
+    crate::events::settings_changed(&app);
     Ok(connection_id)
 }
 
@@ -91,7 +91,7 @@ pub(crate) fn gateway_shared_lan_set(app: tauri::AppHandle, on: bool) -> Result<
             settings.gateway_shared_lan = on;
         })
         .map_err(|error| format!("保存局域网共享设置失败：{error}"))?;
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -210,11 +210,11 @@ pub(crate) fn gateway_set_mode(
         .map_err(|error| format!("保存网关设置失败：{error}"))?;
     if mode == "relay" {
         if let Err(error) = crate::proxy::start(&app) {
-            let restored = app.state::<Cfg>().0.update(|settings| {
+            app.state::<Cfg>().0.update(|settings| {
                 settings.proxy_mode = previous_mode;
                 settings.proxy_enabled = previous_enabled;
             });
-            let _ = app.emit("settings-changed", restored);
+            crate::events::settings_changed(&app);
             // 之前本来在运行：按旧模式把它恢复起来，不留一个「开关是开的、监听不在」的状态。
             if previous_enabled {
                 let _ = crate::proxy::set_proxy(&app, settings.proxy_port, true, settings.proxy_fallback_direct);
@@ -222,7 +222,7 @@ pub(crate) fn gateway_set_mode(
             return Err(format!("启动模型入口失败：{error}"));
         }
     }
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -239,7 +239,7 @@ pub(crate) fn zcode_free_first_set(app: tauri::AppHandle, on: bool) -> Result<se
         .try_update(|settings| settings.zcode_free_first = on)
         .map_err(|error| format!("保存 ZCode Start Plan 优先设置失败：{error}"))?;
     crate::gateway::adapter::zcode::set_free_first(next.zcode_free_first);
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -249,7 +249,11 @@ pub(crate) fn gateway_set_serve(app: tauri::AppHandle, connection_id: String, en
     let state = app.state::<Db>();
     let db = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
     // 选择来源和调用就绪分开：允许预先选择订阅，实际请求仍由对应适配器核实授权。
-    connections::set_serve(&db, &connection_id, enabled)
+    connections::set_serve(&db, &connection_id, enabled)?;
+    drop(db);
+    // 供网关使用的来源变了，模型目录跟着变
+    crate::events::catalog_changed(&app);
+    Ok(())
 }
 
 /// 批量加入 / 移出模型池的单项结果。
@@ -264,14 +268,21 @@ pub(crate) struct ServeBatchItem {
 #[tauri::command]
 pub(crate) fn gateway_set_serve_many(app: tauri::AppHandle, connection_ids: Vec<String>, enabled: bool) -> Result<Vec<ServeBatchItem>, String> {
     let state = app.state::<Db>();
-    let db = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-    Ok(connection_ids
-        .into_iter()
-        .map(|id| match connections::set_serve(&db, &id, enabled) {
-            Ok(()) => ServeBatchItem { connection_id: id, ok: true, error: None },
-            Err(error) => ServeBatchItem { connection_id: id, ok: false, error: Some(error) },
-        })
-        .collect())
+    let items: Vec<ServeBatchItem> = {
+        let db = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+        connection_ids
+            .into_iter()
+            .map(|id| match connections::set_serve(&db, &id, enabled) {
+                Ok(()) => ServeBatchItem { connection_id: id, ok: true, error: None },
+                Err(error) => ServeBatchItem { connection_id: id, ok: false, error: Some(error) },
+            })
+            .collect()
+    };
+    // 供网关使用的来源变了，模型目录跟着变；只要有一个改成功就通知
+    if items.iter().any(|item| item.ok) {
+        crate::events::catalog_changed(&app);
+    }
+    Ok(items)
 }
 
 /// 各来源经网关的使用情况（路由流水保留范围内）：最近使用时间、请求数与失败数。
@@ -336,7 +347,7 @@ pub(crate) fn gateway_allow_ips_set(app: tauri::AppHandle, list: Vec<String>) ->
         .try_update(|settings| settings.gateway_allow_ips = list.clone())
         .map_err(|error| format!("保存白名单失败：{error}"))?;
     crate::gateway::allow::load(&next.gateway_allow_ips)?;
-    let _ = app.emit("settings-changed", next.clone());
+    crate::events::settings_changed(&app);
     Ok(next)
 }
 
@@ -410,6 +421,8 @@ pub(crate) fn gateway_set_slug(app: tauri::AppHandle, connection_id: String, slu
         let new = connections::set_slug(&conn, &connection_id, &slug)?;
         (old, new, crate::gateway::wiring_store::load(&conn, "claude-code"))
     };
+    // 改名已保存：目录里的 `来源/模型` 全变了，先通知前端重读（下面重写接线失败也不影响这一点）
+    crate::events::catalog_changed(&app);
     // 2.7：Claude Code 的接线里写着 `旧id/模型` 时一并改成新 id 重写，否则改名后工具请求全是 404
     if let (Some(old), Some(record)) = (old.filter(|o| *o != new), record.filter(|r| r.state == "wired")) {
         if let Some((model, subagent, tiers)) = record.applied().and_then(|applied| crate::gateway::wiring_store::renamed_slug(&applied, &old, &new)) {
@@ -418,7 +431,7 @@ pub(crate) fn gateway_set_slug(app: tauri::AppHandle, connection_id: String, slu
                 eprintln!("[接线] 来源改 id 后重写 Claude Code 接线失败：{error}");
                 return Err(format!("菜单 id 已改为「{new}」，但 Claude Code 的接线没能同步更新：{error}。请在接线面板重新接线"));
             }
-            let _ = app.emit("gateway-wiring-changed", ());
+            let _ = app.emit(crate::events::GATEWAY_WIRING_CHANGED, ());
         }
     }
     Ok(new)
@@ -548,7 +561,7 @@ pub(crate) fn gateway_routing_group_create(
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
     let group = crate::gateway::routing_groups::create(&conn, &slug, &name, &strategy, &members, intent.as_ref())?;
-    let _ = app.emit("gateway-catalog-changed", ());
+    crate::events::catalog_changed(&app);
     Ok(group)
 }
 
@@ -565,7 +578,7 @@ pub(crate) fn gateway_routing_group_update(
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
     crate::gateway::routing_groups::update(&conn, &slug, name.as_deref(), strategy.as_deref(), members.as_deref(), intent.as_ref())?;
-    let _ = app.emit("gateway-catalog-changed", ());
+    crate::events::catalog_changed(&app);
     Ok(())
 }
 
@@ -575,7 +588,7 @@ pub(crate) fn gateway_routing_group_delete(app: tauri::AppHandle, slug: String) 
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
     crate::gateway::routing_groups::delete(&conn, &slug)?;
-    let _ = app.emit("gateway-catalog-changed", ());
+    crate::events::catalog_changed(&app);
     Ok(())
 }
 

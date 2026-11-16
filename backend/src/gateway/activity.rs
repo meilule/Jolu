@@ -21,8 +21,8 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// 发事件的回调：生产环境转给 Tauri `emit`，测试里收集到内存。
 pub(crate) type Emit = Arc<dyn Fn(&'static str, serde_json::Value) + Send + Sync>;
 
-pub(crate) const START_EVENT: &str = "gateway-route-start";
-pub(crate) const END_EVENT: &str = "gateway-route";
+pub(crate) const START_EVENT: &str = crate::events::GATEWAY_ROUTE_START;
+pub(crate) const END_EVENT: &str = crate::events::GATEWAY_ROUTE;
 
 pub(crate) fn next_request_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
