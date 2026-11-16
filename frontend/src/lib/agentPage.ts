@@ -60,8 +60,6 @@ export function driftText(drift: WiringStatusDto["drift"]): string | null {
  * - 本机检测到（或旧版后端没有检测结果）且有可写的配置 → 可以接入；
  * - CLI 未找到 / 没检测到 / 配置文件还没生成 → 暂时不能接入。
  */
-/** 没有 CLI 的桌面客户端：`cli_missing` 不代表卸载，配置在就能接入 */
-const DESKTOP_CLIENTS: ReadonlySet<string> = new Set(["zcode", "zed"])
 
 export function agentRow(agent: string, wiring: WiringStatusDto | null, discovery: AgentDiscoveryDto | null, model?: string | null): AgentRow {
   const name = discovery?.name || wiringName(agent)
@@ -77,12 +75,13 @@ export function agentRow(agent: string, wiring: WiringStatusDto | null, discover
   if (discovery && discovery.state === "not_found") {
     return { agent, name, group: "blocked", supported: true, subtitle: "本机没有检测到", tone: "normal", toggle: null, wiring, discovery }
   }
-  // CLI 不在 PATH：区分两种情况（这条容易一刀切错）
-  // - 桌面客户端（ZCode）：本来就没有 CLI，配置在就能接入 → 留在「可以接入」
-  // - 真 CLI 工具：CLI 不在说明已经卸载、只剩配置残留 → 归「暂时不能接入」，
-  //   否则列表里会堆一堆用户没装的工具，分不清哪些真能用
-  if (discovery && discovery.state === "cli_missing" && !DESKTOP_CLIENTS.has(agent)) {
-    return { agent, name, group: "blocked", supported: true, subtitle: "检测到配置 · CLI 未找到", tone: "normal", toggle: null, wiring, discovery }
+  // 对齐 magpie：配置在就算已装、可接入——Jolu 的接线只写配置文件，不调用 CLI。
+  // CLI 不在 PATH 只作提示（OpenCode / Kimi / Continue 用 bun 或独立安装器装，命令不在
+  // PATH 是常态）；真卸载的残留已由后端 agent_dir_has_content 过滤，不会走到这里。
+  // 没有专用接线的仍标「暂不支持」，不给点了会失败的开关。
+  if (discovery && discovery.state === "cli_missing") {
+    const wirable = (WIRABLE_AGENTS as readonly string[]).includes(agent)
+    return { agent, name, group: "available", supported: wirable, subtitle: "检测到配置 · CLI 未在 PATH（不影响接入）", tone: "warn", toggle: wirable ? "off" : null, wiring, discovery }
   }
   if (wiring?.reason) {
     return { agent, name, group: "blocked", supported: true, subtitle: wiring.reason, tone: "normal", toggle: null, wiring, discovery }
@@ -104,7 +103,10 @@ const AVAILABLE_SUBTITLES: Readonly<Record<string, string>> = {
 }
 
 function wiringName(agent: string): string {
-  return ({ "claude-code": "Claude Code", codex: "Codex", gemini: "Gemini CLI", opencode: "OpenCode", zcode: "ZCode" } as Record<string, string>)[agent] ?? agent
+  return ({ "claude-code": "Claude Code", codex: "Codex", gemini: "Gemini CLI", opencode: "OpenCode", zcode: "ZCode",
+    pencil: "Pencil", dsh: "DeepSeek Harness", copilot: "Copilot CLI", vscode: "VS Code",
+    agy: "Antigravity CLI", atomcode: "AtomCode", ante: "Ante", jcode: "jcode", minimax: "MiniMax Code",
+    empryo: "Empryo", commandcode: "Command Code", muse: "Muse", mothx: "Mothx", devin: "Devin" } as Record<string, string>)[agent] ?? agent
 }
 
 export const GROUP_LABELS: Record<AgentGroup, string> = { wired: "已接入", available: "可以接入", blocked: "暂时不能接入" }

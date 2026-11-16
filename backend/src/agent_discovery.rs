@@ -270,8 +270,103 @@ fn dir_continue(home: &Path) -> Option<PathBuf> {
     Some(home.join(".continue"))
 }
 
+// ---------- 2026-11-16 探测对齐 magpie · 批 1：本机实测存在但 Jolu 缺的 4 家 ----------
+
+/// Pencil（pen.dev）：自定义 provider 在 `~/.pencil/models.json`（Pi 格式）。
+/// magpie 另有 Mac 应用包判定；Windows 上只看目录。无 CLI（pencil/pen 是常见名，不认）。
+fn dir_pencil(home: &Path) -> Option<PathBuf> {
+    Some(home.join(".pencil"))
+}
+
+/// DeepSeek Harness：`DSH_HOME` 覆盖，缺省 `~/.dsh`。新版按 profile 存
+/// `profiles/<name>/cordis.patch.yml`，旧版 `config.yaml`——目录存在即算。
+fn dir_dsh(home: &Path) -> Option<PathBuf> {
+    std::env::var_os("DSH_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| Some(home.join(".dsh")))
+}
+
+/// Copilot CLI：`~/.copilot/settings.json`。JetBrains / VS Code 的 Copilot 插件也写
+/// 这个目录（agents、skills、hooks），CLI 不在时仍可能是插件在用。
+fn dir_copilot(home: &Path) -> Option<PathBuf> {
+    Some(home.join(".copilot"))
+}
+
+/// VS Code 的 User 目录：Windows 为 `<home>\AppData\Roaming\Code\User`（即 %APPDATA%），
+/// 用 home 推导而非读环境变量，测试注入临时 home 时不会命中真实系统。
+/// 内置 Copilot Chat 的自定义 provider 在 `chatLanguageModels.json`，探测用 `settings.json`。
+fn dir_vscode(home: &Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let dir = home.join("AppData").join("Roaming").join("Code").join("User");
+        if dir.is_dir() {
+            return Some(dir);
+        }
+    }
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"));
+    Some(xdg.join("Code").join("User"))
+}
+
+// ---------- 批 2（2026-11-16）：magpie 纯声明 / 环境变量覆盖型，Standard 判定 ----------
+
+fn xdg_config(home: &Path) -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"))
+}
+
+/// Antigravity CLI：`~/.gemini/antigravity-cli`（与 Gemini 共父目录但独占子目录）。
+fn dir_agy(home: &Path) -> Option<PathBuf> {
+    Some(home.join(".gemini").join("antigravity-cli"))
+}
+
+fn env_or_home(env: &str, home: &Path, dot: &str) -> Option<PathBuf> {
+    Some(
+        std::env::var_os(env)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(dot)),
+    )
+}
+
+fn dir_atomcode(home: &Path) -> Option<PathBuf> { env_or_home("ATOMCODE_HOME", home, ".atomcode") }
+fn dir_ante(home: &Path) -> Option<PathBuf> { env_or_home("ANTE_HOME", home, ".ante") }
+fn dir_jcode(home: &Path) -> Option<PathBuf> { env_or_home("JCODE_HOME", home, ".jcode") }
+fn dir_minimax(home: &Path) -> Option<PathBuf> { env_or_home("MINIMAX_DATA_DIR", home, ".minimax") }
+fn dir_empryo(home: &Path) -> Option<PathBuf> { Some(home.join(".empryo")) }
+fn dir_commandcode(home: &Path) -> Option<PathBuf> { Some(home.join(".commandcode")) }
+fn dir_muse(home: &Path) -> Option<PathBuf> { Some(xdg_config(home).join("muse")) }
+
+/// mothx：`MOTHX_DIR` 覆盖；Windows 缺省 `%APPDATA%\mothx`（用 home 推导），其余 `~/.mothx`。
+fn dir_mothx(home: &Path) -> Option<PathBuf> {
+    if let Some(d) = std::env::var_os("MOTHX_DIR").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(d));
+    }
+    #[cfg(windows)]
+    {
+        let app = home.join("AppData").join("Roaming").join("mothx");
+        if app.is_dir() { return Some(app); }
+    }
+    Some(home.join(".mothx"))
+}
+
+/// Devin：Windows `%APPDATA%\devin`，其余 XDG `devin`。
+fn dir_devin(home: &Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let app = home.join("AppData").join("Roaming").join("devin");
+        if app.is_dir() { return Some(app); }
+    }
+    Some(xdg_config(home).join("devin"))
+}
+
 /// 探测规格表。顺序即界面展示顺序，与 `agent_version::AGENTS` 一致。
-const SPECS: [Spec; 13] = [
+const SPECS: [Spec; 27] = [
     Spec { agent: "claude-code", name: "Claude Code", bin: "claude", dir: dir_claude, file: "settings.json", sign_in: ".credentials.json", detect: Detect::Standard, bin_not: None },
     Spec { agent: "codex", name: "Codex", bin: "codex", dir: dir_codex, file: "config.toml", sign_in: "auth.json", detect: Detect::Standard, bin_not: None },
     Spec { agent: "zcode", name: "ZCode", bin: "zcode", dir: dir_zcode, file: "v2/provider_config.json", sign_in: "", detect: Detect::Standard, bin_not: None },
@@ -286,6 +381,23 @@ const SPECS: [Spec; 13] = [
     Spec { agent: "crush", name: "Crush", bin: "crush", dir: dir_crush, file: "crush.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "goose", name: "Goose", bin: "goose", dir: dir_goose, file: "config.yaml", sign_in: "", detect: Detect::Standard, bin_not: Some(go_program) },
     Spec { agent: "continue", name: "Continue", bin: "cn", dir: dir_continue, file: "config.yaml", sign_in: "", detect: Detect::Standard, bin_not: None },
+    // 批 1（2026-11-16）：magpie 能探测、本机也存在；只探测，接入走通用接入。
+    // Pencil / VS Code 无 CLI 属正常（桌面应用），配置在即可接入。
+    Spec { agent: "pencil", name: "Pencil", bin: "", dir: dir_pencil, file: "models.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "dsh", name: "DeepSeek Harness", bin: "dsh", dir: dir_dsh, file: "config.yaml", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "copilot", name: "Copilot CLI", bin: "copilot", dir: dir_copilot, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "vscode", name: "VS Code", bin: "", dir: dir_vscode, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    // 批 2（2026-11-16）：magpie 纯声明 / 环境变量覆盖型
+    Spec { agent: "agy", name: "Antigravity CLI", bin: "agy", dir: dir_agy, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "atomcode", name: "AtomCode", bin: "atomcode", dir: dir_atomcode, file: "config.toml", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "ante", name: "Ante", bin: "ante", dir: dir_ante, file: "catalog.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "jcode", name: "jcode", bin: "jcode", dir: dir_jcode, file: "config.toml", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "minimax", name: "MiniMax Code", bin: "mcode", dir: dir_minimax, file: "config.yaml", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "empryo", name: "Empryo", bin: "empryo", dir: dir_empryo, file: "config.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "commandcode", name: "Command Code", bin: "command-code", dir: dir_commandcode, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "muse", name: "Muse", bin: "muse", dir: dir_muse, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "mothx", name: "Mothx", bin: "mothx", dir: dir_mothx, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "devin", name: "Devin", bin: "devin", dir: dir_devin, file: "config.json", sign_in: "", detect: Detect::Standard, bin_not: None },
 ];
 
 /// 一家 agent 的发现结果。
@@ -645,7 +757,12 @@ pub(crate) fn discover_with(home: &Path, bin_lookup: &dyn Fn(&str, &Path) -> Opt
                     .map(|base| base.join(spec.file))
                     .is_some_and(|path| path.is_file());
             // 同名的别的程序（例如 Go 写的 goose）当作没找到（T8）
-            let bin_path = bin_lookup(spec.bin, home).filter(|path| !spec.bin_not.is_some_and(|not_ours| not_ours(path)));
+            // 无 CLI 的桌面应用（Pencil / VS Code）不找命令，避免空名扫描
+            let bin_path = if spec.bin.is_empty() {
+                None
+            } else {
+                bin_lookup(spec.bin, home).filter(|path| !spec.bin_not.is_some_and(|not_ours| not_ours(path)))
+            };
             let bin_found = bin_path.is_some();
             // 配置目录被文件占着：这家工具不可能在用它，直接判没装（T9，magpie `Detected` 第一步）
             let taken = dir.as_deref().is_some_and(path_taken);
@@ -686,6 +803,31 @@ mod tests {
             let candidate = base.join("bins").join(format!("{name}.exe"));
             candidate.is_file().then(|| candidate)
         }
+    }
+
+    /// 批 1（2026-11-16）：Pencil / dsh / Copilot / VS Code 按配置目录探测；
+    /// Pencil / VS Code 无 CLI 属正常，配置在即已装。
+    #[test]
+    fn batch1_pencil_dsh_copilot_vscode_found_by_config_dirs() {
+        let home = temp_home("batch1");
+        std::fs::create_dir_all(home.join(".pencil")).unwrap();
+        std::fs::write(home.join(".pencil").join("models.json"), "{}").unwrap();
+        std::fs::create_dir_all(home.join(".dsh").join("profiles").join("default")).unwrap();
+        std::fs::create_dir_all(home.join(".copilot")).unwrap();
+        std::fs::write(home.join(".copilot").join("settings.json"), "{}").unwrap();
+        let vs_user = home.join("AppData").join("Roaming").join("Code").join("User");
+        std::fs::create_dir_all(&vs_user).unwrap();
+        std::fs::write(vs_user.join("settings.json"), "{}").unwrap();
+        let lookup = test_bins(&home);
+        let found = discover_with(&home, &lookup);
+        for agent in ["pencil", "dsh", "copilot", "vscode"] {
+            let d = agent_of(&found, agent);
+            assert!(d.installed, "{agent} 应判为已装");
+        }
+        // 无 CLI 的两家：证据是配置，不是命令
+        assert!(!agent_of(&found, "pencil").cli_found);
+        assert!(!agent_of(&found, "vscode").cli_found);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     fn agent_of<'a>(results: &'a [AgentDiscovery], agent: &str) -> &'a AgentDiscovery {
@@ -877,8 +1019,10 @@ mod tests {
         let cache = std::sync::Mutex::new(LookCache::default());
         let (stamps, asks) = (Cell::new(0), Cell::new(0));
         let start = Instant::now();
+        // 无 CLI 的桌面应用（bin 为空）在生产里不查找，测试 likewise 跳过
+        let wirable: Vec<&Spec> = SPECS.iter().filter(|s| !s.bin.is_empty()).collect();
         let round = |now: Instant| {
-            for spec in &SPECS {
+            for spec in &wirable {
                 let found = looked(&cache, spec.bin, "env", now, || { stamps.set(stamps.get() + 1); stamp("s1") }, |fallback| {
                     asks.set(asks.get() + 1);
                     assert_eq!(fallback, [PathBuf::from("fallback")], "未命中的查找复用取戳时的兜底目录");
@@ -888,11 +1032,11 @@ mod tests {
             }
         };
         round(start);
-        assert_eq!((stamps.get(), asks.get()), (1, SPECS.len()), "第一轮：取戳 1 次，13 家各找 1 次");
+        assert_eq!((stamps.get(), asks.get()), (1, wirable.len()), "第一轮：取戳 1 次，有 CLI 的家各找 1 次");
         round(start + Duration::from_millis(500));
-        assert_eq!((stamps.get(), asks.get()), (1, SPECS.len()), "窗口内：不取戳、不查找");
+        assert_eq!((stamps.get(), asks.get()), (1, wirable.len()), "窗口内：不取戳、不查找");
         round(start + LOOK_FRESH);
-        assert_eq!((stamps.get(), asks.get()), (2, SPECS.len()), "过了窗口：重取一次戳，戳没变就不重找");
+        assert_eq!((stamps.get(), asks.get()), (2, wirable.len()), "过了窗口：重取一次戳，戳没变就不重找");
     }
 
     /// 目录变了（戳变）、PATH 等环境变了、手动 forget → 答案作废，重新查找

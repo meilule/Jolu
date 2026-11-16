@@ -30,10 +30,17 @@ test("工具按 已接入 / 可以接入 / 暂时不能接入 分组（画板 V5
   assert.equal(desktop.group, "available", "ZCode 是桌面客户端，没有 CLI 也能接入")
   assert.doesNotMatch(desktop.subtitle, /CLI 未找到/)
 
-  // 真 CLI 工具（qwen）：CLI 不在 = 只剩配置残留，归「暂时不能接入」，避免列表堆满没装的工具
-  const cliMissing = agentRow("qwen", wiring({ agent: "qwen" }), { ...found("cli_missing"), agent: "qwen", name: "Qwen Code" })
-  assert.equal(cliMissing.group, "blocked")
-  assert.match(cliMissing.subtitle, /CLI 未找到/)
+  // 对齐 magpie：配置在、CLI 不在 PATH 仍「可以接入」（接线只写配置文件）；
+  // 真卸载残留已由后端 agent_dir_has_content 过滤
+  const cliMissing = agentRow("opencode", wiring({ agent: "opencode" }), { ...found("cli_missing"), agent: "opencode", name: "OpenCode" })
+  assert.equal(cliMissing.group, "available")
+  assert.equal(cliMissing.toggle, "off", "有专用接线的给开关")
+  assert.match(cliMissing.subtitle, /CLI 未在 PATH/)
+  // 无专用接线的（qwen）：可接入但「暂不支持」，不给会失败的开关
+  const noWiring = agentRow("qwen", wiring({ agent: "qwen" }), { ...found("cli_missing"), agent: "qwen", name: "Qwen Code" })
+  assert.equal(noWiring.group, "available")
+  assert.equal(noWiring.supported, false)
+  assert.equal(noWiring.toggle, null)
 })
 
 test("列表搜索、隐藏与分组顺序", () => {
