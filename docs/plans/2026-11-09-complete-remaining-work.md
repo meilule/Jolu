@@ -145,7 +145,13 @@
   - [x] P2-3（2026-11-16）：新模块 `proc.rs`（`kill_tree` / `kill_child_tree` / `wait_or_kill_tree`），Windows 用 `taskkill /T /F` 结束整棵树。替换了 3 份重复的 `kill_tree`（自动化、会话交接、Skills）和 5 处各写各的「超时就杀」循环：版本探测、warm-up、WSL 探测、Trae 签到、交接事实里的 git。实际修掉的问题有三个：warm-up 在本机找到的是 npm 的 `codex.cmd` 垫片，超时只杀 `cmd.exe`，node / codex 会把请求发完；WSL 探测每次超时多留一个 `wsl.exe`（magpie #2341）；git 超时后子进程拿着管道，读线程一直挂着。不改的两处：官方登录进程（它打开的浏览器归用户，取消时不能关）；网关的 Claude 一次性进程与桥接（只认原生 `claude.exe`、工具与 MCP 关闭，没有子进程）。单测用「外层 cmd 起内层 cmd」三条互相印证：不打断时孙进程会写标记文件；只杀外层时照样写出来；`wait_or_kill_tree` 超时后不会写
   - [ ] N10（暂缓，并入 5.5）：magpie 的 `filelock` 防的是同一台电脑上多个 magpie 进程同时改同一文件。Jolu 是单实例应用，`jolu_cli` 只读，现在没有第二个写入方，先做出来也没有调用方。第一个用户是 5.5 的 CLI 写命令，和它一起做
   - [ ] N13（跳过）：对照文档原话是「Jolu 的自动化是单线程 `wait_timeout`，无此问题」，属于可选的小优化
-- [ ] 4.10 `lib.rs` 拆分：命令按模块迁到 `service/` 与各 `commands` 文件
+- [x] 4.10 `lib.rs` 拆分：命令按模块迁到 `service/` 与各 `commands` 文件——2026-11-16 完成「按功能区归类」这一层：
+  - **搬了什么**：`lib.rs` 里全部 158 个 `#[tauri::command]` 及只服务于它们的辅助条目，搬到 `backend/src/commands/` 下 9 个文件：`panel`（主窗口与启动）、`island_window`（灵动岛窗口）、`usage_sessions`、`quotas`、`preferences`、`capabilities`（隐私 / 搜索 / Library）、`agents`、`routing`（模型路由）、`providers`。`lib.rs` 从 5281 行降到 2283 行，剩下共享状态、缓存、窗口 / 托盘 / 启动与 `run()`。
+  - **怎么搬的**：每个子模块 `use crate::*;`，根模块 `use commands::*;` 导回，`generate_handler!` 列表与其他调用点一行不改；搬出的条目一律 `pub(crate)`。函数体不动：用行多重集合比对过，新旧两边只差模块头注释、`mod` / `use` 声明、删掉的 7 个空分区标题。另外把一段放错位置的文档注释从 `validate_restored_connection` 挪回 `enable_connection`，给前者补了一句注释。
+  - **验证**：
+    - 后端全量 1422 passed / 0 failed，无警告。
+    - 隔离桌面跑 `main-window-smoke.e2e.mjs`：8 页里 5 页通过。会话线程、自动化、Skills 管理 3 页报「『正在读取』再次出现」。切回重构前的 HEAD 编译后对照，同样这 3 页失败，HEAD 那次用量统计还另外超时，所以这 3 页的失败是原有问题，与本次搬家无关。来源是这些页面的第二层加载区（会话详情「正在读取消息」、自动化「正在读取运行记录」等）在隔离目录没有数据时一直停在加载态；是脚本误报还是页面问题，待查。
+  - **没做的一层**：把业务逻辑从命令抽到 `service/`（不接 `AppHandle`、可给 CLI 复用）。这需要给发事件、重启监听等副作用逐个设计回调，等 5.5 CLI 写命令真正要复用哪个命令时再抽。
 - [ ] 4.11 早期路线图遗留：P0 基线文档、P1 契约文档
 
 ## 阶段 5 · 大模块
