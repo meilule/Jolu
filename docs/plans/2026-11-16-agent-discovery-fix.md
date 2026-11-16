@@ -1,7 +1,7 @@
 # Agent 探测修改执行文档
 
 日期：2026-11-16
-状态：已完成（T1–T9，T2 已扩展到额度 / 账号导入 / 归因 / 本机来源，见 `docs/verification/2026-11-16-agent-discovery-parity.md`；遗留：Continue 在 magpie 里没有参考，T7 未做真实桌面验证）
+状态：已完成（T1–T9，T2 已扩展到额度 / 账号导入 / 归因 / 本机来源，见 `docs/verification/2026-11-16-agent-discovery-parity.md`；T7 已通过真实桌面验证；Continue 已按官方文档核实并改为 `config.yaml`）
 范围：只动 `backend/src/agent_discovery.rs`（及必要的 `agent_version.rs`、前端调用节奏），不动接线（`gateway/wiring.rs`）、不动模型路由。
 读者：接手执行的同事。
 
@@ -302,7 +302,7 @@ magpie **也是每次调用都全量探测**。`internal/gui/api.go` 的 `state(
 **执行前核对与决定（2026-11-16，magpie `40f7de24`）**
 
 1. magpie 的做法与上文一致：`goProgram(bin)` 先用 256 KB 缓冲找魔数 `\xff Go buildinf:`（`hasGoMagic`），找到了再用 `debug/buildinfo` 确认，结果按「路径 + 大小 + 修改时间」缓存。用在 `agents.go` 中 Goose 的 `detect`（`agentDir(dir) || (命令找得到 && !goProgram(bin))`）和 `gone.go::cliHeld()`。Rust 没有 `debug/buildinfo` 这样的库，Jolu 只认魔数。
-2. **上文说「`cn`（Continue）风险最高」，但 magpie 里根本没有 Continue**：没有任何 `ID: "continue"` 或 `Bin: "cn"` 的定义，所以没有撞名处理可以参考。按 §0 第 4 条「不确定的不猜」，本次不给 Continue 做甄别。Jolu 规格表里 Continue 那一行（`cn`、`~/.continue/config.json`）在 magpie 里也找不到出处，留待核实。
+2. **上文说「`cn`（Continue）风险最高」，但 magpie 里根本没有 Continue**：没有任何 `ID: "continue"` 或 `Bin: "cn"` 的定义，所以没有撞名处理可以参考。按 §0 第 4 条「不确定的不猜」，本次不给 Continue 做甄别。Jolu 规格表里 Continue 那一行（`cn`、`~/.continue/config.json`）在 magpie 里也找不到出处。**2026-11-16 已按官方文档核实**（Context7 `/websites/continue_dev`，docs.continue.dev/cli/configuration、customize/deep-dives/configuration、reference/yaml-migration）：CLI 命令是 `cn`，默认读 `~/.continue/config.yaml`（Windows 为 `%USERPROFILE%\.continue`），目录与 VS Code / JetBrains 插件共用；`config.json` 是已迁移的旧格式，两者都在时读 YAML。鼠鼠交由小的决定：保留这一行，配置文件改为 `config.yaml`。只有旧 `config.json` 的用户，目录有内容照样算目录证据。撞名甄别仍没有依据，不加。
 3. **API 形态（鼠鼠 2026-11-16 选定）**：单独字段 `bin_not: Option<fn(&Path) -> bool>`，对应 magpie 的 `binNot`，与 `Detect` 互不干扰；只有 Goose 设为 `Some(go_program)`。
 4. **顺带发现 Goose 的 Windows 目录是错的**：magpie `gooseIn` 在 Windows 上用 `%APPDATA%\Block\goose\config\config.yaml`，Jolu 原来用的是 Linux 布局 `~/.config/goose`。已在 `dir_goose` 里改正。
 

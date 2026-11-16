@@ -263,6 +263,10 @@ fn dir_goose(home: &Path) -> Option<PathBuf> {
 }
 
 fn dir_continue(home: &Path) -> Option<PathBuf> {
+    // magpie 里没有 Continue；依据官方文档（docs.continue.dev/cli/configuration，2026-11-16 经 Context7 核对）：
+    // CLI 命令是 `cn`，默认读 `~/.continue/config.yaml`（Windows 为 `%USERPROFILE%\.continue`），
+    // 目录与 VS Code / JetBrains 插件共用。旧版的 `config.json` 已迁移到 YAML，两者都在时读 YAML；
+    // 只有 config.json 的旧用户目录有内容，照样算目录证据。
     Some(home.join(".continue"))
 }
 
@@ -281,7 +285,7 @@ const SPECS: [Spec; 13] = [
     Spec { agent: "zed", name: "Zed", bin: "zed", dir: dir_zed, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "crush", name: "Crush", bin: "crush", dir: dir_crush, file: "crush.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "goose", name: "Goose", bin: "goose", dir: dir_goose, file: "config.yaml", sign_in: "", detect: Detect::Standard, bin_not: Some(go_program) },
-    Spec { agent: "continue", name: "Continue", bin: "cn", dir: dir_continue, file: "config.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "continue", name: "Continue", bin: "cn", dir: dir_continue, file: "config.yaml", sign_in: "", detect: Detect::Standard, bin_not: None },
 ];
 
 /// 一家 agent 的发现结果。
@@ -1029,6 +1033,23 @@ mod tests {
         if let Some(roaming) = std::env::var_os("APPDATA").filter(|value| !value.is_empty()) {
             assert_eq!(dir_goose(Path::new("H")), Some(PathBuf::from(roaming).join("Block").join("goose").join("config")));
         }
+    }
+
+    /// Continue：现行配置 `~/.continue/config.yaml` 算配置文件证据；只有旧版 `config.json`
+    /// 的用户目录有内容，算目录证据，不会漏掉
+    #[test]
+    fn continue_uses_config_yaml_and_keeps_legacy_json_users() {
+        let home = temp_home("continue");
+        std::fs::create_dir_all(home.join(".continue")).unwrap();
+        std::fs::write(home.join(".continue").join("config.json"), b"{}").unwrap();
+        let legacy = agent_of(&discover_with(&home, &test_bins(&home)), "continue").clone();
+        assert_eq!((legacy.state, legacy.evidence), ("cli_missing", Some("config_dir")));
+        std::fs::write(home.join(".continue").join("config.yaml"), b"name: local\n").unwrap();
+        std::fs::create_dir_all(home.join("bins")).unwrap();
+        std::fs::write(home.join("bins").join("cn.exe"), b"MZ").unwrap();
+        let current = agent_of(&discover_with(&home, &test_bins(&home)), "continue").clone();
+        assert_eq!((current.state, current.evidence), ("installed", Some("config_file")));
+        std::fs::remove_dir_all(&home).ok();
     }
 
     // ---------- T9：路径占用 ----------

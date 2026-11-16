@@ -48,6 +48,13 @@ Remove-Item Env:JOLU_DEV_URL                                 # 验收结束后�
   2. `JOLU_UPSTREAM_DELAY=4 python -I scripts/acceptance/model-upstream.py 18766`（只监听回环，回复固定文本与合成用量；请求头写入 `output/acceptance/upstream-requests.jsonl`，凭据类请求头脱敏）；
   3. 在 `output/acceptance/node` 里设置 `JOLU_DEV_URL` 后运行脚本。
   脚本经应用命令创建两个指向合成上游的自定义来源、开启转发，临时读取剪贴板里的手动接入 Key 后恢复原文本；每个 CLI 用 `output/acceptance/cli-home/<工具>` 作为独立主目录，并去掉本机 shell 里的 `ANTHROPIC_*` / `OPENAI_*` / `GEMINI_*` 等变量，不读写真实配置。核对：运行中显示、结束后无残留在途请求、各工具会话 ID 与其本地会话文件一致、来源关联、Gemini 只记流水不猜会话。报告与截图在 `output/acceptance/gateway-unified-desktop/`。OpenCode 首次在空主目录运行会下载 provider，可能需要几分钟。
+- `agents-discovery-cache.e2e.mjs`：真实桌面验收 Agent 探测缓存（执行文档 `docs/plans/2026-11-16-agent-discovery-fix.md` 的 T7）。按「隔离桌面流程」启动后，在 `output/acceptance/node` 里运行。只读，不接入、不断开任何工具，探测读的是本机真实工具目录。脚本先刷新主窗口页面，然后：
+  - 测首次进入 Agent 页；
+  - 在「供应商」与「Agent」之间来回切 3 次，要求每次第一帧就和稳定后的内容一致，并且后台仍会刷新（开发模式 StrictMode 下每次 2 次 `agent_discover`）；
+  - 点「重新检测」，要求带 `force: true`；
+  - 最后在页面内直接 invoke 计时，要求命中缓存与过取戳窗口都在 50ms 以内。
+
+  `window.__TAURI_INTERNALS__.invoke` 不可写，所以次数靠监听 `http://ipc.localhost/<命令>` 请求来统计。Playwright 网络事件的时间戳有上百毫秒延迟，不能用来计时。报告与截图在 `output/acceptance/agents-discovery-cache/`。
 
 ## 档位面板与联网搜索设置
 

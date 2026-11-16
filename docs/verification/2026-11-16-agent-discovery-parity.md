@@ -10,7 +10,7 @@
 | T4 例外规则钩子 | 已完成（Gemini `CliOnly`） |
 | T5 命令查找缓存 | 已完成 |
 | T6 注册表 PATH | 已完成（并入 T5：每次取戳只读一次，不单独缓存） |
-| T7 页面不重复等待 | 已完成（方案 B：先显示上次结果、后台刷新、不节流） |
+| T7 页面不重复等待 | 已完成（方案 B：先显示上次结果、后台刷新、不节流）；真实桌面验证通过 |
 | T8 同名程序甄别 | 已完成（Goose `bin_not: go_program`；顺带改正 Goose 的 Windows 目录） |
 | T9 路径占用 | 已完成 |
 
@@ -148,7 +148,18 @@
 ### 验证
 
 - `pnpm --dir frontend typecheck` 通过；`node --test frontend/src/lib/*.test.mjs frontend/src/hooks/*.test.mjs` 445 passed / 0 failed。
-- **未做真实桌面验证**：没有在 `pnpm tauri dev` 里实际来回切页面看效果；后端调用耗时以上表的真机实测为准。
+- 真实桌面验证（2026-11-16，隔离实例：debug 构建 + Vite 5173 + `start.ps1`，脚本 `scripts/acceptance/agents-discovery-cache.e2e.mjs`）：**通过**。
+  - 首次进入（先刷新主窗口页面，清掉前端记住的结果）：第一帧 22ms 显示「全部 5」，此时还没有探测结果；随后变为「全部 13」，共变化 1 次，符合预期。
+  - 在「供应商」与「Agent」之间来回切 3 次：第一帧分别在 25 / 18 / 16ms 出现，内容都是「全部 13 · 已接入 0 · 可接入 5」，与稳定后的内容一致，2 秒观察期内 0 次变化，没有闪变。
+  - 每次进入后台都会刷新：从 IPC 请求看，每次调 2 次 `agent_discover`，都不带 force。开发模式 React StrictMode 会让 effect 执行两遍，正式构建为 1 次。
+  - 「重新检测」：发出 1 次 `agent_discover`，带 `force: true`，返回成功。
+  - 页面内直接 invoke 计时（debug 构建，含 IPC 往返）：
+    - `data_info` 基线 2.6ms
+    - force 全量重找 91–103ms
+    - 命中缓存 2.6–4.5ms
+    - 过 2 秒取戳窗口 5.3–5.7ms
+  - 截图：`output/acceptance/agents-discovery-cache/first.png`、`reentry.png`。
+  - 测量方法：`window.__TAURI_INTERNALS__.invoke` 不可写、不可配置，装不了 JS 钩子，所以改为监听 `http://ipc.localhost/<命令>` 请求来计次数、看 force。Playwright 网络事件的时间戳有上百毫秒的回报延迟（量出来约 180ms），不能当耗时用，耗时改在页面内直接计。
 
 ## T8 · 同名程序甄别
 
@@ -158,6 +169,7 @@
 - `go_program` / `has_go_magic`：用 256 KB 缓冲顺序找 Go 构建信息魔数，跨两次读取的魔数也能接上；结果按「路径 + 大小 + 修改时间」缓存。只认魔数，不像 magpie 那样再用 `debug/buildinfo` 确认。
 - `dir_goose`：Windows 上改为 `%APPDATA%\Block\goose\config`，依据 magpie `gooseIn`，原来误用了 Linux 布局。
 - Continue（`cn`）没做甄别：magpie 里没有这家，没有参考（见执行文档 T8 核对第 2 条）。
+- Continue 的探测规格按官方文档核实（2026-11-16，Context7 `/websites/continue_dev`）：命令 `cn`、目录 `~/.continue` 无误，配置文件由已迁移的 `config.json` 改为现行的 `config.yaml`。单元测试 `continue_uses_config_yaml_and_keeps_legacy_json_users` 覆盖两种情况：只有旧 `config.json` 时判 `cli_missing` / `config_dir`；有 `config.yaml` 加 `cn` 时判 `installed` / `config_file`。后端全量 1414 passed / 0 failed。
 
 ### 验证
 
