@@ -41,6 +41,74 @@ struct Spec {
     sign_in: &'static str,
     /// 判定规则（T4 例外钩子）。绝大多数是 `Standard`。
     detect: Detect,
+    /// 找到的命令不是这家工具、只是同名别的程序时返回 true，当作没找到（T8，magpie `binNot`）。
+    /// 只给已知会撞名的工具设，不做全量二进制扫描。
+    bin_not: Option<fn(&Path) -> bool>,
+}
+
+/// Go 构建信息的魔数：Go 程序的 build info 以它开头（magpie `goBuildInfoMagic`，`debug/buildinfo` 找的就是它）
+const GO_BUILD_INFO_MAGIC: &[u8] = b"\xff Go buildinf:";
+
+/// 这个可执行文件是不是 Go 写的（magpie `agent.go::goProgram`）。用途：Block 的 Goose 是 Rust 写的，
+/// PATH 上的 Go 版 `goose` 是 pressly 的数据库迁移工具。
+///
+/// 用 256 KB 缓冲顺序找魔数（magpie `hasGoMagic`：Block 的 goose 有 260 MB，整个解析符号表要分配
+/// 200 MB），结果按「路径 + 大小 + 修改时间」缓存。magpie 找到魔数后还会用 `debug/buildinfo`
+/// 再解析确认，Rust 没有对应的库，这里只认魔数；读不了的文件不算 Go 程序。
+fn go_program(bin: &Path) -> bool {
+    type Key = (PathBuf, u64, Option<std::time::SystemTime>);
+    static SEEN: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<Key, bool>>> = std::sync::LazyLock::new(Default::default);
+    let Ok(meta) = std::fs::metadata(bin) else {
+        return false;
+    };
+    let key: Key = (bin.to_path_buf(), meta.len(), meta.modified().ok());
+    if let Some(known) = SEEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&key) {
+        return *known;
+    }
+    let is = has_go_magic(bin);
+    SEEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(key, is);
+    is
+}
+
+/// 顺序读文件找 Go 魔数；跨两次读取的魔数靠保留上一段末尾 `len - 1` 个字节接上。
+fn has_go_magic(bin: &Path) -> bool {
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(bin) else {
+        return false;
+    };
+    let keep = GO_BUILD_INFO_MAGIC.len() - 1;
+    let mut buffer = vec![0u8; 256 * 1024];
+    let mut kept = 0;
+    loop {
+        let read = match file.read(&mut buffer[kept..]) {
+            Ok(read) => read,
+            Err(_) => return false,
+        };
+        let filled = kept + read;
+        if buffer[..filled].windows(GO_BUILD_INFO_MAGIC.len()).any(|window| window == GO_BUILD_INFO_MAGIC) {
+            return true;
+        }
+        if read == 0 {
+            return false;
+        }
+        kept = keep.min(filled);
+        buffer.copy_within(filled - kept..filled, 0);
+    }
+}
+
+/// 配置目录或它的某一级上级被**文件**占着（magpie `agent.go::Taken`）：那里什么都写不进去，
+/// 这家工具不可能在用这个目录。从目录本身往上找第一个存在的路径：是文件 → true，是目录 → false。
+fn path_taken(path: &Path) -> bool {
+    let mut current = path.to_path_buf();
+    loop {
+        if let Ok(meta) = std::fs::metadata(&current) {
+            return !meta.is_dir();
+        }
+        match current.parent() {
+            Some(parent) if parent != current => current = parent.to_path_buf(),
+            _ => return false,
+        }
+    }
 }
 
 /// 一家 agent 怎么算「装了」（magpie `Agent.detect` 的 Jolu 版）。
@@ -179,6 +247,14 @@ fn dir_crush(home: &Path) -> Option<PathBuf> {
 }
 
 fn dir_goose(home: &Path) -> Option<PathBuf> {
+    // magpie agents.go::gooseIn：Windows 上 Goose 的配置在 `%APPDATA%\Block\goose\config`，
+    // 其余系统在 `<XDG_CONFIG_HOME 或 ~/.config>/goose`
+    #[cfg(windows)]
+    {
+        if let Some(roaming) = std::env::var_os("APPDATA").filter(|value| !value.is_empty()) {
+            return Some(PathBuf::from(roaming).join("Block").join("goose").join("config"));
+        }
+    }
     let xdg = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -192,20 +268,20 @@ fn dir_continue(home: &Path) -> Option<PathBuf> {
 
 /// 探测规格表。顺序即界面展示顺序，与 `agent_version::AGENTS` 一致。
 const SPECS: [Spec; 13] = [
-    Spec { agent: "claude-code", name: "Claude Code", bin: "claude", dir: dir_claude, file: "settings.json", sign_in: ".credentials.json", detect: Detect::Standard },
-    Spec { agent: "codex", name: "Codex", bin: "codex", dir: dir_codex, file: "config.toml", sign_in: "auth.json", detect: Detect::Standard },
-    Spec { agent: "zcode", name: "ZCode", bin: "zcode", dir: dir_zcode, file: "v2/provider_config.json", sign_in: "", detect: Detect::Standard },
-    Spec { agent: "gemini", name: "Gemini CLI", bin: "gemini", dir: dir_gemini, file: ".env", sign_in: "", detect: Detect::CliOnly },
-    Spec { agent: "opencode", name: "OpenCode", bin: "opencode", dir: dir_opencode, file: "opencode.json", sign_in: "", detect: Detect::Standard },
+    Spec { agent: "claude-code", name: "Claude Code", bin: "claude", dir: dir_claude, file: "settings.json", sign_in: ".credentials.json", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "codex", name: "Codex", bin: "codex", dir: dir_codex, file: "config.toml", sign_in: "auth.json", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "zcode", name: "ZCode", bin: "zcode", dir: dir_zcode, file: "v2/provider_config.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "gemini", name: "Gemini CLI", bin: "gemini", dir: dir_gemini, file: ".env", sign_in: "", detect: Detect::CliOnly, bin_not: None },
+    Spec { agent: "opencode", name: "OpenCode", bin: "opencode", dir: dir_opencode, file: "opencode.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     // 以下 8 家只有探测（没有专门接线），接入走「通用接入」手填键名
-    Spec { agent: "qwen", name: "Qwen Code", bin: "qwen", dir: dir_qwen, file: "settings.json", sign_in: "", detect: Detect::Standard },
-    Spec { agent: "kimi", name: "Kimi CLI", bin: "kimi", dir: dir_kimi, file: "config.toml", sign_in: "", detect: Detect::Standard },
-    Spec { agent: "cline", name: "Cline", bin: "cline", dir: dir_cline, file: "settings/providers.json", sign_in: "", detect: Detect::Standard },
-    Spec { agent: "droid", name: "Droid", bin: "droid", dir: dir_droid, file: "settings.json", sign_in: "", detect: Detect::Standard },
-    Spec { agent: "zed", name: "Zed", bin: "zed", dir: dir_zed, file: "settings.json", sign_in: "", detect: Detect::Standard },
-    Spec { agent: "crush", name: "Crush", bin: "crush", dir: dir_crush, file: "crush.json", sign_in: "", detect: Detect::Standard },
-    Spec { agent: "goose", name: "Goose", bin: "goose", dir: dir_goose, file: "config.yaml", sign_in: "", detect: Detect::Standard },
-    Spec { agent: "continue", name: "Continue", bin: "cn", dir: dir_continue, file: "config.json", sign_in: "", detect: Detect::Standard },
+    Spec { agent: "qwen", name: "Qwen Code", bin: "qwen", dir: dir_qwen, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "kimi", name: "Kimi CLI", bin: "kimi", dir: dir_kimi, file: "config.toml", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "cline", name: "Cline", bin: "cline", dir: dir_cline, file: "settings/providers.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "droid", name: "Droid", bin: "droid", dir: dir_droid, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "zed", name: "Zed", bin: "zed", dir: dir_zed, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "crush", name: "Crush", bin: "crush", dir: dir_crush, file: "crush.json", sign_in: "", detect: Detect::Standard, bin_not: None },
+    Spec { agent: "goose", name: "Goose", bin: "goose", dir: dir_goose, file: "config.yaml", sign_in: "", detect: Detect::Standard, bin_not: Some(go_program) },
+    Spec { agent: "continue", name: "Continue", bin: "cn", dir: dir_continue, file: "config.json", sign_in: "", detect: Detect::Standard, bin_not: None },
 ];
 
 /// 一家 agent 的发现结果。
@@ -564,9 +640,13 @@ pub(crate) fn discover_with(home: &Path, bin_lookup: &dyn Fn(&str, &Path) -> Opt
                 && dir.as_deref()
                     .map(|base| base.join(spec.file))
                     .is_some_and(|path| path.is_file());
-            let bin_path = bin_lookup(spec.bin, home);
+            // 同名的别的程序（例如 Go 写的 goose）当作没找到（T8）
+            let bin_path = bin_lookup(spec.bin, home).filter(|path| !spec.bin_not.is_some_and(|not_ours| not_ours(path)));
             let bin_found = bin_path.is_some();
+            // 配置目录被文件占着：这家工具不可能在用它，直接判没装（T9，magpie `Detected` 第一步）
+            let taken = dir.as_deref().is_some_and(path_taken);
             let (installed, state, evidence) = match spec.detect {
+                _ if taken => (false, "not_found", None),
                 Detect::Standard => classify(file_found, dir_found, bin_found),
                 // 目录和文件都不算证据：等于只把命令交给 classify
                 Detect::CliOnly => classify(false, false, bin_found),
@@ -859,6 +939,131 @@ mod tests {
         std::fs::create_dir_all(&missing).unwrap();
         let (after, _) = stamp_of(&[dir.clone(), missing.clone()], SystemTime::now() + Duration::from_secs(1));
         assert_ne!(before, after, "目录出现后戳要变");
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    // ---------- T8：同名程序甄别 ----------
+
+    /// Go 魔数在开头、横跨 256 KB 读缓冲的边界、完全没有、文件不存在
+    #[test]
+    fn go_magic_is_found_across_buffer_boundary() {
+        let home = temp_home("go-magic");
+        let write = |name: &str, bytes: Vec<u8>| {
+            let path = home.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let mut head = b"MZ".to_vec();
+        head.extend_from_slice(GO_BUILD_INFO_MAGIC);
+        assert!(has_go_magic(&write("head.exe", head)));
+        let mut straddle = vec![0u8; 256 * 1024 - 5];
+        straddle.extend_from_slice(GO_BUILD_INFO_MAGIC);
+        straddle.extend_from_slice(&[0u8; 64]);
+        assert!(has_go_magic(&write("straddle.exe", straddle)), "魔数横跨两次读取也要找到");
+        assert!(!has_go_magic(&write("rust.exe", vec![0x4d; 600 * 1024])), "没有魔数的大文件不是 Go 程序");
+        assert!(!has_go_magic(&home.join("missing.exe")));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// Goose：PATH 上的 goose 是 Go 写的（pressly 的迁移工具）→ 当作没找到命令；
+    /// 不是 Go 写的 → 照常找到。其他家不受 bin_not 影响
+    #[test]
+    fn go_goose_on_path_is_not_block_goose() {
+        let home = temp_home("go-goose");
+        std::fs::create_dir_all(home.join("bins")).unwrap();
+        let mut go = b"MZ".to_vec();
+        go.extend_from_slice(GO_BUILD_INFO_MAGIC);
+        std::fs::write(home.join("bins").join("goose.exe"), &go).unwrap();
+        std::fs::write(home.join("bins").join("qwen.exe"), &go).unwrap();
+        let results = discover_with(&home, &test_bins(&home));
+        let goose = agent_of(&results, "goose");
+        assert!(!goose.cli_found, "Go 写的 goose 不是 Block 的 Goose");
+        assert_eq!(goose.cli_path, None);
+        assert!(agent_of(&results, "qwen").cli_found, "没设 bin_not 的工具不做甄别");
+        std::fs::write(home.join("bins").join("goose.exe"), b"MZ rust goose").unwrap();
+        assert!(agent_of(&discover_with(&home, &test_bins(&home)), "goose").cli_found);
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// 真机只读核对（默认不跑）：用本机真实二进制核对 Go 魔数判定，并打印耗时。
+    /// Go 样本：GitHub CLI 的 gh.exe；Rust 样本：Codex 桌面版自带的 rg.exe（ripgrep）。
+    /// `cargo test --manifest-path backend/Cargo.toml --release --lib go_magic_real_binaries -- --ignored --nocapture`
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn go_magic_real_binaries_readonly_smoke() {
+        let program_files = std::env::var_os("ProgramFiles").map(PathBuf::from).expect("ProgramFiles");
+        let local = local_app_data().expect("LOCALAPPDATA");
+        let samples = [
+            (program_files.join("GitHub CLI").join("gh.exe"), true),
+            (local.join("OpenAI").join("Codex").join("bin").join("a7d4c4900eafc659").join("rg.exe"), false),
+        ];
+        for (path, expect_go) in samples {
+            if !path.is_file() {
+                println!("跳过（本机没有）：{}", path.file_name().unwrap().to_string_lossy());
+                continue;
+            }
+            let size = std::fs::metadata(&path).unwrap().len();
+            let started = std::time::Instant::now();
+            let is_go = go_program(&path);
+            let first = started.elapsed();
+            let started = std::time::Instant::now();
+            go_program(&path);
+            println!("{} {} MB：go={is_go} 首次 {first:?}，缓存 {:?}", path.file_name().unwrap().to_string_lossy(), size / 1024 / 1024, started.elapsed());
+            assert_eq!(is_go, expect_go);
+        }
+    }
+
+    /// 13 行里只有 Goose 设了 bin_not
+    #[test]
+    fn only_goose_has_bin_not() {
+        for spec in &SPECS {
+            assert_eq!(spec.bin_not.is_some(), spec.agent == "goose", "{}", spec.agent);
+        }
+    }
+
+    /// Goose 在 Windows 上的配置目录是 `%APPDATA%\Block\goose\config`（magpie gooseIn）
+    #[cfg(windows)]
+    #[test]
+    fn goose_dir_on_windows_is_under_appdata_block() {
+        if let Some(roaming) = std::env::var_os("APPDATA").filter(|value| !value.is_empty()) {
+            assert_eq!(dir_goose(Path::new("H")), Some(PathBuf::from(roaming).join("Block").join("goose").join("config")));
+        }
+    }
+
+    // ---------- T9：路径占用 ----------
+
+    /// 目录本身或某一级上级是文件 → 被占；目录存在或一路都不存在（直到一个真实目录）→ 没被占
+    #[test]
+    fn path_taken_checks_self_and_ancestors() {
+        let home = temp_home("taken");
+        std::fs::write(home.join(".qwen"), b"").unwrap();
+        assert!(path_taken(&home.join(".qwen")), "配置目录的位置是个文件");
+        std::fs::write(home.join(".config"), b"").unwrap();
+        assert!(path_taken(&home.join(".config").join("crush")), "上级是文件，下面建不了目录");
+        std::fs::create_dir_all(home.join(".kimi")).unwrap();
+        assert!(!path_taken(&home.join(".kimi")));
+        assert!(!path_taken(&home.join("nothing").join("here")), "一路都不存在，上到 home 是目录");
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// 配置目录被同名文件挡住 → not_found，命令在也一样（Standard 与 CliOnly 都适用）；
+    /// cli_found 仍如实反映命令找没找到
+    #[test]
+    fn taken_config_dir_is_not_found() {
+        let home = temp_home("taken-discover");
+        std::fs::write(home.join(".qwen"), b"").unwrap();
+        std::fs::write(home.join(".gemini"), b"").unwrap();
+        std::fs::create_dir_all(home.join("bins")).unwrap();
+        std::fs::write(home.join("bins").join("qwen.exe"), b"MZ").unwrap();
+        std::fs::write(home.join("bins").join("gemini.exe"), b"MZ").unwrap();
+        let results = discover_with(&home, &test_bins(&home));
+        for agent in ["qwen", "gemini"] {
+            let found = agent_of(&results, agent);
+            assert_eq!(found.state, "not_found", "{agent} 的配置目录被文件占着");
+            assert!(!found.installed);
+            assert!(found.cli_found, "{agent} 的命令照实报告");
+        }
         std::fs::remove_dir_all(&home).ok();
     }
 

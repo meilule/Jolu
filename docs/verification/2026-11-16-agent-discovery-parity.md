@@ -11,7 +11,8 @@
 | T5 命令查找缓存 | 已完成 |
 | T6 注册表 PATH | 已完成（并入 T5：每次取戳只读一次，不单独缓存） |
 | T7 页面不重复等待 | 已完成（方案 B：先显示上次结果、后台刷新、不节流） |
-| T8 / T9 | 可选，未开始 |
+| T8 同名程序甄别 | 已完成（Goose `bin_not: go_program`；顺带改正 Goose 的 Windows 目录） |
+| T9 路径占用 | 已完成 |
 
 ---
 
@@ -149,8 +150,44 @@
 - `pnpm --dir frontend typecheck` 通过；`node --test frontend/src/lib/*.test.mjs frontend/src/hooks/*.test.mjs` 445 passed / 0 failed。
 - **未做真实桌面验证**：没有在 `pnpm tauri dev` 里实际来回切页面看效果；后端调用耗时以上表的真机实测为准。
 
+## T8 · 同名程序甄别
+
+### 改动
+
+- `Spec.bin_not: Option<fn(&Path) -> bool>`（鼠鼠 2026-11-16 选定）。`discover_with` 里，命中 `bin_not` 的命令当作没找到。13 行里只有 Goose 设为 `Some(go_program)`。
+- `go_program` / `has_go_magic`：用 256 KB 缓冲顺序找 Go 构建信息魔数，跨两次读取的魔数也能接上；结果按「路径 + 大小 + 修改时间」缓存。只认魔数，不像 magpie 那样再用 `debug/buildinfo` 确认。
+- `dir_goose`：Windows 上改为 `%APPDATA%\Block\goose\config`，依据 magpie `gooseIn`，原来误用了 Linux 布局。
+- Continue（`cn`）没做甄别：magpie 里没有这家，没有参考（见执行文档 T8 核对第 2 条）。
+
+### 验证
+
+- 单元测试：
+  - `go_magic_is_found_across_buffer_boundary`：魔数在开头、横跨 256 KB 缓冲边界、600 KB 文件里没有魔数、文件不存在。
+  - `go_goose_on_path_is_not_block_goose`：Go 版 goose 判为没找到命令；同样内容的 qwen 照常找到；换成非 Go 文件后 goose 能找到。
+  - `only_goose_has_bin_not`、`goose_dir_on_windows_is_under_appdata_block`。
+- 真机只读 `go_magic_real_binaries_readonly_smoke`（release）：
+  - GitHub CLI 的 `gh.exe`（Go，40 MB）判为 Go，用时 23–29ms。
+  - Codex 自带的 `rg.exe`（Rust，4 MB）判为非 Go：冷读 211ms，文件缓存热后约 3ms。
+  - 两者命中缓存后都在 0.1ms 以内。
+  - 按热读速度估算，260 MB 的 Block goose 首次约 200ms，和 magpie 注释的 150ms+ 同一量级；只有 PATH 上真有 goose 时才会扫。
+  - 本机没装任何 goose，没做「PATH 上放一个 Go 版 goose」的真机验证。
+
+## T9 · 路径占用
+
+### 改动
+
+- `path_taken(path)`，对应 magpie `Taken`：从配置目录本身往上找第一个存在的路径，是文件就算被占。
+- `discover_with` 里，配置目录被占时直接 `not_found`，`Standard` 和 `CliOnly` 都适用；`cli_found` 仍然如实报告。
+
+### 验证
+
+- 单元测试 `path_taken_checks_self_and_ancestors`：目录位置是文件、上级是文件、目录存在、一路都不存在。
+- 单元测试 `taken_config_dir_is_not_found`：`.qwen`、`.gemini` 是文件，即使命令在也判 `not_found`。
+- 真机：本机没有这种情况，真机探测结果与 T7 时一致。
+
 ## 全量与真机只读探测（2026-11-16）
 
+- T8 / T9 完成后全量 `cargo test --manifest-path backend/Cargo.toml`：1413 passed / 0 failed / 51 ignored，没有编译警告；真机只读探测结果与下表一致。
 - T5–T7 完成后全量 `cargo test --manifest-path backend/Cargo.toml`：1407 passed / 0 failed / 50 ignored，没有编译警告。
 
 - 全量 `cargo test --manifest-path backend/Cargo.toml`：1403 passed / 0 failed / 49 ignored，没有编译警告。
