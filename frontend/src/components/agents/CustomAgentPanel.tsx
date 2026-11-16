@@ -36,7 +36,7 @@ export function CustomAgentPanel({ drawer = false, agent, models, routing, previ
     ...(agent.model_key ? [{ label: "模型", key: agent.model_key, value: "你在下面选的模型" }] : []),
   ]
   return (
-    <div className={cn("flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto pb-8 pt-6", drawer ? "agent-detail-drawer-content px-7" : "px-8")}>
+    <div className={cn("flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto pb-8 pt-6 [&>*]:shrink-0", drawer ? "agent-detail-drawer-content px-7" : "px-8")}>
       <div className="flex items-center gap-2">
         <button type="button" onClick={onBack}
           className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-meta text-jolu-muted outline-none hover:bg-jolu-side hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent">

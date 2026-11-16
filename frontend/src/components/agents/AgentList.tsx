@@ -34,7 +34,8 @@ export function AgentDirectory({ rows, selected, modelsCount, tierCount, busy, s
   const [blockedOpen, setBlockedOpen] = useState(false)
   const grid = agentGridRows(rows, filter, search, hidden, showHidden)
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto px-8 pb-6 pt-6">
+    // 子元素必须 shrink-0：flex-col 默认允许压缩，压缩后内容溢出被裁、滚动容器反而不触发滚动
+    <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto px-8 pb-6 pt-6 [&>*]:shrink-0">
       <div className="flex items-start justify-between gap-4">
         <div className="flex flex-col gap-1.5">
           <h1 className="text-[24px] font-semibold text-jolu-text">你的 AI 工具</h1>

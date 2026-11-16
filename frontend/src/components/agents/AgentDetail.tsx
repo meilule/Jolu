@@ -74,7 +74,7 @@ export function AgentDetail(props: AgentDetailProps) {
   const [tab, setTab] = useState<DetailTab>("model")
   const wired = row.group === "wired"
   return (
-    <div className={cn("flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto px-7 pb-8 pt-6", props.drawer ? "agent-detail-drawer-content" : "px-8")}>
+    <div className={cn("flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto px-7 pb-8 pt-6 [&>*]:shrink-0", props.drawer ? "agent-detail-drawer-content" : "px-8")}>
       <div className="flex items-center gap-2">
         <button type="button" onClick={props.onBack}
           className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-meta text-jolu-muted outline-none hover:bg-jolu-side hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent">

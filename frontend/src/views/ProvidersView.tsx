@@ -54,7 +54,7 @@ export function ProvidersView({ initialTab = "connect", accountTarget, onAccount
       {/* 连接页签：卡片栅格会超出视口，自己滚（PanelPage 是 overflow-hidden）；
           账号管理页签：交给 DownloadPanel 内部的固定网格滚动，外层只占满高度。 */}
       <ContentTransition identity={`${tab}-${conn.loading && !conn.connections.length}`}
-        className={cn("flex min-h-0 flex-1 flex-col gap-3", tab === "connect" && "overflow-y-auto")}>
+        className={cn("flex min-h-0 flex-1 flex-col gap-3", tab === "connect" && "overflow-y-auto [&>*]:shrink-0")}>
       {conn.loading && !conn.connections.length && !conn.error ? <LoadingSurface className={tab === "accounts" ? "min-h-0 flex-1" : undefined} layout={tab === "connect" ? "providers" : "accounts"} label="正在读取供应商连接" /> : tab === "connect" ? (
         <ConnectGrid counts={countByPlatform(conn.connections)} loading={conn.loading} error={conn.error} onConnect={setConnecting} onRetry={() => void conn.reload()} />
       ) : (
