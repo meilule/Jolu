@@ -262,6 +262,29 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
             duration_ms    INTEGER
         );
         CREATE INDEX IF NOT EXISTS idx_gateway_route_log_ts ON gateway_route_log(ts DESC);
+        -- V10 Agent 上下文观察：每次经网关的请求的上下文组成快照（gateway/context/store.rs）。
+        -- 只存名字、tag、次数与 token，不存正文；未知的数字存 NULL，不存 0。
+        CREATE TABLE IF NOT EXISTS gateway_context_snapshot (
+            id               INTEGER PRIMARY KEY,
+            session_platform TEXT    NOT NULL,
+            session_id       TEXT    NOT NULL,
+            request_id       INTEGER,
+            connection_id    TEXT,
+            ts               INTEGER NOT NULL,
+            state            TEXT    NOT NULL,
+            protocol         TEXT    NOT NULL,
+            input_tokens     INTEGER,
+            output_tokens    INTEGER,
+            cache_read       INTEGER,
+            window_tokens    INTEGER,
+            estimated        INTEGER,
+            counted          INTEGER NOT NULL DEFAULT 0,
+            parts_json       TEXT,
+            calls_json       TEXT,
+            error            TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_ctx_snap_session ON gateway_context_snapshot(session_platform, session_id, ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_ctx_snap_request ON gateway_context_snapshot(request_id);
         -- 局域网共享（P8.3）的命名客户端 Key：签发时生成、原文只展示一次，
         -- 落库存的是按 access.rs 网关密钥同一方式（DPAPI）加密后的十六进制。
         -- 撤销 = 删除行；重新签发同名 = 先撤销再签发。

@@ -40,19 +40,24 @@ pub(super) fn parse(b: &mut Builder, req: &Value) -> bool {
             }
             "tool" | "function" => {
                 let mut n = 0;
+                let mut output = String::new();
                 for p in &parts {
                     if p.image {
                         b.add(Kind::Files, "image", "image", IMAGE_TOKENS);
                         continue;
                     }
                     n += tokens_of(p.text);
+                    if !output.is_empty() && !p.text.is_empty() {
+                        output.push('\n');
+                    }
+                    output.push_str(p.text);
                 }
                 // 旧式 function 角色没有调用 id，按函数名认
                 let id = match s("tool_call_id") {
                     "" => format!("name:{}", s("name")),
                     id => id.to_string(),
                 };
-                b.result(&id, n);
+                b.result(&id, n, &output);
             }
             "assistant" => {
                 // 推理、说的话、调用各算一段

@@ -59,8 +59,14 @@ pub(super) fn parse(b: &mut Builder, req: &Value) -> bool {
                     "" => format!("name:{name}"),
                     id => id.to_string(),
                 };
-                b.calls.entry(id.clone()).or_insert_with(|| ToolCall { name: name.to_string(), files: vec![] });
-                b.result(&id, fr.get("response").map_or(0, raw_tokens));
+                b.calls.entry(id.clone()).or_insert_with(|| ToolCall { name: name.to_string(), files: vec![], target: None });
+                let response = fr.get("response");
+                // Gemini CLI 把输出放在 response.output，出错时在 response.error
+                let output = response
+                    .and_then(|r| r.get("output").or_else(|| r.get("error")).or_else(|| r.get("content")))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                b.result(&id, response.map_or(0, raw_tokens), output);
             } else if get(p, "inlineData", "inline_data").is_some() || get(p, "fileData", "file_data").is_some() {
                 b.add(Kind::Files, "image", "image", IMAGE_TOKENS);
             } else if let Some(code) = get(p, "executableCode", "executable_code") {

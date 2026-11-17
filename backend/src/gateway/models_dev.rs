@@ -136,6 +136,12 @@ pub(crate) fn cached(app: &tauri::AppHandle) -> Option<CachedCatalog> {
     read_cache(&path).or_else(|| Some(builtin().clone()))
 }
 
+/// 不经 AppHandle 读缓存：网关转发路径上只有数据库连接，缓存与数据库在同一个应用数据目录。
+/// 读不到（隔离目录、从没拉过）时用内置快照。
+pub(crate) fn cached_in_dir(dir: &std::path::Path) -> CachedCatalog {
+    read_cache(&dir.join("models-dev.json")).unwrap_or_else(|| builtin().clone())
+}
+
 /// 立即拉取并写缓存（「刷新模型元数据」按钮用，阻塞，调用方放到后台线程）。返回（模型数，拉取时间）。
 pub(crate) fn refresh_now(app: &tauri::AppHandle) -> Result<(usize, i64), String> {
     let path = cache_path(app).ok_or("无法定位应用数据目录")?;

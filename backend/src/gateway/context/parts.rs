@@ -100,6 +100,34 @@ pub struct Prompt {
     pub turns: i64,
     /// 只含有内容的类别，按 `Kind::ALL` 的顺序。
     pub parts: Vec<PromptPart>,
+    /// 逐条工具结果（V10-05 原位展开用），按出现顺序，最多 `MAX_CALLS` 条（保留最近的）。不进 `parts_json`，单独存。
+    #[serde(skip)]
+    pub calls: Vec<ToolResult>,
+}
+
+/// 每次请求最多记多少条工具结果明细。
+pub const MAX_CALLS: usize = 200;
+
+/// 一条工具结果：只有名字、脱敏后的命令或路径、计数，不含输出正文。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolResult {
+    /// 调用的工具名。
+    pub tool: String,
+    /// 命令或读的路径（本机目录、用户名、凭证已替换）；看不出时为 `None`。
+    pub target: Option<String>,
+    /// 记到了哪一类：读文件的是 files，其余是 results。
+    pub kind: Kind,
+    pub tokens: i64,
+    /// 输出的行数。
+    pub lines: i64,
+    /// 输出里写明的退出码；没写为 `None`（不是 0）。
+    pub exit_code: Option<i64>,
+    /// `target` 是否替换过内容。
+    pub masked: bool,
+    /// 一句话摘要，例如「退出码 0，输出 12 行」。
+    pub summary: String,
+    /// 正文是否采集。第一版一律不采集。
+    pub captured: bool,
 }
 
 impl Prompt {
@@ -117,6 +145,9 @@ impl Prompt {
         }
         let scale = counted as f64 / p.tokens as f64;
         let round = |x: i64| (x as f64 * scale + 0.5).floor() as i64;
+        for call in &mut p.calls {
+            call.tokens = round(call.tokens);
+        }
         let mut sum = 0;
         for part in &mut p.parts {
             part.tokens = round(part.tokens);
@@ -147,6 +178,8 @@ struct Acc {
 pub struct ToolCall {
     pub name: String,
     pub files: Vec<String>,
+    /// 命令或路径（原文，记明细时再脱敏）。
+    pub target: Option<String>,
 }
 
 /// 边读请求体边累计。
@@ -157,6 +190,8 @@ pub struct Builder {
     pub(super) held: bool,
     /// 调用 id → 调用，给它的结果找名字与文件。
     pub(super) calls: HashMap<String, ToolCall>,
+    /// 逐条工具结果。
+    pub(super) results: Vec<ToolResult>,
 }
 
 impl Builder {
@@ -196,7 +231,11 @@ impl Builder {
 
     /// 收尾：排序、截到 `MAX_ITEMS` 项、汇总其余。
     pub fn finish(self) -> Prompt {
-        let mut p = Prompt { tokens: 0, estimated: 0, counted: false, held: self.held, turns: self.turn, parts: vec![] };
+        let mut results = self.results;
+        if results.len() > MAX_CALLS {
+            results.drain(..results.len() - MAX_CALLS);
+        }
+        let mut p = Prompt { tokens: 0, estimated: 0, counted: false, held: self.held, turns: self.turn, parts: vec![], calls: results };
         let mut parts = self.parts;
         for kind in Kind::ALL {
             let Some(m) = parts.remove(&kind) else { continue };

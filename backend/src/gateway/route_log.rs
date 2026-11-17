@@ -88,6 +88,8 @@ pub fn record(conn: &Connection, entry: NewEntry<'_>) {
             "DELETE FROM gateway_route_log WHERE id NOT IN (SELECT id FROM gateway_route_log ORDER BY id DESC LIMIT ?1)",
             [KEEP_ROWS],
         );
+        // 上下文快照与流水在同一处清理（执行文档 §6）
+        crate::gateway::context::store::prune(conn);
     }
 }
 

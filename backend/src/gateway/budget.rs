@@ -291,6 +291,8 @@ pub(crate) struct UsageMeter {
     whole: Vec<u8>,
     input: Option<i64>,
     output: Option<i64>,
+    /// 输入里命中缓存的部分（上下文观察用，预算不看它）
+    cache_read: Option<i64>,
 }
 
 const WHOLE_LIMIT: usize = 4 * 1024 * 1024;
@@ -322,6 +324,9 @@ impl UsageMeter {
     }
 
     fn observe(&mut self, value: &Value) {
+        if let Some(cached) = cache_read_of(value) {
+            self.cache_read = Some(self.cache_read.map_or(cached, |seen| seen.max(cached)));
+        }
         let (input, output) = usage_of(value);
         if let Some(input) = input {
             self.input = Some(self.input.map_or(input, |seen| seen.max(input)));
@@ -352,6 +357,26 @@ impl UsageMeter {
     pub(crate) fn parts(&self) -> (Option<i64>, Option<i64>) {
         (self.input, self.output)
     }
+
+    /// `finish` 之后读输入里命中缓存的部分；上游没给为 None（不是 0）。
+    pub(crate) fn cache_read(&self) -> Option<i64> {
+        self.cache_read
+    }
+}
+
+/// 各协议「输入里命中缓存」的位置：Anthropic `cache_read_input_tokens`，Chat `prompt_tokens_details.cached_tokens`，
+/// Responses `input_tokens_details.cached_tokens`，Gemini `cachedContentTokenCount`。
+fn cache_read_of(value: &Value) -> Option<i64> {
+    for base in ["/message/usage", "/usage", "/response/usage"] {
+        let Some(usage) = value.pointer(base) else { continue };
+        let cached = int(usage, "/cache_read_input_tokens")
+            .or_else(|| int(usage, "/prompt_tokens_details/cached_tokens"))
+            .or_else(|| int(usage, "/input_tokens_details/cached_tokens"));
+        if cached.is_some() {
+            return cached;
+        }
+    }
+    value.get("usageMetadata").and_then(|meta| int(meta, "/cachedContentTokenCount"))
 }
 
 fn int(value: &Value, pointer: &str) -> Option<i64> {

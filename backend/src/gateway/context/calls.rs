@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-use super::parts::{Builder, Kind, ToolCall};
+use super::parts::{Builder, Kind, ToolCall, ToolResult};
 
 /// 读文件的工具。
 const READ_TOOLS: &[&str] = &["Read", "read", "read_file", "ReadFile", "view", "View", "NotebookRead", "readFile", "open_file", "cat"];
@@ -118,11 +118,12 @@ fn js_call(s: &str) -> (Option<String>, Option<String>) {
 
 /// 从工具名与参数看出这次调用读了哪些文件。`args` 是参数对象；参数不是 JSON 对象时给 `text`（Codex exec 的 JavaScript）。
 pub fn call_of(name: &str, args: Option<&Map<String, Value>>, text: Option<&str>) -> ToolCall {
-    let mut c = ToolCall { name: name.to_string(), files: vec![] };
+    let mut c = ToolCall { name: name.to_string(), files: vec![], target: None };
     let str_of = |k: &str| args.and_then(|a| a.get(k)).and_then(Value::as_str).unwrap_or("");
     if is_read_tool(name) {
         if let Some(path) = PATH_KEYS.iter().map(|k| str_of(k)).find(|s| !s.is_empty()) {
             c.files = vec![path.to_string()];
+            c.target = Some(path.to_string());
             return c;
         }
     }
@@ -148,6 +149,10 @@ pub fn call_of(name: &str, args: Option<&Map<String, Value>>, text: Option<&str>
     }
     if !cmd.is_empty() {
         c.files = files_of_command(&cmd);
+        c.target = Some(cmd);
+    } else if let Some(path) = PATH_KEYS.iter().map(|k| str_of(k)).find(|s| !s.is_empty()) {
+        // 不是读文件工具但带路径参数（写文件、列目录……）：路径就是它操作的对象
+        c.target = Some(path.to_string());
     }
     c
 }
@@ -176,8 +181,21 @@ impl Builder {
     }
 
     /// 一个工具结果：调用读了文件的记到 files（多个文件平分），否则按工具名记到 results。
-    pub fn result(&mut self, call_id: &str, tokens: i64) {
-        let call = self.calls.get(call_id).cloned().unwrap_or_else(|| ToolCall { name: "tool".into(), files: vec![] });
+    /// 另记一条明细（`ToolResult`）：工具名、脱敏后的命令或路径、行数、退出码，不存输出正文。
+    pub fn result(&mut self, call_id: &str, tokens: i64, output: &str) {
+        let call = self.calls.get(call_id).cloned().unwrap_or_else(|| ToolCall { name: "tool".into(), files: vec![], target: None });
+        let (lines, exit_code, summary) = super::summary::summarize(output);
+        let (target, masked) = match call.target.as_deref() {
+            Some(t) => {
+                let (m, changed) = super::summary::mask(t);
+                (Some(m), changed)
+            }
+            None => (None, false),
+        };
+        let kind = if call.files.is_empty() { Kind::Results } else { Kind::Files };
+        if tokens > 0 {
+            self.results.push(ToolResult { tool: call.name.clone(), target, kind, tokens, lines, exit_code, masked, summary, captured: false });
+        }
         if call.files.is_empty() {
             self.add(Kind::Results, &call.name, "result", tokens);
             return;

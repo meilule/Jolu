@@ -1,7 +1,7 @@
 # Agent 上下文观察后端实现执行文档
 
 日期：2026-11-16
-状态：第 1 期已完成（2026-11-17，见第 8 节「第 1 期完成情况」）；第 2–4 期待执行
+状态：第 1、2 期已完成（2026-11-17，见第 8 节各期「完成情况」）；第 3、4 期待执行
 范围：后端新增「请求上下文快照」采集与查询；前端 V10 画板已由鼠鼠完成，本文只讲后端。
 读者：接手执行的同事。
 
@@ -48,30 +48,38 @@
 
 ### 3.1 表
 
-新增 `gateway_context_snapshot`（**不要塞进 `gateway_route_log`**，后者只保留 1000 行且只存元数据）：
+新增 `gateway_context_snapshot`（**不要塞进 `gateway_route_log`**，后者只保留 1000 行且只存元数据）。第 2 期按下面实现（`db.rs` 的 `init`，`gateway/context/store.rs` 读写）：
 
 ```sql
 CREATE TABLE IF NOT EXISTS gateway_context_snapshot (
-  id            INTEGER PRIMARY KEY,
-  session_key   TEXT    NOT NULL,   -- 平台 + 会话 id，与 gateway/sessions.rs 同一套
-  request_id    INTEGER,            -- 关联 gateway_route_log.request_id（同一次网关请求）
-  connection_id TEXT,
-  ts            INTEGER NOT NULL,
-  state         TEXT    NOT NULL,   -- analyzing / ready / failed / unsupported / no_body
-  input_tokens  INTEGER,            -- 上游实测，未知 NULL（不存 0）
-  output_tokens INTEGER,
-  cache_read    INTEGER,
-  window_tokens INTEGER,            -- 模型窗口，来自 models.dev 元数据；未知 NULL
-  estimated     INTEGER,            -- 本地估算总量
-  counted       INTEGER NOT NULL DEFAULT 0,  -- 1 = 已被上游实测校准
-  parts_json    TEXT,               -- 八类组成
-  error         TEXT
+  id               INTEGER PRIMARY KEY,
+  session_platform TEXT    NOT NULL,   -- 会话平台，与 gateway_route_log / sessions.rs 同一套（claude / codex / opencode）
+  session_id       TEXT    NOT NULL,   -- 会话 id
+  request_id       INTEGER,            -- 关联 gateway_route_log.request_id（同一次网关请求）
+  connection_id    TEXT,               -- 最后一次尝试的连接；没走到选路为 NULL
+  ts               INTEGER NOT NULL,
+  state            TEXT    NOT NULL,   -- analyzing / ready / failed / unsupported / no_body
+  protocol         TEXT    NOT NULL,   -- 调用方协议：anthropic / chat / responses / gemini
+  input_tokens     INTEGER,            -- 上游实测的输入总量（含缓存读写），未知 NULL（不存 0）
+  output_tokens    INTEGER,
+  cache_read       INTEGER,            -- 输入里命中缓存的部分，上游没给 NULL
+  window_tokens    INTEGER,            -- 模型窗口，未知 NULL
+  estimated        INTEGER,            -- 本地估算总量（校准后仍保留，用来提示偏差）
+  counted          INTEGER NOT NULL DEFAULT 0,  -- 1 = 已按上游实测校准
+  parts_json       TEXT,               -- 八类组成（§3.2）
+  calls_json       TEXT,               -- 逐条工具结果（§3.2 之后的 calls_json）
+  error            TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_ctx_snap_session ON gateway_context_snapshot(session_key, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_ctx_snap_session ON gateway_context_snapshot(session_platform, session_id, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_ctx_snap_request ON gateway_context_snapshot(request_id);
 ```
 
-**清理**：跟 `gateway_route_log` 一起按条数清理（保留量与流水一致或更少），清理逻辑写在同一处，避免两套。
+与调查时的设计相比改了三处（2026-11-17 第 2 期实现时）：
+- `session_key` 拆成 `session_platform` + `session_id`。这是路由流水与会话聚合已经在用的两列，查询时不用再拼接、拆分。
+- 新增 `protocol`：第 3 期展示链路时要用。
+- 新增 `calls_json`：V10-05 要逐条展示工具结果，`parts_json` 只有聚合，放不下。
+
+**清理**：`route_log::record` 每写 50 次清理一次流水，同一处调用 `context::store::prune`。每个会话保留最近 20 条，全表最多 2000 条。
 
 ### 3.2 parts_json
 
@@ -95,19 +103,38 @@ CREATE INDEX IF NOT EXISTS idx_ctx_snap_request ON gateway_context_snapshot(requ
 - **只存名字、tag、次数、token**，不存正文（AGENTS.md 要求）；
 - `unknown` 是 Jolu 相对 magpie 新增的兜底类：认不出的内容一律归这里，**不推断**为技能或文件（V10-11 的「未识别边界」）。
 
+### 3.2b calls_json（第 2 期新增）
+
+逐条工具结果，按在请求里出现的顺序排列，每次请求最多 200 条（保留最近的）：
+
+```json
+[{"tool":"Bash","target":"cat src/cart.ts","kind":"files","tokens":53,"lines":1,"exit_code":null,
+  "masked":false,"summary":"输出 1 行","captured":false}]
+```
+
+- `target`：命令或读的路径。经 `handoff_facts::redact` 遮掉凭证，它内部复用了 `gateway::mask` 的卡号与身份证规则；再把本机用户目录换成 `~`，用户名换成 `<user>`；最长 300 个字符。看不出命令或路径时为 `null`。
+- `exit_code`：只在输出里写明了（`exit code 1`、`Exit Code: 0`、`exited with code 2`）才有值，没写为 `null`，不是 0。
+- `summary`：一句话摘要，只由行数和退出码组成，例如「退出码 0，输出 12 行」。它不含输出原文，所以本身不需要脱敏。
+- 画板 V10-05 的「时间」一列：请求体里没有每次调用的时间，第一版不提供，标「待确认」。
+- `captured` 一律为 `false`：第一版不采集正文。
+
 ### 3.3 状态机（V10-13 六种状态）
 
 | state | 何时 | 前端表现 |
 |---|---|---|
 | `analyzing` | 已收到请求，解析未完成 | 总量可先展示，组成显示骨架，**不以 0 占位** |
-| `no_body` | 该来源拿不到请求体（部分订阅适配器） | 「尚未采集上下文」，保留模型/来源/时间 |
-| `failed` | 解析或落库失败 | 「采集失败」，可重试；有旧快照时标「上次成功 HH:MM」 |
-| `unsupported` | 请求体格式不认识（非三种协议） | 「此来源暂不支持内容分析」 |
+| `no_body` | 请求体为空（第 2 期起在调用方入口解析，各来源都拿得到请求体，所以只剩这一种情况） | 「尚未采集上下文」，保留模型/来源/时间 |
+| `failed` | 解析中途出错。只在调试构建出现：发布版 panic 直接退出，见第 8 节核对第 9 条。落库失败时这一行本身写不进去，只在日志里记一条 | 「采集失败」，可重试；有旧快照时标「上次成功 HH:MM」 |
+| `unsupported` | 请求体不是该协议能认的格式：不是 JSON，或缺少消息数组 | 「此来源暂不支持内容分析」 |
 | `ready` | 有完整快照 | 正常展示 |
 | 无行 | 会话还没走过路由 | 「暂无请求」，**不拿历史累计用量冒充上下文** |
 
 补充：
-- `window_tokens` 为 NULL 时前端隐藏百分比与剩余空间（V10-13 第 5 种状态）；
+- `window_tokens` 为 NULL 时前端隐藏百分比与剩余空间（V10-13 第 5 种状态）；第 2 期的来源：
+  - 先查来源级覆盖 `model_overrides`；
+  - 再按最后一次尝试的模型，在与数据库同目录的 models.dev 缓存（`models-dev.json`，每 10 分钟最多重读一次）里查；
+  - 读不到缓存时查内置快照。
+- 上游失败、没有回用量时：`input_tokens` / `output_tokens` / `cache_read` 都为 NULL，`counted = 0`，组成保持估算；
 - `cache_read` 为 NULL 时写「未提供」，来源无缓存能力时写「不支持」——两者必须分开。
 
 ### 3.4 查询命令（5 个）
@@ -319,9 +346,29 @@ V10-05 要求每条工具结果有「已脱敏摘要」：
 ### 第 2 期：采集接入 + 校准 + 摘要
 
 - 表与迁移（`db.rs`）；
-- `wire.rs` 挂采集点（最终 body）、异步落库、状态机；
+- `wire.rs` 挂采集点（调用方入口，见 §6「决定」）、异步落库、状态机；
 - 校准 + 偏差记录；
 - 工具结果摘要 + 脱敏。
+
+#### 第 2 期完成情况（2026-11-17）
+
+- 表：`gateway_context_snapshot` 建在 `db.rs` 的 `init`，只新增表与索引，不动已有数据。字段按 §3.1 实现。
+- 采集：`context/capture.rs`。
+  - 挂在 `wire::handle` 与 `adapter::gemini::handle` 的选路之前。只有带会话标识的请求才采集。
+  - 后台线程先写 `analyzing` 行，解析完再写 `ready` / `unsupported` / `no_body` / `failed`。
+  - 换候选时 `set_route` 记下最后一次尝试的连接与模型。
+  - 响应外层的 `meter` 在流结束或客户端断开时读出上游用量。读法复用 `budget::UsageMeter`，新增缓存命中读数。
+  - 解析和用量谁后到谁写最终值；两者先后顺序都有测试。
+- 校准：用量里的输入总量（含缓存读写）大于 0 时，各类与逐条明细按比例缩放到实测量。原估算写在 `estimated`。上游失败时用量各项为 NULL、`counted = 0`。
+- 模型窗口：查找顺序见 §3.3 补充。
+- 工具结果摘要与脱敏：`context/summary.rs`，格式见 §3.2b，写进 `calls_json`。
+- 清理：`route_log::record` 每 50 次写调用一次 `store::prune`，每个会话留 20 条，全表 2000 条。
+- 验证：见 `docs/verification/2026-11-17-agent-context-observation.md` 第 7 节。
+- 未做（第 3、4 期）：
+  - 5 个查询命令与界面；
+  - Gemini CLI 的会话键（§6 已知缺口）；
+  - V10-05 每次调用的「时间」（§3.2b）；
+  - 「来源不支持缓存」与「上游没给缓存数」的区分（§3.3 补充第 2 条）。
 
 ### 第 3 期：查询命令 + 会话列表
 

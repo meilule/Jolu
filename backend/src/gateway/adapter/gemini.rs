@@ -54,6 +54,21 @@ pub(crate) async fn handle(
         connection_id: None,
         client_key,
     };
+    // V10 上下文观察：与 wire::handle 同一挂点。Gemini CLI 目前不带会话标识，所以实际不会建快照（执行文档 §6 已知缺口）
+    let capture = meta.session.as_ref().map(|s| {
+        crate::gateway::context::capture::Capture::start(
+            deps.db.clone(),
+            crate::gateway::context::Protocol::Gemini,
+            body.clone(),
+            &s.platform,
+            &s.session_id,
+            request_id,
+        )
+    });
+    let metered = |response: Response| match capture.as_ref() {
+        Some(capture) => capture.meter(response),
+        None => response,
+    };
     // Gemini 资源名可能带 `models/` 前缀，菜单 id 是 `<slug>/<model>`，两种都接受
     let model_id = model_id.strip_prefix("models/").unwrap_or(model_id);
     let pool = {
@@ -85,7 +100,10 @@ pub(crate) async fn handle(
         RouteDecision::Direct(entry, upstream_model) => {
             let meta = crate::gateway::wire::linked(&meta, entry);
             let guard = crate::gateway::wire::begin_route(&deps, request_id, &meta, entry, started);
-            let response = forward_direct(deps.clone(), entry, &upstream_model, method, body).await;
+            if let Some(capture) = capture.as_ref() {
+                capture.set_route(&entry.connection_id, &entry.platform, &upstream_model);
+            }
+            let response = metered(forward_direct(deps.clone(), entry, &upstream_model, method, body).await);
             guard.finish();
             crate::gateway::wire::record_route(&deps, request_id, &meta, Some(&entry.slug), Some(&upstream_model), Some(response.status().as_u16()), outcome(&response), started);
             response
@@ -94,7 +112,10 @@ pub(crate) async fn handle(
             let meta = crate::gateway::wire::linked(&meta, entry);
             let upstream_model = model_id.split_once('/').map(|(_, model)| model).unwrap_or(model_id).to_string();
             let guard = crate::gateway::wire::begin_route(&deps, request_id, &meta, entry, started);
-            let response = super::gemini_subscription::forward(deps.clone(), entry, &upstream_model, method, body).await;
+            if let Some(capture) = capture.as_ref() {
+                capture.set_route(&entry.connection_id, &entry.platform, &upstream_model);
+            }
+            let response = metered(super::gemini_subscription::forward(deps.clone(), entry, &upstream_model, method, body).await);
             guard.finish();
             crate::gateway::wire::record_route(&deps, request_id, &meta, Some(&entry.slug), Some(&upstream_model), Some(response.status().as_u16()), outcome(&response), started);
             response

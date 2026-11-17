@@ -170,8 +170,12 @@ fn item(b: &mut Builder, raw: &Value) {
         }
         "function_call_output" | "custom_tool_call_output" | "local_shell_call_output" | "tool_search_output" => {
             let mut n = 0;
+            let mut output = String::new();
             match raw.get("output") {
-                Some(Value::String(o)) => n = tokens_of(o),
+                Some(Value::String(o)) => {
+                    n = tokens_of(o);
+                    output.push_str(o);
+                }
                 out => {
                     for p in content_of(out) {
                         if p.image {
@@ -179,6 +183,10 @@ fn item(b: &mut Builder, raw: &Value) {
                             continue;
                         }
                         n += tokens_of(p.text);
+                        if !output.is_empty() && !p.text.is_empty() {
+                            output.push('\n');
+                        }
+                        output.push_str(p.text);
                     }
                 }
             }
@@ -187,13 +195,14 @@ fn item(b: &mut Builder, raw: &Value) {
                     tool(b, t);
                 }
             }
-            b.result(s("call_id"), n);
+            b.result(s("call_id"), n, &output);
         }
         "compaction" | "compaction_summary" => b.add(Kind::Chat, "compacted", "compacted", raw_tokens(raw)),
         "item_reference" => b.chat(raw_tokens(raw)),
         _ if ty.ends_with("_call_output") => {
-            let tokens = raw.get("output").map_or(0, |o| o.as_str().map_or_else(|| raw_tokens(o), tokens_of));
-            b.result(s("call_id"), tokens);
+            let output = raw.get("output");
+            let tokens = output.map_or(0, |o| o.as_str().map_or_else(|| raw_tokens(o), tokens_of));
+            b.result(s("call_id"), tokens, output.and_then(Value::as_str).unwrap_or(""));
         }
         _ if ty.ends_with("_call") => {
             // 上游托管的工具（web_search_call、mcp_call……）：调用连同上游带回的内容一起算对话

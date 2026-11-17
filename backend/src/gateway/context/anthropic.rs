@@ -133,20 +133,31 @@ fn block(b: &mut Builder, role: &str, x: &Block) {
         _ if ty == "tool_result" || ty.ends_with("_tool_result") => {
             let content = x.field("content");
             let mut n = 0;
+            let mut output = String::new();
             match content {
-                Some(Value::String(s)) => n = tokens_of(s),
+                Some(Value::String(s)) => {
+                    n = tokens_of(s);
+                    output.push_str(s);
+                }
                 Some(Value::Array(_)) => {
                     for c in blocks_of(content) {
                         match c.ty() {
                             "image" | "document" => b.add(Kind::Files, c.ty(), "image", IMAGE_TOKENS),
-                            _ => n += tokens_of(c.str_field("text")),
+                            _ => {
+                                let text = c.str_field("text");
+                                n += tokens_of(text);
+                                if !output.is_empty() && !text.is_empty() {
+                                    output.push('\n');
+                                }
+                                output.push_str(text);
+                            }
                         }
                     }
                 }
                 Some(other) => n = raw_tokens(other),
                 None => {}
             }
-            b.result(x.str_field("tool_use_id"), n);
+            b.result(x.str_field("tool_use_id"), n, &output);
         }
         _ => {
             if let Block::Obj(v) = x {

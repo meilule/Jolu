@@ -1057,6 +1057,109 @@ mod tests {
         assert!(request.contains("\"model\":\"kimi-k2\""), "模型名必须已改写：{request}");
     }
 
+    /// V10 上下文观察端到端：带会话标识的 Claude Code 请求经网关转发后，快照按上游用量校准，
+    /// 解析的是调用方发来的请求体（挂点见执行文档 §6）；没有会话标识的请求不建快照。
+    #[tokio::test]
+    async fn context_snapshot_is_captured_and_calibrated_end_to_end() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let upstream_addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { return };
+                let mut raw = Vec::new();
+                let mut chunk = [0u8; 65536];
+                loop {
+                    let n = socket.read(&mut chunk).await.unwrap();
+                    if n == 0 { break; }
+                    raw.extend_from_slice(&chunk[..n]);
+                    let text = String::from_utf8_lossy(&raw);
+                    let Some(split) = text.find("\r\n\r\n") else { continue };
+                    let length = text[..split]
+                        .lines()
+                        .find_map(|l| l.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("content-length")))
+                        .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if raw.len() >= split + 4 + length { break; }
+                }
+                let body = r#"{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":100,"cache_read_input_tokens":40000,"cache_creation_input_tokens":0,"output_tokens":5}}"#;
+                let head = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                socket.write_all(head.as_bytes()).await.unwrap();
+                socket.write_all(body.as_bytes()).await.unwrap();
+                socket.flush().await.unwrap();
+            }
+        });
+        let deps = crate::proxy::test_support::bare_deps();
+        {
+            let conn = deps.db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO connections(id,platform,kind,name,secret,masked,base_url,protocol,serve_enabled,created_ms,slug)
+                 VALUES('c-kimi','custom','api','Kimi','sk-upstream-key','****',?1,'anthropic',1,1,'kimi')",
+                [format!("http://{upstream_addr}")],
+            )
+            .unwrap();
+        }
+        let mut body: serde_json::Value =
+            serde_json::from_str(include_str!("context/testdata/claude-code-2.1.326-3.anthropic.json")).unwrap();
+        body["model"] = "kimi/kimi-k2".into();
+        body["stream"] = false.into();
+        // 不带会话的那次要去掉 metadata：Claude Code 的 metadata.user_id 里也带 session_id，网关会从请求体认出会话
+        let mut anonymous = body.clone();
+        anonymous.as_object_mut().unwrap().remove("metadata");
+        let (body, anonymous) = (body.to_string(), anonymous.to_string());
+        let base = spawn_router(deps.clone()).await;
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let send = |session: Option<&'static str>| {
+            let mut request = client
+                .post(format!("{base}/v1/messages"))
+                .header("content-type", "application/json")
+                .header("x-api-key", "jolu-claude-code")
+                .body(if session.is_some() { body.clone() } else { anonymous.clone() });
+            if let Some(session) = session {
+                request = request.header("x-claude-code-session-id", session);
+            }
+            request.send()
+        };
+        let res = send(Some("3f2a6c1e-0b5d-4a8e-9c71-2d4e6f8a0b1c")).await.unwrap();
+        assert_eq!(res.status(), reqwest::StatusCode::OK);
+        let _ = res.text().await.unwrap();
+        // 解析在后台线程：最多等 5 秒到已校准
+        let mut row = None;
+        for _ in 0..100 {
+            let found = {
+                let conn = deps.db.lock().unwrap();
+                let id: Option<i64> = conn
+                    .query_row("SELECT id FROM gateway_context_snapshot ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
+                    .ok();
+                id.and_then(|id| crate::gateway::context::store::get(&conn, id).unwrap())
+            };
+            if found.as_ref().is_some_and(|r| r.counted && r.state == "ready") {
+                row = found;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let row = row.expect("快照应在 5 秒内写成已校准的 ready");
+        assert_eq!((row.session_platform.as_str(), row.session_id.as_str()), ("claude", "3f2a6c1e-0b5d-4a8e-9c71-2d4e6f8a0b1c"));
+        assert_eq!((row.input_tokens, row.output_tokens, row.cache_read), (Some(40_100), Some(5), Some(40_000)));
+        assert_eq!(row.connection_id.as_deref(), Some("c-kimi"));
+        assert_eq!(row.parts.as_ref().unwrap().iter().map(|p| p.tokens).sum::<i64>(), 40_100);
+        assert!(row.estimated.is_some_and(|e| e > 10_000 && e != 40_100), "估算值保留：{:?}", row.estimated);
+        let request_id: i64 = {
+            let conn = deps.db.lock().unwrap();
+            conn.query_row("SELECT request_id FROM gateway_route_log ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(row.request_id, Some(request_id), "与路由流水同一个 request_id");
+
+        // 没有会话标识（不带会话头、请求体也没有 metadata）：照常转发，不建快照
+        let res = send(None).await.unwrap();
+        assert_eq!(res.status(), reqwest::StatusCode::OK);
+        let _ = res.text().await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let count: i64 = deps.db.lock().unwrap().query_row("SELECT COUNT(*) FROM gateway_context_snapshot", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1);
+    }
+
     /// 隐私脱敏（P5）端到端：开启后上游只见占位符，调用方从回复里拿回真值。
     #[tokio::test]
     async fn privacy_masking_masks_upstream_body_and_restores_response() {

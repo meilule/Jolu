@@ -1,9 +1,9 @@
-# V10 Agent 上下文观察 · 第 1 期解析层验证
+# V10 Agent 上下文观察 · 第 1、2 期验证
 
 日期：2026-11-17
 执行文档：`docs/plans/2026-11-16-agent-context-observation-backend.md`（第 8 节第 1 期）
 代码：`backend/src/gateway/context/`
-范围：只验证解析层。采集接入、落库、查询命令与界面属于第 2–4 期，本次没有做。
+范围：第 1 期（解析层，第 1–6 节）与第 2 期（采集、落库、校准、工具结果摘要，第 7 节）。查询命令与界面属于第 3、4 期，没有做。
 
 ## 1. 样本
 
@@ -87,3 +87,34 @@ OpenCode 的 memory 占一半以上，是因为它读入的项目指令是本仓
 - 校准只做了单元测试，没有拿上游的真实 `input_tokens` 对照；这一项属于第 2 期。
 - ZCode 的真实请求没有抓，原因见第 1 节。
 - 真机验收（V10-01 / V10-03 展示）属于第 3、4 期。
+
+## 7. 第 2 期：采集、落库与校准（2026-11-17）
+
+### 7.1 自动化测试
+
+| 测试 | 核对内容 |
+|---|---|
+| `context::capture::tests::parse_then_usage_calibrates` | 解析先完成：先写估算的 `ready`，用量到了按实测校准。核对四点：各类之和等于实测量；`estimated` 保留原估算；缓存命中与连接写上；模型窗口与内置快照一致。逐条工具结果有 Read 和 Bash 两条，不采正文。重复回报用量只认第一次 |
+| `context::capture::tests::usage_before_parse_still_ends_calibrated` | 用量先到、解析后完成，最后仍是校准后的 `ready` |
+| `context::capture::tests::states_and_unknowns` | 不是 JSON 的请求体记 `unsupported`；空请求体记 `no_body`；上游失败时输入、缓存、窗口都是 NULL，`counted = 0`，不写 0 |
+| `context::capture::tests::meter_reads_upstream_usage` | 计量层按原字节透传。从 Anthropic 流里读出输入 1000（含缓存 900）、输出 42；上游返回 429 时记为没有用量 |
+| `context::capture::tests::prune_keeps_recent_per_session` | 每个会话留最近 20 条，删掉的是最早的 |
+| `context::summary::tests::*` | 本机目录换成 `~`，用户名、凭证被遮掉，无关命令原样保留；能识别三种退出码写法；摘要文字正确 |
+| `gateway::server::tests::context_snapshot_is_captured_and_calibrated_end_to_end` | 走真实网关链路：Claude Code 带会话头发请求，经假上游回用量。核对：快照校准到 40100（其中缓存 40000）；连接为 `c-kimi`；`request_id` 与路由流水一致。不带会话头、请求体也没有 metadata 的请求照常转发，不建快照 |
+
+全量后端测试：见 7.3。
+
+### 7.2 实现中发现的问题
+
+- 端到端测试第一次没过，原因在测试本身：「不带会话」那次请求仍然建了快照。Claude Code 的 `metadata.user_id` 里本来就带 session_id，网关会从请求体认出会话，这是正确行为。测试改成去掉 metadata 再发。
+- 本机可提交内存只剩 3–6GB（本机其他程序合计占约 71GB）。默认调试配置编译测试目标时 rustc 分配失败崩溃（`STATUS_STACK_BUFFER_OVERRUN`）。本阶段测试改用单独的 target 目录，并关闭调试信息和增量编译（`CARGO_PROFILE_DEV_DEBUG=0`、`CARGO_INCREMENTAL=0`）才跑通。代码本身没有问题。
+
+### 7.3 全量测试
+
+- 全量测试：`cargo test --manifest-path backend/Cargo.toml`，按 7.2 的低内存配置、`-j 1` 运行。结果：1465 项通过，51 项忽略，0 项失败。
+- 编译库目标：只有 `gateway/wiring.rs` 里 `saved_default` 一条警告，是同事已有的代码，与本期无关。
+
+### 7.4 未验证
+
+- 真机：还没有在桌面实例里让真实 CLI 经网关跑一次、查看快照。第 3 期加了查询命令后再做。
+- 用 models.dev 缓存查模型窗口只在单元测试里走了内置快照这条路；读真实缓存文件的那条路没有测到。

@@ -545,11 +545,24 @@ pub(crate) async fn handle(
         None => None,
     };
     let budget_db = deps.db.clone();
+    // V10 上下文观察：有会话标识的请求在选路前按调用方协议解析一次（后台线程，不阻塞转发），
+    // 响应结束时用上游用量校准（context/capture.rs；挂点决定见执行文档 §6）
+    let session_ref = session_identity(agent.as_deref(), &headers, &body);
+    let capture = session_ref.as_ref().map(|s| {
+        crate::gateway::context::capture::Capture::start(
+            deps.db.clone(),
+            crate::gateway::context::Protocol::of_caller(protocol),
+            body.clone(),
+            &s.platform,
+            &s.session_id,
+            request_id,
+        )
+    });
     // 以下选路与转发包在一个 async 块里：块内的 `return` 只结束这个块，
     // 返回的响应统一在块外套上 Token 计量。
     let response = async {
     let meta = RouteMeta {
-        session: session_identity(agent.as_deref(), &headers, &body),
+        session: session_ref.clone(),
         agent: agent.clone(),
         identified_by: identity.identified_by,
         unidentified_ua: identity.unidentified_ua.clone(),
@@ -784,6 +797,9 @@ pub(crate) async fn handle(
         let last = index + 1 == total;
         if let Ok(mut cell) = routed.lock() {
             let priced_model = if upstream_model.is_empty() { route::split_model_id(&model).map(|(_, m)| m.to_string()).unwrap_or_else(|| model.clone()) } else { upstream_model.clone() };
+            if let Some(capture) = capture.as_ref() {
+                capture.set_route(&entry.connection_id, &entry.platform, &priced_model);
+            }
             *cell = Some((entry.platform.clone(), priced_model));
         }
         if !route::source_is_current(&deps, &entry) {
@@ -855,6 +871,10 @@ pub(crate) async fn handle(
     error_response(StatusCode::SERVICE_UNAVAILABLE, "没有可用的候选成员")
     }
     .await;
+    let response = match capture.as_ref() {
+        Some(capture) => capture.meter(response),
+        None => response,
+    };
     let response = match reservation {
         Some(reservation) => crate::gateway::budget::meter(response, reservation, budget_db),
         None => response,
