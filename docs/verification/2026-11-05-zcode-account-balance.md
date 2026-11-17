@@ -73,3 +73,16 @@ test result: ok. 3 passed; 0 failed; 0 ignored
 - 「`ZCode Start Plan` 是免费档、额度按日重置」这类产品说明要不要显示在账号卡上（当前只透传 `plans[].name` 与 `status`，不解释档位）。
 - 窗口 `key` 现在是 bucket id（例如 `bkt-…`），前端 `planCoverage.ts` 只把 `5h` / `7d` 当套餐窗口，`dockQuotaView` 因此不会把 ZCode 账号额度画进灵动岛额度环；要不要给日额度一个 `1d` 之类的稳定 key，需要先确认显示口径。
 - `frontend/src/lib/remainingDisplay.ts` 的 ZCode 文案仍是「BigModel 套餐剩余 / 本机 ZCode BigModel Coding Plan API Key」，与现在 zai 走官方客户端令牌的事实不符，是否改文案待确认。
+
+## 2026-11-17 处理（总清单 4.8，按小的推荐方案做，文案待鼠鼠过稿）
+
+- **档位说明**：不在账号卡上写「免费档」，因为那要靠套餐名推断。改为照接口数据写明重置周期：
+  - entitlement 的 `period` 写进窗口名（「GLM-5.3 · 每日额度」）；
+  - 日额度的 key 改为 `1d:<bucket_id>`，月额度改为 `30d:<bucket_id>`；
+  - ZCode 的剩余额度行用窗口名作标签。
+- **经典灵动岛日额度**：没有 5h / 7d、但有 `1d:` 额度桶时，停靠条按日额度画，用得最多的在前，不再画成「不限量」。
+- **文案**：标题「ZCode 套餐剩余」，来源「本机 ZCode 登录账号 / BigModel 编码套餐 Key」，加载中「正在查询 ZCode 套餐额度…」；API 连接仍是 BigModel 编码套餐的文案。
+- **验证**：
+  - 后端 `coding_plan` / `zcode_quota` 相关 110 项测试通过，按真实响应形态的样本断言 key 与名称；
+  - 前端 `dockQuotaView`、`remainingDisplay`、`providerRegistry` 测试已更新并新增日额度用例，全部前端纯逻辑测试通过；
+  - 未在真机上重新查一次真实账号。

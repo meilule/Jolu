@@ -206,22 +206,26 @@ export const PROVIDERS: Readonly<Partial<Record<PlatformId, ProviderDescriptor>>
     // 平台缺省给未声明的 key：本机登录返回的是按 bucket_id 的日额度桶（不在这里声明）。
     // 统一弧段环（批 6 用户要求：刻度条太丑），不再按桶用刻度环
     ringGeometry: "arc",
-    // 账号额度是按 bucket 返回的日额度，key 是 bucket_id，不在这里声明（回落后端窗口名）
+    // 账号额度是按 bucket 返回的额度桶，key 是 bucket_id；重置周期是 daily / monthly 时后端加
+    // `1d:` / `30d:` 前缀并在窗口名写明「每日额度」（4.8）。这些 key 不在这里声明，标签回落后端窗口名
     windows: [W5H, W7D, WQUOTA],
     placeholderWindows: true,
     labels: {
       remaining: {
         kind: "online",
-        title: "ZCode · BigModel 套餐剩余",
-        source: "本机 ZCode BigModel Coding Plan API Key",
+        // 4.8：本机这条路有两个来源——找到 BigModel 编码套餐 Key 时查 5 小时 / 周窗口，否则用官方客户端令牌
+        // 查账号套餐（如 ZCode Start Plan 的每日额度桶）。原文案只写了 BigModel Key（文案无画板，待确认）
+        title: "ZCode 套餐剩余",
+        source: "本机 ZCode 登录账号 / BigModel 编码套餐 Key",
         api: {
           title: "ZCode · BigModel 套餐剩余",
           source: "本机 ZCode BigModel Coding Plan API Key",
           reason: "当前 API 连接未绑定本机 ZCode BigModel Key。",
         },
-        loadingReason: "正在查询 API Key 套餐额度…",
+        loadingReason: "正在查询 ZCode 套餐额度…",
         windowLabels: { "5h": "5 小时剩余", "7d": "周剩余" },
         windowLabelFallback: "剩余额度",
+        labelFromWindowName: true,
         unknownText: "-",
         preferRemainingText: true,
         okWhenValueUnknown: true,

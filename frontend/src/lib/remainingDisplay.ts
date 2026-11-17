@@ -64,7 +64,8 @@ export function remainingDisplay(platform: PlatformId, kind: "auth" | "api", quo
     // 后端 `login_state` 兜底时三个数值字段都是 None：窗口在、数值未知，如实显示未知占位符。
     // 真实剩余为 0 时后端给的是 "0"，原样透出，不参与下面的未知分支。
     return {
-      label: remaining.windowLabels[window.key] ?? remaining.windowLabelFallback,
+      // 描述符没有声明的 key（ZCode 的额度桶等）用后端窗口名，它写明了模型与重置周期；都没有才用通用名
+      label: remaining.windowLabels[window.key] ?? ((remaining.labelFromWindowName ? window.window_name?.trim() : "") || remaining.windowLabelFallback),
       value: exact ?? (hasPercent(window.used_percent) ? percentage(window.used_percent) : unknownText),
       usedText: window.amount_text ?? (hasPercent(window.used_percent) ? `已用 ${window.used_percent}%` : null),
       resetsAt: window.resets_at,

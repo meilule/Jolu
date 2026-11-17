@@ -95,6 +95,8 @@ export type ProviderRemaining =
       windowLabels: Readonly<Record<string, string>>
       /** 未声明 key 的标签 */
       windowLabelFallback: string
+      /** 未声明的 key 用后端窗口名当行标签（ZCode 的额度桶：窗口名写明模型与重置周期）；缺省用 `windowLabelFallback` */
+      labelFromWindowName?: boolean
       /** 数值未知时的占位符；同一仓库里有意按平台不同（`-` / `—`） */
       unknownText: string
       /** 来源返回精确剩余量时优先用它（Grok 只认已用百分比） */

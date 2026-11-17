@@ -195,15 +195,17 @@ test("Grok 不补 5h / 7d 占位，其余已登记平台沿用占位，未登记
   assert.deepEqual(quotaRowsFor("custom-unknown", weekly).map((row) => row.key), ["7d"])
 })
 
-const ZCODE_BASE = { title: "ZCode · BigModel 套餐剩余", source: "本机 ZCode BigModel Coding Plan API Key" }
+// 4.8 起 Auth 的标题与来源写明两种来源；API 连接仍是 BigModel 编码套餐
+const ZCODE_BASE = { title: "ZCode 套餐剩余", source: "本机 ZCode 登录账号 / BigModel 编码套餐 Key" }
+const ZCODE_API = { title: "ZCode · BigModel 套餐剩余", source: "本机 ZCode BigModel Coding Plan API Key" }
 const GROK_BASE = { title: "Grok · SuperGrok 剩余额度", source: "本机 Grok OAuth · 订阅额度" }
 
 test("ZCode 的整句剩余与改动前完全一致", () => {
   assert.deepEqual(remainingDisplay("zcode", "api", null), {
-    ...ZCODE_BASE, rows: [], state: "unsupported", reason: "当前 API 连接未绑定本机 ZCode BigModel Key。",
+    ...ZCODE_API, rows: [], state: "unsupported", reason: "当前 API 连接未绑定本机 ZCode BigModel Key。",
   })
   assert.deepEqual(remainingDisplay("zcode", "auth", null), {
-    ...ZCODE_BASE, rows: [], state: "loading", reason: "正在查询 API Key 套餐额度…",
+    ...ZCODE_BASE, rows: [], state: "loading", reason: "正在查询 ZCode 套餐额度…",
   })
   assert.deepEqual(remainingDisplay("zcode", "auth", { state: "failed", reason: "查询未完成" }), {
     ...ZCODE_BASE, rows: [], state: "failed", reason: "查询未完成",
@@ -221,7 +223,8 @@ test("ZCode 的整句剩余与改动前完全一致", () => {
   assert.deepEqual(view.rows, [
     { label: "5 小时剩余", value: "8999 Credits", usedText: "3000 / 12000 credits", resetsAt: null },
     { label: "周剩余", value: "60000 Credits", usedText: "0 / 60000 credits", resetsAt: "2026-09-30T00:00:00Z" },
-    { label: "剩余额度", value: "-", usedText: null, resetsAt: null },
+    // 未声明的 key 用后端窗口名（4.8：ZCode 的额度桶名写明模型与重置周期）
+    { label: "套餐额度", value: "-", usedText: null, resetsAt: null },
   ])
   assert.equal(view.state, "ok")
   assert.equal(view.reason, "")

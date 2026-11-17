@@ -64,3 +64,9 @@ test("Auth 查询失败不能当作已确认无 5h/7d", () => {
 test("未连接 / 已暂停不画满格", () => {
   assert.deepEqual(dockQuotaView({ ...base, connected: false }), { type: "unknown" })
 })
+
+test("没有 5h / 7d、但有按日重置的额度桶（ZCode 账号）：按日额度画，用得最多的在前，不画成不限量", () => {
+  const view = dockQuotaView({ ...base, kind: "auth", windows: [win("1d:bkt-1", 0), win("1d:bkt-2", 100), win("quota", 10)] })
+  assert.deepEqual(view, { type: "windows", windows: [win("1d:bkt-2", 100), win("1d:bkt-1", 0)] })
+  assert.deepEqual(dockQuotaView({ ...base, kind: "auth", windows: [win("quota", 10)] }), { type: "unlimited" }, "其他窗口仍按原规则")
+})

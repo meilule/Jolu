@@ -48,7 +48,12 @@ export function dockQuotaView(args: {
     return { type: "unknown" }
   }
   // Auth / API Key 一律按实际窗口判定；仅有其他窗口时仍保留其真实数据在卡片中。
-  return args.windows?.length && isPlanCovered(args.windows)
-    ? { type: "windows", windows: args.windows }
-    : { type: "unlimited" }
+  if (args.windows?.length && isPlanCovered(args.windows)) return { type: "windows", windows: args.windows }
+  // 没有 5h / 7d、但来源给了按日重置的额度桶（ZCode 账号的 `1d:<桶>`，4.8）：这是真实的限额，
+  // 画成「不限量」的彩虹条会误导；按日额度画，用得最多的在前（经典岛停靠条最多两条）
+  const daily = (args.windows ?? []).filter((window) => window.key.startsWith("1d:"))
+  if (daily.length > 0) {
+    return { type: "windows", windows: [...daily].sort((a, b) => (b.usedPercent ?? -1) - (a.usedPercent ?? -1)) }
+  }
+  return { type: "unlimited" }
 }

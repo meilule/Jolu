@@ -379,6 +379,15 @@ pub(crate) fn parse_zcode_plan_balance(body: &serde_json::Value) -> ZcodePlanBal
         let window_name = text_field(bucket, "show_name")
             .or_else(|| entitlement.and_then(|value| text_field(value, "show_name")))
             .unwrap_or_else(|| format!("额度窗口 {}", index + 1));
+        // 重置周期（entitlement 的 `period`，实测 Start Plan 是 daily）：照数据写进名称，日 / 月额度的 key
+        // 加 `1d:` / `30d:` 前缀，界面据此知道这是日额度（经典灵动岛没有 5h / 7d 时改画它），不按套餐名推断
+        let period = text_field(bucket, "period").or_else(|| entitlement.and_then(|value| text_field(value, "period")));
+        let (key, window_name) = match period.as_deref() {
+            Some("daily") => (format!("1d:{key}"), format!("{window_name} · 每日额度")),
+            Some("weekly") => (key, format!("{window_name} · 每周额度")),
+            Some("monthly") => (format!("30d:{key}"), format!("{window_name} · 每月额度")),
+            _ => (key, window_name),
+        };
         let unit = text_field(bucket, "unit_type")
             .or_else(|| entitlement.and_then(|value| text_field(value, "unit_type")));
         let suffix = unit.map(|unit| format!(" {unit}")).unwrap_or_default();
@@ -1068,13 +1077,14 @@ mod tests {
         assert_eq!(balance.observed_at.as_deref(), Some(iso(1_762_339_200).as_str()));
         assert_eq!(balance.windows.len(), 2, "两个 bucket 不能被合并成一个窗口");
         // 真实 0：已用 0 不等于未知，进度条要能画在 0%
-        assert_eq!(balance.windows[0].key, "bkt-1");
-        assert_eq!(balance.windows[0].window_name, "GLM-5.3");
+        // 重置周期是 daily：key 带 `1d:` 前缀、名称写明「每日额度」（照数据，不按套餐名推断）
+        assert_eq!(balance.windows[0].key, "1d:bkt-1");
+        assert_eq!(balance.windows[0].window_name, "GLM-5.3 · 每日额度");
         assert_eq!(balance.windows[0].used_percent, Some(0.0));
         assert_eq!(balance.windows[0].amount_text.as_deref(), Some("0 / 3000000 token"));
         assert_eq!(balance.windows[0].remaining_text.as_deref(), Some("剩余 3000000 token"));
         assert_eq!(balance.windows[0].resets_at.as_deref(), Some(iso(1_762_339_199).as_str()));
-        assert_eq!(balance.windows[1].key, "bkt-2");
+        assert_eq!(balance.windows[1].key, "1d:bkt-2");
         assert_eq!(balance.windows[1].used_percent, Some(20.0));
         // 剩余与可用不同时两个都写出来，界面不用二选一
         assert_eq!(balance.windows[1].remaining_text.as_deref(), Some("剩余 4000000 token（可用 3500000）"));

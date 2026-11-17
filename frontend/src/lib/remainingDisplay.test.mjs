@@ -43,7 +43,7 @@ test("ZCode 显示 BigModel API Key 返回的精确剩余积分", () => {
   })
   assert.equal(view.rows[0].value, "8999 Credits")
   assert.equal(view.rows[1].value, "60000 Credits")
-  assert.match(view.source, /API Key/)
+  assert.match(view.source, /BigModel 编码套餐 Key/)
 })
 
 test("ZCode 未知额度显示 -，不冒充 0 也不算查询失败", () => {
@@ -89,4 +89,19 @@ test("ZCode 查询失败 / 未授权 / 需要重新登录保持各自表达，�
   const empty = remainingDisplay("zcode", "auth", { state: "ok", plan: null, windows: [] })
   assert.equal(empty.state, "unsupported")
   assert.equal(empty.rows.length, 0)
+})
+
+test("ZCode 账号的每日额度桶：行标签用后端窗口名（写明模型与重置周期），用尽显示 0%（4.8）", () => {
+  const view = remainingDisplay("zcode", "auth", {
+    state: "ok", plan: "ZCode Start Plan", windows: [
+      { key: "1d:bkt-1", window_name: "GLM-5.3 · 每日额度", used_percent: 0, amount_text: "0 / 3000000 token", remaining_text: "剩余 3000000 token", resets_at: "2026-11-18T00:00:00Z" },
+      { key: "1d:bkt-2", window_name: "GLM-5.3-Flash · 每日额度", used_percent: 100, amount_text: "5000000 / 5000000 token", remaining_text: "剩余 0 token", resets_at: "2026-11-18T00:00:00Z" },
+    ],
+  })
+  assert.deepEqual(view.rows.map((row) => [row.label, row.value]), [
+    ["GLM-5.3 · 每日额度", "剩余 3000000 token"],
+    ["GLM-5.3-Flash · 每日额度", "剩余 0 token"],
+  ])
+  assert.equal(view.title, "ZCode 套餐剩余")
+  assert.equal(view.state, "ok")
 })

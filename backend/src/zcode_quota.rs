@@ -1482,7 +1482,7 @@ mod tests {
         let QuotaState::Ok { windows, plan, account } = state else { panic!("实测形态应成功") };
         assert_eq!(plan.as_deref(), Some("ZCode Start Plan"));
         assert_eq!(windows.len(), 2);
-        assert_eq!(windows[0].window_name, "GLM-5.3");
+        assert_eq!(windows[0].window_name, "GLM-5.3 · 每日额度");
         assert_eq!(windows[0].used_percent, Some(0.0), "已用 0 是真实 0，不是未知");
         assert_eq!(windows[1].used_percent, Some(100.0));
         let account = account.expect("必须带账号元数据");
