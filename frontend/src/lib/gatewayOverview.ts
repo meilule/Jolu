@@ -7,6 +7,34 @@
  */
 import type { RouteLogDto } from "./gatewayApi"
 
+/**
+ * 活跃会话表格在窄容器下的三种呈现形态（配合 `@container` 的 `@max-[..]` 断点）。
+ *
+ * 宽容器用表格；容器变窄时**不隐藏列**（隐藏掉「缓存读取」「状态」「查看上下文」会让用户
+ * 无从得知这些信息存在），而是整行折成两层卡片：第一层会话 + 模型，第二层上下文 +
+ * 缓存 + 状态 + 入口，所有字段都保留。
+ *
+ * 阈值来自实测：六列固定宽合计约 718px，加第一列与内边距，容器低于 ~920px 起第一列就会被
+ * 压到放不下标题（2026-11-17 尺寸扫描）；两层卡片在 ~620px 以下才开始挤，所以：
+ *   - ≥ 920px：六列表格
+ *   - 620–919px：四列表格（只收最次要的按钮列，其余照显示）
+ *   - < 620px：两层卡片（全部字段显示）
+ */
+export const SESSION_TABLE_BREAKPOINT = 920
+export const SESSION_CARD_BREAKPOINT = 620
+
+/**
+ * 表头与数据行共用的列定义（宽档与中档；窄档改用卡片，不用网格）。
+ *
+ * 注意：类名必须写完整字面量，不能用模板串拼 `@max-[${n}px]`——
+ * Tailwind 4 在构建时静态扫描源码文本，拼出来的类名扫不到、样式不会生成。
+ * 改断点时要同步改 `SESSION_TABLE_BREAKPOINT` / `SESSION_CARD_BREAKPOINT` 常量。
+ */
+export const SESSION_GRID = [
+  "grid-cols-[minmax(0,1fr)_210px_190px_130px_110px_88px]",
+  "@max-[919px]:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.9fr)_130px_110px]",
+].join(" ")
+
 /** 同一次请求的最终尝试行：分组成员失败转移会记多行，只有最后一行算最终结果。 */
 export function finalAttempts(rows: readonly RouteLogDto[]): RouteLogDto[] {
   const counts = new Map<number, number>()
@@ -123,4 +151,30 @@ export function rateLimitedSources(rows: readonly RouteLogDto[]): { source: stri
 export function formatLatency(ms: number | null | undefined): string {
   if (typeof ms !== "number" || ms < 0) return "—"
   return ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`
+}
+
+/**
+ * 概览页时间范围（V10-01 右上「今天」下拉）。
+ * 后端 `Range::parse` 认这些 id；`compare` / `period` 是给文案用的说法：
+ * 后端返回的 `today` 字段是**本期**请求数、`yesterday` 是**上期**，所以文案必须跟着范围变，
+ * 否则选「昨天」还会显示「今天 0 请求」。
+ */
+export interface OverviewRange {
+  id: "today" | "yesterday" | "7d" | "30d"
+  label: string
+  /** 本期指标名，如「今日请求」「近 7 天请求」 */
+  period: string
+  /** 对比文案前缀，如「昨天」「前一天」「前 7 天」 */
+  compare: string
+}
+
+export const OVERVIEW_RANGES: readonly OverviewRange[] = [
+  { id: "today", label: "今天", period: "今日请求", compare: "昨天" },
+  { id: "yesterday", label: "昨天", period: "昨日请求", compare: "前一天" },
+  { id: "7d", label: "近 7 天", period: "近 7 天请求", compare: "前 7 天" },
+  { id: "30d", label: "近 30 天", period: "近 30 天请求", compare: "前 30 天" },
+]
+
+export function overviewRange(id: string): OverviewRange {
+  return OVERVIEW_RANGES.find((item) => item.id === id) ?? OVERVIEW_RANGES[0]
 }

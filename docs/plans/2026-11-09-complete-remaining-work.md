@@ -215,7 +215,8 @@
   - [x] 2026-11-17 `tune`（`backend/src/tune.rs`，移植 magpie `internal/tune/tune.go`）：从 `requests` 表取最近 N 天成功、用量全部已知、有会话标识的调用，按会话逐条回放，给 Claude Code（按模型）与 Codex 的压缩窗口建议、Claude Code 提示词缓存 5 分钟 / 1 小时建议；按厂商收费比例加权，省不到 3% 不建议改；窗口取 models.dev 元数据，不知道时提示「模型窗口未知」。与 magpie 的差异：Jolu 记录里没有 1 小时缓存写入的拆分、子代理标记和压缩耗时，所以当前缓存时长按 5 分钟推断并写明、不算等待时长、不分主会话与子代理。只给建议、不改配置（「一键应用」待确认）。入口：`jolu tune [--days N]` 与设置「数据与存储」页尾（`TuneSection.tsx`，无画板，待确认）；单测 10 条 + 前端 3 条；本机真实记录只读跑通（30 天 Claude Code 3.4 万次、Codex 6 千次调用，约 1 秒）
 - [ ] 5.11 更多 agent 接线（权威版 §1.1：Antigravity、Zed、Factory、MiMo、Copilot、Hermes 等）
   - [x] 2026-11-17 Pencil、Qoder、Qoder CN、Crush 专用接线（`gateway/wiring_extra.rs`，参照 magpie pencil.go / qoder.go / agents.go 的 crush；单测 6 条；`agents` 种子表与 `wiring::AGENTS` 同步；Crush 在 Windows 的目录改为 `%LOCALAPPDATA%\crush`，探测与接线共用）。未做真实工具验收；不写推理强度、不保留用户在 `providers.jolu` 里手改的字段（magpie theirsKept）标「待确认」
-  - [ ] 其余 10 家（qwen、cline、droid、zed、goose、continue、dsh、copilot、vscode、workbuddy）需要 yaml / 数组插项 / 多文件 / 凭据库写入，见 `docs/specs/2026-11-17-agent-wiring-registry.md` §8
+  - [x] dsh（2026-11-18）：多 profile cordis.patch.yml 行级拼接 + .env + credentials refs，见 `backend/src/gateway/wiring_dsh.rs`；真机隔离往返通过
+- [ ] 其余 9 家（qwen、cline、droid、zed、goose、continue、copilot、vscode、workbuddy）需要 yaml / 数组插项 / 多文件 / 凭据库写入，见 `docs/specs/2026-11-17-agent-wiring-registry.md` §8
 
 ---
 

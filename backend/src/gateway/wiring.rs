@@ -17,7 +17,8 @@ use crate::gateway::wiring_store::{Applied, TierModels, WiringRecord};
 
 /// 支持的 agent 标识（与 `providerCatalog` 的平台 id 对齐）。
 /// 后四家（Pencil / Qoder / Qoder CN / Crush）的适配在 `wiring_extra.rs`（5.11）
-pub const AGENTS: [&str; 10] = ["claude-code", "codex", "zcode", "gemini", "opencode", "kimi", "pencil", "qoder", "qoder-cn", "crush"];
+// dsh 的适配在 `wiring_dsh.rs`（多 profile patch + .env + credentials，magpie dsh.go 裁剪版）
+pub const AGENTS: [&str; 11] = ["claude-code", "codex", "zcode", "gemini", "opencode", "kimi", "dsh", "pencil", "qoder", "qoder-cn", "crush"];
 
 pub fn is_agent(agent: &str) -> bool {
     AGENTS.contains(&agent)
@@ -1096,13 +1097,7 @@ fn kimi_wire(
         return Err("网关模型清单为空；先在「模型池」里启用要提供给 Kimi 的模型".into());
     }
     let mut document = parse_toml_document(text, "config.toml")?;
-    // 快照：接线前用户自己的 default_model（断开时还原；magpie 同款 stash 语义）
-    let saved_default = document
-        .get("default_model")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|model| !model.is_empty() && !model.starts_with(&format!("{KIMI_PROVIDER}/")))
-        .map(str::to_string);
+    // 快照（断开时还原的原值）由 [`kimi_snapshot`] 单独算，这里只管写。
     // providers.jolu：段是表时就地更新（magpie kimiProvider：整表重写会把
     // 用户设的 custom_headers、env 以及挂在 provider 上的 default_model 冲掉，magpie #2030）；
     // jolu 键本身不是表（配置写坏）则换成表；providers 段整个不在（首次接线）才重建段。
@@ -1260,7 +1255,7 @@ fn parse_toml_document(text: &str, what: &str) -> Result<toml_edit::DocumentMut,
 }
 
 /// dotenv 键值写入：保留其它行与注释，只替换目标键（不存在则追加）。
-fn wire_dotenv(text: &str, key: &str, value: Option<&str>) -> String {
+pub(crate) fn wire_dotenv(text: &str, key: &str, value: Option<&str>) -> String {
     let prefix = format!("{key}=");
     let mut out: Vec<String> = Vec::new();
     let mut replaced = false;
@@ -1286,7 +1281,7 @@ fn wire_dotenv(text: &str, key: &str, value: Option<&str>) -> String {
     joined
 }
 
-fn dotenv_get(text: &str, key: &str) -> Option<String> {
+pub(crate) fn dotenv_get(text: &str, key: &str) -> Option<String> {
     text.lines()
         .find_map(|line| line.trim().strip_prefix(&format!("{key}=")))
         .map(|v| v.trim().trim_matches('"').to_string())
@@ -1305,7 +1300,7 @@ pub(crate) fn points_at_gateway(value: &str, port: u16) -> bool {
 pub(super) const CODEX_PROVIDER: &str = "jolu-gateway";
 
 /// `jolu-<agent>.<实例前 8 位>`：一键接线的归属标记，独立于可刷新的手动 Key。
-fn token_for(agent: &str, instance_short: &str) -> String {
+pub(crate) fn token_for(agent: &str, instance_short: &str) -> String {
     format!("jolu-{agent}.{instance_short}")
 }
 
@@ -1335,6 +1330,7 @@ fn config_path(agent: &str) -> Option<PathBuf> {
             .join("opencode.json"),
         // Kimi CLI / Kimi Code（magpie kimi.go kimiDir：新版 `~/.kimi-code`，旧版 `~/.kimi`）
         "kimi" => kimi_dir(&home).0.join("config.toml"),
+        "dsh" => super::wiring_dsh::config_path(&home),
         other if super::wiring_extra::is_extra(other) => super::wiring_extra::config_path(other, &home)?,
         _ => return None,
     })
@@ -1427,6 +1423,8 @@ fn foreign_marker(agent: &str, text: &str, instance_short: &str) -> Option<Strin
         "opencode" => opencode_current_token(text),
         "zcode" => zcode_current_token(text),
         "kimi" => kimi_current_token(text),
+        // dsh 的令牌在 .env 不在 patch 里，读文件（其余 agent 的令牌都在 text 里）
+        "dsh" => crate::creds::home().and_then(|home| super::wiring_dsh::current_token(&home)),
         other if super::wiring_extra::is_extra(other) => super::wiring_extra::current_token(other, text),
         _ => None,
     }?;
@@ -1476,6 +1474,7 @@ fn ours_with(agent: &str, text: &str, port: u16, instance_short: &str, kept: Opt
                     || kept.is_some_and(|kept| !kept.is_empty() && token == kept))
                 && text.parse::<toml_edit::DocumentMut>().map(|document| kimi_default_ours(&document)).unwrap_or(false)
         }
+        "dsh" => crate::creds::home().is_some_and(|home| super::wiring_dsh::wired(&home, text, port, instance_short, kept)),
         // 5.11 四家 JSON：provider 段指到网关、令牌是我们的，且工具当前选的是 Jolu 的模型
         other if super::wiring_extra::is_extra(other) => {
             let base = super::wiring_extra::current_base(other, text).unwrap_or_default();
@@ -1643,6 +1642,7 @@ fn restart_notice(agent: &str) -> &'static str {
         "opencode" => "需重启该工具后生效",
         "zcode" => "需重启 ZCode 后生效",
         "kimi" => "需重启 Kimi 后生效",
+        "dsh" => super::wiring_dsh::restart_notice(),
         other if super::wiring_extra::is_extra(other) => super::wiring_extra::restart_notice(other),
         _ => "需重启后生效",
     }
@@ -1757,6 +1757,15 @@ pub(crate) fn plan_wire(
             let legacy = kimi_dir(&home).1;
             (kimi_wire(&original, &base, &token, model, catalog_models, legacy)?, kimi_snapshot(&original))
         }
+        "dsh" => {
+            // 多文件：每个 profile 的 patch + .env + credentials refs（wiring_dsh 组装）
+            let home = crate::creds::home().ok_or("未找到用户目录")?;
+            let plan = super::wiring_dsh::plan_wire_files(&home, &base, &token, model, catalog_models)?;
+            for (path, text) in plan.extra {
+                extra_files.push((path, text.into_bytes()));
+            }
+            (plan.main_text, plan.snapshot)
+        }
         other if super::wiring_extra::is_extra(other) => (
             super::wiring_extra::wire(other, &original, &base, &token, model, catalog_models)?,
             super::wiring_extra::snapshot(other, &original),
@@ -1770,7 +1779,7 @@ pub(crate) fn plan_wire(
         token: if agent == "codex" {
             (!codex_oauth).then(|| token.clone())
         } else {
-            (matches!(agent, "claude-code" | "gemini" | "opencode" | "zcode" | "kimi") || super::wiring_extra::is_extra(agent)).then(|| token.clone())
+            (matches!(agent, "claude-code" | "gemini" | "opencode" | "zcode" | "kimi" | "dsh") || super::wiring_extra::is_extra(agent)).then(|| token.clone())
         },
         provider: (agent == "codex" && !codex_oauth).then(|| CODEX_PROVIDER.to_string()),
         mode: (agent == "codex").then(|| if codex_oauth { "oauth" } else { "provider" }.to_string()),
@@ -1949,6 +1958,22 @@ pub(crate) fn plan_unwire(agent: &str, port: u16, record: Option<&WiringRecord>)
                 return Ok(None);
             }
             kimi_restore(&original, saved.as_ref())?
+        }
+        "dsh" => {
+            // 多文件还原：每个 profile 的 patch + .env + credentials（快照按文件分组）。
+            // 主文件（第一个 profile）放列表末尾，与 plan_wire 的主文件保持同路径。
+            let home = crate::creds::home().ok_or("未找到用户目录")?;
+            let base_ours = super::wiring_dsh::current_base(&original).is_some_and(|base| is_gateway_value(&base));
+            let token_ours = crate::creds::home().and_then(|home| super::wiring_dsh::current_token(&home)).is_some_and(|token| token.starts_with("jolu-"));
+            if !base_ours && !token_ours {
+                return Ok(None);
+            }
+            let mut files = super::wiring_dsh::plan_unwire_files(&home, saved.as_ref())?;
+            if let Some(at) = files.iter().position(|(p, _)| *p == path) {
+                let (main_path, main_text) = files.remove(at);
+                files.push((main_path, main_text));
+            }
+            return Ok(Some(files.into_iter().map(|(p, t)| (p, t.into_bytes())).collect()));
         }
         other if super::wiring_extra::is_extra(other) => {
             let base_ours = super::wiring_extra::current_base(other, &original).is_some_and(|base| is_gateway_value(&base));

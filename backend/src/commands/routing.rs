@@ -647,20 +647,16 @@ pub(crate) fn gateway_lan_address() -> Option<String> {
     (!ip.is_loopback() && !ip.is_unspecified()).then(|| ip.to_string())
 }
 
-/// 模型路由概览（画板 V5-3 四项指标、Agent 页「今日路由」）：按请求而不是按流水行计。
+/// 模型路由概览（画板 V5-3 四项指标、V10-01 范围下拉、Agent 页「今日路由」）：
+/// 按请求而不是按流水行计。`range` 决定本期 / 上期的时间窗（today / yesterday / 7d / 30d），
+/// 未知值退回「今天」。
 #[tauri::command]
-pub(crate) fn gateway_day_overview(app: tauri::AppHandle) -> Result<crate::gateway::route_log::DayOverview, String> {
+pub(crate) fn gateway_day_overview(app: tauri::AppHandle, range: Option<String>) -> Result<crate::gateway::route_log::DayOverview, String> {
     let today = chrono::Local::now().date_naive();
-    let start = |day: chrono::NaiveDate| {
-        day.and_hms_opt(0, 0, 0)
-            .and_then(|midnight| midnight.and_local_timezone(chrono::Local).earliest())
-            .map(|midnight| midnight.timestamp_millis())
-            .unwrap_or(0)
-    };
-    let yesterday = today.pred_opt().unwrap_or(today);
+    let (current_start, prior_start) = crate::gateway::route_log::Range::parse(range.as_deref()).bounds(today);
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-    crate::gateway::route_log::day_overview(&conn, start(today), start(yesterday)).map_err(|error| error.to_string())
+    crate::gateway::route_log::day_overview(&conn, current_start, prior_start).map_err(|error| error.to_string())
 }
 
 /// 锁定 ZCode 连接的订阅通道（账号卡「订阅通道」切换）。

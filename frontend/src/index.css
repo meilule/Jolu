@@ -771,11 +771,20 @@ html.reduce-motion .agent-card:hover { transform: none; }
   .agent-card-grid { animation: none; }
 }
 
-/* 统一网关：复制成功对勾的弹出（沿用模型入口旧稿 OX4b7 的 pop 曲线）。 */
+/* 统一网关：复制成功对勾的弹出（沿用模型入口旧稿 OX4b7 的 pop 曲线）。
+   gw-pop / gw-pop-out 成对：弹层进入 160ms 淡入上移，退出 120ms 反向下沉淡出——
+   退出期间内容仍在 DOM（调用方延迟卸载），动画 fill 保持终态避免闪一下。
+   注意 .gw-pop / .gw-pop-out 是挂在弹层元素上的类；keyframes 只有名字，不挂不生效。 */
 @keyframes gw-pop {
   from { opacity: 0; transform: translateY(6px) scale(0.98); }
   to { opacity: 1; transform: none; }
 }
+.gw-pop { animation: gw-pop 160ms var(--motion-ease) both; }
+@keyframes gw-pop-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(4px) scale(0.98); }
+}
+.gw-pop-out { animation: gw-pop-out 120ms var(--motion-ease) both; }
 
 /* 统一网关 · 来源直连最近会话（画板 J6-03）：
    运行中 2.4px 主线 + 柔光，结束 220ms 淡为 1.4px；悬停 140ms / 退出 100ms；展开 240ms，箭头 160ms。

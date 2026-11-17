@@ -11,7 +11,7 @@ import {
 import type { RoutingGroupDto } from "@/components/gateway/routingGroups"
 import { agentLabel, canEscape, wiredCount } from "@/lib/gatewayPage"
 import { driftText } from "@/lib/agentPage"
-import { rateLimitedSources } from "@/lib/gatewayOverview"
+import { rateLimitedSources, type OverviewRange } from "@/lib/gatewayOverview"
 import { activeSessionRows, contextRisks } from "@/lib/contextSessions"
 import type { MainPage } from "@/lib/mainNavigation"
 import { useConnections } from "@/hooks/useConnections"
@@ -110,17 +110,24 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
   const [discovery, setDiscovery] = useState<AgentDiscoveryDto[]>([])
   const [dialog, setDialog] = useState<Dialog>(null)
   const operationLock = useRef(false)
+  /** 概览页的时间范围（V10-01 右上「今天」下拉）：切了就重新拉日概览，轮询沿用同一个值 */
+  const [dayRange, setDayRange] = useState<OverviewRange["id"]>("today")
+  const dayRangeRef = useRef<OverviewRange["id"]>("today")
+  dayRangeRef.current = dayRange
 
-  // 挂载、5 秒轮询、目录 / 连接事件、操作后都会调 refresh：只认最新一次的结果
+  // 挂载、5 秒轮询、目录 / 连接事件、操作、切换范围后都会调 refresh：只认最新一次的结果
   const refreshGate = useLatestGate()
   const refresh = useCallback(async () => {
     if (!isTauri) return
     const isLatest = refreshGate.begin()
+    // 范围是用户当前选的那个：切到「近 7 天」后，5 秒轮询也要继续取 7 天，不能落回今天。
+    // 用 ref 而不是把 range 放进依赖：放进去会让 useCallback 重建、轮询定时器跟着重装。
+    const range = dayRangeRef.current
     try {
       const [nextStatus, nextGroups, nextCatalog, nextCapabilities, nextSettings, nextDay, nextRows, nextContexts, nextRouting] = await Promise.all([
         gatewayApi.status(), gatewayApi.groups(), gatewayApi.catalog(), gatewayApi.sourceCapabilities(),
         invoke<{ gateway_shared_lan?: boolean }>("get_settings").catch(() => null),
-        gatewayApi.dayOverview().catch(() => null),
+        gatewayApi.dayOverview(range).catch(() => null),
         gatewayApi.routeLogPage(1, RECENT_ROWS, null).catch(() => null),
         gatewayApi.contextSessions().catch(() => null),
         gatewayApi.groupList().catch(() => [] as RoutingGroupDto[]),
@@ -299,7 +306,7 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
           <span className="flex-1" />
           <span className="shrink-0 text-meta text-jolu-muted">{wired} 个工具已接入</span>
           <button type="button" disabled={busy} onClick={() => toggleRunning(!running)}
-            className="flex h-10 shrink-0 items-center gap-2 rounded-lg border border-jolu-border px-4 text-meta font-medium text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
+            className="motion-button flex h-10 shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap rounded-lg border border-jolu-border bg-jolu-bg px-4 text-meta font-medium text-jolu-text outline-none hover:bg-jolu-stage active:bg-jolu-cc-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
             <StopGlyph on={running} />
             {running ? "停止中转" : "开启中转"}
           </button>
@@ -330,6 +337,13 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
         {tab === "overview" && !observing && (
           <OverviewPanel
             day={day}
+            range={dayRange}
+            onRange={(next) => {
+              setDayRange(next)
+              // 立即拉一次，不等 5 秒轮询；轮询随后沿用新范围
+              dayRangeRef.current = next
+              void refresh()
+            }}
             sessions={sessions.views}
             contexts={contexts}
             logRows={logRows}
@@ -442,24 +456,59 @@ interface MoreMenuItem {
 
 function MoreMenu({ items }: { items: MoreMenuItem[] }) {
   const [open, setOpen] = useState(false)
+  /** 退出动画期间保持渲染，120ms 后真正卸载（gw-pop-out 时长，与范围下拉一致） */
+  const [closing, setClosing] = useState(false)
+  const closeTimer = useRef<number | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const close = () => {
+    if (!open) return
+    setClosing(true)
+    if (closeTimer.current) window.clearTimeout(closeTimer.current)
+    closeTimer.current = window.setTimeout(() => {
+      setOpen(false)
+      setClosing(false)
+      closeTimer.current = null
+    }, 120)
+  }
+  useEffect(() => () => { if (closeTimer.current) window.clearTimeout(closeTimer.current) }, [])
+  // 点外与 Escape 关闭（automation/SkillPicker 同款）；菜单进入 gw-pop / 退出 gw-pop-out
+  useEffect(() => {
+    if (!open) return
+    const onDown = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) close()
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close()
+    }
+    document.addEventListener("mousedown", onDown)
+    document.addEventListener("keydown", onKey)
+    return () => {
+      document.removeEventListener("mousedown", onDown)
+      document.removeEventListener("keydown", onKey)
+    }
+  }, [open])
   return (
-    <>
-      <button type="button" aria-label="更多操作" aria-expanded={open} onClick={() => setOpen((value) => !value)}
-        className="flex h-10 w-11 items-center justify-center gap-1 rounded-lg border border-jolu-border outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
+    <div ref={rootRef} className="relative shrink-0">
+      <button type="button" aria-label="更多操作" aria-expanded={open} data-open={open} onClick={() => (open ? close() : setOpen(true))}
+        className={cn(
+          // 悬停用 jolu-stage：浅色主题 jolu-side 与 jolu-bg 同为 #ffffff，白上白无反馈
+          "motion-button flex h-10 w-11 cursor-pointer items-center justify-center gap-1 whitespace-nowrap rounded-lg border outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent",
+          open ? "border-jolu-accent/45 bg-jolu-side" : "border-jolu-border bg-jolu-bg hover:bg-jolu-stage active:bg-jolu-cc-pressed",
+        )}>
         <span className="text-meta font-semibold text-jolu-muted">···</span>
         <span className="text-meta font-medium text-jolu-text">更多</span>
       </button>
       {open && (
-        <div role="menu" className="absolute right-0 top-12 z-20 w-48 rounded-lg border border-jolu-border bg-jolu-bg p-1 shadow-lg">
+        <div role="menu" className={cn("absolute right-0 top-12 z-20 w-48 rounded-lg border border-jolu-border bg-jolu-bg p-1 shadow-[0_10px_24px_var(--jolu-cc-popup-shadow)]", closing ? "gw-pop-out" : "gw-pop")}>
           {items.map((item) => (
-            <button key={item.label} type="button" role="menuitem" onClick={() => { setOpen(false); item.onClick() }}
-              className={cn("w-full rounded-md px-2.5 py-1.5 text-left text-meta hover:bg-jolu-side", item.danger ? "text-jolu-danger" : "text-jolu-text")}>
+            <button key={item.label} type="button" role="menuitem" onClick={() => { close(); item.onClick() }}
+              className={cn("w-full cursor-pointer rounded-md px-2.5 py-1.5 text-left text-meta transition-colors hover:bg-jolu-stage active:bg-jolu-cc-pressed", item.danger ? "text-jolu-danger" : "text-jolu-text")}>
               {item.label}
             </button>
           ))}
         </div>
       )}
-    </>
+    </div>
   )
 }
 

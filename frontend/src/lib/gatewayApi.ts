@@ -530,9 +530,12 @@ export const gatewayApi = {
     invoke<RouteLogPageDto>("gateway_route_log_page", { page, pageSize, upperId }),
   /** 模型来源 → 最近会话：在途快照 + 经网关会话 + 权威 Token */
   sessionsOverview: () => invoke<SessionsOverviewDto>("gateway_sessions_overview"),
-  /** 今日（本地零点起）经网关的请求数 */
-  /** 模型路由概览：按请求计（改道的多次尝试算一次）；partial = 流水保留上限内的下限 */
-  dayOverview: () => invoke<DayOverviewDto>("gateway_day_overview"),
+  /**
+   * 模型路由概览：按请求计（改道的多次尝试算一次）；partial = 流水保留上限内的下限。
+   * `range` 是概览页的范围下拉（today / yesterday / 7d / 30d）：返回里 `today` 是**本期**、
+   * `yesterday` 是**上期**（见后端 `Range`），不传就是今天 vs 昨天。
+   */
+  dayOverview: (range?: string) => invoke<DayOverviewDto>("gateway_day_overview", { range: range ?? null }),
   /* ── V10 上下文观察 ── */
   contextSessions: () => invoke<ContextSessionRowDto[]>("gateway_context_sessions"),
   contextSnapshot: (platform: string, sessionId: string, snapshotId: number | null = null) =>

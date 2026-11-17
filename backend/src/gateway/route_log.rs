@@ -229,15 +229,19 @@ pub fn source_usage(conn: &Connection) -> rusqlite::Result<Vec<SourceUsage>> {
     rows.collect()
 }
 
-/// 模型路由概览（画板 V5-3「四项指标」与 Agent 页「今日路由 N」）。
+/// 模型路由概览（画板 V5-3「四项指标」、V10-01 范围下拉、Agent 页「今日路由 N」）。
 ///
 /// 一次网关请求在分组改道时会写多行（共享 `request_id`），这里按请求而不是按行计：
 /// - `today` / `yesterday`：请求数；
-/// - `reroutes`：今天写了不止一行的请求（失败后换下一个成员）；
-/// - `errors`：今天最后一次尝试仍不是 ok 的请求（Agent 真正收到的错误）；
-/// - `by_agent`：今天各 agent 的请求数（agent 未识别的不计）。
+/// - `reroutes`：本期写了不止一行的请求（失败后换下一个成员）；
+/// - `errors`：本期最后一次尝试仍不是 ok 的请求（Agent 真正收到的错误）；
+/// - `by_agent`：本期各 agent 的请求数（agent 未识别的不计）。
 ///
-/// 流水只保留最近 1000 行：最早一行晚于昨天零点时，`partial = true`，昨天与今天的数都是下限。
+/// **字段名沿用 `today` / `yesterday`，含义是「本期 / 上期」**（概览页的范围下拉）：
+/// 今天 → 本期今天 / 上期昨天；昨天 → 本期昨天 / 上期前天；近 7 天 → 本期 7 天 / 上期前 7 天；
+/// 近 30 天同理。前端文案按范围换称呼即可，计算不分叉。
+///
+/// 流水只保留最近 1000 行：最早一行晚于上期起点时，`partial = true`，两期数字都是下限。
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct DayOverview {
     pub today: i64,
@@ -246,8 +250,63 @@ pub struct DayOverview {
     pub errors: i64,
     pub by_agent: std::collections::BTreeMap<String, i64>,
     pub partial: bool,
-    /// 今天最近一次 Agent 收到的错误（最后一次尝试那行）
+    /// 本期最近一次 Agent 收到的错误（最后一次尝试那行）
     pub last_error: Option<RouteLogEntry>,
+}
+
+/// 概览页的时间范围（V10-01 右上「今天」下拉）。
+/// 每个范围给出「本期起点 + 上期起点」两个时间戳：上期用于「比上期」的对比与 `partial` 判断。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Range {
+    Today,
+    Yesterday,
+    Last7Days,
+    Last30Days,
+}
+
+impl Range {
+    /// 从命令参数解析；未知值退回「今天」（不让前端一个错字把页面变空）。
+    pub fn parse(value: Option<&str>) -> Self {
+        match value.unwrap_or("today").trim().to_ascii_lowercase().as_str() {
+            "yesterday" => Self::Yesterday,
+            "7d" | "last7" | "last7d" => Self::Last7Days,
+            "30d" | "last30" | "last30d" => Self::Last30Days,
+            _ => Self::Today,
+        }
+    }
+
+    /// 覆盖的天数（本期）。用于算上期起点。
+    fn days(self) -> i64 {
+        match self {
+            Self::Today | Self::Yesterday => 1,
+            Self::Last7Days => 7,
+            Self::Last30Days => 30,
+        }
+    }
+
+    /// 本期是否截止到今天；`false` 表示本期是「昨天 / 昨天往前 N 天」这类已结束的区间。
+    fn ends_today(self) -> bool {
+        matches!(self, Self::Today | Self::Last7Days | Self::Last30Days)
+    }
+
+    /// 本期起点与上期起点（本地时间自然日边界，毫秒）。
+    /// `today` 由调用方传入，便于测试固定日期。
+    pub fn bounds(self, today: chrono::NaiveDate) -> (i64, i64) {
+        let days = self.days();
+        // 本期覆盖的最后一个自然日
+        let end_day = if self.ends_today() { today } else { today.pred_opt().unwrap_or(today) };
+        let current_start = end_day - chrono::Duration::days(days - 1);
+        let prior_start = current_start - chrono::Duration::days(days);
+        (midnight_ms(current_start), midnight_ms(prior_start))
+    }
+}
+
+/// 本地时区某天 00:00 的毫秒时间戳；时区异常时退回 0（与既有实现一致）。
+fn midnight_ms(day: chrono::NaiveDate) -> i64 {
+    day.and_hms_opt(0, 0, 0)
+        .and_then(|midnight| midnight.and_local_timezone(chrono::Local).earliest())
+        .map(|midnight| midnight.timestamp_millis())
+        .unwrap_or(0)
 }
 
 pub fn day_overview(conn: &Connection, today_start: i64, yesterday_start: i64) -> rusqlite::Result<DayOverview> {
@@ -328,6 +387,48 @@ mod tests {
 
     fn db() -> Connection {
         crate::db::open(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    /// 范围下拉的各档时间窗：本期起点与上期起点必须连续、等长，且落在自然日零点。
+    #[test]
+    fn range_bounds_are_contiguous_equal_length_windows() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        let day = 86_400_000i64;
+        for range in [Range::Today, Range::Yesterday, Range::Last7Days, Range::Last30Days] {
+            let (current, prior) = range.bounds(today);
+            let span = current - prior;
+            assert_eq!(span, range.days() * day, "{range:?} 本期与上期长度不等");
+            assert!(prior < current, "{range:?} 上期应在本期之前");
+        }
+        // 具体边界：今天 → 本期今天 00:00，上期昨天 00:00
+        let (cur, prior) = Range::Today.bounds(today);
+        assert_eq!(cur, midnight_ms(today));
+        assert_eq!(prior, midnight_ms(today.pred_opt().unwrap()));
+        // 昨天 → 本期昨天 00:00，上期前天 00:00
+        let (cur, prior) = Range::Yesterday.bounds(today);
+        assert_eq!(cur, midnight_ms(today.pred_opt().unwrap()));
+        assert_eq!(prior, midnight_ms(today - chrono::Duration::days(2)));
+        // 近 7 天 → 含今天共 7 天，上期为之前 7 天
+        let (cur, prior) = Range::Last7Days.bounds(today);
+        assert_eq!(cur, midnight_ms(today - chrono::Duration::days(6)));
+        assert_eq!(prior, midnight_ms(today - chrono::Duration::days(13)));
+        // 近 30 天同理
+        let (cur, prior) = Range::Last30Days.bounds(today);
+        assert_eq!(cur, midnight_ms(today - chrono::Duration::days(29)));
+        assert_eq!(prior, midnight_ms(today - chrono::Duration::days(59)));
+    }
+
+    #[test]
+    fn range_parse_defaults_to_today_for_unknown_values() {
+        assert_eq!(Range::parse(None), Range::Today);
+        assert_eq!(Range::parse(Some("")), Range::Today);
+        assert_eq!(Range::parse(Some("today")), Range::Today);
+        assert_eq!(Range::parse(Some("YESTERDAY")), Range::Yesterday);
+        assert_eq!(Range::parse(Some("7d")), Range::Last7Days);
+        assert_eq!(Range::parse(Some("30d")), Range::Last30Days);
+        // 拼错不能把页面变空：退回今天
+        assert_eq!(Range::parse(Some("7days")), Range::Today);
+        assert_eq!(Range::parse(Some("week")), Range::Today);
     }
 
     #[test]

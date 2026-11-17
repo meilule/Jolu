@@ -8,7 +8,7 @@ import type { AgentDiscoveryDto, CustomAgentDto, WiringStatusDto } from "./gatew
 
 /** Jolu 能接线的工具（与后端 `wiring::AGENTS` 一致） */
 /** 有专用接线的工具（后端 `gateway/wiring.rs` 的 AGENTS；后四家在 `wiring_extra.rs`，5.11） */
-export const WIRABLE_AGENTS = ["claude-code", "codex", "gemini", "opencode", "zcode", "kimi", "pencil", "qoder", "qoder-cn", "crush"] as const
+export const WIRABLE_AGENTS = ["claude-code", "codex", "gemini", "opencode", "zcode", "kimi", "dsh", "pencil", "qoder", "qoder-cn", "crush"] as const
 
 /** 自定义工具（没有官方 logo）的首字母小方块；Jolu 支持的工具用官方 logo，见 `AgentBadge` */
 export function agentBadge(_agent: string, name: string): { bg: string; glyph: string } {
@@ -23,6 +23,7 @@ export const AGENT_PLATFORM: Readonly<Record<string, string>> = {
   opencode: "opencode",
   zcode: "zcode",
   kimi: "kimi",
+  dsh: "deepseek",
 }
 
 export type AgentGroup = "wired" | "available" | "blocked"
@@ -251,6 +252,12 @@ export function wireExplanation(agent: string): { icon: "file" | "shield" | "und
       return [
         { icon: "file", text: "在 Kimi 的 config.toml 里新增 provider「jolu」与一组「jolu/」开头的模型表，默认模型指向网关" },
         { icon: "shield", text: "你原有的 provider 与模型表原样保留；旧版 kimi-cli 会少写它不认识的键" },
+        undo,
+      ]
+    case "dsh":
+      return [
+        { icon: "file", text: "在 DeepSeek Harness 各 profile 的 cordis.patch.yml 里写路由「jolu」（网关模型目录生成模型清单）并把默认模型指向它，密钥写入 .env 与凭据引用" },
+        { icon: "shield", text: "你原有的供应商（如 hualong）与其它条目一行不动；你在 dsh 里改过的线协议会保留" },
         undo,
       ]
     case "pencil":
