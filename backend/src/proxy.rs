@@ -180,6 +180,7 @@ pub(crate) fn detached_deps(db: Arc<Mutex<rusqlite::Connection>>) -> Arc<ProxyDe
         cooldowns: None,
         claude_sessions: None,
         circuit_threshold: u32::MAX,
+        live_circuit_threshold: None,
         on_circuit: Arc::new(|_| {}),
         on_activity: Arc::new(|_, _| {}),
         gateway_auth_relaxed: true,
@@ -191,6 +192,9 @@ pub(crate) fn detached_deps(db: Arc<Mutex<rusqlite::Connection>>) -> Arc<ProxyDe
 pub(crate) fn running_port() -> Option<u16> {
     PROXY.lock().ok()?.as_ref().map(|runtime| runtime.port)
 }
+
+/// 每次读取都取当前值的设置项（生产实例从设置读，见 `start`）
+pub(crate) type LiveSetting<T> = Arc<dyn Fn() -> T + Send + Sync>;
 
 pub(crate) struct ProxyRuntime {
     pub port: u16,
@@ -215,7 +219,8 @@ pub(crate) struct ProxyDeps {
     pub(crate) on_fallback: Arc<dyn Fn(&str) + Send + Sync>,
     /// 网关模式：模型池索引（slug → 连接）与兜底连接。观测模式不使用。
     pub(crate) pool_index: Option<Mutex<crate::gateway::route::PoolIndex>>,
-    pub(crate) gateway_default_connection: Option<String>,
+    /// 默认来源：生产实例每次请求读当前设置（改了立即生效，不用重启模型路由）；测试为 None
+    pub(crate) gateway_default_connection: Option<LiveSetting<Option<String>>>,
     /// 网关模式：会话亲和表与连接冷却表（内存态，进程重启清空）。
     pub(crate) affinity: Option<Mutex<crate::gateway::route::Affinity>>,
     pub(crate) cooldowns: Option<Mutex<crate::gateway::route::Cooldowns>>,
@@ -223,6 +228,8 @@ pub(crate) struct ProxyDeps {
     pub(crate) claude_sessions: Option<Mutex<crate::gateway::adapter::claude::ClaudeSessions>>,
     /// 网关模式：连续失败阈值与熔断动作（与观测模式的回退计数相互独立）。
     pub(crate) circuit_threshold: u32,
+    /// 熔断阈值的实时值：生产实例读当前设置，测试为 None（用 `circuit_threshold`）
+    pub(crate) live_circuit_threshold: Option<LiveSetting<u32>>,
     pub(crate) on_circuit: Arc<dyn Fn(&str) + Send + Sync>,
     /// 网关模式：请求开始 / 结束的实时事件（灵动岛转发动效用，只带元数据）。
     pub(crate) on_activity: crate::gateway::activity::Emit,
@@ -246,7 +253,12 @@ impl ProxyDeps {
     }
 
     pub(crate) fn gateway_default_connection(&self) -> Option<String> {
-        self.gateway_default_connection.clone()
+        self.gateway_default_connection.as_ref().and_then(|read| read())
+    }
+
+    /// 连续失败多少次熔断（实时设置优先）
+    pub(crate) fn circuit_threshold(&self) -> u32 {
+        self.live_circuit_threshold.as_ref().map(|read| read()).unwrap_or(self.circuit_threshold)
     }
 }
 
@@ -862,8 +874,10 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
         } else {
             None
         },
+        // 2026-11-17：以前在启动时取快照，「设为默认来源」要重启模型路由才生效；改成每次请求读当前设置
         gateway_default_connection: if mode == crate::gateway::Mode::Relay {
-            settings.gateway_default_connection.clone()
+            let app = app.clone();
+            Some(Arc::new(move || app.state::<crate::Cfg>().0.get().gateway_default_connection))
         } else {
             None
         },
@@ -883,11 +897,15 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
             None
         },
         circuit_threshold: settings.gateway_circuit_threshold.max(1),
+        live_circuit_threshold: {
+            let app = app.clone();
+            Some(Arc::new(move || app.state::<crate::Cfg>().0.get().gateway_circuit_threshold.max(1)))
+        },
         on_circuit: {
             let app = app.clone();
-            let auto_escape = settings.gateway_auto_escape;
             Arc::new(move |reason: &str| {
-                if !auto_escape {
+                // 熔断那一刻读当前设置：自动逃生开关改了立即生效
+                if !app.state::<crate::Cfg>().0.get().gateway_auto_escape {
                     eprintln!("[网关] 连续失败达阈值，但自动逃生已关闭：{reason}");
                     return;
                 }
@@ -1257,6 +1275,7 @@ pub(crate) mod test_support {
             cooldowns: Some(Mutex::new(crate::gateway::route::Cooldowns::new())),
             claude_sessions: Some(Mutex::new(crate::gateway::adapter::claude::ClaudeSessions::new())),
             circuit_threshold: 5,
+            live_circuit_threshold: None,
             on_circuit: Arc::new(|_| {}),
             on_activity: Arc::new(|_, _| {}),
             // 测试固定走严格校验，保持 access.rs 既有 HTTP 用例的 401 语义。
@@ -1418,6 +1437,7 @@ mod tests {
             cooldowns: None,
             claude_sessions: Some(Mutex::new(crate::gateway::adapter::claude::ClaudeSessions::new())),
             circuit_threshold: 5,
+            live_circuit_threshold: None,
             on_circuit: Arc::new(|_| {}),
             on_activity: Arc::new(|_, _| {}),
             gateway_auth_relaxed: false,

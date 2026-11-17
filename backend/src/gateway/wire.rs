@@ -69,7 +69,7 @@ pub(crate) fn note_outcome(deps: &Arc<ProxyDeps>, failed: bool, reason: &str) {
         return;
     }
     let count = deps.consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
-    if count >= deps.circuit_threshold {
+    if count >= deps.circuit_threshold() {
         deps.consecutive_failures.store(0, Ordering::Relaxed);
         (deps.on_circuit)(reason);
     }

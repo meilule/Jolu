@@ -1,8 +1,8 @@
 //! CLI 写设置（5.5，`jolu settings set`）：只开放「用到时才读」的简单键——改了以后桌面端
 //! 2 秒内读回（`settings::Store::reload_external`）就能生效，不需要重启监听、改系统设置。
 //! 端口、开机自启、保持唤醒这类要做副作用的键不在白名单里，仍然在桌面端改。
-//! 网关的默认来源、熔断阈值、自动逃逸在模型路由启动时取一次快照（`proxy::start`），命令行改了要等
-//! 下次启动才生效，所以也不开放（2026-11-17 端到端验收时发现，原先误放在白名单里）。
+//! 网关的默认来源、熔断阈值、自动逃生原先在模型路由启动时取快照，改了要重启才生效；2026-11-17 改成
+//! 每次读当前设置后，阈值与自动逃生重新开放。默认来源要校验「正在对外服务」，走 [`set_default_source`]。
 //!
 //! 写法：拿文件锁（与桌面端同一把，`filelock`）→ 读 JSON → 只改这一个键 → 整份按 `Settings`
 //! 反序列化校验 → 临时文件 + 改名写回，并留 `.lastgood`。只改这一个键，别的内容（含搜索 Key 原文）原样保留。
@@ -36,6 +36,8 @@ pub const SETTABLE: &[Settable] = &[
     Settable { key: "notify_quota_alerts", kind: Kind::Bool, about: "额度提醒通知" },
     Settable { key: "privacy_masking", kind: Kind::Bool, about: "经网关的请求做隐私脱敏" },
     Settable { key: "zcode_free_first", kind: Kind::Bool, about: "ZCode 先试免费 Start Plan 通道" },
+    Settable { key: "gateway_auto_escape", kind: Kind::Bool, about: "网关连续失败时自动把工具切回直连" },
+    Settable { key: "gateway_circuit_threshold", kind: Kind::Int(1, 100), about: "连续失败几次后熔断" },
     Settable { key: "warmup_hour", kind: Kind::Int(0, 23), about: "每日 warm-up 的触发小时" },
     Settable { key: "balance_alert_threshold", kind: Kind::OptNumber, about: "余额提醒阈值（none = 关闭）" },
     Settable { key: "default_page", kind: Kind::Page, about: "主窗口默认打开的页面（last = 上次访问的）" },
@@ -92,6 +94,25 @@ pub fn get(directory: &Path, key: &str) -> Result<String, String> {
 pub fn set(directory: &Path, key: &str, raw: &str) -> Result<(String, String), String> {
     let item = settable(key).ok_or_else(|| format!("「{key}」不能用命令行改；`jolu settings list` 看可改的键"))?;
     let value = parse_value(item, raw)?;
+    write_key(directory, item.key, value)
+}
+
+/// 设默认来源（同桌面端「设为默认来源」的校验：只接受正在对外服务、有前缀的连接）；`None` 清除
+pub fn set_default_source(directory: &Path, conn: &rusqlite::Connection, id: Option<&str>) -> Result<(String, String), String> {
+    if let Some(id) = id {
+        let serving: Option<(String, Option<String>)> = conn
+            .query_row("SELECT name, slug FROM connections WHERE id = ?1 AND serve_enabled = 1", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .ok();
+        match serving {
+            None => return Err("该来源不在模型池中：先 `jolu provider serve <id> on`，再设为默认来源".into()),
+            Some((name, slug)) if slug.as_deref().unwrap_or("").is_empty() => return Err(format!("来源「{name}」还没有 id，无法作为默认来源")),
+            Some(_) => {}
+        }
+    }
+    write_key(directory, "gateway_default_connection", id.map(|id| Value::String(id.into())).unwrap_or(Value::Null))
+}
+
+fn write_key(directory: &Path, key: &str, value: Value) -> Result<(String, String), String> {
     let path = directory.join("settings.json");
     let _lock = crate::filelock::FileLock::acquire(&path, std::time::Duration::from_secs(5))?;
     let text = crate::steady::read_optional(&path)
@@ -99,8 +120,8 @@ pub fn set(directory: &Path, key: &str, raw: &str) -> Result<(String, String), S
         .ok_or("还没有设置文件：先启动一次 Jolu 桌面端")?;
     let mut root: Value = serde_json::from_str(&text).map_err(|e| format!("settings.json 不是有效 JSON：{e}"))?;
     let object = root.as_object_mut().ok_or("settings.json 顶层不是对象")?;
-    let before = display(object.get(item.key));
-    object.insert(item.key.to_string(), value.clone());
+    let before = display(object.get(key));
+    object.insert(key.to_string(), value.clone());
     // 整份按桌面端的结构体校验一遍：类型不对的值不会写进去让桌面端读不出
     serde_json::from_value::<crate::settings::Settings>(root.clone()).map_err(|e| format!("写入后设置读不出来，已放弃：{e}"))?;
     let bytes = serde_json::to_vec_pretty(&root).map_err(|e| e.to_string())?;
@@ -150,6 +171,20 @@ mod tests {
         assert!(set(&dir, "gateway_default_connection", "c1").unwrap_err().contains("不能用命令行改"), "网关启动时快照的键不开放");
         assert_eq!(set(&dir, "balance_alert_threshold", "12.5").unwrap().1, "12.5");
         assert_eq!(set(&dir, "default_page", "last").unwrap().1, "last");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn default_source_must_be_serving_and_have_a_prefix() {
+        let dir = dir("default");
+        std::fs::write(dir.join("settings.json"), "{}").unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE connections (id TEXT, name TEXT, slug TEXT, serve_enabled INTEGER);
+            INSERT INTO connections VALUES ('a','A','a-slug',1),('b','B','b-slug',0),('c','C','',1);").unwrap();
+        assert_eq!(set_default_source(&dir, &conn, Some("a")).unwrap().1, "a");
+        assert!(set_default_source(&dir, &conn, Some("b")).unwrap_err().contains("不在模型池"));
+        assert!(set_default_source(&dir, &conn, Some("c")).unwrap_err().contains("还没有 id"));
+        assert_eq!(set_default_source(&dir, &conn, None).unwrap(), ("a".into(), "（未设置）".into()));
         let _ = std::fs::remove_dir_all(dir);
     }
 

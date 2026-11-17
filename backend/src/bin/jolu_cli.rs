@@ -83,6 +83,7 @@ jolu — Jolu 命令行
   jolu provider add <平台> <名称> [--base-url 地址] [--protocol openai|anthropic] [--model 模型] [--service 服务]
                                   加一个 API Key 连接；Key 从标准输入读，如 `echo sk-... | jolu provider add custom 我的网关 ...`
   jolu provider serve <连接 id> on|off  加入 / 移出模型池（对外服务）
+  jolu provider default <连接 id>|none  设默认来源（无前缀的模型名走它）
   jolu provider rm <连接 id>      删除连接（历史统计保留）
   jolu save <名称>                把当前接线存成 Profile（由运行中的桌面端执行）
   jolu use <名称>                 切换到一个 Profile（由运行中的桌面端执行）
@@ -443,6 +444,15 @@ async fn provider(args: &[String]) -> Result<(), String> {
             println!("{id} 已{}模型池（立即生效）", if on { "加入" } else { "移出" });
             Ok(())
         }
+        "default" => {
+            let id = args.get(1).ok_or("用 `jolu provider default <连接 id>|none`")?;
+            let conn = open_database()?;
+            let directory = paths::config_directory()?;
+            let id = (id != "none").then_some(id.as_str());
+            let (before, after) = jolu_lib::service::settings_write::set_default_source(&directory, &conn, id)?;
+            println!("默认来源：{before} → {after}（桌面端 2 秒内读回，模型路由不用重启）");
+            Ok(())
+        }
         "rm" => {
             let id = args.get(1).ok_or("用 `jolu provider rm <连接 id>`")?;
             let conn = jolu_lib::db::open(&database).map_err(|e| e.to_string())?;
@@ -450,7 +460,7 @@ async fn provider(args: &[String]) -> Result<(), String> {
             println!("已删除连接 {id}（历史统计保留）");
             Ok(())
         }
-        other => Err(format!("未知 provider 动作「{other}」：用 list / add / serve / rm")),
+        other => Err(format!("未知 provider 动作「{other}」：用 list / add / serve / default / rm")),
     }
 }
 
