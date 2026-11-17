@@ -58,7 +58,11 @@ jolu — Jolu 命令行
 用法：
   jolu status                     网关总览（模式、端口、接线状态）
   jolu catalog [--json]           模型目录（连接已接入的模型 + 路由分组）
-  jolu group list                 来源分组与 Agent 分组
+  jolu group list                 路由分组、来源分组与 Agent 分组
+  jolu group add <分组> <策略> <来源/模型>…
+                                  新建路由分组（策略 order|rotate|usage|smart|pace，立即生效）
+  jolu group set <分组> <来源/模型>…  整体替换成员
+  jolu group rm <分组>            删除路由分组
   jolu keys                       命名客户端 Key（只有掩码，没有原文）
   jolu quota <连接 id>            查一个连接的额度
   jolu restore                    把已接线 agent 的配置还原到接线前（卸载/排障用）
@@ -78,7 +82,7 @@ jolu — Jolu 命令行
 
 搜索后端与 Key 在桌面端 settings.json 的 search_apis 里配置。
 说明：
-  除 restore、library install/remove、settings set 与 claude run 外，子命令只读桌面端已有数据，不会启动网关监听。"
+  除 restore、library install/remove、group add/set/rm、settings set 与 claude run 外，子命令只读桌面端已有数据，不会启动网关监听。"
     );
 }
 
@@ -144,13 +148,45 @@ fn catalog(args: &[String]) -> Result<(), String> {
 }
 
 fn group(args: &[String]) -> Result<(), String> {
+    use jolu_lib::service::gateway::route_groups;
     let action = args.first().map(String::as_str).unwrap_or("list");
-    if action != "list" {
-        return Err(format!(
-            "分组只支持只读的 `jolu group list`（写操作请在桌面端做），收到「{action}」"
-        ));
+    let write_db = || -> Result<rusqlite::Connection, String> {
+        let (_, database) = paths::locate()?;
+        jolu_lib::db::open(&database).map_err(|e| e.to_string())
+    };
+    let show = |group: &route_groups::RouteGroupView| println!("group/{:<20} {:<7} {}", group.slug, group.strategy, group.members.join(" → "));
+    match action {
+        "list" => {}
+        "add" => {
+            let (Some(slug), Some(strategy)) = (args.get(1), args.get(2)) else {
+                return Err("用 `jolu group add <分组> <order|rotate|usage|smart|pace> <来源/模型>…`".into());
+            };
+            let group = route_groups::add(&write_db()?, slug, strategy, &args[3..])?;
+            print!("已建：");
+            show(&group);
+            return Ok(());
+        }
+        "set" => {
+            let Some(slug) = args.get(1) else { return Err("用 `jolu group set <分组> <来源/模型>…`".into()) };
+            let group = route_groups::set_members(&write_db()?, slug, &args[2..])?;
+            print!("已更新：");
+            show(&group);
+            return Ok(());
+        }
+        "rm" => {
+            let Some(slug) = args.get(1) else { return Err("用 `jolu group rm <分组>`".into()) };
+            route_groups::remove(&write_db()?, slug)?;
+            println!("已删除 group/{slug}");
+            return Ok(());
+        }
+        other => return Err(format!("未知 group 动作「{other}」：用 list / add / set / rm")),
     }
     let conn = open_database()?;
+    println!("路由分组：");
+    for group in route_groups::list(&conn)? {
+        print!("  ");
+        show(&group);
+    }
     let all = gateway::groups::list(&conn)?;
     println!("来源分组：");
     for group in &all.sources {

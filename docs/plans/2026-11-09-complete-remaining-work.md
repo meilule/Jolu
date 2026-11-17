@@ -193,7 +193,8 @@
     - `jolu settings list|get|set`（`service/settings_write.rs`）只开放 13 个「用到时才读」的键（免打扰、通知、脱敏、网关熔断阈值与默认连接、warm-up 小时、默认页面等），只改这一个键、整份按 `Settings` 校验后原子写回，别的内容（含搜索 Key 原文）原样保留；端口、开机自启、保持唤醒等要做副作用的键仍在桌面端改。
     - `jolu claude run [--model <模型>] [参数…]`（`service/launch.rs`，参照 magpie `claude_launch_cli.go`）：写数据目录里的 `claude-launch.json`（env 指向本机网关 + `jolu-claude-code.<实例>` 令牌），用 `claude --settings` 启动；`--settings` 优先级高于用户 / 项目设置（Context7 核对 Claude Code `SettingsSource`），不改 `~/.claude/settings.json`。启动前检查模型路由开着且端口在听。
     - 隔离目录冒烟：`settings set` 改值、越界与非白名单键拒绝、`claude run` 在路由未开时说明原因；单测 9 条。
-  - [ ] 未做（待确认）：`provider add`（要走桌面端的凭据加密与校验流程）、`group add`（网关进程内缓存分组，需要通知桌面端重载）、`save` / `use`（Profile 切换会改接线与设置，副作用多）、`serve`（无界面跑网关，网关现依赖 Tauri 的 AppHandle）
+  - [x] 2026-11-17 第二批：`jolu group add <分组> <策略> <来源/模型>…` / `set` / `rm`（`service/gateway/route_groups.rs`），沿用 `routing_groups` 的校验（重名、嵌套成环、成员非空）；网关每次请求从库里读分组，写入即生效；「按意图」要判定模型，只在桌面端建。隔离目录冒烟通过，单测 2 条
+  - [ ] 未做（待确认）：`provider add`（要走桌面端的凭据加密与校验流程）、`save` / `use`（Profile 切换会改接线与设置，副作用多）、`serve`（无界面跑网关，网关现依赖 Tauri 的 AppHandle）
 - [ ] 5.6 WSL 接线写入（G10 剩余 / P2-6）
 - [ ] 5.7 TUI 与 Web 管理界面（G6）
 - [ ] 5.8 远程网关（G7）、Docker 镜像（G8）、系统服务（N12）

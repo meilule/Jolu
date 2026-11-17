@@ -36,6 +36,8 @@ pub mod gateway {
     pub mod groups;
     pub mod middleware;
     pub mod quota;
+    /// 路由分组（`group/<slug>`）的命令行增删改（5.5）
+    pub mod route_groups;
     pub mod status;
     /// 无 Tauri 上下文的接线还原（卸载钩子与 CLI 用）。
     pub mod wiring_restore;
