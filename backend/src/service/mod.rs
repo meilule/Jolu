@@ -27,6 +27,7 @@ pub mod paths;
 pub mod providers;
 pub mod settings;
 pub mod settings_write;
+pub mod tune;
 
 pub mod gateway {
     //! 统一网关相关的服务函数。与 `crate::gateway`（协议与路由实现）区分：

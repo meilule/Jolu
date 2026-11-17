@@ -1,6 +1,7 @@
 import { invoke, isTauri, type AppSettings } from "./api"
 import type { FileOutcomeDto, LibrarySharedStateDto, SubagentDto } from "./librarySharedView"
 import type { WslWiringStateDto } from "./wslWiring"
+import type { TuneAgentDto } from "./tuneAdvice"
 import type { DefaultPage, MainPage } from "./mainNavigation"
 import type { WarmupOutcomeDto } from "./events"
 import type { Density } from "./appearance"
@@ -85,6 +86,8 @@ export const settingsApi = {
   wslWire: (distro: string, agent: string) => invoke<string>("wsl_wire", { distro, agent }),
   /** 5.6：断开并还原 WSL 里的一个工具，撤销专用 Key */
   wslUnwire: (distro: string, agent: string) => invoke<string>("wsl_unwire", { distro, agent }),
+  /** 5.10：按最近 days 天的调用回放，给压缩窗口与缓存时长建议（只读） */
+  tuneAdvice: (days: number) => invoke<TuneAgentDto[]>("tune_advice", { days }),
 }
 
 /** OTLP 导出结果：成功时带上实际请求的地址与数据点数 */

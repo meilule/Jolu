@@ -28,6 +28,7 @@ mod connections;
 mod creds;
 mod cli_switch;
 pub mod cli_requests;
+pub mod tune;
 pub(crate) mod filelock;
 // 连接归因：把请求指到已存连接上（exact / mapped / platform 三档），见模块头注释
 mod attribution;
@@ -1899,6 +1900,7 @@ pub fn run() {
             agent_discover,
             wsl_probe_agents,
             wsl_wiring_state,
+            tune_advice,
             wsl_wire,
             wsl_unwire,
             otlp_export_usage,

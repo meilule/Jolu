@@ -46,6 +46,7 @@ async fn run(args: &[String]) -> Result<(), String> {
         "library" => library(rest).await,
         "settings" => settings_cmd(rest),
         "claude" => claude(rest),
+        "tune" => tune(rest),
         "provider" | "providers" => provider(rest).await,
         "save" => desktop_request("profile_save", rest.first().map(String::as_str), "用 `jolu save <名称>` 把当前接线存成 Profile"),
         "use" => desktop_request("profile_use", rest.first().map(String::as_str), "用 `jolu use <名称>` 切换到一个 Profile"),
@@ -85,6 +86,7 @@ jolu — Jolu 命令行
   jolu save <名称>                把当前接线存成 Profile（由运行中的桌面端执行）
   jolu use <名称>                 切换到一个 Profile（由运行中的桌面端执行）
   jolu serve                      让运行中的桌面端开启模型路由
+  jolu tune [--days 天数]         按最近的真实调用回放，建议压缩窗口与缓存时长（只给建议，不改配置）
   jolu claude run [--model <模型>] [claude 的参数…]
                                   让这一次的 Claude Code 走 Jolu 模型路由（不改 ~/.claude/settings.json）
 
@@ -466,6 +468,48 @@ fn claude(args: &[String]) -> Result<(), String> {
         .status()
         .map_err(|e| format!("启动 {} 失败：{e}", launch.exe.display()))?;
     std::process::exit(status.code().unwrap_or(1));
+}
+
+fn tune(args: &[String]) -> Result<(), String> {
+    let days = match args {
+        [] => 30,
+        [flag, n] if flag == "--days" => n.parse::<i64>().map_err(|_| "--days 后面写天数".to_string())?,
+        _ => return Err("用 `jolu tune [--days 天数]`".into()),
+    };
+    let conn = open_database()?;
+    let advice = jolu_lib::service::tune::advise(&conn, days, now_ms())?;
+    let k = |n: i64| format!("{}K", (n + 500) / 1000);
+    let save = |cost: f64, low: f64| if cost > 0.0 { format!("{:.0}%", (cost - low) / cost * 100.0) } else { "0%".into() };
+    if advice.is_empty() {
+        println!("最近 {days} 天没有 Claude Code / Codex 的调用记录。");
+    }
+    for agent in &advice {
+        let name = if agent.platform == "claude" { "Claude Code" } else { "Codex" };
+        println!("■ {name}：最近 {days} 天 {} 次调用", agent.calls);
+        if agent.compactions.is_empty() {
+            println!("  压缩窗口：调用太少（每个模型至少 {} 次）或从没接近窗口，暂不建议", jolu_lib::tune::MIN_CALLS);
+        }
+        for c in &agent.compactions {
+            let current = match agent.compact_setting { Some(_) => format!("现在 {}", k(c.current)), None => format!("现在约 {}（没设，按压缩点推断）", k(c.current)) };
+            if c.best == c.current {
+                println!("  {} 压缩窗口：{current}，保持即可（{} 次调用，{} 个会话，压缩 {} 次）", c.model, c.facts.calls, c.facts.streams, c.facts.compacts);
+            } else {
+                let window = if c.window > 0 { String::new() } else { "；模型窗口未知，建议值可能超过它，改前先核对".into() };
+                println!("  {} 压缩窗口：{current} → 建议 {}，加权 Token 省 {}（{} 次调用，压缩 {} 次{window}）", c.model, k(c.best), save(c.cost, c.low), c.facts.calls, c.facts.compacts);
+            }
+        }
+        if let Some(t) = &agent.cache {
+            let inferred = if t.current_inferred { "（Jolu 记录里没有 1 小时写入的拆分，按 5 分钟推断）" } else { "" };
+            let gaps = format!("间隔 5 分钟内 {:.0}%、5 分钟到 1 小时 {:.0}%", t.facts.quick * 100.0, t.facts.pause * 100.0);
+            if t.best == t.current {
+                println!("  提示词缓存：{}{inferred}，保持即可（{gaps}）", t.current);
+            } else {
+                println!("  提示词缓存：{}{inferred} → 建议 {}，加权 Token 省 {}（{gaps}）", t.current, t.best, save(t.cost, t.low));
+            }
+        }
+    }
+    println!("说明：结论只按你这台电脑这段时间的调用回放得出；改设置请在工具自己的配置里改。");
+    Ok(())
 }
 
 fn quota(args: &[String]) -> Result<(), String> {

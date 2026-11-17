@@ -35,6 +35,18 @@ pub(crate) async fn wsl_probe_agents() -> Result<wsl_probe::WslProbe, String> {
         .map_err(|error| format!("探测 WSL 失败：{error}"))
 }
 
+/// 5.10 成本调优建议（只读，不改任何工具配置；无画板，待确认）
+#[tauri::command]
+pub(crate) async fn tune_advice(app: tauri::AppHandle, days: i64) -> Result<Vec<crate::tune::AgentAdvice>, String> {
+    let db = app.state::<Db>().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db.lock().map_err(|_| "数据库不可用".to_string())?;
+        crate::service::tune::advise(&conn, days, chrono::Utc::now().timestamp_millis())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// 5.6 WSL 接线现状：发行版的网络模式与已接的工具（无画板，待确认）
 #[derive(serde::Serialize)]
 pub(crate) struct WslWiringState {
