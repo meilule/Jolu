@@ -18,6 +18,9 @@ export function CompressDialog({session,onClose,onResult}: {session:SessionItemD
   const [models,setModels]=useState<string[]>([])
   const [target,setTarget]=useState('Claude Code')
   const [focus,setFocus]=useState('')
+  // D-34（无画板，待确认）：在原工具里分叉。只有 Claude Code / Codex 会话可选，且要用原工具的账号
+  const [channel,setChannel]=useState<'isolated'|'fork'>('isolated')
+  const canFork=session.platform==='claude'||session.platform==='codex'
   const project=projectName(session.cwd)
   const [name,setName]=useState(()=>handoffFileName(project,'','Claude',new Date()))
   const manualName=useRef(false)
@@ -57,6 +60,7 @@ export function CompressDialog({session,onClose,onResult}: {session:SessionItemD
   const selected=accounts.find(a=>a.id===connection)
   useEffect(()=>{let active=true;setModel('');setModels([]);if(selected&&isTauri)void automationApi.models(selected.platform as 'claude'|'codex',selected.id).then(values=>{if(active)setModels(values)}).catch(e=>{if(active)setError(String(e))});return()=>{active=false}},[connection])
   const mode=state?dialogMode(state):null
+  const forkBlocked=channel==='fork'&&!!selected&&selected.platform!==session.platform
   const close=()=>chat?setConfirm(true):onClose()
   const cancel=async()=>{try{if(job.current)await handoffApi.cancel(job.current);job.current=null;onClose()}catch(e){setError(String(e))}}
   const start=async()=>{
@@ -71,7 +75,7 @@ export function CompressDialog({session,onClose,onResult}: {session:SessionItemD
       await ready.current
       if(job.current)await handoffApi.cancel(job.current)
       job.current=null;buffer.current=[];starting.current=true;setItems([]);setDrafts([]);setRound(0);setChat(true);instruction.current=''
-      const id=await handoffApi.start(session.platform,session.session_id,connection,model||null,focus,target)
+      const id=await handoffApi.start(session.platform,session.session_id,connection,model||null,focus,target,channel)
       if(!alive.current){await handoffApi.cancel(id);return}
       job.current=id;starting.current=false
       for(const event of buffer.current)if(event.job_id===id)accept(event.event)
@@ -102,13 +106,16 @@ export function CompressDialog({session,onClose,onResult}: {session:SessionItemD
         <p>{mode==='unreadable'?'无法仅凭 Token 数与会话标题生成可靠的开发交接。':mode==='reuse'?'本次只调整文档包装，主体事实和任务进度沿用有效摘要。':`本次整理第 ${state.new_range?.join('–')??`1–${state.total}`} 条消息，已有纪要覆盖 ${state.digest_covered_to} 条。`}</p>
       </HandoffNotice>}
       {mode!=='reuse'&&mode!=='unreadable'&&<><div className="grid grid-cols-2 gap-4"><label className="text-xs text-jolu-muted">执行压缩的 AI<SelectField label="执行压缩的 AI" className="mt-1.5 h-10 w-full" value={connection} onValueChange={setConnection} options={[{value:'',label:'选择可用连接'},...accounts.map(a=>({value:a.id,label:a.name,disabled:!a.current||a.status!=='connected',description:!a.current?'需为 CLI 当前登录账号':a.status!=='connected'?'连接不可用':undefined}))]} /></label><label className="text-xs text-jolu-muted">压缩模型<SelectField label="压缩模型" className="mt-1.5 h-10 w-full" value={model} onValueChange={setModel} options={[{value:'',label:'默认模型'},...models.map(id=>({value:id,label:id}))]} /></label></div><p className="text-[12px] leading-5 text-jolu-muted">预计发送约 {formatTokens(state?.estimate_tokens??0)} token · 将会话内容发送给所选 AI。没有可用连接时暂不能压缩新增消息，保留上次摘要。</p></>}
+      {canFork&&<label className="text-xs text-jolu-muted">生成方式（待确认）<SelectField label="生成方式" className="mt-1.5 h-10 w-full" value={channel} onValueChange={value=>setChannel(value as 'isolated'|'fork')} options={[{value:'isolated',label:'Jolu 整理：所选 AI 读整理后的会话'},{value:'fork',label:`在原工具里分叉：${session.platform==='claude'?'Claude Code':'Codex'} 读完整原会话`}]} />
+        {channel==='fork'&&<p className={`mt-1.5 ${forkBlocked?'text-jolu-danger':'text-jolu-muted'}`}>{forkBlocked?`在原工具里分叉只能用 ${session.platform==='claude'?'Claude Code':'Codex'} 的账号，请在上面换一个账号。`:'续接原会话的分叉副本，不改原会话、也不留下新会话；会读完整原会话，消耗原工具的额度。'}</p>}
+      </label>}
       <div className="grid grid-cols-2 gap-4"><label className="text-xs text-jolu-muted">交接给<SelectField label="交接给" className="mt-1.5 h-10 w-full" value={target} onValueChange={setTarget} options={HANDOFF_TARGETS.map(t=>({value:t,label:t}))} /></label><label className="text-xs text-jolu-muted">交接主题<input className={handoffInput} value={focus} onChange={e=>setFocus(e.target.value)} placeholder="接手后要做什么（可留空）"/></label></div>
       <label className="text-xs text-jolu-muted">文件名（可修改）<input className={handoffInput} value={name} onChange={e=>{manualName.current=true;setName(e.target.value)}}/></label>
       {fileNameError(name)&&<p className="text-xs text-jolu-danger">{fileNameError(name)}</p>}
       <div className="rounded-lg border border-jolu-border p-4 text-xs leading-6 text-jolu-muted"><p className="font-medium text-jolu-text">这份 MD 会包含</p>项目目标与约束 · 当前开发进度 · 已完成改动<br/>关键文件与决策 · 验证结果 · 待办与下一步执行建议</div>
       <p className="text-xs text-jolu-muted">原始会话保持完整；交接文档按当前目标整理，过时结论以新消息为准。</p>
       {!isTauri&&<HandoffNotice>浏览器预览不调用模型；请在桌面应用中执行压缩。</HandoffNotice>}
-      <div className="flex justify-end gap-2">{(mode==='unreadable'||!!error)&&<button className={handoffButton} onClick={()=>void reload()}>重新读取会话</button>}<button className={handoffButton} onClick={onClose}>取消</button>{mode!=='unreadable'&&mode!=='reuse'&&<button className={handoffButton} disabled={busy||!isTauri||!state||!!fileNameError(name)} title="不调用任何模型，直接摘出原文与结构化事实；不是模型压缩" onClick={()=>void localExport()}>本地交接导出（不调用模型）</button>}<button className={handoffPrimary} disabled={busy||!isTauri||!state||mode==='unreadable'||!!fileNameError(name)||(mode!=='reuse'&&(!selected?.current||selected.status!=='connected'))} onClick={()=>void start()}>{mode==='reuse'?'直接生成 MD':'压缩并生成 MD'}</button></div>
+      <div className="flex justify-end gap-2">{(mode==='unreadable'||!!error)&&<button className={handoffButton} onClick={()=>void reload()}>重新读取会话</button>}<button className={handoffButton} onClick={onClose}>取消</button>{mode!=='unreadable'&&mode!=='reuse'&&<button className={handoffButton} disabled={busy||!isTauri||!state||!!fileNameError(name)} title="不调用任何模型，直接摘出原文与结构化事实；不是模型压缩" onClick={()=>void localExport()}>本地交接导出（不调用模型）</button>}<button className={handoffPrimary} disabled={busy||!isTauri||!state||mode==='unreadable'||!!fileNameError(name)||(mode!=='reuse'&&(!selected?.current||selected.status!=='connected'||forkBlocked))} onClick={()=>void start()}>{mode==='reuse'?'直接生成 MD':'压缩并生成 MD'}</button></div>
     </>}
     {error&&<HandoffNotice danger>{error}</HandoffNotice>}
   </HandoffShell>
