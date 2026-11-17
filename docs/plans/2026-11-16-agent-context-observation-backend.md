@@ -1,7 +1,7 @@
 # Agent 上下文观察后端实现执行文档
 
 日期：2026-11-16
-状态：待执行
+状态：第 1 期已完成（2026-11-17，见第 8 节「第 1 期完成情况」）；第 2–4 期待执行
 范围：后端新增「请求上下文快照」采集与查询；前端 V10 画板已由鼠鼠完成，本文只讲后端。
 读者：接手执行的同事。
 
@@ -255,6 +255,39 @@ V10-05 要求每条工具结果有「已脱敏摘要」：
 - 建 `context/` 模块，实现**四协议**解析（Anthropic / Chat / Responses / Gemini 原生）、八类归类、估算；
 - 用**真实请求体样本**做单测（Claude Code / Codex / ZCode / Gemini CLI 各抓一份，脱敏后放测试 fixture）；
 - 验收：对样本跑解析，打印八类 token 与占比；**`unknown` 占比超过 20% 说明规则没覆盖，要先补规则**。
+
+**执行前核对（2026-11-17，magpie `40f7de24`，比调查时的 `e9dd8e8` 新 3500+ 提交）**
+
+按 §0 第 4 条先记差异：
+
+1. 函数都还在 `internal/gateway/prompt.go`，行号整体后移：`promptOf` 314、`calibrate` 340、`memoryTag` 391、`splitMemory` 411、`splitSkills` 452、`harnessName` 470、`systemText` 482、`userText` 496、`filesOfCommand` 534、`callOf` 581、`result` 627、`tool` 656、`anthropic` 696、`responses` 868、`chatCompletions` 1072、`gemini` 1146、`calibrated` 1233。
+2. 图片估算现在是常量 `imageTokens = 1600`（约等于 Anthropic 对 1092×1092 图片的计数），不再是 `imgPiece` 里的值；`imgPiece` 只是保存图片源。
+3. **Gemini 的 `thought` 段**：§4.1 写的「不计入会话正文」与 magpie 不符。magpie 是把 `model` 角色里带 `thought` 的段落按 `thinking` 角色**计入 chat**。§4.1 让核对的 `gemini_thought_tag_test.go` 测的是**回复流**里的 `<thought>` 标签，与请求上下文解析无关。按 magpie 实现：计入 chat。
+4. **超出 24 项的汇总**：magpie 非对话类汇总为 `{name:"other", tag:"more"}`，对话类保留最近的轮次、把更早的汇总为 `{name:"earlier", tag:"turns"}`。§3.2 写的是 `{"name":"more","n":N}`。按 §3.2 用 `name:"more"`（tag 也是 `more`）；对话类沿用 magpie 的 `earlier` / `turns`。
+5. **次数 `n`**：magpie 只在 `mcp` / `namespace` / `result` 三种 tag 上保留次数，且次数为 1 时不写。§3.2 示例里工具定义带 `n:42` 与此不符；按 magpie，工具定义只有 MCP 服务器 / 命名空间才带 `n`（它下面的工具数）。
+6. **`unknown` 的口径**：magpie 把认不出的块、条目一律当作对话（`chat`）。Jolu 改为：内容块 / 条目的 `type` 不认识、消息角色不认识的，归 `unknown`；协议本身认识但内容空的不记。JSON 结构本身的开销不算任何一类（校准时由上游实测吸收）。
+7. **样本**：magpie 的 `testdata/context/claude-code.json`、`codex.json` 是真实请求结构、正文换成等长填充，MIT 许可，注明出处后作为多轮样本使用。另外用本机当前版本的 Claude Code 2.1.326、Codex 0.169.0、OpenCode 1.19.5（Chat）、Gemini CLI 0.68.0 在隔离目录里各抓一份带工具调用与结果的真实请求，正文做同样的等长填充、去掉本机路径后存为测试样本。ZCode 是桌面应用，抓真实请求要改它的配置，第 1 期不抓；它走 Anthropic Messages，由 Claude Code 样本覆盖协议。
+8. 模块命名用 §4 的第一方案 `backend/src/gateway/context/`。
+9. **发布版是 `panic = "abort"`**（`backend/Cargo.toml` 的 `[profile.release]`）。§6「任何 panic 降级为 unsupported」在发布版做不到：`catch_unwind` 只在测试与调试构建里生效，发布版一旦 panic 整个进程退出。所以解析层本身必须不 panic，第 2 期接入时不能指望兜底。
+10. 本机抓到的请求与 magpie 的规则对不上的地方，Jolu 补了规则（magpie 没覆盖这些工具的新版格式）：
+    - Gemini CLI 的指令文件写作 `--- Context from: <路径> ---` … `--- End of Context from: <路径> ---`，记为 memory；
+    - OpenCode 与 Gemini CLI 的技能列表是 `<available_skills>…</available_skills>` 块，记为 skills；
+    - Gemini CLI 以用户身份发的 `<session_context>` 是 harness 上下文，记为 system，不算用户说话；
+    - Codex 的 `# AGENTS.md instructions for <目录>` 里有 `--- project-doc ---` 时，前半是 `$CODEX_HOME/AGENTS.md`（user），后半是项目的；没有分隔时沿用 magpie，整段算项目的；
+    - 先拆技能列表、再拆指令文件（magpie 相反）。OpenCode 把技能块直接接在最后一个指令文件后面，先拆指令文件会把技能算进 memory；
+    - 描述里带 auto-memory 的指令文件算 memory。magpie 先判断 user's，Claude Code 的 MEMORY.md 描述是 `user's auto-memory`，会被它误判为 user；
+    - Windows 路径（`\.claude\` 等）和 `.gemini` 目录同样按用户目录认。
+
+#### 第 1 期完成情况（2026-11-17）
+
+- 代码：`backend/src/gateway/context/`。`mod.rs` 提供 `parse(protocol, body) -> Option<Prompt>`，其余文件是 `parts.rs`、`estimate.rs`、`text.rs`、`calls.rs` 和 `anthropic.rs` / `responses.rs` / `chat.rs` / `gemini.rs`。`Prompt::calibrated` 已实现：校准后的总量等于上游实测量，原估算保留在 `estimated` 字段，用来提示偏差。还没有接到网关，也不落库。
+- 样本：`backend/src/gateway/context/testdata/` 下共 14 个请求体。每种协议至少 3 个真实请求：本机抓的 12 个，加上 magpie 的 2 个。来源与生成方法见该目录的 `README.md`。抓取脚本为 `scripts/acceptance/context-capture.mjs` 与 `context-capture-upstream.py`，脱敏脚本为 `context-sample-sanitize.py`。
+- 验证：见 `docs/verification/2026-11-17-agent-context-observation.md`。
+  - 14 个样本的各类之和都等于总量，`unknown` 都是 0%。
+  - magpie 的测试已移植。
+  - 变异测试：把样本的任意节点换成别的类型，解析不 panic。
+  - 性能：约 12.8 万 token、56 万字节的请求体，发布优化级别下单次解析约 2.9ms，低于 5ms 门槛；调试构建约 10.5ms。
+- 第 2 期接入前要定的事：采集点挂在哪里（§6，须与鼠鼠确认）。
 
 ### 第 2 期：采集接入 + 校准 + 摘要
 

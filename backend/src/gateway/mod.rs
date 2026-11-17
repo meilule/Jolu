@@ -20,6 +20,8 @@ pub mod budget;
 pub mod key_slots;
 pub mod member_effort;
 pub mod catalog;
+/// Agent 上下文观察（V10）：请求体 → 八类上下文组成与 token 估算。
+pub mod context;
 pub mod escape;
 pub mod groups;
 pub mod routing_groups;
