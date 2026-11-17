@@ -13,15 +13,62 @@
 //!
 //! 不管什么：Responses 的内置工具（web_search、file_search、local_shell 等）Chat 没有对应物，丢弃并在
 //! 日志里说明；`previous_response_id` 这类服务端会话状态 Chat 没有，Codex 默认不用。
+//!
+//! Codex 远程压缩（N15，参照 magpie `internal/codexsummary`）：Codex 以为对面是 OpenAI 时（保留 ChatGPT
+//! 登录的接线）压缩会话发的是 V2 协议——普通 Responses 请求里带一项 `{"type":"compaction_trigger"}`，
+//! 要求回复里**恰好一项** `{"type":"compaction","encrypted_content":…}`，之后每轮把它原样放回 input。
+//! 第三方模型不认这两种项，以前在这里被静默丢掉，压缩就失败。现在：触发项换成 Codex 自己的压缩提示词
+//! （Apache-2.0，`prompts/templates/compact/prompt.md`），回复的文字包成 `jolu1:` + base64 的压缩项；
+//! 后续轮次里 `jolu1:` 的压缩项还原成「摘要前缀 + 摘要」的用户消息（Codex 本地压缩留下的同款形状）。
+//! OpenAI 自己封的压缩项第三方读不了，跳过。
 
+use base64::Engine;
 use serde_json::{json, Value};
 
 /// 包装 Codex 自由格式工具时用的参数名。
 const CUSTOM_INPUT: &str = "input";
 
-/// 请求里的自由格式工具名（回复时要把同名的函数调用拆回 `custom_tool_call`）。
+/// Jolu 生成的压缩项内容前缀
+pub(crate) const COMPACTION_MARK: &str = "jolu1:";
+/// 混在「自由格式工具名」清单里的内部标记：这次请求是压缩，回复要包成压缩项（调用方都只把这份清单
+/// 原样转给 `response_body`，借它传话不用改各个调用点；工具名不可能以控制字符开头）
+const COMPACTION_REPLY: &str = "\u{1}jolu-compaction";
+
+/// Codex 的压缩提示词（openai/codex `prompts/templates/compact/prompt.md`，Apache-2.0）
+const COMPACT_PROMPT: &str = "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.\n\nInclude:\n- Current progress and key decisions made\n- Important context, constraints, or user preferences\n- What remains to be done (clear next steps)\n- Any critical data, examples, or references needed to continue\n\nBe concise, structured, and focused on helping the next LLM seamlessly continue the work.";
+/// Codex 的摘要前缀（`prompts/templates/compact/summary_prefix.md`，Apache-2.0）
+const SUMMARY_PREFIX: &str = "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:";
+
+/// 这个 Responses 请求是不是 Codex 的远程压缩（input 里有 `compaction_trigger`）
+pub(crate) fn compaction_requested(body: &Value) -> bool {
+    body.get("input").and_then(Value::as_array).is_some_and(|items| items.iter().any(|item| item.get("type").and_then(Value::as_str) == Some("compaction_trigger")))
+}
+
+/// 摘要 → 压缩项的 encrypted_content
+pub(crate) fn compaction_content(summary: &str) -> String {
+    format!("{COMPACTION_MARK}{}", base64::engine::general_purpose::STANDARD.encode(summary.as_bytes()))
+}
+
+/// 压缩项 → 用户消息；不是 Jolu 生成的（OpenAI 封的）或读不出来返回 None
+fn compaction_message(encrypted: &str) -> Option<Value> {
+    let encoded = encrypted.strip_prefix(COMPACTION_MARK)?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
+    let summary = String::from_utf8(bytes).ok()?;
+    Some(json!({"role": "user", "content": format!("{SUMMARY_PREFIX}\n{summary}")}))
+}
+
+fn compaction_reply(custom: &[String]) -> bool {
+    custom.iter().any(|name| name == COMPACTION_REPLY)
+}
+
+fn compaction_item(summary: &str) -> Value {
+    json!({"type": "compaction", "id": "cmp_0", "encrypted_content": compaction_content(summary)})
+}
+
+/// 请求里的自由格式工具名（回复时要把同名的函数调用拆回 `custom_tool_call`）；压缩请求另带内部标记。
 pub(crate) fn custom_tool_names(body: &Value) -> Vec<String> {
-    body.get("tools")
+    let mut names: Vec<String> = body
+        .get("tools")
         .and_then(Value::as_array)
         .map(|tools| {
             tools
@@ -30,7 +77,11 @@ pub(crate) fn custom_tool_names(body: &Value) -> Vec<String> {
                 .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string))
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if compaction_requested(body) {
+        names.push(COMPACTION_REPLY.to_string());
+    }
+    names
 }
 
 fn content_parts(content: &Value) -> Value {
@@ -106,6 +157,12 @@ pub(crate) fn request(body: &Value) -> Result<Value, String> {
                         };
                         messages.push(json!({"role": "tool", "tool_call_id": item.get("call_id").cloned().unwrap_or(json!("")), "content": output}));
                     }
+                    // Codex 远程压缩：触发项换成压缩提示词；Jolu 生成的压缩项还原成摘要消息
+                    "compaction_trigger" => messages.push(json!({"role": "user", "content": COMPACT_PROMPT})),
+                    "compaction" => match item.get("encrypted_content").and_then(Value::as_str).and_then(compaction_message) {
+                        Some(message) => messages.push(message),
+                        None => eprintln!("[协议转换] 跳过一项第三方读不了的压缩记录（OpenAI 封装的）"),
+                    },
                     // 推理项（加密内容）与其他服务端状态 Chat 接不住，跳过
                     _ => {}
                 }
@@ -119,7 +176,9 @@ pub(crate) fn request(body: &Value) -> Result<Value, String> {
         chat["stream"] = json!(true);
         chat["stream_options"] = json!({"include_usage": true});
     }
-    if let Some(tools) = body.get("tools").and_then(Value::as_array) {
+    // 压缩请求只要一段摘要文字：不给工具，免得模型去调工具
+    let compacting = compaction_requested(body);
+    if let Some(tools) = body.get("tools").and_then(Value::as_array).filter(|_| !compacting) {
         let mut converted = Vec::new();
         for tool in tools {
             match tool.get("type").and_then(Value::as_str) {
@@ -140,7 +199,7 @@ pub(crate) fn request(body: &Value) -> Result<Value, String> {
             chat["tools"] = Value::Array(converted);
         }
     }
-    match body.get("tool_choice") {
+    match body.get("tool_choice").filter(|_| !compacting) {
         Some(Value::String(choice)) => chat["tool_choice"] = json!(choice),
         Some(choice) if choice.get("name").is_some() => chat["tool_choice"] = json!({"type": "function", "function": {"name": choice["name"]}}),
         _ => {}
@@ -189,14 +248,16 @@ fn call_item(id: &str, call_id: &str, name: &str, arguments: &str, custom: &[Str
 pub(crate) fn response(chat: &Value, custom: &[String]) -> Value {
     let message = chat.pointer("/choices/0/message").cloned().unwrap_or(json!({}));
     let mut output: Vec<Value> = Vec::new();
-    if let Some(reasoning) = message.get("reasoning_content").and_then(Value::as_str).filter(|t| !t.is_empty()) {
+    if compaction_reply(custom) {
+        output.push(compaction_item(message.get("content").and_then(Value::as_str).unwrap_or_default()));
+    } else if let Some(reasoning) = message.get("reasoning_content").and_then(Value::as_str).filter(|t| !t.is_empty()) {
         output.push(json!({"type": "reasoning", "id": "rs_0", "summary": [{"type": "summary_text", "text": reasoning}]}));
     }
-    if let Some(text) = message.get("content").and_then(Value::as_str).filter(|t| !t.is_empty()) {
+    if let Some(text) = message.get("content").and_then(Value::as_str).filter(|t| !t.is_empty() && !compaction_reply(custom)) {
         output.push(json!({"type": "message", "id": "msg_0", "role": "assistant", "status": "completed",
             "content": [{"type": "output_text", "text": text, "annotations": []}]}));
     }
-    for (index, call) in message.get("tool_calls").and_then(Value::as_array).into_iter().flatten().enumerate() {
+    for (index, call) in message.get("tool_calls").and_then(Value::as_array).into_iter().flatten().filter(|_| !compaction_reply(custom)).enumerate() {
         let call_id = call.get("id").and_then(Value::as_str).unwrap_or_default();
         output.push(call_item(&format!("fc_{index}"), call_id, call.pointer("/function/name").and_then(Value::as_str).unwrap_or_default(),
             call.pointer("/function/arguments").and_then(Value::as_str).unwrap_or("{}"), custom));
@@ -265,6 +326,13 @@ impl StreamTranslator {
             self.usage = Some(usage_of(usage));
         }
         let Some(delta) = chunk.pointer("/choices/0/delta") else { return out };
+        // 压缩：只收文字，结束时一次给出压缩项（Codex 只认 output_item.done 里的那一项）
+        if compaction_reply(&self.custom) {
+            if let Some(text) = delta.get("content").and_then(Value::as_str) {
+                self.text.push_str(text);
+            }
+            return out;
+        }
         if let Some(reasoning) = delta.get("reasoning_content").and_then(Value::as_str).filter(|t| !t.is_empty()) {
             if self.reasoning_index.is_none() {
                 let index = self.next_index;
@@ -322,6 +390,15 @@ impl StreamTranslator {
             return out;
         }
         let mut items: Vec<(usize, Value)> = Vec::new();
+        if compaction_reply(&self.custom) {
+            let item = compaction_item(&self.text);
+            self.event(&mut out, "response.output_item.added", json!({"output_index": 0, "item": item.clone()}));
+            self.event(&mut out, "response.output_item.done", json!({"output_index": 0, "item": item.clone()}));
+            let completed = self.base("completed", vec![item]);
+            self.event(&mut out, "response.completed", json!({"response": completed}));
+            self.started = false;
+            return out;
+        }
         if let Some(index) = self.reasoning_index {
             let item = json!({"type": "reasoning", "id": "rs_0", "summary": [{"type": "summary_text", "text": self.reasoning}]});
             self.event(&mut out, "response.output_item.done", json!({"output_index": index, "item": item.clone()}));
@@ -545,5 +622,60 @@ mod tests {
         assert_eq!(chat_path("/v1/responses"), "/v1/chat/completions");
         assert_eq!(chat_path("/v1/messages?beta=true"), "/v1/chat/completions", "Claude Code 的 beta 查询不带给 Chat");
         assert_eq!(chat_path("/responses"), "/chat/completions");
+    }
+
+    /// Codex V2 远程压缩：触发项变压缩提示词、不带工具；回复包成恰好一项压缩项；下一轮还原成摘要消息
+    #[test]
+    fn codex_remote_compaction_round_trip_non_stream() {
+        let body = json!({
+            "model": "kimi/k2", "stream": false,
+            "tools": [{"type": "function", "name": "shell", "parameters": {}}], "tool_choice": "auto",
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "修好登录"}]},
+                {"type": "compaction", "encrypted_content": "openai-sealed"},
+                {"type": "compaction_trigger"}
+            ]
+        });
+        assert!(compaction_requested(&body));
+        let chat = request(&body).unwrap();
+        let messages = chat["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2, "OpenAI 封的压缩项读不了，跳过：{messages:?}");
+        assert!(messages[1]["content"].as_str().unwrap().starts_with("You are performing a CONTEXT CHECKPOINT COMPACTION"));
+        assert!(chat.get("tools").is_none() && chat.get("tool_choice").is_none(), "压缩不给工具");
+
+        let custom = custom_tool_names(&body);
+        let reply = response(&json!({"id": "x", "choices": [{"message": {"content": "摘要：登录已修到一半"}}], "usage": {"prompt_tokens": 9, "completion_tokens": 3}}), &custom);
+        let output = reply["output"].as_array().unwrap();
+        assert_eq!(output.len(), 1, "恰好一项");
+        assert_eq!(output[0]["type"], "compaction");
+        let content = output[0]["encrypted_content"].as_str().unwrap();
+        assert!(content.starts_with(COMPACTION_MARK));
+
+        // 下一轮：Codex 把这项原样放回 input
+        let next = json!({"model": "kimi/k2", "input": [output[0].clone(), {"type": "message", "role": "user", "content": "继续"}]});
+        assert!(!compaction_requested(&next));
+        let chat = request(&next).unwrap();
+        let first = chat["messages"][0]["content"].as_str().unwrap();
+        assert!(first.starts_with("Another language model started to solve this problem") && first.ends_with("
+摘要：登录已修到一半"), "{first}");
+        assert!(!custom_tool_names(&next).iter().any(|n| n == COMPACTION_REPLY));
+    }
+
+    #[test]
+    fn codex_remote_compaction_stream_emits_one_compaction_item() {
+        let body = json!({"model": "kimi/k2", "stream": true, "input": [{"type": "compaction_trigger"}]});
+        let mut translator = StreamTranslator::new(custom_tool_names(&body));
+        let mut out = translator.push(&json!({"id": "c1", "model": "k2", "choices": [{"delta": {"reasoning_content": "想一想"}}]}));
+        out += &translator.push(&json!({"choices": [{"delta": {"content": "第一段"}}]}));
+        out += &translator.push(&json!({"choices": [{"delta": {"content": "，第二段"}}], "usage": {"prompt_tokens": 5, "completion_tokens": 2}}));
+        out += &translator.finish();
+        assert!(!out.contains("output_text.delta") && !out.contains("reasoning_summary_text"), "压缩时不发文字增量：{out}");
+        let done: Vec<&str> = out.lines().filter(|l| l.starts_with("data:") && l.contains("response.output_item.done")).collect();
+        assert_eq!(done.len(), 1);
+        let item: Value = serde_json::from_str(done[0].trim_start_matches("data:").trim()).unwrap();
+        assert_eq!(item["item"]["type"], "compaction");
+        let summary = compaction_message(item["item"]["encrypted_content"].as_str().unwrap()).unwrap();
+        assert!(summary["content"].as_str().unwrap().ends_with("第一段，第二段"));
+        assert!(out.contains("response.completed"));
     }
 }

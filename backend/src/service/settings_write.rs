@@ -1,6 +1,8 @@
 //! CLI 写设置（5.5，`jolu settings set`）：只开放「用到时才读」的简单键——改了以后桌面端
 //! 2 秒内读回（`settings::Store::reload_external`）就能生效，不需要重启监听、改系统设置。
 //! 端口、开机自启、保持唤醒这类要做副作用的键不在白名单里，仍然在桌面端改。
+//! 网关的默认来源、熔断阈值、自动逃逸在模型路由启动时取一次快照（`proxy::start`），命令行改了要等
+//! 下次启动才生效，所以也不开放（2026-11-17 端到端验收时发现，原先误放在白名单里）。
 //!
 //! 写法：拿文件锁（与桌面端同一把，`filelock`）→ 读 JSON → 只改这一个键 → 整份按 `Settings`
 //! 反序列化校验 → 临时文件 + 改名写回，并留 `.lastgood`。只改这一个键，别的内容（含搜索 Key 原文）原样保留。
@@ -14,8 +16,6 @@ pub enum Kind {
     Bool,
     /// 闭区间
     Int(u32, u32),
-    /// 可以清空（写 none）的字符串
-    OptText,
     /// 可以清空的数
     OptNumber,
     /// 主窗口默认打开的页面
@@ -36,9 +36,6 @@ pub const SETTABLE: &[Settable] = &[
     Settable { key: "notify_quota_alerts", kind: Kind::Bool, about: "额度提醒通知" },
     Settable { key: "privacy_masking", kind: Kind::Bool, about: "经网关的请求做隐私脱敏" },
     Settable { key: "zcode_free_first", kind: Kind::Bool, about: "ZCode 先试免费 Start Plan 通道" },
-    Settable { key: "gateway_auto_escape", kind: Kind::Bool, about: "网关故障时自动把工具切回直连" },
-    Settable { key: "gateway_circuit_threshold", kind: Kind::Int(1, 100), about: "连续失败几次后熔断一个来源" },
-    Settable { key: "gateway_default_connection", kind: Kind::OptText, about: "无前缀模型名走的默认连接 id（none = 清空）" },
     Settable { key: "warmup_hour", kind: Kind::Int(0, 23), about: "每日 warm-up 的触发小时" },
     Settable { key: "balance_alert_threshold", kind: Kind::OptNumber, about: "余额提醒阈值（none = 关闭）" },
     Settable { key: "default_page", kind: Kind::Page, about: "主窗口默认打开的页面（last = 上次访问的）" },
@@ -61,8 +58,6 @@ fn parse_value(item: &Settable, raw: &str) -> Result<Value, String> {
             Ok(n) if (min..=max).contains(&n) => Ok(Value::from(n)),
             _ => Err(format!("{} 要写 {min}–{max} 的整数", item.key)),
         },
-        Kind::OptText if clear => Ok(Value::Null),
-        Kind::OptText => Ok(Value::String(raw.to_string())),
         Kind::OptNumber if clear => Ok(Value::Null),
         Kind::OptNumber => match raw.parse::<f64>() {
             Ok(n) if n.is_finite() && n >= 0.0 => Ok(Value::from(n)),
@@ -152,8 +147,7 @@ mod tests {
         assert!(set(&dir, "dnd", "maybe").is_err());
         assert!(set(&dir, "warmup_hour", "24").is_err());
         assert!(set(&dir, "default_page", "nowhere").is_err());
-        assert_eq!(set(&dir, "gateway_default_connection", "c1").unwrap().1, "c1");
-        assert_eq!(set(&dir, "gateway_default_connection", "none").unwrap(), ("c1".into(), "（未设置）".into()));
+        assert!(set(&dir, "gateway_default_connection", "c1").unwrap_err().contains("不能用命令行改"), "网关启动时快照的键不开放");
         assert_eq!(set(&dir, "balance_alert_threshold", "12.5").unwrap().1, "12.5");
         assert_eq!(set(&dir, "default_page", "last").unwrap().1, "last");
         let _ = std::fs::remove_dir_all(dir);

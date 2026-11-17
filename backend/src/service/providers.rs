@@ -66,6 +66,14 @@ pub fn add_api_key(conn: &mut Connection, input: ApiKeyInput) -> Result<String, 
     Ok(id)
 }
 
+/// 进出模型池（同桌面端「管理来源」的开关）：网关每次请求都从库里读，写入即生效
+pub fn set_serve(conn: &Connection, id: &str, on: bool) -> Result<(), String> {
+    if !list(conn)?.iter().any(|p| p.id == id) {
+        return Err(format!("没有 id 为「{id}」的连接"));
+    }
+    crate::connections::set_serve(conn, id, on)
+}
+
 /// 删除连接：只删凭据与配置，历史统计保留（同桌面端）
 pub fn remove(conn: &Connection, id: &str) -> Result<(), String> {
     if !list(conn)?.iter().any(|p| p.id == id) {

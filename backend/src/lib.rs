@@ -2241,6 +2241,10 @@ pub fn run() {
                     loop {
                         std::thread::sleep(std::time::Duration::from_secs(2));
                         if handle.state::<Cfg>().0.reload_external() {
+                            // 进程级开关跟着读回（桌面端自己的命令改设置时也是这样同步的）
+                            let now = handle.state::<Cfg>().0.get();
+                            crate::gateway::mask::set_enabled(now.privacy_masking);
+                            crate::gateway::adapter::zcode::set_free_first(now.zcode_free_first);
                             crate::events::settings_changed(&handle);
                         }
                         let Some(db) = handle.try_state::<Db>() else { continue };
@@ -2248,7 +2252,7 @@ pub fn run() {
                             let Ok(conn) = db.0.try_lock() else { continue };
                             let sig = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, String>(0)).unwrap_or_default();
                             (
-                                sig("SELECT count(*) || ':' || coalesce(max(created_ms), 0) || ':' || coalesce(sum(length(name)), 0) FROM connections"),
+                                sig("SELECT count(*) || ':' || coalesce(max(created_ms), 0) || ':' || coalesce(sum(length(name)), 0) || ':' || coalesce(sum(serve_enabled), 0) FROM connections"),
                                 sig("SELECT count(*) || ':' || coalesce(sum(length(members_json) + length(strategy)), 0) FROM routing_groups"),
                             )
                         };
