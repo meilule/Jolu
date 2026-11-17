@@ -22,8 +22,10 @@
 //! - 不在这一层做参数校验以外的副作用：写配置文件、拉进程、重启监听都留在命令侧或原有模块；
 //! - 不吞错：所有失败原样以 `String` 返回，由命令侧决定怎么报给前端。
 
+pub mod launch;
 pub mod paths;
 pub mod settings;
+pub mod settings_write;
 
 pub mod gateway {
     //! 统一网关相关的服务函数。与 `crate::gateway`（协议与路由实现）区分：

@@ -1,8 +1,8 @@
 //! `jolu` 命令行骨架（批次 G §3.11）。
 //!
-//! 只读子命令：直接读桌面端的数据目录，**不启动网关监听、不写任何配置**。
-//! 写操作留在桌面端——CLI 与桌面端并发写配置的风险计划里已标「中」，
-//! 骨架阶段先只做只读，避免引入跨进程互斥的复杂度。
+//! 多数子命令只读：直接读桌面端的数据目录，不启动网关监听。
+//! 写命令（5.5）：`settings set` 只改白名单里「用到时才读」的键，与桌面端共用文件锁
+//! （`filelock`），桌面端 2 秒内读回；`claude run` 不改任何用户配置，只写 Jolu 自己的启动用设置。
 //!
 //! 参数解析手写：项目其余 bin（`gateway_mcp_bridge` / `handoff_eval`）都手写，
 //! 引入 clap 会让依赖树与 tauri 的构建时间一起变长，而这里只需要几个子命令。
@@ -44,6 +44,8 @@ async fn run(args: &[String]) -> Result<(), String> {
         "search" => search(rest).await,
         "fetch" => fetch(rest).await,
         "library" => library(rest).await,
+        "settings" => settings_cmd(rest),
+        "claude" => claude(rest),
         other => Err(format!("未知子命令「{other}」，运行 `jolu help` 查看用法")),
     }
 }
@@ -51,7 +53,7 @@ async fn run(args: &[String]) -> Result<(), String> {
 fn print_usage() {
     println!(
         "\
-jolu — Jolu 命令行（只读）
+jolu — Jolu 命令行
 
 用法：
   jolu status                     网关总览（模式、端口、接线状态）
@@ -65,13 +67,18 @@ jolu — Jolu 命令行（只读）
   jolu library install <agent>    把「Jolu 搜索」MCP 装进指定 agent
   jolu library remove <agent> <名> 卸载（只删 Jolu 装的）
   jolu library list               各 agent 的安装状态
+  jolu settings list              命令行可改的设置与当前值
+  jolu settings get <键>          看一个设置
+  jolu settings set <键> <值>     改一个设置（on/off、数字或 none；桌面端 2 秒内生效）
+  jolu claude run [--model <模型>] [claude 的参数…]
+                                  让这一次的 Claude Code 走 Jolu 模型路由（不改 ~/.claude/settings.json）
 
 环境变量：
   JOLU_DATA_DIR   指定数据目录（默认按平台从 %APPDATA% / Application Support 推断）
 
 搜索后端与 Key 在桌面端 settings.json 的 search_apis 里配置。
 说明：
-  除 restore、search 与 fetch 外，所有子命令只读桌面端已有数据，不会启动网关监听，也不会写配置。"
+  除 restore、library install/remove、settings set 与 claude run 外，子命令只读桌面端已有数据，不会启动网关监听。"
     );
 }
 
@@ -281,6 +288,59 @@ fn restore() -> Result<(), String> {
     for agent in &report.skipped { println!("跳过 {agent}（配置已不在或不是 Jolu 写的）"); }
     for line in &report.failed { println!("失败 {line}"); }
     if report.failed.is_empty() { Ok(()) } else { Err("部分工具还原失败，详见上方输出".into()) }
+}
+
+fn settings_cmd(args: &[String]) -> Result<(), String> {
+    use jolu_lib::service::settings_write;
+    let directory = paths::config_directory()?;
+    match args.first().map(String::as_str).unwrap_or("list") {
+        "list" => {
+            for item in settings_write::SETTABLE {
+                let value = settings_write::get(&directory, item.key)?;
+                println!("{:<28} {:<14} {}", item.key, value, item.about);
+            }
+            Ok(())
+        }
+        "get" => {
+            let key = args.get(1).ok_or("用 `jolu settings get <键>`")?;
+            println!("{}", settings_write::get(&directory, key)?);
+            Ok(())
+        }
+        "set" => {
+            let (Some(key), Some(value)) = (args.get(1), args.get(2)) else {
+                return Err("用 `jolu settings set <键> <值>`".into());
+            };
+            let (before, after) = settings_write::set(&directory, key, value)?;
+            println!("{key}：{before} → {after}（桌面端 2 秒内读回生效）");
+            Ok(())
+        }
+        other => Err(format!("未知 settings 动作「{other}」：用 list / get / set")),
+    }
+}
+
+/// `jolu claude run [--model <模型>] [claude 的参数…]`：本次启动走模型路由，退出码沿用 claude 的
+fn claude(args: &[String]) -> Result<(), String> {
+    if args.first().map(String::as_str) != Some("run") {
+        return Err("用 `jolu claude run [--model <模型>] [claude 的参数…]`".into());
+    }
+    let mut rest: Vec<String> = args[1..].to_vec();
+    let mut model = None;
+    if rest.first().map(String::as_str) == Some("--model") {
+        if rest.len() < 2 {
+            return Err("--model 后面要写模型 id，如 kimi/k2".into());
+        }
+        model = Some(rest[1].clone());
+        rest.drain(..2);
+    }
+    let directory = paths::config_directory()?;
+    let launch = jolu_lib::service::launch::prepare_claude(&directory, model.as_deref())?;
+    let status = std::process::Command::new(&launch.exe)
+        .arg("--settings")
+        .arg(&launch.settings_file)
+        .args(&rest)
+        .status()
+        .map_err(|e| format!("启动 {} 失败：{e}", launch.exe.display()))?;
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 fn quota(args: &[String]) -> Result<(), String> {

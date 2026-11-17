@@ -27,6 +27,7 @@ mod tray_icon;
 mod connections;
 mod creds;
 mod cli_switch;
+pub(crate) mod filelock;
 // 连接归因：把请求指到已存连接上（exact / mapped / platform 三档），见模块头注释
 mod attribution;
 // 连接目录自动回填：把 ZCode provider 规则的 baseUrl / 模型补进已存连接
@@ -2220,6 +2221,16 @@ pub fn run() {
                         if handle.state::<Cfg>().0.try_update(|s| { island_clones::promote(s, &id); }).is_ok() {
                             crate::events::settings_changed(&handle);
                         }
+                    }
+                }).ok();
+            }
+            // 5.5：`jolu settings set` 在别的进程里改了 settings.json —— 每 2 秒看一次，读回并广播给各窗口
+            {
+                let handle = app.handle().clone();
+                std::thread::Builder::new().name("jolu-settings-watch".into()).spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    if handle.state::<Cfg>().0.reload_external() {
+                        crate::events::settings_changed(&handle);
                     }
                 }).ok();
             }

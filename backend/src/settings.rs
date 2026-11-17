@@ -375,6 +375,9 @@ pub struct Store {
     /// 每次写入成功加一（在 `inner` 的锁内改），随 `settings-changed` 发给前端：
     /// 多个线程发出的整份快照可能乱序到达，前端丢弃修订号更小的那份
     revision: std::sync::atomic::AtomicU64,
+    /// 上一次读到 / 写下的文件字节：磁盘内容和它不同 = 别的进程（`jolu settings set`）改过，
+    /// 写入前以磁盘为底、轮询时读回（5.5）
+    disk: Mutex<Vec<u8>>,
 }
 
 /// 发给前端的设置快照：设置本身（字段平铺，搜索 Key 照常在序列化时掩码）加修订号。
@@ -409,19 +412,48 @@ impl Store {
             },
             Err(_) => Settings::default(),
         };
+        let mut disk = crate::steady::read(&path).unwrap_or_default();
         // 实例标识必须落盘：每次启动换一个会让「另一个 Jolu 接管」误判。
         if inner.instance_id.trim().is_empty() {
             inner.instance_id = new_instance_id();
             if let Ok(json) = persisted_json(&inner) {
                 let _ = std::fs::create_dir_all(dir);
-                let _ = std::fs::write(&path, json);
+                if std::fs::write(&path, &json).is_ok() {
+                    disk = json;
+                }
             }
         }
         Self {
             path,
             inner: Mutex::new(inner),
             revision: std::sync::atomic::AtomicU64::new(1),
+            disk: Mutex::new(disk),
         }
+    }
+
+    /// 磁盘上的设置被别的进程改过（且能解析）时返回它。
+    fn external(&self) -> Option<(Settings, Vec<u8>)> {
+        let bytes = crate::steady::read(&self.path).ok()?;
+        let known = self.disk.lock().ok()?;
+        if bytes == *known {
+            return None;
+        }
+        drop(known);
+        let settings = serde_json::from_slice::<Settings>(&bytes).ok()?;
+        Some((settings, bytes))
+    }
+
+    /// 读回别的进程（`jolu settings set`）写下的设置；有变化返回 true，调用方随后广播 `settings-changed`。
+    pub fn reload_external(&self) -> bool {
+        let Ok(_lock) = crate::filelock::FileLock::acquire(&self.path, std::time::Duration::from_secs(2)) else { return false };
+        let Some((settings, bytes)) = self.external() else { return false };
+        let Ok(mut guard) = self.inner.lock() else { return false };
+        *guard = settings;
+        if let Ok(mut known) = self.disk.lock() {
+            *known = bytes;
+        }
+        self.revision.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        true
     }
 
     pub fn get(&self) -> Settings {
@@ -454,7 +486,12 @@ impl Store {
     pub fn try_update(&self, f: impl FnOnce(&mut Settings)) -> Result<Settings, String> {
         use std::io::Write;
         let mut guard = self.inner.lock().map_err(|e| format!("设置锁获取失败：{e}"))?;
-        let mut next = guard.clone();
+        // 5.5：与 `jolu settings set` 跨进程串行；磁盘被它改过时以磁盘为底，不把它的改动覆盖掉
+        let _lock = crate::filelock::FileLock::acquire(&self.path, std::time::Duration::from_secs(5))?;
+        let mut next = match self.external() {
+            Some((settings, _)) => settings,
+            None => guard.clone(),
+        };
         f(&mut next);
         let json = persisted_json(&next).map_err(|e| format!("设置序列化失败：{e}"))?;
         let temporary = self.path.with_extension("json.tmp");
@@ -472,6 +509,9 @@ impl Store {
         }
         // 保存成功后留一份上一版好的；它写失败不影响本次保存（只是少了一层兜底）
         let _ = std::fs::write(self.path.with_extension("json.lastgood"), &json);
+        if let Ok(mut known) = self.disk.lock() {
+            *known = json;
+        }
         *guard = next.clone();
         self.revision.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         Ok(next)
