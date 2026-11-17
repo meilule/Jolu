@@ -27,6 +27,7 @@ mod tray_icon;
 mod connections;
 mod creds;
 mod cli_switch;
+pub mod cli_requests;
 pub(crate) mod filelock;
 // 连接归因：把请求指到已存连接上（exact / mapped / platform 三档），见模块头注释
 mod attribution;
@@ -2224,14 +2225,45 @@ pub fn run() {
                     }
                 }).ok();
             }
-            // 5.5：`jolu settings set` 在别的进程里改了 settings.json —— 每 2 秒看一次，读回并广播给各窗口
+            // 5.5：`jolu settings set` 在别的进程里改了 settings.json —— 每 2 秒看一次，读回并广播给各窗口；
+            // `jolu provider add` / `group add` 直接写库：连接表与路由分组表的签名变了也广播，界面随之刷新
             {
                 let handle = app.handle().clone();
-                std::thread::Builder::new().name("jolu-settings-watch".into()).spawn(move || loop {
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                    if handle.state::<Cfg>().0.reload_external() {
-                        crate::events::settings_changed(&handle);
+                std::thread::Builder::new().name("jolu-settings-watch".into()).spawn(move || {
+                    let mut last: Option<(String, String)> = None;
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        if handle.state::<Cfg>().0.reload_external() {
+                            crate::events::settings_changed(&handle);
+                        }
+                        let Some(db) = handle.try_state::<Db>() else { continue };
+                        let signature = {
+                            let Ok(conn) = db.0.try_lock() else { continue };
+                            let sig = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, String>(0)).unwrap_or_default();
+                            (
+                                sig("SELECT count(*) || ':' || coalesce(max(created_ms), 0) || ':' || coalesce(sum(length(name)), 0) FROM connections"),
+                                sig("SELECT count(*) || ':' || coalesce(sum(length(members_json) + length(strategy)), 0) FROM routing_groups"),
+                            )
+                        };
+                        if let Some(previous) = last.as_ref() {
+                            if previous.0 != signature.0 {
+                                let _ = handle.emit(crate::events::CONNECTIONS_CHANGED, ());
+                            }
+                            if previous.1 != signature.1 {
+                                crate::events::catalog_changed(&handle);
+                            }
+                        }
+                        last = Some(signature);
                     }
+                }).ok();
+            }
+            // 5.5：命令行请求桌面端代办（`jolu use` / `save` / `serve`），每秒处理一次
+            {
+                let handle = app.handle().clone();
+                std::thread::Builder::new().name("jolu-cli-requests".into()).spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    let data_dir = handle.state::<Cfg>().0.dir().to_path_buf();
+                    crate::cli_requests::process(&data_dir, &|request| crate::cli_requests::desktop_handle(&handle, request));
                 }).ok();
             }
             // C6：本机 ZCode 比 Jolu 适配的版本新时记一条日志（界面提示走 zcode_version_check）。

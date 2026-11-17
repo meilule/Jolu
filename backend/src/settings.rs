@@ -443,6 +443,11 @@ impl Store {
         Some((settings, bytes))
     }
 
+    /// 数据目录（settings.json 所在目录）
+    pub fn dir(&self) -> &std::path::Path {
+        self.path.parent().unwrap_or_else(|| std::path::Path::new("."))
+    }
+
     /// 读回别的进程（`jolu settings set`）写下的设置；有变化返回 true，调用方随后广播 `settings-changed`。
     pub fn reload_external(&self) -> bool {
         let Ok(_lock) = crate::filelock::FileLock::acquire(&self.path, std::time::Duration::from_secs(2)) else { return false };

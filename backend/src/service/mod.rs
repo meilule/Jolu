@@ -24,6 +24,7 @@
 
 pub mod launch;
 pub mod paths;
+pub mod providers;
 pub mod settings;
 pub mod settings_write;
 

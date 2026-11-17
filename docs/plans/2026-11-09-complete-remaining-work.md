@@ -194,7 +194,12 @@
     - `jolu claude run [--model <模型>] [参数…]`（`service/launch.rs`，参照 magpie `claude_launch_cli.go`）：写数据目录里的 `claude-launch.json`（env 指向本机网关 + `jolu-claude-code.<实例>` 令牌），用 `claude --settings` 启动；`--settings` 优先级高于用户 / 项目设置（Context7 核对 Claude Code `SettingsSource`），不改 `~/.claude/settings.json`。启动前检查模型路由开着且端口在听。
     - 隔离目录冒烟：`settings set` 改值、越界与非白名单键拒绝、`claude run` 在路由未开时说明原因；单测 9 条。
   - [x] 2026-11-17 第二批：`jolu group add <分组> <策略> <来源/模型>…` / `set` / `rm`（`service/gateway/route_groups.rs`），沿用 `routing_groups` 的校验（重名、嵌套成环、成员非空）；网关每次请求从库里读分组，写入即生效；「按意图」要判定模型，只在桌面端建。隔离目录冒烟通过，单测 2 条
-  - [ ] 未做（待确认）：`provider add`（要走桌面端的凭据加密与校验流程）、`save` / `use`（Profile 切换会改接线与设置，副作用多）、`serve`（无界面跑网关，网关现依赖 Tauri 的 AppHandle）
+  - [x] 2026-11-17 第三批（鼠鼠：「要做，按推荐」）：
+    - `jolu provider list|add|rm`（`service/providers.rs`）：只收 API Key 连接，与桌面端「添加连接」同一条路（`prepare_new` → `quota::validate_connection` 真连一次上游 → 事务 `connections::add`）；Key 只从标准输入读，命令行参数里写 `--key` 直接拒绝；删除保留历史统计。官方订阅的登录凭据仍只在桌面端获取。
+    - `jolu save <名称>` / `use <名称>` / `serve` 由运行中的桌面端代办（`cli_requests.rs`）：CLI 在数据目录 `cli-requests/` 写请求文件，桌面端后台线程每秒认领（改名）、执行（`gateway_profiles_save` / `gateway_profiles_apply` / `gateway_set_mode(relay)`），写回结果；5 秒没人认领 = 桌面端没在运行，CLI 撤回请求并说明。只接受这三个动作，手写的其他动作拒绝。
+    - 桌面端每 2 秒看连接表与路由分组表的签名，命令行写库后广播 `connections-changed` / `gateway-catalog-changed`，界面随之刷新。
+    - 验证：单测 5 条（请求往返、桌面端不在时撤回、拒绝伪造动作、参数归一、空库）；隔离目录冒烟：Key 写在参数里拒绝、空 Key 拒绝、对本地模拟上游 `provider add` 验证并保存、`list` 只显示掩码、`rm`、桌面端不在时 `use` 5 秒后说明原因。隔离桌面实例（`start.ps1 -Executable`，无前端页面，只验后台线程）上：`save` / `use` 把桌面端的报错原样带回（「Profile 至少要包含一个 agent 的模型」「没有名为…的 Profile」），`serve` 开启模型路由且 12731 由该实例监听、再次 `serve` 报「已在运行」，`claude run --model … --version` 用启动设置拉起 Claude Code 2.1.326 并正常退出，`settings set dnd on` 之后桌面端写设置未覆盖它；结束时只停本次两个 PID。没有在接过线的真实环境里切换 Profile
+  - [ ] 不做（待确认）：真正无界面的 `serve`（网关依赖 Tauri 的 AppHandle，要先把网关与桌面端拆开；现在的 `serve` 是让运行中的桌面端开模型路由）
 - [ ] 5.6 WSL 接线写入（G10 剩余 / P2-6）
 - [ ] 5.7 TUI 与 Web 管理界面（G6）
 - [ ] 5.8 远程网关（G7）、Docker 镜像（G8）、系统服务（N12）

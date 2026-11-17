@@ -46,6 +46,10 @@ async fn run(args: &[String]) -> Result<(), String> {
         "library" => library(rest).await,
         "settings" => settings_cmd(rest),
         "claude" => claude(rest),
+        "provider" | "providers" => provider(rest).await,
+        "save" => desktop_request("profile_save", rest.first().map(String::as_str), "用 `jolu save <名称>` 把当前接线存成 Profile"),
+        "use" => desktop_request("profile_use", rest.first().map(String::as_str), "用 `jolu use <名称>` 切换到一个 Profile"),
+        "serve" => desktop_request("serve", Some(""), ""),
         other => Err(format!("未知子命令「{other}」，运行 `jolu help` 查看用法")),
     }
 }
@@ -74,6 +78,13 @@ jolu — Jolu 命令行
   jolu settings list              命令行可改的设置与当前值
   jolu settings get <键>          看一个设置
   jolu settings set <键> <值>     改一个设置（on/off、数字或 none；桌面端 2 秒内生效）
+  jolu provider list              连接列表（Key 只有掩码）
+  jolu provider add <平台> <名称> [--base-url 地址] [--protocol openai|anthropic] [--model 模型] [--service 服务]
+                                  加一个 API Key 连接；Key 从标准输入读，如 `echo sk-... | jolu provider add custom 我的网关 ...`
+  jolu provider rm <连接 id>      删除连接（历史统计保留）
+  jolu save <名称>                把当前接线存成 Profile（由运行中的桌面端执行）
+  jolu use <名称>                 切换到一个 Profile（由运行中的桌面端执行）
+  jolu serve                      让运行中的桌面端开启模型路由
   jolu claude run [--model <模型>] [claude 的参数…]
                                   让这一次的 Claude Code 走 Jolu 模型路由（不改 ~/.claude/settings.json）
 
@@ -82,7 +93,7 @@ jolu — Jolu 命令行
 
 搜索后端与 Key 在桌面端 settings.json 的 search_apis 里配置。
 说明：
-  除 restore、library install/remove、group add/set/rm、settings set 与 claude run 外，子命令只读桌面端已有数据，不会启动网关监听。"
+  除 restore、library install/remove、group add/set/rm、provider add/rm、settings set、save、use、serve 与 claude run 外，子命令只读桌面端已有数据，不会启动网关监听。"
     );
 }
 
@@ -351,6 +362,84 @@ fn settings_cmd(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         other => Err(format!("未知 settings 动作「{other}」：用 list / get / set")),
+    }
+}
+
+/// `jolu save` / `use` / `serve`：写请求文件，由运行中的桌面端执行（`cli_requests`）
+fn desktop_request(action: &str, name: Option<&str>, usage: &str) -> Result<(), String> {
+    let name = match name {
+        Some(name) => name,
+        None => return Err(usage.into()),
+    };
+    let directory = paths::config_directory()?;
+    let name = (!name.is_empty()).then_some(name);
+    let response = jolu_lib::cli_requests::send(&directory, action, name, std::time::Duration::from_secs(5), std::time::Duration::from_secs(90))?;
+    if response.ok {
+        println!("{}", response.message);
+        Ok(())
+    } else {
+        Err(response.message)
+    }
+}
+
+async fn provider(args: &[String]) -> Result<(), String> {
+    use jolu_lib::service::providers;
+    let (_, database) = paths::locate()?;
+    match args.first().map(String::as_str).unwrap_or("list") {
+        "list" => {
+            let conn = open_database()?;
+            let rows = providers::list(&conn)?;
+            if rows.is_empty() {
+                println!("还没有连接。");
+            }
+            for row in rows {
+                println!("{:<44} {:<10} {:<4} {:<20} {:<16} {}", row.id, row.platform, row.kind, row.name, row.masked, row.status);
+            }
+            Ok(())
+        }
+        "add" => {
+            let (Some(platform), Some(name)) = (args.get(1), args.get(2)) else {
+                return Err("用 `jolu provider add <平台> <名称> [--base-url 地址] [--protocol openai|anthropic] [--model 模型] [--service 服务]`，Key 从标准输入传入".into());
+            };
+            let mut flags = std::collections::HashMap::new();
+            let mut rest = args[3..].iter();
+            while let Some(flag) = rest.next() {
+                if flag == "--key" || flag.starts_with("--key=") {
+                    return Err("不要把 Key 写在命令行参数里（会留在 shell 历史）：从标准输入传入".into());
+                }
+                let key = flag.strip_prefix("--").filter(|k| ["base-url", "protocol", "model", "service"].contains(k)).ok_or_else(|| format!("不认识的参数「{flag}」"))?;
+                let value = rest.next().ok_or_else(|| format!("{flag} 后面要写值"))?;
+                flags.insert(key.to_string(), value.clone());
+            }
+            let mut secret = String::new();
+            std::io::stdin().read_line(&mut secret).map_err(|e| format!("读标准输入失败：{e}"))?;
+            let input = providers::ApiKeyInput {
+                platform: platform.clone(),
+                name: name.clone(),
+                secret: secret.trim().to_string(),
+                base_url: flags.remove("base-url"),
+                protocol: flags.remove("protocol"),
+                model: flags.remove("model"),
+                service: flags.remove("service"),
+            };
+            // 校验会发阻塞的网络请求：放到独立线程，不占异步运行时
+            let id = tokio::task::spawn_blocking(move || {
+                let mut conn = jolu_lib::db::open(&database).map_err(|e| e.to_string())?;
+                providers::add_api_key(&mut conn, input)
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+            println!("已添加连接 {id}（Key 已验证；桌面端 2 秒内刷新）");
+            Ok(())
+        }
+        "rm" => {
+            let id = args.get(1).ok_or("用 `jolu provider rm <连接 id>`")?;
+            let conn = jolu_lib::db::open(&database).map_err(|e| e.to_string())?;
+            providers::remove(&conn, id)?;
+            println!("已删除连接 {id}（历史统计保留）");
+            Ok(())
+        }
+        other => Err(format!("未知 provider 动作「{other}」：用 list / add / rm")),
     }
 }
 
