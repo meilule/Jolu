@@ -28,7 +28,7 @@ const TREND_HOURS = 12
  * 今日请求 / 改道 / 最终失败来自后端全天统计；趋势与响应头分位由路由流水推导（只保留最近约 1,000 行）；
  * 上下文来自 `gateway_context_sessions`，取最近一次请求，不是会话累计用量。
  */
-export function OverviewPanel({ day, sessions, contexts, logRows, nowMs, updatedAt, sources, models, groups, attention, busy, onRefresh, onOpenLog }: {
+export function OverviewPanel({ day, sessions, contexts, logRows, nowMs, updatedAt, sources, models, groups, attention, busy, onRefresh, onOpenLog, onOpenContext }: {
   day: DayOverviewDto | null
   sessions: SessionView[]
   /** 每个会话最近一次上下文快照；读取失败为 null（表格照常列出会话，上下文列写「读取失败」） */
@@ -44,6 +44,8 @@ export function OverviewPanel({ day, sessions, contexts, logRows, nowMs, updated
   busy: boolean
   onRefresh: () => void
   onOpenLog: () => void
+  /** 「查看上下文」：进入这个会话的会话观察（V10-03） */
+  onOpenContext: (platform: string, sessionId: string) => void
 }) {
   const [search, setSearch] = useState("")
   const [status, setStatus] = useState<StatusFilter>("all")
@@ -181,7 +183,7 @@ export function OverviewPanel({ day, sessions, contexts, logRows, nowMs, updated
             {rows.length === 0 ? "还没有经过模型路由的会话。" : "没有符合条件的会话。"}
           </p>
         )}
-        {shown.slice(0, 8).map((row) => <SessionLine key={row.key} row={row} nowMs={nowMs} contextsFailed={contexts === null} />)}
+        {shown.slice(0, 8).map((row) => <SessionLine key={row.key} row={row} nowMs={nowMs} contextsFailed={contexts === null} onOpen={() => onOpenContext(row.platform, row.sessionId)} />)}
         <footer className="border-t border-jolu-table-divider px-5 py-2 text-note text-jolu-muted">
           缓存读取已包含在输入中；未采集与 0 分开显示。{shown.length > 8 ? `　共 ${shown.length} 个会话，显示最近 8 个。` : ""}
         </footer>
@@ -195,7 +197,7 @@ export function OverviewPanel({ day, sessions, contexts, logRows, nowMs, updated
   )
 }
 
-function SessionLine({ row, nowMs, contextsFailed }: { row: ActiveSessionRow; nowMs: number; contextsFailed: boolean }) {
+function SessionLine({ row, nowMs, contextsFailed, onOpen }: { row: ActiveSessionRow; nowMs: number; contextsFailed: boolean; onOpen: () => void }) {
   const status = statusCell(row.running)
   const context = contextsFailed && row.snapshotId === null ? { text: "读取失败", ratio: null, tone: "danger" as const, title: "上下文快照读取失败，稍后自动重试" } : row.context
   const agentName = row.agent ? agentLabel(row.agent) : null
@@ -230,8 +232,8 @@ function SessionLine({ row, nowMs, contextsFailed }: { row: ActiveSessionRow; no
         <span className="text-note tabular-nums text-jolu-muted">{relativeTime(row.lastTs, nowMs)}</span>
       </span>
       <span className="text-right">
-        <button type="button" disabled title="会话观察（V10-03）在第 4 期接入"
-          className="text-note font-medium text-jolu-on outline-none disabled:cursor-not-allowed disabled:opacity-45">
+        <button type="button" onClick={onOpen}
+          className="text-note font-medium text-jolu-on outline-none hover:underline focus-visible:outline-2 focus-visible:outline-jolu-accent">
           查看上下文
         </button>
       </span>

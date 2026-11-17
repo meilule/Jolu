@@ -21,6 +21,7 @@ import { ConfirmDialog as ActionConfirmDialog } from "@/components/ui/ConfirmDia
 import { RouteLogPanel } from "@/components/gateway/RouteLogPanel"
 import { PanelPage } from "@/components/panel/PanelPage"
 import { OverviewPanel, type AttentionItem } from "@/components/gateway/OverviewPanel"
+import { SessionObservation } from "@/components/gateway/SessionObservation"
 import { GroupsPanel } from "@/components/gateway/GroupsPanel"
 import { PoolPanel } from "@/components/gateway/PoolPanel"
 import { AccessPanel } from "@/components/gateway/AccessPanel"
@@ -98,6 +99,8 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
   const [logRows, setLogRows] = useState<RouteLogDto[]>([])
   /** 每个会话最近一次上下文快照（V10-01）；读取失败为 null，与「还没有快照」的空数组分开 */
   const [contexts, setContexts] = useState<ContextSessionRowDto[] | null>([])
+  /** 概览里正在观察的会话（V10-03）；null = 看运行概览 */
+  const [observing, setObserving] = useState<{ platform: string; sessionId: string } | null>(null)
   const [sharedLan, setSharedLan] = useState(false)
   const [busy, setBusy] = useState(false)
   const [tick, setTick] = useState(0)
@@ -238,8 +241,7 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
       ...risk,
       kind: "context",
       action: "查看会话上下文",
-      // 会话观察（V10-03）在第 4 期接入；先定位到概览里的活跃会话表
-      onAction: () => document.getElementById("active-sessions")?.scrollIntoView({ behavior: "smooth", block: "start" }),
+      onAction: () => { setTab("overview"); setObserving({ platform: risk.platform, sessionId: risk.sessionId }) },
     }))
     return [...risks, ...items]
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -315,7 +317,17 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto [&>*]:shrink-0">
-        {tab === "overview" && (
+        {tab === "overview" && observing && (
+          <SessionObservation
+            key={`${observing.platform}:${observing.sessionId}`}
+            platform={observing.platform}
+            sessionId={observing.sessionId}
+            view={sessions.views.find((item) => item.session.platform === observing.platform && item.session.session_id === observing.sessionId) ?? null}
+            groupName={(slug) => routingGroups.find((group) => group.slug === slug)?.name ?? null}
+            onBack={() => setObserving(null)}
+          />
+        )}
+        {tab === "overview" && !observing && (
           <OverviewPanel
             day={day}
             sessions={sessions.views}
@@ -330,6 +342,7 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
             busy={busy}
             onRefresh={() => void refresh()}
             onOpenLog={() => setTab("log")}
+            onOpenContext={(platform, sessionId) => setObserving({ platform, sessionId })}
           />
         )}
         {tab === "log" && (

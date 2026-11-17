@@ -477,3 +477,28 @@ fn parse_large_body_fast() {
         assert!(each < std::time::Duration::from_millis(5), "{each:?}");
     }
 }
+
+/// Skill 的加载证据（V10-11）：读了某个 Skill 的 SKILL.md，或调用了 Skill 工具，归入 Skills 一次，不再算文件或工具结果。
+#[test]
+fn loaded_skills_have_evidence() {
+    let body = r#"{"messages":[
+      {"role":"user","content":"format the changelog"},
+      {"role":"assistant","content":[
+        {"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/p/.claude/skills/changelog-format/SKILL.md"}},
+        {"type":"tool_use","id":"t2","name":"Skill","input":{"skill":"commit-helper"}},
+        {"type":"tool_use","id":"t3","name":"Read","input":{"file_path":"/p/src/a.ts"}}]},
+      {"role":"user","content":[
+        {"type":"tool_result","tool_use_id":"t1","content":"skill body one two three four five six seven"},
+        {"type":"tool_result","tool_use_id":"t2","content":"loaded skill body text here"},
+        {"type":"tool_result","tool_use_id":"t3","content":"export const a = 1"}]}]}"#;
+    let p = parse(Protocol::Anthropic, body.as_bytes()).unwrap();
+    assert_eq!(item(&p, Kind::Skills, "changelog-format").map(|it| it.tag.as_str()), Some("loaded"));
+    assert_eq!(item(&p, Kind::Skills, "commit-helper").map(|it| it.tag.as_str()), Some("loaded"));
+    assert!(item(&p, Kind::Files, "/p/.claude/skills/changelog-format/SKILL.md").is_none(), "不再算文件");
+    assert!(item(&p, Kind::Results, "Skill").is_none(), "不再算工具结果");
+    assert!(item(&p, Kind::Files, "/p/src/a.ts").is_some());
+    let kinds: Vec<Kind> = p.calls.iter().map(|c| c.kind).collect();
+    assert_eq!(kinds, vec![Kind::Skills, Kind::Skills, Kind::Files]);
+    assert_eq!(super::calls::skill_of_path("C:/x/skills/demo/skill.md").as_deref(), Some("demo"));
+    assert_eq!(super::calls::skill_of_path("README.md"), None);
+}

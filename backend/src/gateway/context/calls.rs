@@ -9,6 +9,10 @@ const READ_TOOLS: &[&str] = &["Read", "read", "read_file", "ReadFile", "view", "
 /// 读文件工具的路径参数（Gemini CLI 的 read_file 用 `file_path`，旧版用 `absolute_path`）。
 const PATH_KEYS: &[&str] =
     &["file_path", "path", "filePath", "absolute_path", "target_file", "notebook_path", "file", "filename", "uri"];
+/// 加载 Skill 的工具与它们放 Skill 名的参数（Claude Code `Skill` 的 `skill` / 旧版 `command`，Gemini CLI `activate_skill` 的 `name`）。
+const SKILL_TOOLS: &[&str] = &["Skill", "skill", "activate_skill", "use_skill", "load_skill"];
+const SKILL_KEYS: &[&str] = &["skill", "name", "command", "skill_name"];
+
 /// 只读文件的命令（`sed` 另带 `-n` 才算）。
 const READ_CMDS: &[&str] = &["cat", "head", "tail", "nl", "bat", "less", "more"];
 
@@ -62,6 +66,15 @@ pub fn files_of_command(cmd: &str) -> Vec<String> {
         files.push(a.to_string());
     }
     files
+}
+
+/// 路径是某个 Skill 的 `SKILL.md` 时返回 Skill 名（它所在目录的名字）。
+pub fn skill_of_path(path: &str) -> Option<String> {
+    let parts: Vec<&str> = path.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    match parts.as_slice() {
+        [.., dir, file] if file.eq_ignore_ascii_case("SKILL.md") => Some(dir.to_string()),
+        _ => None,
+    }
 }
 
 /// 前一个字符不是单词字符（`\b`）。
@@ -118,8 +131,15 @@ fn js_call(s: &str) -> (Option<String>, Option<String>) {
 
 /// 从工具名与参数看出这次调用读了哪些文件。`args` 是参数对象；参数不是 JSON 对象时给 `text`（Codex exec 的 JavaScript）。
 pub fn call_of(name: &str, args: Option<&Map<String, Value>>, text: Option<&str>) -> ToolCall {
-    let mut c = ToolCall { name: name.to_string(), files: vec![], target: None };
+    let mut c = ToolCall { name: name.to_string(), ..Default::default() };
     let str_of = |k: &str| args.and_then(|a| a.get(k)).and_then(Value::as_str).unwrap_or("");
+    if SKILL_TOOLS.contains(&name) {
+        if let Some(skill) = SKILL_KEYS.iter().map(|k| str_of(k).trim()).find(|s| !s.is_empty()) {
+            c.skill = Some(skill.trim_start_matches('/').to_string());
+            c.target = c.skill.clone();
+            return c;
+        }
+    }
     if is_read_tool(name) {
         if let Some(path) = PATH_KEYS.iter().map(|k| str_of(k)).find(|s| !s.is_empty()) {
             c.files = vec![path.to_string()];
@@ -183,7 +203,7 @@ impl Builder {
     /// 一个工具结果：调用读了文件的记到 files（多个文件平分），否则按工具名记到 results。
     /// 另记一条明细（`ToolResult`）：工具名、脱敏后的命令或路径、行数、退出码，不存输出正文。
     pub fn result(&mut self, call_id: &str, tokens: i64, output: &str) {
-        let call = self.calls.get(call_id).cloned().unwrap_or_else(|| ToolCall { name: "tool".into(), files: vec![], target: None });
+        let call = self.calls.get(call_id).cloned().unwrap_or_else(|| ToolCall { name: "tool".into(), ..Default::default() });
         let (lines, exit_code, summary) = super::summary::summarize(output);
         let (target, masked) = match call.target.as_deref() {
             Some(t) => {
@@ -192,9 +212,19 @@ impl Builder {
             }
             None => (None, false),
         };
-        let kind = if call.files.is_empty() { Kind::Results } else { Kind::Files };
+        // Skill 的加载证据（V10-11）：调用了 Skill 工具，或读的文件就是某个 Skill 的 SKILL.md。
+        // 这部分归入 Skills 一次，不再算进工具结果或文件
+        let loaded = call.skill.clone().or_else(|| match call.files.as_slice() {
+            [only] => skill_of_path(only),
+            _ => None,
+        });
+        let kind = if loaded.is_some() { Kind::Skills } else if call.files.is_empty() { Kind::Results } else { Kind::Files };
         if tokens > 0 {
             self.results.push(ToolResult { tool: call.name.clone(), target, kind, tokens, lines, exit_code, masked, summary, captured: false });
+        }
+        if let Some(skill) = loaded {
+            self.add(Kind::Skills, &skill, "loaded", tokens);
+            return;
         }
         if call.files.is_empty() {
             self.add(Kind::Results, &call.name, "result", tokens);

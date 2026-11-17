@@ -180,6 +180,8 @@ pub struct ToolCall {
     pub files: Vec<String>,
     /// 命令或路径（原文，记明细时再脱敏）。
     pub target: Option<String>,
+    /// 加载的 Skill 名：调用的是 Skill 工具（Claude Code `Skill`、Gemini CLI `activate_skill`）时才有。
+    pub skill: Option<String>,
 }
 
 /// 边读请求体边累计。

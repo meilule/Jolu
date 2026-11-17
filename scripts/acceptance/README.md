@@ -88,6 +88,10 @@ Remove-Item Env:JOLU_DEV_URL                                 # 验收结束后�
   - 核对内容：活跃会话各列，以及 V10-13 各状态的写法（尚未采集、暂无请求、容量未知、未提供、危险色进度条），还有搜索与状态筛选。截图浅色、深色各一张。
   - 用法：先 `pnpm --dir frontend exec vite --port 5198 --strictPort`，再在仓库根目录运行 `JOLU_PREVIEW_URL=http://localhost:5198 node scripts/acceptance/context-overview-preview.e2e.mjs`。
   - 浏览器：本机 Edge 无头启动会直接退出，脚本优先用 Chrome。
+- `context-observation-preview.e2e.mjs`：会话观察（V10-03～V10-14）的浏览器预览验收，用法同上。
+  - 从概览「查看上下文」进入，核对：链路与两张卡、堆叠条与矩形图筛选联动、明细表展开、单次工具返回与「查看全部」、Skills 来源证据。
+  - 也核对历史请求暂停与恢复跟随，脚本会模拟新增一次请求。
+  - 也核对「不支持」「暂无请求」两种状态。
 
 ## 档位面板与联网搜索设置
 

@@ -59,7 +59,7 @@ pub(super) fn parse(b: &mut Builder, req: &Value) -> bool {
                     "" => format!("name:{name}"),
                     id => id.to_string(),
                 };
-                b.calls.entry(id.clone()).or_insert_with(|| ToolCall { name: name.to_string(), files: vec![], target: None });
+                b.calls.entry(id.clone()).or_insert_with(|| ToolCall { name: name.to_string(), ..Default::default() });
                 let response = fr.get("response");
                 // Gemini CLI 把输出放在 response.output，出错时在 response.error
                 let output = response

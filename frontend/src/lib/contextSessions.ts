@@ -183,6 +183,8 @@ export function filterRows(rows: ActiveSessionRow[], search: string, status: Sta
 
 export interface ContextRisk {
   key: string
+  platform: string
+  sessionId: string
   title: string
   detail: string
 }
@@ -194,6 +196,8 @@ export function contextRisks(rows: ActiveSessionRow[], agentName: (agent: string
     .sort((a, b) => (b.context.ratio ?? 0) - (a.context.ratio ?? 0))
     .map((row) => ({
       key: `context:${row.key}`,
+      platform: row.platform,
+      sessionId: row.sessionId,
       title: `${row.agent ? agentName(row.agent) : row.title} 上下文已用 ${((row.context.ratio ?? 0) * 100).toFixed(0)}%`,
       detail: `最近一次请求 · ${row.context.text}`,
     }))
