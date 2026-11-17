@@ -11,6 +11,7 @@ import { useSettings } from "@/hooks/useSettings"
 import { useUpdate } from "@/components/panel/UpdateContext"
 import { useToast } from "@/components/ui/Toast"
 import { ActionButton, SettingsGroup, SettingsRow, Switch } from "./settingsUi"
+import { CapabilitySection } from "./CapabilitySection"
 
 /** 关于与更新（画板 96）：检查更新默认启用；构建时停用（UPDATES_ENABLED = false）则如实显示停用状态 */
 export function AboutSection() {
@@ -89,6 +90,8 @@ export function AboutSection() {
           control={<ActionButton tone="soft" onClick={() => void openUrl(`${REPO_URL}/releases`)}>查看日志<ChevronRight aria-hidden className="size-3.5" /></ActionButton>}
         />
       </SettingsGroup>
+
+      <CapabilitySection />
 
       <div className="flex items-start gap-2.5 rounded-[9px] bg-jolu-side p-3.5 text-[12px] text-jolu-muted">
         <Info aria-hidden className="size-4 shrink-0" />
