@@ -462,6 +462,16 @@ fn user_bin_dirs(home: &Path) -> Vec<PathBuf> {
     dirs.into_iter().flatten().collect()
 }
 
+/// 用户级 CLI 安装目录（macOS / Linux）：magpie `UserBinDirs` 的非 Windows 版（proc/path_other.go
+/// `userDirs` 的固定清单部分）。2026-11-17 补：以前只有 Windows 版，macOS / Linux 的发行构建编不过。
+#[cfg(not(windows))]
+fn user_bin_dirs(home: &Path) -> Vec<PathBuf> {
+    [".local/bin", ".npm-global/bin", ".npm/bin", ".bun/bin", ".volta/bin", ".asdf/shims", ".local/share/mise/shims", ".cargo/bin", ".deno/bin", "Library/pnpm", ".local/share/pnpm"]
+        .iter()
+        .map(|dir| home.join(dir))
+        .collect()
+}
+
 /// 各家官方安装器 / 桌面版的固定落点：装完不在 PATH 里，也不在通用兜底目录里。
 /// 只按已知厂商目录逐个拼，不递归扫 `%LOCALAPPDATA%`。来源：
 /// - Claude `~/.claude/local`、OpenCode `~/.opencode/bin`、Codex `~/.codex/packages/standalone`：
