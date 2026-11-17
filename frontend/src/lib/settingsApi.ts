@@ -1,4 +1,5 @@
 import { invoke, isTauri, type AppSettings } from "./api"
+import type { FileOutcomeDto, LibrarySharedStateDto, SubagentDto } from "./librarySharedView"
 import type { DefaultPage, MainPage } from "./mainNavigation"
 import type { WarmupOutcomeDto } from "./events"
 import type { Density } from "./appearance"
@@ -54,6 +55,14 @@ export const settingsApi = {
   libraryInstall: (agent: string) => invoke<{ agent: string; name: string; created: boolean }>("library_install", { agent }),
   /** 搜索插件：从某个 agent 移除（只删 Jolu 装的） */
   libraryRemove: (agent: string, name: string) => invoke<boolean>("library_remove", { agent, name }),
+  /** Library 5.1：共享指令与子代理的定义和各工具的写入现状（无画板，待确认） */
+  librarySharedState: () => invoke<LibrarySharedStateDto>("library_shared_state"),
+  /** 保存共享指令并写进勾选的工具；没勾选但写过的移除区块 */
+  libraryInstructionsSave: (text: string, agents: string[]) => invoke<FileOutcomeDto[]>("library_instructions_save", { text, agents }),
+  /** 保存子代理并按各工具格式写文件；取消勾选的删掉 Jolu 写的文件 */
+  librarySubagentSave: (def: SubagentDto) => invoke<FileOutcomeDto[]>("library_subagent_save", { def }),
+  /** 删除子代理：删掉 Jolu 写的、没被改过的文件 */
+  librarySubagentRemove: (name: string) => invoke<FileOutcomeDto[]>("library_subagent_remove", { name }),
   /** 批次 G：保持系统唤醒；不支持的系统上打开会报错，不假装成功 */
   setKeepAwake: (on: boolean) => invoke<AppSettings>("set_keep_awake", { on }),
   /** 批次 G：每日 warm-up 开关与触发小时（后端按 0–23 截断） */

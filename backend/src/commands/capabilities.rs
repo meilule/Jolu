@@ -138,6 +138,80 @@ pub(crate) fn library_remove(app: tauri::AppHandle, agent: String, name: String)
     Ok(removed)
 }
 
+/// Library 5.1：共享指令与子代理的定义和各 agent 的写入现状（无画板，待确认）。
+#[derive(serde::Serialize)]
+pub(crate) struct LibrarySharedState {
+    instructions: library::shared::InstructionsDef,
+    instruction_targets: Vec<library::shared::TargetStatus>,
+    subagents: Vec<LibrarySubagentView>,
+    subagent_agents: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct LibrarySubagentView {
+    #[serde(flatten)]
+    def: library::shared::SubagentDef,
+    targets: Vec<library::shared::TargetStatus>,
+}
+
+fn shared_state(conn: &rusqlite::Connection) -> LibrarySharedState {
+    use library::shared;
+    LibrarySharedState {
+        instructions: shared::load_instructions(conn),
+        instruction_targets: shared::INSTRUCTION_AGENTS.iter().map(|agent| shared::instruction_status(conn, agent, shared::instruction_path(agent).as_deref())).collect(),
+        subagents: shared::list_subagents(conn)
+            .into_iter()
+            .map(|def| LibrarySubagentView { targets: shared::SUBAGENT_AGENTS.iter().map(|agent| shared::subagent_status(conn, &def.name, agent)).collect(), def })
+            .collect(),
+        subagent_agents: shared::SUBAGENT_AGENTS.iter().map(|a| a.to_string()).collect(),
+    }
+}
+
+#[tauri::command]
+pub(crate) fn library_shared_state(app: tauri::AppHandle) -> Result<LibrarySharedState, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    Ok(shared_state(&conn))
+}
+
+/// 保存共享指令并同步到勾选的工具（没勾选但写过的移除）；返回每处的结果。
+#[tauri::command]
+pub(crate) fn library_instructions_save(app: tauri::AppHandle, text: String, agents: Vec<String>) -> Result<Vec<library::shared::FileOutcome>, String> {
+    let def = library::shared::InstructionsDef { text, agents };
+    let out = crate::cli_switch::with_switch(|| {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().map_err(|_| "数据库不可用".to_string())?;
+        library::shared::save_instructions(&conn, &def, chrono::Utc::now().timestamp_millis(), &library::shared::instruction_path)
+    })
+    .map_err(|error| format!("另一实例正在修改工具配置：{error}"))?;
+    let _ = app.emit(crate::events::LIBRARY_CHANGED, ());
+    Ok(out)
+}
+
+#[tauri::command]
+pub(crate) fn library_subagent_save(app: tauri::AppHandle, def: library::shared::SubagentDef) -> Result<Vec<library::shared::FileOutcome>, String> {
+    let out = crate::cli_switch::with_switch(|| {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().map_err(|_| "数据库不可用".to_string())?;
+        library::shared::save_subagent(&conn, &def, chrono::Utc::now().timestamp_millis(), &library::shared::subagent_path)
+    })
+    .map_err(|error| format!("另一实例正在修改工具配置：{error}"))?;
+    let _ = app.emit(crate::events::LIBRARY_CHANGED, ());
+    Ok(out)
+}
+
+#[tauri::command]
+pub(crate) fn library_subagent_remove(app: tauri::AppHandle, name: String) -> Result<Vec<library::shared::FileOutcome>, String> {
+    let out = crate::cli_switch::with_switch(|| {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().map_err(|_| "数据库不可用".to_string())?;
+        Ok::<_, String>(library::shared::remove_subagent(&conn, &name, chrono::Utc::now().timestamp_millis(), &library::shared::subagent_path))
+    })
+    .map_err(|error| format!("另一实例正在修改工具配置：{error}"))?;
+    let _ = app.emit(crate::events::LIBRARY_CHANGED, ());
+    Ok(out)
+}
+
 /// Library：每个 agent 的安装状态（装了什么 + 配置里现状），供 UI 列表用。
 #[derive(serde::Serialize)]
 pub(crate) struct LibraryAgentStatus {

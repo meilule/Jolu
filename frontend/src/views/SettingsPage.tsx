@@ -9,6 +9,7 @@ import { AppearanceSection } from "@/components/settings/AppearanceSection"
 import { NetworkSection } from "@/components/settings/NetworkSection"
 import { PrivacySection } from "@/components/settings/PrivacySection"
 import { OpsSection } from "@/components/settings/OpsSection"
+import { LibrarySharedSection } from "@/components/settings/LibrarySharedSection"
 import { SearchSection } from "@/components/settings/SearchSection"
 import { DataSection } from "@/components/settings/DataSection"
 import { NotificationSection } from "@/components/settings/NotificationSection"
@@ -120,6 +121,8 @@ export function SettingsPage({ section, navigationRequest, onOpenSkills }: {
               {/* 待确认：批次 G 运维项（保持唤醒 / warm-up / OTLP / Agent 版本）在 Jolu.pen 模块 G 没有画板，
                   暂挂「数据与存储」页尾——这四项都跟本机运行与数据外发相关 */}
               <OpsSection />
+              {/* 待确认：Library 5.1 共享指令与子代理没有画板，同挂「数据与存储」页尾 */}
+              <LibrarySharedSection />
             </>
           )}
           {tab === "notifications" && <NotificationSection cfg={cfg} setDirty={setDirty} />}

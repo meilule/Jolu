@@ -30,6 +30,7 @@
 
 pub mod agents;
 pub mod mcp_search;
+pub mod shared;
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};

@@ -1842,7 +1842,9 @@ pub fn restore_agents_headless() -> i32 {
         eprintln!("[卸载] 失败：{line}");
     }
     // Library（批 5）：Jolu 写进各 agent 的 MCP server 一并移除
-    let library_lines = crate::library::restore_all_library(&conn);
+    let mut library_lines = crate::library::restore_all_library(&conn);
+    // 5.1：共享指令区块与子代理文件（被用户改过的留着）
+    library_lines.extend(crate::library::shared::restore_all(&conn));
     for line in &library_lines {
         eprintln!("[卸载] {line}");
     }
@@ -1901,6 +1903,10 @@ pub fn run() {
             library_install,
             library_remove,
             library_list,
+            library_shared_state,
+            library_instructions_save,
+            library_subagent_save,
+            library_subagent_remove,
             gateway_wiring_applied,
             gateway_wiring_preflight,
             gateway_wiring_preview,
