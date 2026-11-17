@@ -308,6 +308,71 @@ export interface SessionsOverviewDto {
   sessions: GatewaySessionDto[]
 }
 
+/* ── V10 Agent 上下文观察（后端 gateway/context/query.rs；未知一律为 null，不是 0）── */
+
+export type ContextKind = "system" | "tools" | "skills" | "memory" | "files" | "results" | "chat" | "unknown"
+export type ContextState = "analyzing" | "ready" | "unsupported" | "no_body" | "failed"
+
+export interface ContextItemDto { name: string; tag: string; n?: number; tokens: number }
+export interface ContextPartDto { kind: ContextKind; tokens: number; items: ContextItemDto[] }
+
+/** 一条上下文快照的概要与链路 */
+export interface ContextSnapshotSummaryDto {
+  id: number
+  session_platform: string
+  session_id: string
+  request_id: number | null
+  ts: number
+  state: ContextState | string
+  protocol: string
+  /** 上游实测的输入总量（含缓存读写） */
+  input_tokens: number | null
+  output_tokens: number | null
+  cache_read: number | null
+  window_tokens: number | null
+  /** 本地估算总量（校准后仍保留，用来提示偏差） */
+  estimated: number | null
+  counted: boolean
+  error: string | null
+  agent: string | null
+  requested_model: string | null
+  upstream_model: string | null
+  source: string | null
+  route_result: string | null
+  status_code: number | null
+  duration_ms: number | null
+  connection_id: string | null
+  connection_name: string | null
+  connection_platform: string | null
+}
+
+/** 会话列表一行：最近一次快照 + 最近一次 ready 的时间 + 保留条数 */
+export interface ContextSessionRowDto extends ContextSnapshotSummaryDto {
+  last_ready_ts: number | null
+  snapshots: number
+}
+
+export interface ContextToolGroupDto { tool: string; count: number; tokens: number }
+
+export interface ContextSnapshotDetailDto extends ContextSnapshotSummaryDto {
+  parts: ContextPartDto[] | null
+  tools: ContextToolGroupDto[]
+}
+
+export interface ContextItemRowDto { kind: ContextKind; name: string; tag: string; n: number | null; tokens: number; share: number | null }
+
+export interface ContextToolResultDto {
+  tool: string
+  target: string | null
+  kind: ContextKind
+  tokens: number
+  lines: number
+  exit_code: number | null
+  masked: boolean
+  summary: string
+  captured: boolean
+}
+
 /** 网关总览（与后端 `GatewayStatus` 一致；不含任何凭证）。 */
 export interface GatewayStatusDto {
   mode: "observe" | "relay" | string
@@ -468,6 +533,16 @@ export const gatewayApi = {
   /** 今日（本地零点起）经网关的请求数 */
   /** 模型路由概览：按请求计（改道的多次尝试算一次）；partial = 流水保留上限内的下限 */
   dayOverview: () => invoke<DayOverviewDto>("gateway_day_overview"),
+  /* ── V10 上下文观察 ── */
+  contextSessions: () => invoke<ContextSessionRowDto[]>("gateway_context_sessions"),
+  contextSnapshot: (platform: string, sessionId: string, snapshotId: number | null = null) =>
+    invoke<ContextSnapshotDetailDto | null>("gateway_context_snapshot", { platform, sessionId, snapshotId }),
+  contextItems: (snapshotId: number, kind: ContextKind | null = null, search: string | null = null) =>
+    invoke<ContextItemRowDto[] | null>("gateway_context_items", { snapshotId, kind, search }),
+  contextToolItems: (snapshotId: number, tool: string | null = null) =>
+    invoke<ContextToolResultDto[] | null>("gateway_context_tool_items", { snapshotId, tool }),
+  contextHistory: (platform: string, sessionId: string) =>
+    invoke<ContextSnapshotSummaryDto[]>("gateway_context_history", { platform, sessionId }),
   /* ── 通用接入（P1-1）：Jolu 没有专门适配的工具，手填配置文件与键名 ── */
   customAgents: () => invoke<CustomAgentDto[]>("custom_agents_list"),
   customAgentAdd: (input: CustomAgentInputDto) => invoke<CustomAgentDto>("custom_agents_add", { input }),

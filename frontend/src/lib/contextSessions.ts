@@ -1,0 +1,204 @@
+import type { ContextSessionRowDto, GatewaySessionDto } from "./gatewayApi.ts"
+import { compactTokens, sessionKey, sessionTitle, type SessionView } from "./gatewaySessions.ts"
+import { PROVIDERS } from "./providerCatalog.ts"
+
+/**
+ * 模型路由 · 概览「活跃会话」表的纯逻辑（Jolu.pen V10-01 / V10-02；状态口径见 V10-13；测试见 `contextSessions.test.mjs`）。
+ *
+ * 纪律（V10-13）：
+ * - 上下文取最近一次请求，不拿会话累计用量冒充；
+ * - 未知、真实的零、不支持、采集失败分别表达：没有快照写「暂无请求」/「尚未采集」，没有缓存数写「未提供」，
+ *   模型窗口未知时写「容量未知」并隐藏百分比与进度；
+ * - 输入总量已包含缓存读取，缓存占比的分母就是输入，不再相加。
+ */
+
+/** 上下文占窗口达到这个比例时标红并进「需要关注」。画板示例 84% 标红、63% 不标；阈值本身待确认。 */
+export const CONTEXT_RISK = 0.8
+
+export type CellTone = "danger" | "normal" | "muted"
+
+export interface ContextCell {
+  /** 主文字：「168K / 200K」「631K / 容量未知」「尚未采集」…… */
+  text: string
+  /** 占窗口比例（0–1）；窗口未知或没有数字时为 null，界面隐藏百分比与进度条 */
+  ratio: number | null
+  tone: CellTone
+  /** 悬停说明：口径、估算还是实测、失败原因 */
+  title: string
+}
+
+export interface CacheCell {
+  text: string
+  title: string
+}
+
+export interface StatusCell {
+  text: string
+  tone: "on" | "muted"
+}
+
+export interface ActiveSessionRow {
+  key: string
+  platform: string
+  sessionId: string
+  agent: string | null
+  title: string
+  project: string | null
+  running: boolean
+  /** 最近活动时间：快照、会话线程、经网关流水与在途请求取最新 */
+  lastTs: number
+  model: string | null
+  account: string | null
+  context: ContextCell
+  cache: CacheCell
+  /** 最近一次快照的 id；没有快照为 null（「查看上下文」不可用） */
+  snapshotId: number | null
+}
+
+/** 输入量：上游实测优先；没有实测时用本地估算并注明 */
+function usedTokens(row: ContextSessionRowDto): { value: number | null; estimated: boolean } {
+  if (row.input_tokens != null) return { value: row.input_tokens, estimated: false }
+  if (row.estimated != null) return { value: row.estimated, estimated: true }
+  return { value: null, estimated: false }
+}
+
+/**
+ * 「最近一次上下文」单元格。
+ * `routed`：这个会话有没有经过模型路由（有经网关的流水）——没有快照时据此区分「暂无请求」与「尚未采集」。
+ */
+export function contextCell(row: ContextSessionRowDto | null, routed: boolean): ContextCell {
+  if (!row) {
+    return routed
+      ? { text: "尚未采集", ratio: null, tone: "muted", title: "已记录路由去向，当前请求没有内容快照" }
+      : { text: "暂无请求", ratio: null, tone: "muted", title: "这个会话还没有经过 Jolu 的模型路由" }
+  }
+  const used = usedTokens(row)
+  if (used.value == null) {
+    if (row.state === "analyzing") return { text: "正在分析", ratio: null, tone: "muted", title: "已收到请求，正在整理上下文组成" }
+    if (row.state === "failed") {
+      return { text: "采集失败", ratio: null, tone: "danger", title: row.last_ready_ts ? `上次成功 ${clock(row.last_ready_ts)}` : "请求已完成，但上下文快照没有保存成功" }
+    }
+    if (row.state === "unsupported") return { text: "暂不支持分析", ratio: null, tone: "muted", title: "此来源暂不支持内容分析，可查看路由与上游用量" }
+    return { text: "尚未采集", ratio: null, tone: "muted", title: "已记录路由去向，当前请求没有内容快照" }
+  }
+  const source = used.estimated ? "本地估算（上游还没回用量）" : "上游实测"
+  const window = row.window_tokens
+  if (window == null || window <= 0) {
+    return { text: `${compactTokens(used.value)} / 容量未知`, ratio: null, tone: "normal", title: `输入 ${used.value.toLocaleString("zh-CN")} · ${source}；模型窗口容量尚未确认` }
+  }
+  const ratio = used.value / window
+  return {
+    text: `${compactTokens(used.value)} / ${compactTokens(window)}`,
+    ratio,
+    tone: ratio >= CONTEXT_RISK ? "danger" : "normal",
+    title: `输入 ${used.value.toLocaleString("zh-CN")} / 窗口 ${window.toLocaleString("zh-CN")} · ${source}`,
+  }
+}
+
+/** 「缓存读取 / 占输入」单元格：上游没给写「未提供」（不是 0）；给了 0 就显示 0 */
+export function cacheCell(row: ContextSessionRowDto | null): CacheCell {
+  if (!row || row.cache_read == null) return { text: "未提供", title: "上游没有返回缓存读取数" }
+  const input = row.input_tokens
+  if (input == null || input <= 0) return { text: compactTokens(row.cache_read), title: "缓存读取（输入总量未知，不算占比）" }
+  const share = (row.cache_read / input) * 100
+  return { text: `${compactTokens(row.cache_read)} · ${share.toFixed(1)}%`, title: "缓存读取已包含在输入中" }
+}
+
+/** 状态：只有在途请求算「正在生成」；没有阶段数据，不细分「调用工具」（待确认） */
+export function statusCell(running: boolean): StatusCell {
+  return running ? { text: "正在生成", tone: "on" } : { text: "空闲", tone: "muted" }
+}
+
+/** 项目名：工作目录的最后一段 */
+export function projectOf(cwd: string | null | undefined): string | null {
+  if (!cwd) return null
+  const parts = cwd.split(/[\\/]+/).filter(Boolean)
+  return parts.length > 0 ? parts[parts.length - 1] : null
+}
+
+/** 来源账号：「平台 · 账号名」，平台名查不到时只写账号名 */
+export function accountOf(row: ContextSessionRowDto | null, fallbackSource: string | null): string | null {
+  const name = row?.connection_name ?? null
+  const platform = row?.connection_platform ?? null
+  const platformName = platform ? PROVIDERS.find((entry) => entry.id === platform)?.name ?? null : null
+  if (name && platformName && !name.includes(platformName)) return `${platformName} · ${name}`
+  return name ?? row?.source ?? fallbackSource
+}
+
+const bareModel = (model: string | null | undefined) => (model ? model.replace(/^[^/]+\//, "") : null)
+
+/**
+ * 合并「最近会话」（标题、项目、运行状态）与每个会话最近一次快照。
+ * 顺序：运行中在前，其余按最近活动倒序；只有快照、不在最近会话里的也列出。
+ */
+export function activeSessionRows(views: SessionView[], contexts: ContextSessionRowDto[]): ActiveSessionRow[] {
+  const byKey = new Map(contexts.map((row) => [sessionKey(row.session_platform, row.session_id), row]))
+  const seen = new Set<string>()
+  const rows: ActiveSessionRow[] = []
+  const push = (key: string, session: GatewaySessionDto | null, running: boolean, activity: number, ctx: ContextSessionRowDto | null) => {
+    seen.add(key)
+    const link = session?.links[0] ?? null
+    rows.push({
+      key,
+      platform: session?.platform ?? ctx?.session_platform ?? "",
+      sessionId: session?.session_id ?? ctx?.session_id ?? "",
+      agent: session?.agent ?? ctx?.agent ?? link?.agent ?? null,
+      title: session ? sessionTitle(session) : sessionTitle({ title: null, session_id: ctx?.session_id ?? "" }),
+      project: projectOf(session?.cwd),
+      running,
+      lastTs: Math.max(activity, ctx?.ts ?? 0),
+      model: ctx?.upstream_model ?? bareModel(ctx?.requested_model) ?? link?.upstream_model ?? bareModel(link?.requested_model),
+      account: accountOf(ctx, link?.source ?? null),
+      context: contextCell(ctx, (session?.links.length ?? 0) > 0 || ctx != null),
+      cache: cacheCell(ctx),
+      snapshotId: ctx?.id ?? null,
+    })
+  }
+  for (const view of views) push(view.key, view.session, view.running, view.activity, byKey.get(view.key) ?? null)
+  for (const [key, ctx] of byKey) if (!seen.has(key)) push(key, null, false, 0, ctx)
+  return rows.sort((a, b) => Number(b.running) - Number(a.running) || b.lastTs - a.lastTs)
+}
+
+export type StatusFilter = "all" | "running" | "risk" | "uncollected"
+
+export const STATUS_FILTERS: readonly { id: StatusFilter; label: string }[] = [
+  { id: "all", label: "全部状态" },
+  { id: "running", label: "正在生成" },
+  { id: "risk", label: "接近上限" },
+  { id: "uncollected", label: "尚未采集" },
+]
+
+/** 搜索会话标题、项目、Agent、模型（不区分大小写）与状态筛选 */
+export function filterRows(rows: ActiveSessionRow[], search: string, status: StatusFilter, agentName: (agent: string) => string = (a) => a): ActiveSessionRow[] {
+  const needle = search.trim().toLowerCase()
+  return rows.filter((row) => {
+    if (status === "running" && !row.running) return false
+    if (status === "risk" && !(row.context.ratio != null && row.context.ratio >= CONTEXT_RISK)) return false
+    if (status === "uncollected" && row.snapshotId != null) return false
+    if (!needle) return true
+    const hay = [row.title, row.project, row.agent ? agentName(row.agent) : null, row.agent, row.model].filter(Boolean).join("\n").toLowerCase()
+    return hay.includes(needle)
+  })
+}
+
+export interface ContextRisk {
+  key: string
+  title: string
+  detail: string
+}
+
+/** 「需要关注」：最近一次上下文已接近模型窗口的会话，占比高的在前 */
+export function contextRisks(rows: ActiveSessionRow[], agentName: (agent: string) => string = (a) => a): ContextRisk[] {
+  return rows
+    .filter((row) => row.context.ratio != null && row.context.ratio >= CONTEXT_RISK)
+    .sort((a, b) => (b.context.ratio ?? 0) - (a.context.ratio ?? 0))
+    .map((row) => ({
+      key: `context:${row.key}`,
+      title: `${row.agent ? agentName(row.agent) : row.title} 上下文已用 ${((row.context.ratio ?? 0) * 100).toFixed(0)}%`,
+      detail: `最近一次请求 · ${row.context.text}`,
+    }))
+}
+
+function clock(ts: number): string {
+  return new Date(ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })
+}

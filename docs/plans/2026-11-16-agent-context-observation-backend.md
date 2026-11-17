@@ -1,7 +1,7 @@
 # Agent 上下文观察后端实现执行文档
 
 日期：2026-11-16
-状态：第 1、2 期已完成（2026-11-17，见第 8 节各期「完成情况」）；第 3、4 期待执行
+状态：第 1–3 期已完成（2026-11-17，见第 8 节各期「完成情况」）；第 4 期待执行
 范围：后端新增「请求上下文快照」采集与查询；前端 V10 画板已由鼠鼠完成，本文只讲后端。
 读者：接手执行的同事。
 
@@ -141,11 +141,13 @@ CREATE INDEX IF NOT EXISTS idx_ctx_snap_request ON gateway_context_snapshot(requ
 
 | 命令 | 服务画板 | 关键返回 |
 |---|---|---|
-| `gateway_context_sessions` | V10-01 | 每个会话：agent、项目、实际模型、来源账号、最近快照（已用/窗口/占比）、cache_read/input、状态、最近请求时间 |
-| `gateway_context_snapshot(session_key, request_id?)` | V10-03 | 链路（请求模型 → 分组 → 实际模型/来源）、状态行（完成时间/用时/响应头）、上游实测、八类组成 |
-| `gateway_context_items(snapshot_id, kind?, search?)` | V10-03 表格 | 明细：名称、类别、次数、token、占输入；支持按类别筛选与名称/路径搜索 |
-| `gateway_context_tool_items(snapshot_id, tool_name)` | V10-05 | 逐条：命令、时间、token、**脱敏摘要**、正文是否采集 |
-| `gateway_context_history(session_key)` | V10-07 | 历史快照列表（id、时间、模型、token、状态） |
+| `gateway_context_sessions` | V10-01 | 每个会话最近一次快照：状态、上游实测输入 / 输出 / 缓存、窗口、估算、链路（agent、请求模型、实际模型、来源、路由结果、状态码、用时）、来源账号名与平台、最近一次 ready 的时间、保留条数。最多 100 个会话，按时间倒序 |
+| `gateway_context_snapshot(platform, session_id, snapshot_id?)` | V10-03 | 同上概要 + 八类组成 `parts` + 按工具聚合 `tools`（工具、条数、token）；不给 id 取最近一次；id 不属于该会话或没有这一行返回 null |
+| `gateway_context_items(snapshot_id, kind?, search?)` | V10-03 表格 | 明细：类别、名称、tag、次数、token、占输入（0–1，总量为 0 时 null）；按类别筛选、按名称不区分大小写搜索；快照不存在返回 null |
+| `gateway_context_tool_items(snapshot_id, tool?)` | V10-05 | 逐条工具结果（§3.2b）；可只看某个工具；快照不存在返回 null |
+| `gateway_context_history(platform, session_id)` | V10-07 | 这个会话保留的快照概要（最多 20 条），新的在前 |
+
+与调查时的设计相比，第 3 期按 §3.1 的两列会话键实现：`session_key` 拆成 `platform` + `session_id` 两个参数。链路信息按 `request_id` 取路由流水里这次请求的最后一条，也就是给出回复的那次尝试；为此给 `gateway_route_log.request_id` 加了索引。来源账号名取自 `connections`。命令都走只读连接池（`DbRead` + `with_reader`），不占写锁。
 
 所有命令返回「未知」用 `null`，不要用 0 或空字符串（前端要分别表达）。
 
@@ -374,6 +376,33 @@ V10-05 要求每条工具结果有「已脱敏摘要」：
 
 - 5 个 Tauri 命令；
 - 与前端 V10-01 对接。
+
+#### 第 3 期完成情况（2026-11-17）
+
+- 后端：
+  - `context/query.rs` 实现 §3.4 的 5 个查询，命令在 `commands/routing.rs`，已在 `lib.rs` 注册。
+  - 有单元测试，覆盖：取最新、换候选取最后一条流水、未知为 null、跨会话拿不到、占比之和为 1、按工具筛选、unsupported 没有组成。
+- 前端：
+  - 「模型路由 › 概览」按 V10-01 / V10-02 重排，见 `components/gateway/OverviewPanel.tsx`。
+  - 页面依次是：标题「运行概览 · 先看全局，再进入会话」；六项指标；最近 12 小时请求趋势；需要关注；活跃会话表；页脚口径。
+  - V6 概览里的「来源分布」「请求活动」两块，V10-01 里没有，随之去掉。路由流水仍在「路由流水」页签。
+  - 活跃会话的纯逻辑在 `lib/contextSessions.ts`，有测试。会话标题、项目、运行状态来自已有的 `gateway_sessions_overview`，上下文与缓存来自 `gateway_context_sessions`，两边按「平台 + 会话 id」合并。
+  - 「需要关注」新增上下文接近窗口的提醒。
+- 状态口径按 V10-13：
+  - 没有快照时：有经网关的流水写「尚未采集」，没有写「暂无请求」；
+  - 分析中写「正在分析」；
+  - 失败写「采集失败」，悬停显示「上次成功 HH:MM」；
+  - 不支持且没有用量时写「暂不支持分析」；
+  - 窗口未知写「631K / 容量未知」，不显示百分比和进度条；
+  - 没有缓存数写「未提供」，给了 0 就显示 0；
+  - 输入优先用上游实测值，没有实测时用估算，并在悬停里注明。
+- 验证：见验证记录第 8 节。浏览器预览验收 `scripts/acceptance/context-overview-preview.e2e.mjs` 通过，浅色、深色截图已与画板对照。
+- 待确认（画板没有，按最小实现做了）：
+  - 上下文标红并进「需要关注」的阈值，暂定 80%（画板示例 84% 标红、63% 不标）；
+  - 「全部状态」下拉的选项：全部状态 / 正在生成 / 接近上限 / 尚未采集；
+  - 状态列只分「正在生成」（有在途请求）和「空闲」，画板里的「调用工具」没有阶段数据，不细分；
+  - 「查看上下文」按钮在第 4 期接入 V10-03，现在是禁用状态；「需要关注」里的「查看会话上下文」先滚动到活跃会话表；
+  - 表格最多显示 8 个会话，超出时在表尾注明总数。
 
 ### 第 4 期：快照详情 + 明细 + 工具展开
 

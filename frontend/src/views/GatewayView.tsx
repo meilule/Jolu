@@ -6,12 +6,13 @@ import { EVENTS } from "@/lib/events"
 import { useLatestGate } from "@/hooks/useLatestGate"
 import {
   gatewayApi, type AgentDiscoveryDto, type CatalogModelDto, type DayOverviewDto, type GatewayGroupsDto,
-  type GatewayStatusDto, type RouteLogDto, type SourceCapabilityDto,
+  type ContextSessionRowDto, type GatewayStatusDto, type RouteLogDto, type SourceCapabilityDto,
 } from "@/lib/gatewayApi"
 import type { RoutingGroupDto } from "@/components/gateway/routingGroups"
 import { agentLabel, canEscape, wiredCount } from "@/lib/gatewayPage"
 import { driftText } from "@/lib/agentPage"
 import { rateLimitedSources } from "@/lib/gatewayOverview"
+import { activeSessionRows, contextRisks } from "@/lib/contextSessions"
 import type { MainPage } from "@/lib/mainNavigation"
 import { useConnections } from "@/hooks/useConnections"
 import { useGatewaySessions } from "@/hooks/useGatewaySessions"
@@ -95,7 +96,8 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
   const [catalog, setCatalog] = useState<CatalogModelDto[]>([])
   const [day, setDay] = useState<DayOverviewDto | null>(null)
   const [logRows, setLogRows] = useState<RouteLogDto[]>([])
-  const [middlewaresCount, setMiddlewaresCount] = useState<number | null>(null)
+  /** 每个会话最近一次上下文快照（V10-01）；读取失败为 null，与「还没有快照」的空数组分开 */
+  const [contexts, setContexts] = useState<ContextSessionRowDto[] | null>([])
   const [sharedLan, setSharedLan] = useState(false)
   const [busy, setBusy] = useState(false)
   const [tick, setTick] = useState(0)
@@ -112,12 +114,12 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
     if (!isTauri) return
     const isLatest = refreshGate.begin()
     try {
-      const [nextStatus, nextGroups, nextCatalog, nextCapabilities, nextSettings, nextDay, nextRows, nextMiddlewares, nextRouting] = await Promise.all([
+      const [nextStatus, nextGroups, nextCatalog, nextCapabilities, nextSettings, nextDay, nextRows, nextContexts, nextRouting] = await Promise.all([
         gatewayApi.status(), gatewayApi.groups(), gatewayApi.catalog(), gatewayApi.sourceCapabilities(),
         invoke<{ gateway_shared_lan?: boolean }>("get_settings").catch(() => null),
         gatewayApi.dayOverview().catch(() => null),
         gatewayApi.routeLogPage(1, RECENT_ROWS, null).catch(() => null),
-        gatewayApi.middlewares().catch(() => null),
+        gatewayApi.contextSessions().catch(() => null),
         gatewayApi.groupList().catch(() => [] as RoutingGroupDto[]),
       ])
       if (!isLatest()) return
@@ -128,7 +130,7 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
       setCapabilities(nextCapabilities)
       setDay(nextDay)
       if (nextRows) setLogRows(nextRows.rows)
-      setMiddlewaresCount(nextMiddlewares ? nextMiddlewares.filter((row) => row.enabled).length : null)
+      setContexts(nextContexts)
       setUpdatedAt(Date.now())
       setRoutingGroups(nextRouting)
     } catch (error) {
@@ -231,9 +233,17 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
         onAction: () => setTab("log"),
       })
     }
-    return items
+    // 上下文接近模型窗口的会话（V10-01「需要关注」）：排在最前
+    const risks = contextRisks(activeSessionRows(sessions.views, contexts ?? []), agentLabel).map((risk): AttentionItem => ({
+      ...risk,
+      kind: "context",
+      action: "查看会话上下文",
+      // 会话观察（V10-03）在第 4 期接入；先定位到概览里的活跃会话表
+      onAction: () => document.getElementById("active-sessions")?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    }))
+    return [...risks, ...items]
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agents, discovery, seenTools, modelIds.length, logRows, connections])
+  }, [agents, discovery, seenTools, modelIds.length, logRows, connections, sessions.views, contexts])
 
   const toggleRunning = (on: boolean) => {
     const work = (throwOnFailure = false) => run(() => gatewayApi.setMode(on ? "relay" : "observe", status?.default_connection ?? null), on ? "模型路由已开启" : "模型路由已停止，接入的工具已恢复原连接", throwOnFailure)
@@ -262,11 +272,6 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
       return next
     })
   }
-
-  const dayStart = useMemo(() => {
-    const now = new Date()
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-  }, [])
 
   if (!isTauri) {
     return <div className="flex h-full items-center justify-center text-meta text-jolu-muted">模型路由需要在桌面端使用</div>
@@ -314,14 +319,13 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
           <OverviewPanel
             day={day}
             sessions={sessions.views}
+            contexts={contexts}
             logRows={logRows}
-            dayStartMs={dayStart}
             nowMs={Date.now()}
             updatedAt={updatedAt}
             sources={serving.length}
             models={poolModels}
             groups={routingGroups.length}
-            middlewares={middlewaresCount}
             attention={attention}
             busy={busy}
             onRefresh={() => void refresh()}

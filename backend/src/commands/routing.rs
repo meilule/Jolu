@@ -684,3 +684,65 @@ pub(crate) fn zcode_set_channel(
 /// 今日（本地零点起）经网关的请求数：(ok, rejected, failed)。
 #[derive(serde::Serialize)]
 pub(crate) struct GatewayTodayCounts { pub(crate) since: i64, pub(crate) at: i64, pub(crate) ok: i64, pub(crate) rejected: i64, pub(crate) failed: i64 }
+
+/* ── V10 Agent 上下文观察（执行文档 §3.4）：只读查询，走只读连接池，不占写锁 ── */
+
+/// 每个会话最近一次上下文快照（V10-01 活跃会话表）。
+#[tauri::command]
+pub(crate) async fn gateway_context_sessions(db: State<'_, DbRead>) -> Result<Vec<crate::gateway::context::query::SessionRow>, String> {
+    with_reader(db.0.clone(), |conn| crate::gateway::context::query::sessions(conn).map_err(|e| e.to_string())).await
+}
+
+/// 一条快照的组成与按工具聚合（V10-03）；不给 `snapshot_id` 时取会话最近一次。没有为 null。
+#[tauri::command]
+pub(crate) async fn gateway_context_snapshot(
+    db: State<'_, DbRead>,
+    platform: String,
+    session_id: String,
+    snapshot_id: Option<i64>,
+) -> Result<Option<crate::gateway::context::query::SnapshotDetail>, String> {
+    with_reader(db.0.clone(), move |conn| {
+        crate::gateway::context::query::snapshot(conn, &platform, &session_id, snapshot_id).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// 明细表格（V10-03）：可按类别与名称筛选。快照不存在为 null。
+#[tauri::command]
+pub(crate) async fn gateway_context_items(
+    db: State<'_, DbRead>,
+    snapshot_id: i64,
+    kind: Option<crate::gateway::context::Kind>,
+    search: Option<String>,
+) -> Result<Option<Vec<crate::gateway::context::query::ItemRow>>, String> {
+    with_reader(db.0.clone(), move |conn| {
+        crate::gateway::context::query::items(conn, snapshot_id, kind, search.as_deref()).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// 逐条工具结果（V10-05）：可只看某个工具。快照不存在为 null。
+#[tauri::command]
+pub(crate) async fn gateway_context_tool_items(
+    db: State<'_, DbRead>,
+    snapshot_id: i64,
+    tool: Option<String>,
+) -> Result<Option<Vec<crate::gateway::context::ToolResult>>, String> {
+    with_reader(db.0.clone(), move |conn| {
+        crate::gateway::context::query::tool_items(conn, snapshot_id, tool.as_deref()).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// 一个会话保留的历史快照（V10-07），新的在前。
+#[tauri::command]
+pub(crate) async fn gateway_context_history(
+    db: State<'_, DbRead>,
+    platform: String,
+    session_id: String,
+) -> Result<Vec<crate::gateway::context::query::SnapshotSummary>, String> {
+    with_reader(db.0.clone(), move |conn| {
+        crate::gateway::context::query::history(conn, &platform, &session_id).map_err(|e| e.to_string())
+    })
+    .await
+}

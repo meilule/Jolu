@@ -84,6 +84,11 @@ Remove-Item Env:JOLU_DEV_URL                                 # 验收结束后�
 
 `raw/` 里是各工具真实的系统提示词，只能留在 `output/`（不进 Git）。
 
+- `context-overview-preview.e2e.mjs`：「模型路由 › 概览」按 V10-01 / V10-02 做的浏览器预览验收。挂载真实 `GatewayView`，接口用合成数据，不连桌面。
+  - 核对内容：活跃会话各列，以及 V10-13 各状态的写法（尚未采集、暂无请求、容量未知、未提供、危险色进度条），还有搜索与状态筛选。截图浅色、深色各一张。
+  - 用法：先 `pnpm --dir frontend exec vite --port 5198 --strictPort`，再在仓库根目录运行 `JOLU_PREVIEW_URL=http://localhost:5198 node scripts/acceptance/context-overview-preview.e2e.mjs`。
+  - 浏览器：本机 Edge 无头启动会直接退出，脚本优先用 Chrome。
+
 ## 档位面板与联网搜索设置
 
 - `gateway-tiers-search.e2e.mjs`：浏览器预览，挂载真实的接线弹窗（含档位面板）与设置页「联网搜索 / 搜索插件」分区（**档位部分待改挂 Agent 页**：接线弹窗已随 R2 删除，档位改在 `components/agents/AgentDetail.tsx`；搜索设置部分仍有效），原生调用全部合成（不读写任何工具配置）。核对：Opus 4.5 只给到 high、Haiku 不给 effort、只有一个 effort 被选中、「跟随子代理」在子代理跟随主模型时填主模型；搜索 Key 只显示掩码、保存时掩码原样交回、新 Key 原文只交一次、试搜结果展示、Trae 标为不支持。先 `pnpm dev`，再 `JOLU_PREVIEW_URL=http://localhost:5173 node scripts/acceptance/gateway-tiers-search.e2e.mjs`；截图在 `output/acceptance/gateway-tiers-search/`。

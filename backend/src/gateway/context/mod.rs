@@ -4,7 +4,8 @@
 //! - 解析（第 1 期）：四种协议的请求体 → 八类组成（system / tools / skills / memory / files / results / chat / unknown）
 //!   与逐项明细的 token 估算、逐条工具结果明细，以及按上游实测量的校准；
 //! - 采集与落库（第 2 期）：`capture.rs` 在网关入口按调用方协议解析一次、上游回了用量后校准，`store.rs` 写
-//!   `gateway_context_snapshot`；工具结果摘要与脱敏在 `summary.rs`。
+//!   `gateway_context_snapshot`；工具结果摘要与脱敏在 `summary.rs`；
+//! - 查询（第 3 期）：`query.rs`，执行文档 §3.4 的 5 个命令。
 //!
 //! 算法移植自 magpie `internal/gateway/prompt.go`（MIT，commit `40f7de24`），与它的差异写在各子模块开头。
 //! 只记名字、tag、次数与 token，不保存正文。
@@ -12,6 +13,7 @@
 mod anthropic;
 mod calls;
 pub(crate) mod capture;
+pub(crate) mod query;
 mod chat;
 mod estimate;
 mod gemini;
