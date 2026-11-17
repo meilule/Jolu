@@ -1,5 +1,6 @@
 import { invoke, isTauri, type AppSettings } from "./api"
 import type { FileOutcomeDto, LibrarySharedStateDto, SubagentDto } from "./librarySharedView"
+import type { WslWiringStateDto } from "./wslWiring"
 import type { DefaultPage, MainPage } from "./mainNavigation"
 import type { WarmupOutcomeDto } from "./events"
 import type { Density } from "./appearance"
@@ -78,6 +79,12 @@ export const settingsApi = {
   agentVersions: () => invoke<AgentVersionRow[]>("agent_versions"),
   /** 批次 G：探测 WSL 与其中 agent 的安装情况（只读） */
   wslProbeAgents: () => invoke<WslProbeDto>("wsl_probe_agents"),
+  /** 5.6：某个发行版的网络情况与已接的工具（无画板，待确认） */
+  wslWiringState: (distro: string) => invoke<WslWiringStateDto>("wsl_wiring_state", { distro }),
+  /** 5.6：接入 WSL 里的一个工具；NAT 下只在已开局域网共享时接，并签专用 Key */
+  wslWire: (distro: string, agent: string) => invoke<string>("wsl_wire", { distro, agent }),
+  /** 5.6：断开并还原 WSL 里的一个工具，撤销专用 Key */
+  wslUnwire: (distro: string, agent: string) => invoke<string>("wsl_unwire", { distro, agent }),
 }
 
 /** OTLP 导出结果：成功时带上实际请求的地址与数据点数 */

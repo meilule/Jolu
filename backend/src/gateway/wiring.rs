@@ -228,7 +228,7 @@ fn fit_effort(model: &str, effort: &str) -> Option<Option<String>> {
 /// 里那行要显示档位实际用的模型；`tier_about` 给「档位写入值」返回它的显示名与描述。
 /// 没自选的档位照旧写主模型、用主模型的「关于」。
 #[allow(clippy::too_many_arguments)]
-fn claude_wire(
+pub(super) fn claude_wire(
     text: &str,
     base: &str,
     token: &str,
@@ -391,7 +391,7 @@ fn claude_snapshot_is_structured(saved: &serde_json::Value) -> bool {
 /// `prior_model` 是上一次接线写下的主模型（取自接线记录的 applied）：没有快照时，
 /// 顶层 `model` 与各档位键若等于它，就是我们写的，要删——不能把网关来源名留给用户。
 #[allow(clippy::too_many_arguments)]
-fn claude_restore(
+pub(super) fn claude_restore(
     text: &str,
     saved: Option<&serde_json::Value>,
     prior_model: Option<&str>,
@@ -460,7 +460,7 @@ fn claude_env(text: &str, key: &str) -> Option<String> {
     root.get("env")?.get(key)?.as_str().map(str::to_string)
 }
 
-fn claude_current_base(text: &str) -> Option<String> {
+pub(super) fn claude_current_base(text: &str) -> Option<String> {
     claude_env(text, "ANTHROPIC_BASE_URL")
 }
 
@@ -475,7 +475,7 @@ fn claude_current_token(text: &str) -> Option<String> {
 /// 模型名还原成网关来源名。
 ///
 /// 快照结构：`{"env": {键: 原值}, "model": 顶层model原值}`；`model` 只在用户本来就有时出现。
-fn claude_snapshot(
+pub(super) fn claude_snapshot(
     text: &str,
     prior_model: Option<&str>,
     prior_label: Option<&str>,
@@ -518,7 +518,7 @@ fn claude_snapshot(
 /// - 未登录 ChatGPT：写自定义 provider + `experimental_bearer_token`。
 ///
 /// `wire_api` 必须是 `responses`：当前 Codex 只接受这个值，写 `chat` 会让它拒绝加载整份配置。
-fn codex_wire(
+pub(super) fn codex_wire(
     text: &str,
     base: &str,
     provider: &str,
@@ -557,7 +557,7 @@ fn codex_wire(
 
 /// 还原 Codex：删掉 Jolu 建的 provider 段，恢复 `openai_base_url` 与原 `model_provider`。
 /// 外部改过的值不动（当前 provider 是别人的、current base 不是网关地址时跳过对应字段）。
-fn codex_restore(text: &str, saved: Option<&serde_json::Value>, provider: &str) -> Result<String, String> {
+pub(super) fn codex_restore(text: &str, saved: Option<&serde_json::Value>, provider: &str) -> Result<String, String> {
     let mut document = text
         .parse::<toml_edit::DocumentMut>()
         .map_err(|error| format!("config.toml 格式无效：{error}"))?;
@@ -592,7 +592,7 @@ fn codex_restore(text: &str, saved: Option<&serde_json::Value>, provider: &str) 
 }
 
 /// Codex 实际生效的 base：顶层 openai_base_url 优先，其次当前 provider 的 base_url。
-fn codex_effective_base(text: &str) -> Option<String> {
+pub(super) fn codex_effective_base(text: &str) -> Option<String> {
     let document = text.parse::<toml_edit::DocumentMut>().ok()?;
     if let Some(base) = document.get("openai_base_url").and_then(|v| v.as_str()) {
         let base = base.trim();
@@ -634,7 +634,7 @@ fn codex_provider_base(text: &str, provider: &str) -> Option<String> {
 }
 
 /// 读 Codex 的 `openai_base_url` 与当前 provider 作为原值快照；网关值一律不收。
-fn codex_snapshot(text: &str) -> Option<serde_json::Value> {
+pub(super) fn codex_snapshot(text: &str) -> Option<serde_json::Value> {
     let document = text.parse::<toml_edit::DocumentMut>().ok()?;
     let mut saved = serde_json::Map::new();
     if let Some(base) = document.get("openai_base_url").and_then(|v| v.as_str()) {
@@ -653,7 +653,7 @@ fn codex_snapshot(text: &str) -> Option<serde_json::Value> {
 }
 
 /// OpenCode：`opencode.json` 的 `provider` 段。JSON 往返保留全部字段。
-fn opencode_wire(text: &str, base: &str, token: &str) -> Result<String, String> {
+pub(super) fn opencode_wire(text: &str, base: &str, token: &str) -> Result<String, String> {
     let mut root: serde_json::Value = if text.trim().is_empty() {
         serde_json::json!({})
     } else {
@@ -673,7 +673,7 @@ fn opencode_wire(text: &str, base: &str, token: &str) -> Result<String, String> 
     serde_json::to_string_pretty(&root).map_err(|error| format!("opencode 配置序列化失败：{error}"))
 }
 
-fn opencode_restore(text: &str, _saved: Option<&serde_json::Value>) -> Result<String, String> {
+pub(super) fn opencode_restore(text: &str, _saved: Option<&serde_json::Value>) -> Result<String, String> {
     let mut root: serde_json::Value =
         serde_json::from_str(text).map_err(|error| format!("opencode 配置不是有效 JSON：{error}"))?;
     if let Some(providers) = root.get_mut("provider").and_then(|p| p.as_object_mut()) {
@@ -682,7 +682,7 @@ fn opencode_restore(text: &str, _saved: Option<&serde_json::Value>) -> Result<St
     serde_json::to_string_pretty(&root).map_err(|error| format!("opencode 配置序列化失败：{error}"))
 }
 
-fn opencode_current_base(text: &str) -> Option<String> {
+pub(super) fn opencode_current_base(text: &str) -> Option<String> {
     let root: serde_json::Value = serde_json::from_str(text).ok()?;
     root.get("provider")?.get("jolu")?.get("options")?.get("baseURL")?.as_str().map(str::to_string)
 }
@@ -1302,7 +1302,7 @@ pub(crate) fn points_at_gateway(value: &str, port: u16) -> bool {
 /* ─────────────────────────── 文件层：路径、备份、原子写 ─────────────────────────── */
 
 /// Jolu 建的 Codex provider 段名。
-const CODEX_PROVIDER: &str = "jolu-gateway";
+pub(super) const CODEX_PROVIDER: &str = "jolu-gateway";
 
 /// `jolu-<agent>.<实例前 8 位>`：一键接线的归属标记，独立于可刷新的手动 Key。
 fn token_for(agent: &str, instance_short: &str) -> String {
@@ -1395,7 +1395,7 @@ fn verify_written(path: &Path, expected: &[u8]) -> Result<(), String> {
 }
 
 /// 写前备份到应用数据目录（沿用 cli_apply 的纪律：备份失败则不写）。
-fn backup(path: &Path, backup_dir: &Path) -> Result<(), String> {
+pub(super) fn backup(path: &Path, backup_dir: &Path) -> Result<(), String> {
     if !crate::steady::exists(&path) {
         return Ok(());
     }

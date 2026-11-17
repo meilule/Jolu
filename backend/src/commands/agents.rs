@@ -35,6 +35,97 @@ pub(crate) async fn wsl_probe_agents() -> Result<wsl_probe::WslProbe, String> {
         .map_err(|error| format!("探测 WSL 失败：{error}"))
 }
 
+/// 5.6 WSL 接线现状：发行版的网络模式与已接的工具（无画板，待确认）
+#[derive(serde::Serialize)]
+pub(crate) struct WslWiringState {
+    net: Option<crate::gateway::wiring_wsl::DistroNet>,
+    /// 读不到网络情况的原因
+    net_error: Option<String>,
+    rows: Vec<crate::gateway::wiring_wsl::WslWiringRow>,
+    agents: Vec<String>,
+    lan_shared: bool,
+}
+
+#[tauri::command]
+pub(crate) async fn wsl_wiring_state(app: tauri::AppHandle, distro: String) -> Result<WslWiringState, String> {
+    let probe_distro = distro.clone();
+    let net = tauri::async_runtime::spawn_blocking(move || crate::gateway::wiring_wsl::probe_net(&probe_distro)).await.map_err(|e| e.to_string())?;
+    let rows = {
+        let state = app.state::<Db>();
+        let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+        crate::gateway::wiring_wsl::list(&conn)
+    };
+    let (net, net_error) = match net { Ok(net) => (Some(net), None), Err(error) => (None, Some(error)) };
+    Ok(WslWiringState {
+        net,
+        net_error,
+        rows: rows.into_iter().filter(|row| row.distro == distro).collect(),
+        agents: crate::gateway::wiring_wsl::WSL_AGENTS.iter().map(|a| a.to_string()).collect(),
+        lan_shared: app.state::<Cfg>().0.get().gateway_shared_lan,
+    })
+}
+
+/// 把 WSL 发行版里的一个工具接到模型路由。NAT 网络下只在用户已开局域网共享时接，并签一把专用客户端 Key。
+#[tauri::command]
+pub(crate) async fn wsl_wire(app: tauri::AppHandle, distro: String, agent: String) -> Result<String, String> {
+    use crate::gateway::wiring_wsl::{self, Route};
+    let rel = wiring_wsl::relative_config(&agent).ok_or_else(|| format!("WSL 里暂不支持接入 {agent}"))?;
+    let settings = app.state::<Cfg>().0.get();
+    let (mode, _) = crate::gateway::mode_from(&settings);
+    if !settings.proxy_enabled || mode != crate::gateway::Mode::Relay {
+        return Err("模型路由没有运行：请先开启模型路由，再接入工具".into());
+    }
+    let probe_distro = distro.clone();
+    let net = tauri::async_runtime::spawn_blocking(move || wiring_wsl::probe_net(&probe_distro)).await.map_err(|e| e.to_string())??;
+    let route = wiring_wsl::route_for(&net, &agent, settings.proxy_port, settings.gateway_shared_lan)?;
+    let path = wiring_wsl::unc(&distro, &format!("{}/{rel}", net.home.trim_end_matches('/')));
+    let dir_exists = path.parent().is_some_and(|parent| crate::steady::exists(parent));
+    if !dir_exists {
+        return Err(format!("WSL「{distro}」里没找到 {agent} 的配置目录（{}）：先在 WSL 里装好并运行一次", path.parent().map(|p| p.display().to_string()).unwrap_or_default()));
+    }
+    let backup = custom_backup_dir(&app)?;
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    let (base, token, key_name) = match &route {
+        Route::Loopback { base } => (base.clone(), format!("jolu-{agent}.{}", settings.instance_id.chars().take(8).collect::<String>()), None),
+        Route::Host { base, key_name } => {
+            // 重接时换新 Key：旧 Key 原文只在签发时出现过一次，取不回来
+            let _ = crate::gateway::access::client_key_revoke(&conn, key_name);
+            let issued = crate::gateway::access::client_key_issue(&conn, key_name, None, None, None, None, false)?;
+            (base.clone(), issued.key, Some(key_name.clone()))
+        }
+    };
+    let result = crate::cli_switch::with_switch(|| {
+        wiring_wsl::wire_at(&conn, &distro, &agent, &path, &base, &token, key_name.as_deref(), &backup, chrono::Utc::now().timestamp_millis())
+    });
+    if let Err(error) = result {
+        if let Some(name) = key_name.as_deref() {
+            let _ = crate::gateway::access::client_key_revoke(&conn, name);
+        }
+        return Err(error);
+    }
+    drop(conn);
+    let _ = app.emit(crate::events::GATEWAY_WIRING_CHANGED, ());
+    Ok(match route {
+        Route::Loopback { .. } => format!("已接入 WSL「{distro}」里的 {agent}（经 127.0.0.1）"),
+        Route::Host { key_name, .. } => format!("已接入 WSL「{distro}」里的 {agent}（经 {base}，专用 Key「{key_name}」；Windows 防火墙需放行 WSL）"),
+    })
+}
+
+#[tauri::command]
+pub(crate) fn wsl_unwire(app: tauri::AppHandle, distro: String, agent: String) -> Result<String, String> {
+    let backup = custom_backup_dir(&app)?;
+    let state = app.state::<Db>();
+    let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    let (changed, key) = crate::cli_switch::with_switch(|| crate::gateway::wiring_wsl::unwire(&conn, &distro, &agent, &backup))?;
+    if let Some(key) = key {
+        let _ = crate::gateway::access::client_key_revoke(&conn, &key);
+    }
+    drop(conn);
+    let _ = app.emit(crate::events::GATEWAY_WIRING_CHANGED, ());
+    Ok(if changed { format!("已断开并还原 WSL「{distro}」里的 {agent}") } else { format!("WSL「{distro}」里的 {agent} 已不是 Jolu 写的地址，只清掉了接线记录") })
+}
+
 /// 接线前的提醒（只读）：比如 Claude Code 同时设了顶层 model 与 env.ANTHROPIC_MODEL。
 #[tauri::command]
 pub(crate) fn gateway_wiring_preflight(agent: String) -> Vec<String> {

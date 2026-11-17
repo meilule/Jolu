@@ -200,7 +200,12 @@
     - 桌面端每 2 秒看连接表与路由分组表的签名，命令行写库后广播 `connections-changed` / `gateway-catalog-changed`，界面随之刷新。
     - 验证：单测 5 条（请求往返、桌面端不在时撤回、拒绝伪造动作、参数归一、空库）；隔离目录冒烟：Key 写在参数里拒绝、空 Key 拒绝、对本地模拟上游 `provider add` 验证并保存、`list` 只显示掩码、`rm`、桌面端不在时 `use` 5 秒后说明原因。隔离桌面实例（`start.ps1 -Executable`，无前端页面，只验后台线程）上：`save` / `use` 把桌面端的报错原样带回（「Profile 至少要包含一个 agent 的模型」「没有名为…的 Profile」），`serve` 开启模型路由且 12731 由该实例监听、再次 `serve` 报「已在运行」，`claude run --model … --version` 用启动设置拉起 Claude Code 2.1.326 并正常退出，`settings set dnd on` 之后桌面端写设置未覆盖它；结束时只停本次两个 PID。没有在接过线的真实环境里切换 Profile
   - [ ] 不做（待确认）：真正无界面的 `serve`（网关依赖 Tauri 的 AppHandle，要先把网关与桌面端拆开；现在的 `serve` 是让运行中的桌面端开模型路由）
-- [ ] 5.6 WSL 接线写入（G10 剩余 / P2-6）
+- [x] 5.6 WSL 接线写入（G10 剩余 / P2-6）——2026-11-17（无画板，待确认）：
+  - `gateway/wiring_wsl.rs`（参照 magpie `agent/wsl.go`）：Claude Code / Codex / OpenCode 三家，复用 `wiring.rs` 的接线纯函数，文件经 `\\wsl.localhost\<发行版>\<家目录>\…` 读写，写前备份、快照记在 `wsl_wiring` 表，断开时文件里仍是 Jolu 写的地址才还原，卸载钩子一并还原。
+  - 网络：`wslinfo --networking-mode`（没有时看 `.wslconfig` 的 `[wsl2] networkingMode=mirrored`）。mirrored / virtioproxy 走 127.0.0.1 与本机令牌；NAT 只在**用户自己开了局域网共享**时接，经发行版默认路由里的 Windows 地址，并给这个工具签一把专用客户端 Key（`wsl-<发行版>-<工具>`，断开撤销，重接换新）；否则拒绝并说明「改 mirrored」或「自己开局域网共享」两条路。Jolu 不替用户开局域网共享。
+  - 坑：探测脚本里不能用 awk 的 `$3`——`wsl.exe` 转交参数时会再展开一次，改用 `cut`。
+  - 命令 `wsl_wiring_state` / `wsl_wire` / `wsl_unwire`；界面 `components/settings/WslWiringSection.tsx` 挂「数据与存储」页尾，纯逻辑 `lib/wslWiring.ts` 有测试。
+  - 验证：单测 4 条（网络解析与 `.wslconfig` 兜底、路由判定、三家接入 / 重接 / 还原往返、用户改走后不动）；本机真 WSL（Ubuntu，NAT，主机地址 172.30.224.1）经 UNC 在 `/tmp` 下往返写入与还原通过（`real_wsl_round_trip_under_tmp`，`--ignored`）。本机是 NAT 且未开局域网共享，没有真的把 WSL 里的工具接到网关发请求；mirrored 模式没有真机样本
 - [ ] 5.7 TUI 与 Web 管理界面（G6）
 - [ ] 5.8 远程网关（G7）、Docker 镜像（G8）、系统服务（N12）
 - [ ] 5.9 同步备份（G9：WebDAV / S3 / 加密 GitHub）

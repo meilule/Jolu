@@ -1847,6 +1847,8 @@ pub fn restore_agents_headless() -> i32 {
     let mut library_lines = crate::library::restore_all_library(&conn);
     // 5.1：共享指令区块与子代理文件（被用户改过的留着）
     library_lines.extend(crate::library::shared::restore_all(&conn));
+    // 5.6：WSL 里的接线（发行版没在运行时只清记录）
+    library_lines.extend(crate::gateway::wiring_wsl::restore_all(&conn, &directory.join("gateway-backups")));
     for line in &library_lines {
         eprintln!("[卸载] {line}");
     }
@@ -1896,6 +1898,9 @@ pub fn run() {
             agent_versions,
             agent_discover,
             wsl_probe_agents,
+            wsl_wiring_state,
+            wsl_wire,
+            wsl_unwire,
             otlp_export_usage,
             data_info,
             open_data_directory,

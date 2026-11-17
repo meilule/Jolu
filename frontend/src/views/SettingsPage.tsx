@@ -10,6 +10,7 @@ import { NetworkSection } from "@/components/settings/NetworkSection"
 import { PrivacySection } from "@/components/settings/PrivacySection"
 import { OpsSection } from "@/components/settings/OpsSection"
 import { LibrarySharedSection } from "@/components/settings/LibrarySharedSection"
+import { WslWiringSection } from "@/components/settings/WslWiringSection"
 import { SearchSection } from "@/components/settings/SearchSection"
 import { DataSection } from "@/components/settings/DataSection"
 import { NotificationSection } from "@/components/settings/NotificationSection"
@@ -123,6 +124,8 @@ export function SettingsPage({ section, navigationRequest, onOpenSkills }: {
               <OpsSection />
               {/* 待确认：Library 5.1 共享指令与子代理没有画板，同挂「数据与存储」页尾 */}
               <LibrarySharedSection />
+              {/* 待确认：5.6 WSL 接线没有画板，同挂「数据与存储」页尾 */}
+              <WslWiringSection />
             </>
           )}
           {tab === "notifications" && <NotificationSection cfg={cfg} setDirty={setDirty} />}
