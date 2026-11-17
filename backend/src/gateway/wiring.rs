@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use crate::gateway::wiring_store::{Applied, TierModels, WiringRecord};
 
 /// 支持的 agent 标识（与 `providerCatalog` 的平台 id 对齐）。
-pub const AGENTS: [&str; 6] = ["claude-code", "codex", "zcode", "gemini", "opencode", "kimi"];
+/// 后四家（Pencil / Qoder / Qoder CN / Crush）的适配在 `wiring_extra.rs`（5.11）
+pub const AGENTS: [&str; 10] = ["claude-code", "codex", "zcode", "gemini", "opencode", "kimi", "pencil", "qoder", "qoder-cn", "crush"];
 
 pub fn is_agent(agent: &str) -> bool {
     AGENTS.contains(&agent)
@@ -1334,6 +1335,7 @@ fn config_path(agent: &str) -> Option<PathBuf> {
             .join("opencode.json"),
         // Kimi CLI / Kimi Code（magpie kimi.go kimiDir：新版 `~/.kimi-code`，旧版 `~/.kimi`）
         "kimi" => kimi_dir(&home).0.join("config.toml"),
+        other if super::wiring_extra::is_extra(other) => super::wiring_extra::config_path(other, &home)?,
         _ => return None,
     })
 }
@@ -1425,6 +1427,7 @@ fn foreign_marker(agent: &str, text: &str, instance_short: &str) -> Option<Strin
         "opencode" => opencode_current_token(text),
         "zcode" => zcode_current_token(text),
         "kimi" => kimi_current_token(text),
+        other if super::wiring_extra::is_extra(other) => super::wiring_extra::current_token(other, text),
         _ => None,
     }?;
     if !token.starts_with("jolu-") {
@@ -1472,6 +1475,14 @@ fn ours_with(agent: &str, text: &str, port: u16, instance_short: &str, kept: Opt
                 && (token == token_for("kimi", instance_short)
                     || kept.is_some_and(|kept| !kept.is_empty() && token == kept))
                 && text.parse::<toml_edit::DocumentMut>().map(|document| kimi_default_ours(&document)).unwrap_or(false)
+        }
+        // 5.11 四家 JSON：provider 段指到网关、令牌是我们的，且工具当前选的是 Jolu 的模型
+        other if super::wiring_extra::is_extra(other) => {
+            let base = super::wiring_extra::current_base(other, text).unwrap_or_default();
+            let token = super::wiring_extra::current_token(other, text).unwrap_or_default();
+            points_at_gateway(&base, port)
+                && (token == token_for(other, instance_short) || kept.is_some_and(|kept| !kept.is_empty() && token == kept))
+                && super::wiring_extra::selected_ours(other, text)
         }
         _ => false,
     }
@@ -1632,6 +1643,7 @@ fn restart_notice(agent: &str) -> &'static str {
         "opencode" => "需重启该工具后生效",
         "zcode" => "需重启 ZCode 后生效",
         "kimi" => "需重启 Kimi 后生效",
+        other if super::wiring_extra::is_extra(other) => super::wiring_extra::restart_notice(other),
         _ => "需重启后生效",
     }
 }
@@ -1745,6 +1757,10 @@ pub(crate) fn plan_wire(
             let legacy = kimi_dir(&home).1;
             (kimi_wire(&original, &base, &token, model, catalog_models, legacy)?, kimi_snapshot(&original))
         }
+        other if super::wiring_extra::is_extra(other) => (
+            super::wiring_extra::wire(other, &original, &base, &token, model, catalog_models)?,
+            super::wiring_extra::snapshot(other, &original),
+        ),
         _ => return Err("该工具不在接线范围".into()),
     };
     let mut files = extra_files;
@@ -1754,7 +1770,7 @@ pub(crate) fn plan_wire(
         token: if agent == "codex" {
             (!codex_oauth).then(|| token.clone())
         } else {
-            matches!(agent, "claude-code" | "gemini" | "opencode" | "zcode" | "kimi").then(|| token.clone())
+            (matches!(agent, "claude-code" | "gemini" | "opencode" | "zcode" | "kimi") || super::wiring_extra::is_extra(agent)).then(|| token.clone())
         },
         provider: (agent == "codex" && !codex_oauth).then(|| CODEX_PROVIDER.to_string()),
         mode: (agent == "codex").then(|| if codex_oauth { "oauth" } else { "provider" }.to_string()),
@@ -1933,6 +1949,14 @@ pub(crate) fn plan_unwire(agent: &str, port: u16, record: Option<&WiringRecord>)
                 return Ok(None);
             }
             kimi_restore(&original, saved.as_ref())?
+        }
+        other if super::wiring_extra::is_extra(other) => {
+            let base_ours = super::wiring_extra::current_base(other, &original).is_some_and(|base| is_gateway_value(&base));
+            let token_ours = super::wiring_extra::current_token(other, &original).is_some_and(|token| token.starts_with("jolu-"));
+            if !base_ours && !token_ours {
+                return Ok(None);
+            }
+            super::wiring_extra::restore(other, &original, saved.as_ref())?
         }
         _ => return Err("该工具不在接线范围".into()),
     };
@@ -2775,10 +2799,11 @@ mod tests {
 
     #[test]
     fn agent_whitelist_covers_catalog_platforms() {
-        for agent in ["claude-code", "codex", "zcode", "gemini", "opencode"] {
+        for agent in ["claude-code", "codex", "zcode", "gemini", "opencode", "kimi", "pencil", "qoder", "qoder-cn", "crush"] {
             assert!(is_agent(agent), "{agent}");
         }
-        assert!(!is_agent("qoder"), "Qoder 不在接线范围（不代管密钥）");
+        // 5.11：Qoder CLI 接入的是 Jolu 网关令牌（写进它的 settings.json），不代管 Qoder 账号的密钥；
+        // WorkBuddy 的 models.json 是顶层数组，要逐项插入，仍不接
         assert!(!is_agent("workbuddy"));
     }
 

@@ -7,7 +7,8 @@
 import type { AgentDiscoveryDto, CustomAgentDto, WiringStatusDto } from "./gatewayApi.ts"
 
 /** Jolu 能接线的工具（与后端 `wiring::AGENTS` 一致） */
-export const WIRABLE_AGENTS = ["claude-code", "codex", "gemini", "opencode", "zcode", "kimi"] as const
+/** 有专用接线的工具（后端 `gateway/wiring.rs` 的 AGENTS；后四家在 `wiring_extra.rs`，5.11） */
+export const WIRABLE_AGENTS = ["claude-code", "codex", "gemini", "opencode", "zcode", "kimi", "pencil", "qoder", "qoder-cn", "crush"] as const
 
 /** 自定义工具（没有官方 logo）的首字母小方块；Jolu 支持的工具用官方 logo，见 `AgentBadge` */
 export function agentBadge(_agent: string, name: string): { bg: string; glyph: string } {
@@ -171,7 +172,7 @@ export function isCustomAgent(id: string): boolean {
 
 /** 添加自定义工具时每种格式的键名示例 */
 export const CUSTOM_EXAMPLES: Readonly<Record<"json" | "toml" | "env", { path: string; base: string; auth: string; model: string; suffix: string }>> = {
-  json: { path: "~/.config/crush/crush.json", base: "providers.jolu.base_url", auth: "providers.jolu.api_key", model: "models.large.model", suffix: "/v1" },
+  json: { path: "~/.config/tool/settings.json", base: "provider.baseUrl", auth: "provider.apiKey", model: "provider.model", suffix: "/v1" },
   toml: { path: "~/.config/tool/config.toml", base: "provider.base_url", auth: "provider.api_key", model: "model", suffix: "/v1" },
   env: { path: "~/.tool/.env", base: "OPENAI_BASE_URL", auth: "OPENAI_API_KEY", model: "OPENAI_MODEL", suffix: "/v1" },
 }
@@ -201,10 +202,8 @@ export interface CustomAgentPreset {
 
 export const CUSTOM_AGENT_PRESETS: readonly CustomAgentPreset[] = [
   { id: "qwen", name: "Qwen Code", format: "json", configPath: "~/.qwen/settings.json", baseKey: "env.OPENAI_BASE_URL", authKey: "env.OPENAI_API_KEY", modelKey: "env.OPENAI_MODEL", suffix: "/v1", verified: false },
-  { id: "kimi", name: "Kimi CLI", format: "toml", configPath: "~/.kimi/config.toml", baseKey: "provider.base_url", authKey: "provider.api_key", modelKey: "provider.model", suffix: "/v1", verified: false },
-  { id: "droid", name: "Droid", format: "json", configPath: "~/.factory/settings.json", baseKey: "customModels[0].baseUrl", authKey: "customModels[0].apiKey", modelKey: "customModels[0].model", suffix: "/v1", verified: false },
-  { id: "zed", name: "Zed", format: "json", configPath: "~/.config/zed/settings.json", baseKey: "language_models.openai.api_url", authKey: "language_models.openai.api_key", modelKey: "language_models.openai.available_models", suffix: "/v1", verified: false },
-  { id: "crush", name: "Crush", format: "json", configPath: "~/.config/crush/crush.json", baseKey: "providers.jolu.base_url", authKey: "providers.jolu.api_key", modelKey: "models.large.model", suffix: "/v1", verified: true },
+  // 5.11 起 Kimi / Crush 有专用接线，不再给预设；Droid（customModels 是数组）与 Zed（密钥在系统凭据库）
+  // 按 magpie 核对后通用引擎写不了，已删掉，免得写出工具不认的配置
   { id: "goose", name: "Goose", format: "env", configPath: "~/.config/goose/.env", baseKey: "OPENAI_BASE_URL", authKey: "OPENAI_API_KEY", modelKey: "OPENAI_MODEL", suffix: "/v1", verified: false },
   { id: "continue", name: "Continue", format: "json", configPath: "~/.continue/config.json", baseKey: "models.0.apiBase", authKey: "models.0.apiKey", modelKey: "models.0.model", suffix: "/v1", verified: false },
 ]
@@ -252,6 +251,25 @@ export function wireExplanation(agent: string): { icon: "file" | "shield" | "und
       return [
         { icon: "file", text: "在 Kimi 的 config.toml 里新增 provider「jolu」与一组「jolu/」开头的模型表，默认模型指向网关" },
         { icon: "shield", text: "你原有的 provider 与模型表原样保留；旧版 kimi-cli 会少写它不认识的键" },
+        undo,
+      ]
+    case "pencil":
+      return [
+        { icon: "file", text: "在 ~/.pencil/models.json 里新增 provider「jolu」，模型池里的模型都进 Pencil 的模型选择器" },
+        { icon: "shield", text: "你原有的 provider 原样保留；Pencil 启动时读这个文件，接入后要重启它" },
+        undo,
+      ]
+    case "qoder":
+    case "qoder-cn":
+      return [
+        { icon: "file", text: "在 Qoder 的 settings.json 里新增 provider「jolu」，并把当前模型切到「jolu/」开头的网关模型" },
+        { icon: "shield", text: "原来选的模型存进快照，断开时切回；Qoder 账号与它自己的密钥不动" },
+        undo,
+      ]
+    case "crush":
+      return [
+        { icon: "file", text: "在 crush.json 里新增 provider「jolu」，大小两个模型选择都指向网关模型" },
+        { icon: "shield", text: "原来的大小模型选择存进快照，断开时放回；你在 Crush 里改选了别的就不动" },
         undo,
       ]
     default:

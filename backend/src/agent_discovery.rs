@@ -247,12 +247,10 @@ fn dir_zed(home: &Path) -> Option<PathBuf> {
     Some(xdg.join("zed"))
 }
 
+/// Crush：Windows 上配置在 `%LOCALAPPDATA%\crush`（magpie crush()），其余系统 `<XDG_CONFIG_HOME 或 ~/.config>/crush`；
+/// 与接线（`gateway::wiring_extra::crush_dir`）共用一处判定
 fn dir_crush(home: &Path) -> Option<PathBuf> {
-    let xdg = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".config"));
-    Some(xdg.join("crush"))
+    Some(crate::gateway::wiring_extra::crush_dir(home))
 }
 
 fn dir_goose(home: &Path) -> Option<PathBuf> {

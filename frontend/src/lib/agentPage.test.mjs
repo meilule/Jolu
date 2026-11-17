@@ -99,7 +99,7 @@ test("通用接入的自定义工具按接入状态分组（P1-1）", () => {
 
 test("自定义工具预设：每条键名完整，未验证的必须标出来", () => {
   const presets = CUSTOM_AGENT_PRESETS
-  assert.ok(presets.length >= 6, `预设应有至少 6 家，实际 ${presets.length}`)
+  assert.ok(presets.length >= 3, `预设应有至少 3 家，实际 ${presets.length}`)
   for (const preset of presets) {
     assert.ok(preset.id && preset.name, "id 与名称必填")
     assert.ok(["json", "toml", "env"].includes(preset.format), `${preset.id} 格式合法`)
@@ -110,11 +110,13 @@ test("自定义工具预设：每条键名完整，未验证的必须标出来",
   }
   // 只有已从纸码/文档确认的才允许 verified: true
   const verified = presets.filter((p) => p.verified).map((p) => p.id)
-  assert.deepEqual(verified, ["crush"], `目前只有 Crush 的键名有代码依据，实际 ${verified}`)
+  assert.deepEqual(verified, [], `剩下的预设都是推测的键名，实际 ${verified}`)
+  // 有专用接线的工具不再出现在预设里
+  for (const id of ["kimi", "crush", "pencil", "qoder", "qoder-cn"]) assert.equal(customPresetFor(id), null, id)
 })
 
 test("customPresetFor 只认已知 id", () => {
-  assert.equal(customPresetFor("crush")?.name, "Crush")
+  assert.equal(customPresetFor("qwen")?.name, "Qwen Code")
   assert.equal(customPresetFor("不存在的工具"), null)
 })
 
@@ -140,18 +142,18 @@ test("V8 栅格筛选：blocked 恒定折叠、顺序先已接入再可接入、
 })
 
 test("V8 暂不支持：非可接线且已检测的工具在栅格里、开关禁用", () => {
-  const qoder = agentRow("qoder", null, { agent: "qoder", name: "Qoder", state: "installed" }, null)
-  assert.equal(qoder.group, "available")
-  assert.equal(qoder.supported, false)
-  assert.equal(qoder.toggle, null)
-  assert.equal(qoder.subtitle, "已检测到 · 暂无专用接入")
+  const workbuddy = agentRow("workbuddy", null, { agent: "workbuddy", name: "WorkBuddy", state: "installed" }, null)
+  assert.equal(workbuddy.group, "available")
+  assert.equal(workbuddy.supported, false)
+  assert.equal(workbuddy.toggle, null)
+  assert.equal(workbuddy.subtitle, "已检测到 · 暂无专用接入")
   // 可接线的仍是开关可用
   const zcode = agentRow("zcode", null, { agent: "zcode", name: "ZCode", state: "installed" }, null)
   assert.equal(zcode.supported, true)
   assert.equal(zcode.toggle, "off")
   // 栅格包含暂不支持卡（不走折叠区）
-  const grid = agentGridRows([qoder, zcode], "all", "", [], false)
+  const grid = agentGridRows([workbuddy, zcode], "all", "", [], false)
   // 同组保持输入顺序（都是 available）
-  assert.deepEqual(grid.rows.map((r) => r.agent), ["qoder", "zcode"])
+  assert.deepEqual(grid.rows.map((r) => r.agent), ["workbuddy", "zcode"])
   assert.deepEqual(grid.blocked, [])
 })

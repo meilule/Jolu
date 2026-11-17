@@ -192,6 +192,8 @@
 - [ ] 5.9 同步备份（G9：WebDAV / S3 / 加密 GitHub）
 - [ ] 5.10 `tune` 成本调优建议（N9）、`codexsummary` 替 Codex 压缩（N15）、OIDC 换网关 Key（N8）、浏览器扩展（N6）
 - [ ] 5.11 更多 agent 接线（权威版 §1.1：Antigravity、Zed、Factory、MiMo、Copilot、Hermes 等）
+  - [x] 2026-11-17 Pencil、Qoder、Qoder CN、Crush 专用接线（`gateway/wiring_extra.rs`，参照 magpie pencil.go / qoder.go / agents.go 的 crush；单测 6 条；`agents` 种子表与 `wiring::AGENTS` 同步；Crush 在 Windows 的目录改为 `%LOCALAPPDATA%\crush`，探测与接线共用）。未做真实工具验收；不写推理强度、不保留用户在 `providers.jolu` 里手改的字段（magpie theirsKept）标「待确认」
+  - [ ] 其余 10 家（qwen、cline、droid、zed、goose、continue、dsh、copilot、vscode、workbuddy）需要 yaml / 数组插项 / 多文件 / 凭据库写入，见 `docs/specs/2026-11-17-agent-wiring-registry.md` §8
 
 ---
 

@@ -139,4 +139,4 @@ WiringEntry {
 
 | 日期 | 决定 | 参与人 | 备注 |
 |---|---|---|---|
-| | | | |
+| 2026-11-17 | 暂不建「简单户」总台账；先按专用适配器补接 Pencil、Qoder、Qoder CN、Crush（`backend/src/gateway/wiring_extra.rs`） | 鼠鼠授权「全部完成」，助手按证据定（待确认） | 逐家核对 magpie `internal/agent/*.go`：探测表里 14 家未接线的工具**没有一家**能用现有字符串键引擎表达——要写 yaml（goose、dsh）、往数组插项（qwen、droid、copilot、vscode、workbuddy）、写多个文件（cline、copilot、vscode、goose、dsh）、整段写含 models 数组的 provider 对象（crush、qoder、pencil、zed），或密钥在系统凭据库（zed）；Continue 在 magpie 里没有实现。离简单最近的四家都只改一个 JSON 文件、provider 在固定的 `providers.jolu` 下，于是照 Kimi 的方式做成专用适配（共用网关模型目录、快照只记选择键与原有同名段、断开时选择键仍指向 Jolu 才还原）。台账（方案 B）等出现第一家真正的简单户再建。自定义工具预设里 Droid（数组）与 Zed（凭据库）按核对结果删掉，Kimi / Crush 有专用接线后也不再给预设。未做真实工具验收 |

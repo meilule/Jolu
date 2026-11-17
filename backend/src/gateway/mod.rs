@@ -56,6 +56,7 @@ pub(crate) mod subscription;
 pub(crate) mod translate;
 pub mod wire;
 pub mod wiring;
+pub(crate) mod wiring_extra;
 pub mod wiring_diff;
 pub mod wiring_store;
 
