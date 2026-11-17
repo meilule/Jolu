@@ -134,7 +134,7 @@ pub fn menu_show(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn menu_action(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    if !matches!(id.as_str(), "open_main" | "refresh" | "toggle_island" | "dnd" | "topmost" | "reset_layout" | "about" | "open_source_settings" | "pos_free" | "pos_top" | "pos_bottom" | "pos_left" | "pos_right" | "clone_create" | "clone_destroy" | "quit") {
+    if !matches!(id.as_str(), "open_main" | "refresh" | "toggle_island" | "dnd" | "topmost" | "reset_layout" | "about" | "open_source_settings" | "pos_free" | "pos_top" | "pos_bottom" | "pos_left" | "pos_right" | "clone_create" | "clone_destroy" | "clone_promote" | "quit") {
         return Err("不支持的菜单操作".into());
     }
     let target = TARGET.lock().map_err(|e| e.to_string())?.clone();

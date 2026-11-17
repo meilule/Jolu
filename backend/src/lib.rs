@@ -1746,6 +1746,12 @@ fn handle_tray_menu(app: &tauri::AppHandle, id: &str, island: Option<&str>) -> R
         "pos_right" => island_position(app.clone(), Some(dock::Edge::Right), island.map(str::to_string)),
         "clone_create" => create_island_clone(app, island)?,
         "clone_destroy" => destroy_island(app, island)?,
+        // 4.2b：以此分身为主——与本体互换所看的连接（窗口不动），各岛随 settings-changed 重新取数
+        "clone_promote" => {
+            let id = island.ok_or("本体已经是主关注")?;
+            app.state::<Cfg>().0.try_update(|settings| { island_clones::promote(settings, id); })?;
+            crate::events::settings_changed(app);
+        }
         "refresh" => {
             if TRAY_REFRESHING.swap(true, Ordering::Relaxed) { return Ok(()); }
             refresh_tray_menu(app);
@@ -2064,6 +2070,9 @@ pub fn run() {
             set_theme,
             set_display_preferences,
             set_island_style,
+            set_island_linkage,
+            set_main_context,
+            main_context,
             open_main_section,
             open_main_session,
             open_main_usage,
@@ -2179,6 +2188,35 @@ pub fn run() {
             // ③5 ZCode Start Plan 优先：按设置初始化进程级开关（zcode_free_first_set 运行时改）。
             // 字段默认 false，与静态默认一致；用户开启过则重启后仍要生效，必须回读一次。
             crate::gateway::adapter::zcode::set_free_first(app.state::<Cfg>().0.get().zcode_free_first);
+            // 4.2b #6 按最近活跃自动选主（默认关）：每 30 秒看一次各平台最近一次请求，分身所在平台明显更活跃时与本体互换
+            {
+                let handle = app.handle().clone();
+                std::thread::Builder::new().name("jolu-island-focus".into()).spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(30));
+                    let settings = handle.state::<Cfg>().0.get();
+                    if !settings.island_linkage.auto_focus || settings.island_clones.is_empty() {
+                        continue;
+                    }
+                    let Some(db) = handle.try_state::<Db>() else { continue };
+                    let latest: std::collections::HashMap<String, i64> = {
+                        let Ok(conn) = db.0.try_lock() else { continue };
+                        let mut stmt = match conn.prepare("SELECT platform, MAX(ts) FROM requests WHERE ts >= ?1 GROUP BY platform") {
+                            Ok(stmt) => stmt,
+                            Err(_) => continue,
+                        };
+                        let since = chrono::Utc::now().timestamp_millis() - 3_600_000;
+                        stmt.query_map([since], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                            .map(|rows| rows.flatten().collect())
+                            .unwrap_or_default()
+                    };
+                    let now = chrono::Utc::now().timestamp_millis();
+                    if let Some(id) = island_clones::auto_focus_target(&settings, &latest, now, 120_000, 60_000) {
+                        if handle.state::<Cfg>().0.try_update(|s| { island_clones::promote(s, &id); }).is_ok() {
+                            crate::events::settings_changed(&handle);
+                        }
+                    }
+                }).ok();
+            }
             // C6：本机 ZCode 比 Jolu 适配的版本新时记一条日志（界面提示走 zcode_version_check）。
             // 读注册表放后台线程，不拖慢启动。
             std::thread::spawn(|| {

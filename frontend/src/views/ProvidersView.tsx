@@ -1,4 +1,5 @@
 import { ContentTransition, LoadingSurface } from "@/components/ui/LoadingSurface"
+import { useMainContextReport } from "@/hooks/useMainContextReport"
 import { useEffect, useState } from "react"
 import { Blocks, Code, FolderInput, Hexagon, Info, Plus, UsersRound } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -25,6 +26,8 @@ export function ProvidersView({ initialTab = "connect", accountTarget, onAccount
   const [connecting, setConnecting] = useState<ProviderId | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   useEffect(() => { if (accountTarget) setTab("accounts") }, [accountTarget])
+  // 4.2b：在账号管理里定位到某个账号时，告诉本体岛「主窗口在看这个连接」
+  useMainContextReport("providers", tab === "accounts" ? accountTarget?.connectionId ?? null : null)
 
   return (
     <PanelPage className="flex-col"><div className={cn("flex w-full min-h-0 flex-1 flex-col gap-3", tab === "accounts" && "overflow-hidden")}>

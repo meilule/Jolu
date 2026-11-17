@@ -96,6 +96,12 @@ export interface IslandData {
    * 经典样式不读这个字段。
    */
   activeConnection?: { id: string; name: string; confidence: "exact" | "mapped" } | null
+  /** 4.2b：短时信号（额度 80% / 用尽 / 网关拒绝 / 新会话）；motion=false 时只改颜色 */
+  signal?: { kind: string; label: string; at: number; motion: boolean } | null
+  /** 4.2b：正在跟随主窗口看的连接（本体岛）；点「解除」回到自己的连接 */
+  following?: { label: string; onUnfollow: () => void } | null
+  /** 4.2b：本体岛只看这一家 ZCode provider；null = 全部 */
+  providerFilter?: string | null
 }
 
 function Shell({

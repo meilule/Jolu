@@ -72,6 +72,9 @@ pub struct Settings {
     /// 灵动岛分身列表（画布 22）。本体仍用上面的 island_* 与 dock 字段，分身各自一条。
     #[serde(default)]
     pub island_clones: Vec<crate::island_clones::IslandClone>,
+    /// 灵动岛联动（4.2b，调研 `docs/specs/2026-11-05-island-live-linkage.md` §4 #5–#9；无画板，待确认）
+    #[serde(default)]
+    pub island_linkage: IslandLinkage,
     /// 主面板上次的位置与尺寸；旧版设置缺少此字段时首次打开仍居中。
     #[serde(default)]
     pub main_window: Option<crate::main_window::Placement>,
@@ -206,6 +209,28 @@ fn default_opacity() -> u8 { 100 }
 fn default_scale() -> u16 { 100 }
 fn default_shrink_scale() -> u16 { 100 }
 fn default_island_style() -> String { "classic".into() }
+
+/// 灵动岛联动的几项开关（4.2b）。缺省值按调研的推荐：动效开、严格模式关、跟随主窗口关。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IslandLinkage {
+    /// 严格模式：「正在写」只认确证（运行中会话 / 网关在途），推测一律显示「不知道」，宁可不亮
+    pub strict_writing: bool,
+    /// 阈值 / 事件短时动效（额度 80%、用尽、网关拒绝、新会话）；免打扰或减少动效时只改颜色不播动画
+    pub signals: bool,
+    /// 跟随主窗口：主窗口在看某个连接的用量 / 供应商时，本体岛临时显示那个连接
+    pub follow_main: bool,
+    /// 本体岛只看这一家 ZCode provider（名称）；None = 全部。只作显示筛选，不触发额度查询
+    pub zcode_provider: Option<String>,
+    /// 按最近活跃自动选主：某个分身所在平台明显更活跃时，自动「以此分身为主」（默认关）
+    pub auto_focus: bool,
+}
+
+impl Default for IslandLinkage {
+    fn default() -> Self {
+        Self { strict_writing: false, signals: true, follow_main: false, zcode_provider: None, auto_focus: false }
+    }
+}
 fn default_refresh() -> u32 { 5 }
 fn default_currency() -> String { "USD".into() }
 fn default_dock_enabled() -> bool { true }
@@ -303,6 +328,7 @@ impl Default for Settings {
             island_visible: true,
             dock: Default::default(),
             island_clones: Vec::new(),
+            island_linkage: IslandLinkage::default(),
             main_window: None,
             proxy_enabled: false,
             proxy_port: default_proxy_port(),

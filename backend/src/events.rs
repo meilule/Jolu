@@ -40,16 +40,18 @@ pub(crate) const MENU_STATE_CHANGED: &str = "menu-state-changed";
 pub(crate) const TRAY_SUMMARY_OPEN: &str = "tray-summary-open";
 pub(crate) const TRAY_SUMMARY_CLOSE: &str = "tray-summary-close";
 pub(crate) const STARTUP_ERROR: &str = "startup-error";
+/// 主窗口当前在看哪个连接（4.2b #9「跟随主窗口」）；载荷见 `commands::island_window::MainContext`
+pub(crate) const MAIN_CONTEXT: &str = "main-context";
 
 /// 全部事件名（测试用来与前端表核对）。
 #[cfg(test)]
-pub(crate) const ALL: [&str; 28] = [
+pub(crate) const ALL: [&str; 29] = [
     SETTINGS_CHANGED, CONNECTIONS_CHANGED, REFRESH_REQUESTED, COLLECTION_STATUS, LIVE_USAGE,
     GATEWAY_ROUTE_START, GATEWAY_ROUTE, GATEWAY_WIRING_CHANGED, GATEWAY_CATALOG_CHANGED,
     AUTOMATION_CHANGED, WARMUP_FINISHED, DAILY_CHECKIN_CHANGED, LIBRARY_CHANGED, PRIVACY_FIRST_MASK,
     HANDOFF_CHAT, DOCK_CHANGED, DOCK_HINT, ISLAND_POINTER, ISLAND_BLUR, ISLAND_REFRESH, MAIN_INTENT,
     APP_NOTICE, UPDATE_DOWNLOAD_PROGRESS, MENU_REOPEN, MENU_STATE_CHANGED, TRAY_SUMMARY_OPEN,
-    TRAY_SUMMARY_CLOSE, STARTUP_ERROR,
+    TRAY_SUMMARY_CLOSE, STARTUP_ERROR, MAIN_CONTEXT,
 ];
 
 /// 发 `settings-changed`：载荷是发送这一刻的设置快照（含修订号），不是调用方手里的副本。

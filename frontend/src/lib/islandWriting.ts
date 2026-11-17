@@ -47,6 +47,11 @@ export interface IslandWritingInput {
   now: number
   /** 采集源出错：没有任何证据时状态是「不知道」，不是「空闲」 */
   sourceFailed?: boolean
+  /**
+   * 严格模式（4.2b，调研 §5）：只认确证两支（运行中会话 / 网关在途）。只有「最近写过」时
+   * 不算在写，显示「不知道」——宁可不亮，也不拿推测点灯
+   */
+  strict?: boolean
 }
 
 /**
@@ -93,9 +98,11 @@ export function islandWriting(input: IslandWritingInput): IslandWriting {
   const recentWrite = input.recentWindow && age != null && age <= windowSeconds * 1_000 && age >= -FUTURE_TOLERANCE_MS
   const gatewayInFlight = input.inFlight > 0
   const confirmed = running > 0 || gatewayInFlight
-  const level: WritingLevel = confirmed ? "confirmed" : recentWrite ? "inferred" : input.sourceFailed ? "unknown" : "idle"
+  const level: WritingLevel = confirmed ? "confirmed"
+    : recentWrite ? (input.strict ? "unknown" : "inferred")
+    : input.sourceFailed ? "unknown" : "idle"
   return {
-    working: confirmed || recentWrite,
+    working: confirmed || (recentWrite && !input.strict),
     running,
     recentWrite,
     gatewayInFlight,

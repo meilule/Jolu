@@ -9,7 +9,9 @@ import { useConnections } from "@/hooks/useConnections"
 import { shouldRefreshConnection } from "@/lib/refreshScope"
 import { useApiUsage, useBalance, useCostEstimate, useQuota } from "@/hooks/useQuota"
 import { toQuotaWindows } from "@/lib/quotaMap"
-import { api, isTauri, listenEvent, type SourceBreakdownDto } from "@/lib/api"
+import { api, DEFAULT_ISLAND_LINKAGE, isTauri, listenEvent, type SourceBreakdownDto } from "@/lib/api"
+import type { MainContextDto } from "@/lib/events"
+import { SIGNAL_LABEL, SIGNAL_SHOW_MS, emptySignals, stepSignals, type ActiveSignal } from "@/lib/islandSignals"
 import { islandIdFromSearch, islandProfile } from "@/lib/islandProfile"
 import { authQuotaRows } from "@/lib/authQuotaRows"
 import type { IslandMode, PlatformId } from "@/types"
@@ -60,7 +62,28 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
   // 本岛身份：URL 带 clone 参数的是分身，否则是本体；连接与停靠按身份从设置里取
   const { settings } = useSettings()
   const cloneId = useMemo(() => islandIdFromSearch(window.location.search), [])
-  const profile = islandProfile(settings, cloneId)
+  const linkage = settings.island_linkage ?? DEFAULT_ISLAND_LINKAGE
+  const ownProfile = islandProfile(settings, cloneId)
+  const { connections, loading: connectionsLoading } = useConnections()
+  // 4.2b #9 跟随主窗口：只有本体岛、开关打开时才听主窗口在看哪个连接；用户点「解除」后，
+  // 直到主窗口换了连接之前都不再跟随
+  const followOn = isTauri && !cloneId && linkage.follow_main
+  const [mainContext, setMainContext] = useState<MainContextDto | null>(null)
+  const [unfollowed, setUnfollowed] = useState<string | null>(null)
+  useEffect(() => {
+    if (!followOn) { setMainContext(null); return }
+    let disposed = false
+    void api.mainContext().then((value) => { if (!disposed) setMainContext(value) }).catch(() => {})
+    const off = listenEvent(EVENTS.MAIN_CONTEXT, (value) => { if (!disposed) setMainContext(value) })
+    return () => { disposed = true; void off.then((un) => un()).catch(() => {}) }
+  }, [followOn])
+  const contextKey = mainContext?.connection_id ? `${mainContext.page}:${mainContext.connection_id}` : null
+  const followed = followOn && contextKey && unfollowed !== contextKey
+    ? connections.find((c) => c.id === mainContext?.connection_id && c.status !== "paused") ?? null
+    : null
+  const profile = followed
+    ? { ...ownProfile, platform: followed.platformId, kind: followed.kind, connection_id: followed.id, connection_name: followed.name }
+    : ownProfile
   const islandPlatform = profile.platform
   const live = useLiveUsage(islandPlatform, true, settings.dnd, dragging)
   const collection = useCollectionStatus()
@@ -68,7 +91,6 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
   const conn = useConnectionKind(islandPlatform)
 
   // 额度按连接查；灵动岛只看当前配置平台的那一个连接（§7.3）
-  const { connections, loading: connectionsLoading } = useConnections()
   // 灵动岛生效连接：明确选择优先；未选择时自动启用当前平台第一个连接成功的
   // 连接（2026-09-19 鼠鼠定版）。仍不回退到本机账号或唯一候选。
   const active = islandActiveConnection(profile.connection_id, connections, islandPlatform)
@@ -195,14 +217,18 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
     inFlight: gateway.relay ? gateway.activity.inFlight.length : 0,
     now: quotaNow,
     sourceFailed,
+    strict: linkage.strict_writing,
   })
   const working = writing.working
   // 会话状态展示仍按来源可信度收敛：采集源出错时状态不可判定，逐条标「未知」。
   // 本轮增量取后端 running_tokens（只含 running 会话），拿不到就是 null——胶囊显示未知，
   // 不补 0、不拿示例数字。
+  // 4.2b #5：本体岛可以只看某一家 ZCode provider（按会话行的来源名筛，只作显示筛选，不改额度查询）
+  const providerFilter = islandPlatform === "zcode" && !cloneId ? linkage.zcode_provider : null
+  const visibleSessions = providerFilter ? live.sessions.filter((session) => session.source?.name === providerFilter) : live.sessions
   const islandSessions = sourceFailed
-    ? live.sessions.map((session) => ({ ...session, state: "unknown" as const }))
-    : live.sessions
+    ? visibleSessions.map((session) => ({ ...session, state: "unknown" as const }))
+    : visibleSessions
   const liveDelta = sourceFailed ? null : live.runningDelta
   /* 胶囊收缩态尾部增量段的 A + B 组合（§5.7）：锁存值 ?? 今日累计。
      A 本轮终值锁存：进行中记下 running_tokens 的最新非零读数，结束后停在这个读数上，不跳变、
@@ -256,6 +282,27 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
     return () => { alive = false; off() }
   }, [breakdownOn, islandPlatform])
 
+  // 4.2b #7 阈值 / 事件短时信号：只用已有数据在前端合成（纯逻辑 lib/islandSignals.ts）
+  const signalState = useRef(emptySignals())
+  const [signal, setSignal] = useState<ActiveSignal | null>(null)
+  const shown = gateway.activity.shown
+  const rejection = shown && shown.endedAt != null && shown.phase !== "ok" && (shown.statusCode === 429 || shown.statusCode === 402)
+    ? `${shown.statusCode}@${shown.endedAt}` : null
+  const usedPercents = (quotaWindows ?? []).map((w) => w.usedPercent).filter((n): n is number => n != null && Number.isFinite(n))
+  const signalKey = `${usedPercents.join(",")}|${live.sessions.map((s) => s.id).join(",")}|${rejection ?? ""}|${islandPlatform}|${active?.id ?? ""}`
+  useEffect(() => {
+    if (!linkage.signals) { signalState.current = emptySignals(); return }
+    const step = stepSignals(signalState.current, { usedPercents, sessionIds: live.sessions.map((s) => s.id), rejection }, Date.now())
+    signalState.current = step.state
+    if (!step.signal) return
+    setSignal(step.signal)
+    const timer = window.setTimeout(() => setSignal((current) => (current === step.signal ? null : current)), SIGNAL_SHOW_MS)
+    return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signalKey, linkage.signals])
+  // 换平台 / 换连接时重建基线，免得把切换误报成「新会话」「跨过 80%」
+  useEffect(() => { signalState.current = emptySignals(); setSignal(null) }, [islandPlatform, active?.id])
+
   // 「等额度」表情：本岛生效的连接上有自动化任务在等额度恢复（胶囊样式才读）
   const waitingIds = useAutomationWaiting(capsule)
   const automationWaiting = Boolean(active && waitingIds.has(active.id))
@@ -279,6 +326,10 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
         // 收缩态那一行按置信度渲染：`exact` / `mapped` 显示连接名（mapped 用弱化样式），
         // `platform` 或 null 保持现在的平台名。
         activeConnection,
+        // 4.2b：短时信号（免打扰或减少动效时只改颜色）、跟随主窗口、只看某家 provider
+        signal: signal ? { kind: signal.kind, label: SIGNAL_LABEL[signal.kind], at: signal.at, motion: !settings.dnd && !settings.reduce_motion } : null,
+        following: followed ? { label: `跟随中：${mainContext?.page === "usage" ? "用量" : mainContext?.page === "providers" ? "供应商" : "主窗口"} · ${followed.name}`, onUnfollow: () => setUnfollowed(contextKey) } : null,
+        providerFilter,
         // 只有真正发起了额度查询、且结果是失败类状态时才算查询失败；不支持与加载中不算
         queryFailed: (localQuotaPlatform || Boolean(queries.quota)) && !displayQuota.loading
           && Boolean(displayQuota.state) && !["ok", "unsupported"].includes(displayQuota.state!.state),

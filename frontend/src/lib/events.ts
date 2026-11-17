@@ -46,6 +46,7 @@ export const EVENTS = {
   TRAY_SUMMARY_OPEN: "tray-summary-open",
   TRAY_SUMMARY_CLOSE: "tray-summary-close",
   STARTUP_ERROR: "startup-error",
+  MAIN_CONTEXT: "main-context",
 } as const
 
 /** 最近一次 warm-up 的结果（`warmup-finished` 载荷，也是 `warmup_last_outcome` 的返回） */
@@ -56,6 +57,12 @@ export interface WarmupOutcomeDto {
   /** 直接给用户看的说明 */
   detail: string
   finished_ms: number
+}
+
+/** 主窗口当前在看的页面与连接（`set_main_context` / `main_context`）；离开有连接的页面时 connection_id 为 null */
+export interface MainContextDto {
+  page: string
+  connection_id: string | null
 }
 
 /** 压缩会话对话式修订的流式片段 */
@@ -101,6 +108,8 @@ export interface EventPayloads {
   "tray-summary-close": null
   /** 启动失败的说明文字 */
   "startup-error": string
+  /** 主窗口当前在看哪个连接（4.2b「跟随主窗口」） */
+  "main-context": MainContextDto
 }
 
 export type EventName = keyof EventPayloads

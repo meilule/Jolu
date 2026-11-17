@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react"
-import { AppWindow, BellOff, Check, ChevronRight, CopyMinus, CopyPlus, Info, LayoutGrid, LogOut, Move, PanelBottom, PanelLeft, PanelRight, PanelTop, PanelTopOpen, Pin, RefreshCw, Settings } from "lucide-react"
+import { AppWindow, BellOff, Check, ChevronRight, CopyMinus, CopyPlus, Crown, Info, LayoutGrid, LogOut, Move, PanelBottom, PanelLeft, PanelRight, PanelTop, PanelTopOpen, Pin, RefreshCw, Settings } from "lucide-react"
 import { api, isTauri, listenEvent } from "@/lib/api"
 import { EVENTS } from "@/lib/events"
 import { cloneActions, islandCount, islandIdFromSearch, islandProfile } from "@/lib/islandProfile"
@@ -98,7 +98,7 @@ export function ContextMenuWindow() {
   const icons: Partial<Record<string, typeof RefreshCw>> = {
     "打开主面板": PanelTopOpen, "立即刷新": RefreshCw, "刷新中…": RefreshCw,
     "显示灵动岛": PanelTop, "切换连接": LayoutGrid, "显示位置": Move, "始终置顶": Pin, "免打扰": BellOff,
-    "开启分身": CopyPlus, "销毁分身": CopyMinus,
+    "开启分身": CopyPlus, "销毁分身": CopyMinus, "以此分身为主": Crown,
     "重置窗口位置": Move, "设置": Settings, "关于 Jolu": Info, "退出": LogOut,
   }
   const row = (label: string, action: () => void, options: { checked?: boolean; sub?: "connections" | "position"; radio?: boolean; disabled?: boolean; danger?: boolean; platform?: "claude" | "codex"; itemIcon?: typeof RefreshCw } = {}) => {
@@ -177,6 +177,8 @@ export function ContextMenuWindow() {
           {separator}
           {row("开启分身", command("clone_create"), { disabled: !canCreate })}
           {row("销毁分身", () => setDestroying(true), { disabled: !canDestroy })}
+          {/* 4.2b #6：分身与本体互换所看的连接（窗口不动）；本体上不显示（无画板，待确认） */}
+          {target && row("以此分身为主", command("clone_promote"))}
           {separator}
           {/* 灵动岛上的右键也应能隐藏本体：以前只有托盘菜单有这个入口 */}
           {row("隐藏灵动岛", command("toggle_island"), { checked: settings.island_visible })}

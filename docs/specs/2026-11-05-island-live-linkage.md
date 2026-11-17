@@ -296,3 +296,22 @@ magpie 的答案是"把 Key 归类到客户端 key 上，而不是供应商凭�
 | 余额阈值通知已有（可复用为岛上信号源） | `backend/src/notify.rs:116-130`、`backend/src/notify.rs:206-215` |
 | 自动化"等额度 / 续跑"机制已有，但没有给岛的计数接口 | `backend/src/automation.rs:1455-1465`、`backend/src/automation.rs:1721-1745`（`lib.rs` 中无 automation 计数命令） |
 | 社区标准（链接见 §2） | OTel GenAI 属性注册表、Claude Code Hooks / Monitoring、OpenCode Server / Plugins、OpenAI admin usage 参数、magpie reference |
+
+
+---
+
+## 10. 2026-11-17 实现记录（总清单 4.2b）
+
+§6 的问题按本文的推荐先定，界面没有画板，标「待确认」。逐条：
+1. 不读 `provider_config.json`，「只看这一家」用会话行已有的来源名。
+2. 不加 `provider` 列。
+3. 维持现状，严格模式只是不认推测。
+4. 不读进程信息。
+5. 本体只显示主关注 + 分身，右键「以此分身为主」。
+6. 跳转意图沿用 4.2 已有的，本次只加了反方向的 `main-context`。
+7. admin usage 不接。
+8. 动效默认开，免打扰或减少动效时只亮颜色。
+9. 显示已存连接名。
+10. 未改。
+
+实现细节见 `docs/plans/2026-11-09-complete-remaining-work.md` 4.2b。

@@ -5,10 +5,11 @@ import { cn } from "@/lib/utils"
 import { api, isTauri, type StatsCallPageDto, type StatsFilterDto, type StatsModelRowDto, type StatsTrendBucketDto } from "@/lib/api"
 import { dateKey, localZone, rangeLabel, rangeToMillis, todayRange, utcOffsetLabel, zoneName, type DateRange } from "@/lib/usageStats"
 import { useCostFx } from "@/lib/costCurrency"
-import { accountsFor, keepApplicable } from "@/lib/usageFilters"
+import { UNATTRIBUTED_ACCOUNT, accountsFor, keepApplicable } from "@/lib/usageFilters"
 import { useConnections } from "@/hooks/useConnections"
 import { useSettings } from "@/hooks/useSettings"
 import { useStatsQuery } from "@/hooks/useStatsQuery"
+import { useMainContextReport } from "@/hooks/useMainContextReport"
 import { demoActivity, demoCalls, demoOverview } from "@/mock/usageStats"
 import { useToast } from "@/components/ui/Toast"
 import { AnalysisPanel } from "@/components/usage/AnalysisPanel"
@@ -58,6 +59,8 @@ export function UsageView({ active, request, onOpenSession }: {
   const [range, setRange] = useState<DateRange>(() => todayRange())
   const [platform, setPlatform] = useState<PlatformId | null>(null)
   const [accounts, setAccounts] = useState<string[]>([])
+  // 4.2b：只筛了一个真实账号时，告诉本体岛「主窗口在看这个连接」（岛开了「跟随主窗口」才会用）
+  useMainContextReport("usage", accounts.length === 1 && accounts[0] !== UNATTRIBUTED_ACCOUNT ? accounts[0] : null)
   const [model, setModel] = useState<string | null>(null)
   const [status, setStatus] = useState<CallStatus>(null)
   const [searchDraft, setSearchDraft] = useState("")

@@ -122,7 +122,25 @@
   - 联动 P0：会话行显示归到的连接名（只认 exact / mapped，平台档不显示）；点会话 → 主窗口会话线程定位、卡片底部「在主窗口查看」→ 用量统计按今天 + 本岛平台 / 连接预筛（新 `MainIntent::Sessions` / `Usage`）；展开卡片「今日按来源」（`island_source_breakdown`，只认 `requests.connection_id`，未归属单独计数写「n/m 条已归属」，最多 5 行）；「正在写」三档（运行中 / 网关在途 = 确证绿眼，只靠最近写入 = 推测青眼，采集源出错且无证据 = 空闲灰眼）；
   - 月窗口环：按额度描述符说明 §459 改蓝色，并按窗口长度排在最外圈（月 > 周 > 5 小时 > 日额度）。
   - 以上均无画板，标「待确认」；没有读 ZCode `provider_config.json`（明文 Key）、没有给 `requests` 加列、没有读进程信息——这些是调研 §6 的待拍板问题。浏览器预览看不到这些（都要桌面端数据），桌面端未走
-- [ ] 4.2b 灵动岛 P1 / P2 联动（调研 `docs/specs/2026-11-05-island-live-linkage.md` §4 #5–#13）：岛内切换关注的 ZCode provider、多家并列与 `island-focus`、阈值 / 事件短时动效（`island-signal`）、跟随主窗口（`main-context`）、严格模式。依赖 §6 的拍板（读明文 Key 的配置、`requests` 加列、读进程信息、动效默认值、多家并列方式），未拍板前不做
+- [x] 4.2b 灵动岛 P1 / P2 联动（调研 `docs/specs/2026-11-05-island-live-linkage.md` §4 #5–#13）：岛内切换关注的 ZCode provider、多家并列与 `island-focus`、阈值 / 事件短时动效（`island-signal`）、跟随主窗口（`main-context`）、严格模式。依赖 §6 的拍板（读明文 Key 的配置、`requests` 加列、读进程信息、动效默认值、多家并列方式），未拍板前不做
+  - 2026-11-17 完成。鼠鼠要求「现在需要完成的全部完成」，§6 待拍板的几项按调研推荐先定，界面都没有画板，标「待确认」：
+    - 不读带明文 Key 的 `provider_config.json`；
+    - `requests` 不加列；
+    - 严格模式不读进程信息；
+    - 动效默认开，免打扰或减少动效时只亮颜色；
+    - 跟随主窗口默认关；
+    - 多家并列按「本体只显示主关注 + 分身显示其他」。
+  - #5 只看这一家 ZCode provider：`island_linkage.zcode_provider`。本体岛在 ZCode 时按会话行的来源名（已存连接名）筛会话，只作显示筛选。选项取「今日按来源」里出现过的名字，入口是灵动岛设置页「联动」组。
+  - #6 主关注：右键菜单「以此分身为主」（`clone_promote` → `island_clones::promote`）。分身与本体互换所看的平台与连接，窗口位置与停靠不动。「按最近活跃自动选主」（`island_linkage.auto_focus`，默认关）：后端每 30 秒看各平台最近一次请求时刻，某个分身所在平台 2 分钟内有请求、且比本体平台领先至少 1 分钟时，自动与本体互换；同平台的分身不比较，因为分不清是哪条连接在跑。判定是 `island_clones::auto_focus_target`，有测试。
+  - #7 阈值 / 事件短时信号：`lib/islandSignals.ts`，在前端用已有数据合成，不加后端事件。
+    - 四种信号：额度跨过 80%、额度用尽、网关回 429 / 402、出现新会话。
+    - 第一次只记基线；同一种信号 5 秒内合并；每次显示 1.5 秒，沿岛内侧描边（`IslandLinkageBits.tsx` / `index.css`）。
+    - 网关拒绝只在胶囊样式有，经典样式没有订阅网关事件。
+  - #9 跟随主窗口：`set_main_context` / `main_context` 命令与 `main-context` 事件，前后端事件表同步。
+    - 用量页只筛了一个账号时、供应商页定位到某个账号时，报告这个连接（`useMainContextReport`）。
+    - 本体岛开了开关后临时显示该连接，显示「跟随中：用量 · 连接名」与「解除」；分身不跟随。
+  - 严格模式：`islandWriting` 的 `strict`。只认确证（运行中会话或网关在途）；只有最近写过时不算在写，显示「不知道」。
+  - 验证：`islandSignals` 4 项、`islandWriting` 严格模式 1 项、后端 `promote_swaps_connection_but_keeps_windows`、`auto_focus_picks_clearly_more_active_other_platform` 都通过；前端全部纯逻辑测试与类型检查通过。没有在真机上看动效与跟随。
 - [x] 4.3 额度描述符（2026-11-12）：
   - 后端注册表 `quota_registry.rs`：（平台, 接入方式）→ 查询路线集中一处，`connection_quota` 只按路线分派；一致性测试保证目录声明了订阅额度的平台都有路线；
   - 限流头 `gateway/ratelimit.rs`：所有调用 `record_upstream_signal` 的转发都记下 Anthropic / OpenAI 式 / IETF `RateLimit` 头的最近一次观测（相对时长不换算成绝对重置时间，裸数字的 `x-ratelimit-reset` 不读）；

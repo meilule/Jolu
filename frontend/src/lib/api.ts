@@ -362,6 +362,22 @@ export interface MenuSourceEvent {
 export type IslandStyle = "classic" | "capsule"
 
 /** 持久化设置（§2.6 / §7.3）。托盘与设置界面共享同一份值 */
+/** 灵动岛联动的几项开关（后端 `settings::IslandLinkage`） */
+export interface IslandLinkageDto {
+  /** 严格模式：「正在写」只认确证，推测显示「不知道」 */
+  strict_writing: boolean
+  /** 阈值 / 事件短时动效；免打扰或减少动效时只改颜色 */
+  signals: boolean
+  /** 跟随主窗口：主窗口在看某个连接时本体岛临时显示它 */
+  follow_main: boolean
+  /** 本体岛只看这一家 ZCode provider；null = 全部 */
+  zcode_provider: string | null
+  /** 按最近活跃自动选主：分身所在平台明显更活跃时自动与本体互换 */
+  auto_focus: boolean
+}
+
+export const DEFAULT_ISLAND_LINKAGE: IslandLinkageDto = { strict_writing: false, signals: true, follow_main: false, zcode_provider: null, auto_focus: false }
+
 export interface AppSettings {
   /** 后端每次保存成功加一；`get_settings` 与 `settings-changed` 都带。乱序到达时丢弃更小的 */
   revision?: number
@@ -396,6 +412,8 @@ export interface AppSettings {
   island_visible: boolean
   /** 分身列表；旧版设置缺少此字段时为空数组 */
   island_clones: IslandCloneDto[]
+  /** 灵动岛联动（4.2b；无画板，待确认）。旧版设置没有这个字段时按默认值 */
+  island_linkage?: IslandLinkageDto
   /** 本地代理：默认关闭，不开启时应用保持纯只读采集行为 */
   proxy_enabled: boolean
   proxy_port: number
@@ -548,6 +566,10 @@ export const api = {
   setBalanceAlert: (threshold: number | null, currency: string) => invoke<AppSettings>("set_balance_alert", { threshold, currency }),
   setDisplayPreferences: (opacity: number, scale: number, shrinkScale: number, refreshMinutes: number) => invoke<AppSettings>("set_display_preferences", { opacity, scale, shrinkScale, refreshMinutes }),
   setIslandStyle: (style: IslandStyle) => invoke<AppSettings>("set_island_style", { style }),
+  setIslandLinkage: (linkage: IslandLinkageDto) => invoke<AppSettings>("set_island_linkage", { linkage }),
+  /** 主窗口报告当前在看哪个连接（4.2b「跟随主窗口」；离开时传 null） */
+  setMainContext: (page: string, connectionId: string | null) => invoke<void>("set_main_context", { page, connectionId }),
+  mainContext: () => invoke<{ page: string; connection_id: string | null } | null>("main_context"),
   /** 从灵动岛打开主窗口的指定页面（模型入口 / 灵动岛 / 供应商） */
   openMainSection: (section: "gateway" | "island" | "connections") => invoke<void>("open_main_section", { section }),
   /** 灵动岛点会话：主窗口打开会话线程并定位 */

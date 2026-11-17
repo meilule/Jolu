@@ -164,6 +164,34 @@ pub fn apply_connection(settings: &mut Settings, id: Option<&str>, selected: Opt
     }
 }
 
+/// 「以此分身为主」（4.2b #6）：分身与本体互换所看的平台与连接，窗口位置与停靠各自不动。
+/// 本体是「主关注」——跟随主窗口、托盘与状态栏都看它；返回是否换成功（分身不存在为 false）。
+pub fn promote(settings: &mut Settings, id: &str) -> bool {
+    let Some(index) = clone_index(settings, id) else { return false };
+    let clone = &mut settings.island_clones[index];
+    std::mem::swap(&mut settings.island_platform, &mut clone.platform);
+    std::mem::swap(&mut settings.island_kind, &mut clone.kind);
+    std::mem::swap(&mut settings.island_connection_id, &mut clone.connection_id);
+    std::mem::swap(&mut settings.island_connection_name, &mut clone.connection_name);
+    std::mem::swap(&mut settings.island_source_id, &mut clone.source_id);
+    true
+}
+
+/// 「按最近活跃自动选主」（4.2b #6）的判定：给出各平台最近一次请求时刻，返回该提升为主的分身。
+/// 只比较和本体**不同平台**的分身（同平台分不清是哪条连接在跑）；分身所在平台要在最近 `fresh_ms` 内有请求，
+/// 且比本体平台新至少 `lead_ms`，免得两边都在用时来回换。
+pub fn auto_focus_target(settings: &Settings, latest: &std::collections::HashMap<String, i64>, now: i64, fresh_ms: i64, lead_ms: i64) -> Option<String> {
+    let main_at = latest.get(&settings.island_platform).copied().unwrap_or(i64::MIN);
+    settings
+        .island_clones
+        .iter()
+        .filter(|clone| clone.platform != settings.island_platform)
+        .filter_map(|clone| latest.get(&clone.platform).map(|at| (clone, *at)))
+        .filter(|(_, at)| now - at <= fresh_ms && at.saturating_sub(main_at) >= lead_ms)
+        .max_by_key(|(_, at)| *at)
+        .map(|(clone, _)| clone.id.clone())
+}
+
 /// 连接改名后同步本体与所有分身的快照名；返回是否有改动。
 pub fn rename_connection(settings: &mut Settings, connection_id: &str, name: &str) -> bool {
     let mut changed = false;
@@ -330,5 +358,48 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(back.island_clones, s.island_clones);
+    }
+}
+
+#[cfg(test)]
+mod promote_tests {
+    use super::*;
+
+    #[test]
+    fn promote_swaps_connection_but_keeps_windows() {
+        let mut settings = Settings::default();
+        settings.island_platform = "claude".into();
+        settings.island_connection_id = Some("main-conn".into());
+        settings.island_connection_name = Some("工作账号".into());
+        let clone = create_clone(&mut settings, None).unwrap();
+        let index = settings.island_clones.iter().position(|c| c.id == clone.id).unwrap();
+        settings.island_clones[index].platform = "zcode".into();
+        settings.island_clones[index].connection_id = Some("clone-conn".into());
+        settings.island_clones[index].connection_name = Some("ZCode".into());
+        settings.island_clones[index].position = Some((10, 20));
+        assert!(promote(&mut settings, &clone.id));
+        assert_eq!((settings.island_platform.as_str(), settings.island_connection_id.as_deref()), ("zcode", Some("clone-conn")));
+        let after = &settings.island_clones[index];
+        assert_eq!((after.platform.as_str(), after.connection_id.as_deref(), after.connection_name.as_deref()), ("claude", Some("main-conn"), Some("工作账号")));
+        assert_eq!(after.position, Some((10, 20)), "窗口位置不跟着换");
+        assert!(!promote(&mut settings, "no-such-clone"));
+    }
+
+    #[test]
+    fn auto_focus_picks_clearly_more_active_other_platform() {
+        let mut settings = Settings::default();
+        settings.island_platform = "claude".into();
+        let a = create_clone(&mut settings, None).unwrap();
+        let b = create_clone(&mut settings, None).unwrap();
+        for (id, platform) in [(&a.id, "codex"), (&b.id, "claude")] {
+            let index = settings.island_clones.iter().position(|c| &c.id == id).unwrap();
+            settings.island_clones[index].platform = platform.into();
+        }
+        let now = 1_000_000;
+        let latest = |pairs: &[(&str, i64)]| pairs.iter().map(|(p, t)| (p.to_string(), *t)).collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(auto_focus_target(&settings, &latest(&[("claude", now - 300_000), ("codex", now - 5_000)]), now, 120_000, 60_000), Some(a.id.clone()));
+        assert_eq!(auto_focus_target(&settings, &latest(&[("claude", now - 30_000), ("codex", now - 5_000)]), now, 120_000, 60_000), None, "领先不到 60 秒不换");
+        assert_eq!(auto_focus_target(&settings, &latest(&[("codex", now - 200_000)]), now, 120_000, 60_000), None, "分身的平台也已经不活跃了");
+        assert_eq!(auto_focus_target(&settings, &latest(&[("codex", now - 5_000)]), now, 120_000, 60_000), Some(a.id.clone()), "本体平台没有记录时分身领先");
     }
 }

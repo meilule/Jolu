@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from "react"
 import { EVENTS } from "@/lib/events"
-import { api, isTauri, listenEvent, type AppSettings, type IslandStyle } from "@/lib/api"
+import { api, isTauri, listenEvent, type AppSettings, type IslandStyle, DEFAULT_ISLAND_LINKAGE, type IslandLinkageDto } from "@/lib/api"
 import type { DefaultPage } from "@/lib/mainNavigation"
 import { settingsApi } from "@/lib/settingsApi"
 import { normalizeDensity } from "@/lib/appearance"
@@ -179,6 +179,11 @@ export function useSettings() {
     return api.setDisplayPreferences(next.island_opacity, next.island_scale, next.island_shrink_scale, next.refresh_minutes)
   }), [save])
   const setIslandStyle = useCallback((style: IslandStyle) => save("island_style", () => api.setIslandStyle(style)), [save])
+  /** 4.2b：联动开关按「现读最新 + 补丁」写，免得两个开关连续切换时互相覆盖 */
+  const setIslandLinkage = useCallback((patch: Partial<IslandLinkageDto>) => save("island_linkage", async () => {
+    const current = (await api.getSettings()).island_linkage ?? DEFAULT_ISLAND_LINKAGE
+    return api.setIslandLinkage({ ...DEFAULT_ISLAND_LINKAGE, ...current, ...patch })
+  }), [save])
   const setDefaultPage = useCallback((page: DefaultPage) => save("default_page", () => settingsApi.setDefaultPage(page)), [save])
   const setAppearance = useCallback((patch: Partial<Pick<AppSettings, "main_zoom" | "list_density" | "reduce_motion">>) => save(Object.keys(patch).sort().join(","), async () => {
     const next = { ...await api.getSettings(), ...patch }
@@ -199,6 +204,6 @@ export function useSettings() {
 
   const { settings, ready, loading } = state
   const error = saveError ?? state.error
-  return { settings, ready, loading, saving, isSaving, error, reload: reloadShared, setIslandPlatform, setIslandConnection, setIslandSource, setDnd, setDockEnabled, setTopmost, setIslandVisible, setAutoCheckUpdates, setUpdateInterval, setCostCurrency, setSilentStartup, setProxy, setTheme, setRetentionDays, setDisplayPreferences, setIslandStyle, setDefaultPage, setAppearance, setNetwork, setTaskNotify }
+  return { settings, ready, loading, saving, isSaving, error, reload: reloadShared, setIslandPlatform, setIslandConnection, setIslandSource, setDnd, setDockEnabled, setTopmost, setIslandVisible, setAutoCheckUpdates, setUpdateInterval, setCostCurrency, setSilentStartup, setProxy, setTheme, setRetentionDays, setDisplayPreferences, setIslandStyle, setIslandLinkage, setDefaultPage, setAppearance, setNetwork, setTaskNotify }
 }
 

@@ -1,4 +1,5 @@
 import { useCallback, useRef } from "react"
+import { FollowingBar, SignalRing } from "@/components/island/IslandLinkageBits"
 import { CapsuleIsland } from "@/components/island/CapsuleIsland"
 import { LazyConnectionSwitcher } from "@/components/island/LazyConnectionSwitcher"
 import { DockControls, FreeControls } from "@/components/island/PreviewControls"
@@ -129,6 +130,8 @@ export function CapsuleWindow() {
         {snapIndicator}
         <div className="absolute inset-0" style={{ zoom: scale }}>
           <div ref={shellRef} className={`absolute w-max ${pad} ${frame}`}>
+            <div className="relative">
+            <SignalRing signal={data.signal} round={mode === "expanded" ? "rounded-[20px]" : "rounded-full"} />
             <CapsuleIsland
               data={data}
               open={mode === "expanded"}
@@ -157,6 +160,8 @@ export function CapsuleWindow() {
                 />
               }
             />
+            </div>
+            {mode === "expanded" && <div className="mt-2 flex justify-center"><FollowingBar following={data.following} /></div>}
           </div>
         </div>
         {/* 浏览器预览的演示按钮不参与测量，否则会把内容框撑宽、让停靠位置失真 */}

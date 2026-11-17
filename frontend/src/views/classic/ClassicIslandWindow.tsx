@@ -1,4 +1,5 @@
 import { useCallback, useRef } from "react"
+import { FollowingBar, SignalRing } from "@/components/island/IslandLinkageBits"
 import { DockedIsland } from "@/components/island/DockedIsland"
 import { IslandMotion } from "@/components/island/IslandMotion"
 import { LazyConnectionSwitcher } from "@/components/island/LazyConnectionSwitcher"
@@ -138,6 +139,8 @@ export function ClassicIslandWindow() {
       onPointerDown={onPointerDown}
     >
       {snapIndicator}
+      <div className="relative">
+      <SignalRing signal={data.signal} round="rounded-[18px]" />
       <IslandMotion expanded={mode === "expanded"} dragging={dragging}>
       {mode === "collapsed" ? (
         <IslandCollapsed data={data} onExpand={() => setMode("expanded")} refreshKey={refreshSerial} refreshing={refreshActive} />
@@ -160,6 +163,8 @@ export function ClassicIslandWindow() {
         />
       )}
       </IslandMotion>
+      </div>
+      <FollowingBar following={data.following} />
       {!isTauri && (
         <FreeControls mode={mode} onMode={setMode} onDock={(e) => { setEdge(e); setMode("docked") }} />
       )}

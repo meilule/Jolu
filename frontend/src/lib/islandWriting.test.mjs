@@ -107,3 +107,12 @@ test("可信度三档：运行中 / 在途为确证，只靠最近写入为推�
   assert.equal(work([], { sourceFailed: true }).level, "unknown")
   assert.equal(work([session("done", 600_000)]).level, "idle")
 })
+
+test("严格模式：只认确证；只有最近写过时不点灯、显示不知道（4.2b）", () => {
+  const base = { sessions: [{ state: "done", updatedAtMs: 1_000 }], recentWindow: true, activeWindowSeconds: 90, inFlight: 0, now: 2_000 }
+  assert.deepEqual([islandWriting(base).working, islandWriting(base).level], [true, "inferred"])
+  const strict = islandWriting({ ...base, strict: true })
+  assert.deepEqual([strict.working, strict.level, strict.recentWrite], [false, "unknown", true])
+  const confirmed = islandWriting({ ...base, strict: true, inFlight: 1 })
+  assert.deepEqual([confirmed.working, confirmed.level], [true, "confirmed"])
+})

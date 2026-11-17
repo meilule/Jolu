@@ -147,6 +147,49 @@ pub(crate) fn set_island_style(app: tauri::AppHandle, style: String) -> Result<s
     Ok(next)
 }
 
+/// 主窗口当前在看的页面与连接（4.2b #9）。只在内存里，重启清空；本体岛开了「跟随主窗口」才用它
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct MainContext {
+    pub page: String,
+    pub connection_id: Option<String>,
+}
+
+static MAIN_CONTEXT: std::sync::Mutex<Option<MainContext>> = std::sync::Mutex::new(None);
+
+/// 主窗口报告「正在看哪个连接」（离开时报 connection_id = null）；变了才广播 `main-context`
+#[tauri::command]
+pub(crate) fn set_main_context(app: tauri::AppHandle, page: String, connection_id: Option<String>) -> Result<(), String> {
+    use tauri::Emitter;
+    let next = MainContext { page, connection_id: connection_id.filter(|id| !id.trim().is_empty()) };
+    let mut slot = MAIN_CONTEXT.lock().map_err(|e| e.to_string())?;
+    if slot.as_ref() == Some(&next) {
+        return Ok(());
+    }
+    *slot = Some(next.clone());
+    drop(slot);
+    let _ = app.emit(crate::events::MAIN_CONTEXT, next);
+    Ok(())
+}
+
+/// 岛打开时读一次当前的主窗口上下文
+#[tauri::command]
+pub(crate) fn main_context() -> Option<MainContext> {
+    MAIN_CONTEXT.lock().ok().and_then(|slot| slot.clone())
+}
+
+/// 灵动岛联动开关（4.2b）：严格模式、信号动效、跟随主窗口、关注的 ZCode provider
+#[tauri::command]
+pub(crate) fn set_island_linkage(app: tauri::AppHandle, linkage: settings::IslandLinkage) -> Result<settings::Settings, String> {
+    if let Some(name) = linkage.zcode_provider.as_deref() {
+        if name.trim().is_empty() || name.chars().count() > 120 {
+            return Err("provider 名称不合法".into());
+        }
+    }
+    let next = app.state::<Cfg>().0.try_update(|settings| settings.island_linkage = linkage)?;
+    crate::events::settings_changed(&app);
+    Ok(next)
+}
+
 #[tauri::command]
 pub(crate) async fn island_menu(app: tauri::AppHandle, window: WebviewWindow, refreshing: bool) -> Result<(), String> {
     let _ = refreshing;
@@ -268,7 +311,7 @@ pub(crate) async fn set_island_visibility(app: tauri::AppHandle, visible: bool) 
 /// `island` 是目标岛：开启分身时为来源窗口，销毁时为被销毁的窗口，None 为本体。
 #[tauri::command]
 pub(crate) async fn island_action(app: tauri::AppHandle, id: String, island: Option<String>) -> Result<(), String> {
-    if !matches!(id.as_str(), "refresh" | "reset_layout" | "clone_create" | "clone_destroy") {
+    if !matches!(id.as_str(), "refresh" | "reset_layout" | "clone_create" | "clone_destroy" | "clone_promote") {
         return Err("不支持的灵动岛操作".into());
     }
     handle_tray_menu(&app, &id, island.as_deref())
