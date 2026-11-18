@@ -4,10 +4,10 @@
 
 **把 AI 编程工具管在一处。**
 
-额度常驻桌面灵动岛 · 每日福利一键签到 · 额度用完自动等待、恢复后续跑
+额度常驻桌面灵动岛 · 每日福利一键签到 · 额度用完自动等待、恢复后续跑 · 一个本机地址接入所有模型
 
 [![Release](https://img.shields.io/github/v/release/meilule/Jolu?label=release&logo=github)](https://github.com/meilule/Jolu/releases/latest)
-![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-blue)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 
 [下载安装](https://github.com/meilule/Jolu/releases/latest) · [反馈问题](https://github.com/meilule/Jolu/issues)
 
@@ -110,9 +110,10 @@
 | 用量统计 | 概览、用量分析、调用明细三个视图；按时间、供应商、账号、模型筛选，调用明细可导出 CSV |
 | 会话线程 | 按项目浏览本机会话，搜索标题、会话 ID 或正文；只读查看消息，一键在原工具中继续 |
 | 自动化 | 让 Claude Code / Codex 立即、定时或额度恢复后执行任务；额度耗尽时保留进度，恢复后续跑 |
-| Skills 管理 | 扫描、查看、新建、导入、复制、启停 Claude Code 与 Codex 的 Skills，写入前自动备份 |
-| 模型入口 | 把官方订阅、官方 Key 与第三方 Key 收进同一个本机地址，各工具按「来源/模型」取用；三栏总览、分组排序、Agent 接线与漂移状态、路由流水 |
-| 设置 | 开机启动、主题、CLI 本地代理、数据导入导出与清理、通知与免打扰 |
+| Skills 管理 | 扫描、查看、新建、导入、复制、启停 Claude Code、Codex、Gemini、OpenCode 等工具的 Skills，写入前自动备份 |
+| Agent | 按卡片列出本机检测到的 AI 工具，11 个工具可一键接到模型路由；接入前预览改动，断开时还原 |
+| 模型路由 | 把官方订阅、官方 Key 与第三方 Key 收进同一个本机地址，各工具按「来源/模型」取用；概览与会话上下文观察、路由流水、路由分组、模型池、对外访问、中间件 |
+| 设置 | 开机启动、主题、网络与隐私脱敏、数据导入导出与清理、通知与免打扰；共享指令与子代理、WSL 接入、成本调优建议 |
 
 ![Jolu 主窗口 · 用量统计](./docs/assets/readme/panel-usage.png)
 
@@ -153,10 +154,18 @@
 
 ## 下载与安装
 
-在 [GitHub Releases](https://github.com/meilule/Jolu/releases) 下载 `Windows-x86_64-Setup.exe`，运行安装向导，完成后启动 Jolu。支持 Windows 10 / 11 x64。
+在 [GitHub Releases](https://github.com/meilule/Jolu/releases/latest) 下载对应平台的安装包：
 
+| 平台 | 文件 | 说明 |
+| --- | --- | --- |
+| Windows 10 / 11 x64 | `Windows-x86_64-Setup.exe` | 安装版，支持应用内更新 |
+| Windows 10 / 11 x64 | `Windows-x86_64-Portable.zip` | 免安装版，解压即用；需要系统已装 WebView2，更新需手动下载新版 |
+| macOS（Apple 芯片 / Intel） | `macOS-arm64.dmg` / `macOS-x86_64.dmg` | 没有 Apple 开发者签名，首次打开需在系统设置里手动允许 |
+| Linux x86_64 | `Linux-x86_64.AppImage` / `Linux-x86_64.deb` | — |
+
+- Jolu 以 Windows 为主要平台，功能和验收都在 Windows 上完成；macOS 与 Linux 版能构建和安装，但还没有在真机上系统验证，部分读取本机工具数据的功能可能不可用。
 - 每个版本拥有独立发行页，历史版本应从对应版本页下载。
-- 安装向导会创建开始菜单入口，并可创建桌面快捷方式；卸载默认保留应用数据。
+- Windows 安装向导会创建开始菜单入口，并可创建桌面快捷方式；卸载默认保留应用数据。
 
 ## 首次使用
 
@@ -220,32 +229,60 @@
 - Claude Code / Codex 按副本启停；Gemini / OpenCode 按名称规则生效，会影响同名项。其余平台的启停状态需在原工具核对。写入、覆盖、移除前都会先备份。
 - 支持 HTTPS Git 仓库导入及草稿与磁盘文件的逐行差异；Grok Skills 未接入，新接入工具的原客户端识别和热加载仍待真机核对。
 
-### 模型入口：一个本机地址，所有账号共用
+### Agent：把工具一键接到模型路由
 
-侧栏 **模型入口** 把官方订阅、官方 Key 和第三方 Key 收进同一个本机地址，各工具按「来源/模型」取用，不必在每个工具里各填一次地址和密钥。默认不转发：页面先是清单，拨到 **开启模型转发** 后才在本机回环端口上监听；没开启时工具照旧直连。
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/readme/panel-agents-dark.png" />
+  <img src="./docs/assets/readme/panel-agents.png" alt="Agent 页：本机检测到的 AI 工具按卡片排列，右上角开关就是接入与断开" />
+</picture>
+
+- 侧栏 **Agent** 按卡片列出本机检测到的 AI 工具，分「已接入 / 可接入」计数，可搜索；卡片右上角的开关就是接入与断开。
+- **可一键接入的 11 个工具**：Claude Code、Codex、Gemini CLI、OpenCode、ZCode、Kimi CLI、DeepSeek Harness、Pencil、Qoder、Qoder CN、Crush。接入前可以预览要写的配置改动；Jolu 只写自己管理的字段，断开时按接入前的快照还原，你在工具里自己改过的值不会被还原。
+- **详细页**：Claude Code 可以给 opus / sonnet / haiku 等档位分别指定模型，并设置子代理模型；其他工具设默认模型。「写入改动」页签列出 Jolu 改了配置文件的哪几行。
+- 检测到、但还没有专用接入的工具（如 Cline、GitHub Copilot CLI）显示「暂不支持」；也可以点 **添加工具**，按 JSON / TOML / env 填写配置文件路径和键名，自己接入。
+- **WSL 里的工具**：在 **设置 → 数据与存储** 可以把 WSL 发行版里的 Claude Code、Codex、OpenCode 接到模型路由。mirrored 网络直接走 127.0.0.1；NAT 网络需要你先在「对外访问」里打开局域网共享，Jolu 会给这个工具单独签一把 Key。
+- Pencil、Qoder、Crush 的接入和 WSL 接入还没用真实工具验收。
+
+### 模型路由：一个本机地址，所有账号共用
+
+侧栏 **模型路由** 把官方订阅、官方 Key 和第三方 Key 收进同一个本机地址，各工具按 `<来源>/<模型>` 取用，不必在每个工具里各填一次地址和密钥。默认不转发：开启中转后才在本机回环端口上监听；停止中转后工具照旧直连。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/readme/gateway-overview-dark.png" />
-  <img src="./docs/assets/readme/gateway-overview.png" alt="模型入口：顶部是接入设置与网关地址，下面三栏依次是模型来源、本机模型池和 Agent" />
+  <img src="./docs/assets/readme/gateway-overview.png" alt="模型路由概览：今日请求、成功率、改道与失败，最近 12 小时趋势，需要关注的会话和活跃会话的上下文占用" />
 </picture>
+
+- **概览**：今日请求、成功率、正在处理、改道、失败和响应延迟；最近 12 小时的请求趋势；「需要关注」会提醒上下文快到窗口上限的会话；活跃会话表显示每个会话最近一次请求用了多少上下文、缓存读取占多少。
+- **会话观察**：在活跃会话上点「查看上下文」，可以逐项看一次请求的上下文由什么组成——系统提示词、工具定义、Skills、记忆、文件、工具结果、对话——并按上游实际用量换算。工具结果只显示脱敏后的摘要，不保存正文。
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/readme/gateway-groups-dark.png" />
-  <img src="./docs/assets/readme/gateway-groups.png" alt="模型入口的分组视图：来源与 Agent 收进分组卡片，下方是新建分组的虚线卡" />
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/readme/gateway-session-dark.png" />
+  <img src="./docs/assets/readme/gateway-session.png" alt="会话观察：请求链路、上下文占用、提示词缓存与按类别拆分的上下文组成" />
 </picture>
 
-- **三栏**：左边 **模型来源**、中间 **本机模型池**、右边 **Agent**。订阅、官方 Key 和第三方 Key 统一按 `<来源>/<模型>` 暴露，写进工具配置的就是这个 id；同一平台可以并存多个账号，按平台 / 地区 / 账号身份去重，各自单独开关。
-- **两种视图**：**平铺** 逐条列出来源，**分组** 把来源和 Agent 收进分组卡，虚线卡用来新建分组。分组只影响排列，不改路由、接线和菜单 id；拖动成员直接换组，拖动分组卡或按 `Alt+↑/↓` 调整顺序（需要先进入 **编辑布局**，点 **完成** 保存视图、点 **还原** 放弃）。顶部还能按 Agent 分组筛选，或只显示已接入的工具。
-- **接线**：`接入设置` 逐个列出 Agent 的状态，包括未接入、已接入、配置里已移除、配置被改写、已被另一个 Jolu 接管和上次接线未完成；后几种算漂移，可以 **重新应用** 或 **接受现状**。状态按配置文件里实际写入的值判断，重新应用不会重新拍快照；所有会改工具配置的入口共用同一把锁（进程内加 Windows 命名互斥量），每个 Agent 只有一条接线记录。
-- **各工具怎么接**：Claude Code / Codex 的订阅按所选连接读取加密授权，Claude 走隔离 CLI 文本桥接，Codex 转发 Chat / Responses 请求；Codex 检测到 ChatGPT 登录时只改 `openai_base_url`、保留 OAuth，未登录时才写自定义 provider 和 `jolu-codex` 令牌。Gemini 走 `/v1beta` 原生端点，接线期间改用网关 Key、不再用 Google 账号登录，弹窗按「当前 / 接线期间 / 断开时」三行对照，断开时逐项还原。Grok、OpenCode、ZCode、Qoder、Trae 与 WorkBuddy 双版已有隔离适配，其中 **Qoder 和 Trae 还没用真实账号验收**。Codex 的原生会话头（`session-id` / `thread-id`）用来把同一会话的请求稳定送到同一来源。
-- **路由流水**：每次转发记一行——时间、Agent、请求模型、路由到的来源、耗时、结果（成功 / 拒绝 / 失败）。这是单次请求的去向记录，按来源分组的多次故障转移尝试记录还没做。
-- **失效来源与边界**：暂停、授权失效或额度用尽的来源留在列表里并写明原因（上图两条 ZCode 正在等补全授权），请求会按原因返回 401 / 429 / 503 并说明怎么恢复；只有主动关掉服务才会移出菜单，Agent 里存的 id 不会因为一次掉线失效。网关只监听本机回环，校验 `Host` / `Origin`；手动 Key 在页面里脱敏显示；连续失败 5 次后自动切回直连，也可以手动 **紧急切回直连**，停止接入不会删除账号、Key 和路由历史。
+- **路由流水**：每次转发记一行——时间、工具、请求模型、路由到的来源、耗时、结果。
+- **路由分组**：用 `group/<名称>` 把多个「来源/模型」编成一组，策略有顺序、轮转、按用量、智能、按节奏，以及按意图（先用小模型判断问题难易，再分到强档或轻档成员）；额度用满的成员自动排到后面，也可以暂停单个成员。
+- **模型池**：决定哪些来源、哪些模型对外服务；同一平台可以并存多个账号，按平台 / 地区 / 账号身份去重。
+- **对外访问**：局域网共享默认关闭；可以给其他设备或工具签发命名客户端 Key，并设置过期时间、模型白名单、只读、每日请求数和 Token 上限。
+- **中间件**：模型名映射、参数覆盖、追加系统提示词、敏感词拦截、思考标签处理，也可以写 JS 钩子；保存前先试跑。
+- **协议转换**：只提供 Chat 接口的第三方模型，也能给 Codex（Responses 协议）和 Claude Code（Anthropic Messages 协议）使用。Codex 保留 ChatGPT 登录时使用第三方模型，远程压缩由 Jolu 代为完成。
+- **失效来源与边界**：暂停、授权失效或额度用尽的来源留在列表里并写明原因，请求按原因返回 401 / 429 / 503；只监听本机回环（打开局域网共享时除外），校验 `Host` / `Origin`；连续失败达到阈值自动切回直连，也可以手动 **紧急切回直连**；断开接入不会删除账号、Key 和路由历史。
+- Grok、OpenCode、ZCode、Qoder、Trae 与 WorkBuddy 双版已有订阅适配，其中 **Qoder 和 Trae 还没用真实账号验收**。
 
 ### 设置
 
 ![设置](./docs/assets/readme/panel-settings.png)
 
-常规（开机启动、静默启动、自动刷新）、外观（浅色 / 深色 / 跟随系统）、网络与代理（CLI 本地代理）、数据与存储（导入导出、历史保留、清理、打开数据目录）、通知（免打扰、余额提醒）以及关于与更新。
+常规（开机启动、静默启动、自动刷新）、外观（浅色 / 深色 / 跟随系统）、网络与代理（联网方式、隐私脱敏、联网搜索插件）、数据与存储（导入导出、历史保留、清理、打开数据目录）、通知（免打扰、余额提醒）以及关于与更新。
+
+「数据与存储」页尾还有几项没有设计稿、仍在完善的功能：
+
+- **运维**：保持系统唤醒、每日 warm-up、OTLP 用量导出、查看各工具版本。
+- **共享指令与子代理**：一段指令写进 Claude Code、Codex、Gemini、OpenCode、Qwen、Droid 的用户级指令文件（放在 Jolu 标记的区块里，区块外是你自己的内容）；子代理按各工具自己的格式写成文件。被你改过的文件 Jolu 不再覆盖。
+- **WSL 里的工具**：见上文 Agent 一节。
+- **成本调优建议**：按这台电脑最近的真实调用逐条回放，建议 Claude Code / Codex 在多大上下文时压缩、提示词缓存留 5 分钟还是 1 小时更省 Token。只给建议，不改配置。
+
+「关于与更新」里还列出了各平台能力的验证状态与依据。
 
 ## 读懂统计数据
 
@@ -287,7 +324,8 @@
 - 统计记录保存在本机 SQLite 数据库 `usage.db`，运行偏好保存在 `settings.json`。Windows 默认应用目录为 `%APPDATA%\dev.ningz.jolu`，可在设置的数据区域打开。
 - 额度检测、凭证刷新、模型查询等会访问对应服务，并按接口要求发送授权信息；不能将“本地存储”理解为“完全不联网”。
 - 自动化任务在本机调用原工具执行，不经过 Jolu 的服务器；Skills 的写入会修改对应工具的目录与配置，修改前会备份到应用数据目录。
-- 如主动启用本地代理，模型请求会经过本地代理转发至配置的上游，相关 CLI 配置也会改变。
+- 如主动启用本地代理或模型路由，模型请求会经过本机转发至配置的上游，接入的工具配置也会改变；断开时按快照还原。
+- 开启 **隐私脱敏** 后，经模型路由发出的请求会先把密钥等隐私值换成占位符，回复到达后再换回来；替换表只在内存里，不落盘。
 - API Key 只在后端处理，界面列表以脱敏形式展示；不要公开完整数据目录或凭证文件。
 
 ## 常见问题
@@ -352,7 +390,7 @@ pnpm tauri dev
 
 # 前端类型检查与单元测试
 pnpm --dir frontend typecheck
-node --test frontend/src/lib/*.test.mjs
+node --test frontend/src/lib/*.test.mjs frontend/src/hooks/*.test.mjs
 
 # 后端测试
 cargo test --manifest-path backend/Cargo.toml
@@ -362,6 +400,23 @@ pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 ```
 
 安装包位于 `backend/target/release/bundle/nsis/`。首次 Rust 编译耗时较长；开发端口冲突时，检查 Vite 地址与 Tauri 的 `devUrl` 是否一致。
+
+### 命令行 `jolu`
+
+命令行工具不随安装包分发，需要从源码构建：`cargo build --release --manifest-path backend/Cargo.toml --bin jolu_cli`。它读写和桌面端同一个数据目录（可用 `JOLU_DATA_DIR` 指定），`jolu help` 列出全部用法。常用的几条：
+
+```bash
+jolu status                       # 模型路由总览与各工具的接入状态
+jolu catalog                      # 模型目录
+jolu tune --days 30               # 成本调优建议（只读）
+jolu claude run --model kimi/k2   # 让这一次的 Claude Code 走模型路由，不改 ~/.claude/settings.json
+echo sk-... | jolu provider add custom 我的网关 --base-url https://… --protocol openai --model …
+jolu group add main rotate kimi/k2 zcode/glm-5   # 新建路由分组，立即生效
+jolu settings set dnd on          # 改白名单里的设置，桌面端 2 秒内生效
+jolu use 日常编码                  # 切换 Profile（由运行中的桌面端执行）
+```
+
+Key 只从标准输入读，不放在命令行参数里；`save` / `use` / `serve` 需要桌面端正在运行。
 
 开发验证边界见 [未验证项清单](docs/todo/2026-10-22-unverified-integrations.md)。检查更新默认启用，构建时同时设置 `JOLU_UPDATES_ENABLED=0` 和 `VITE_JOLU_UPDATES_ENABLED=0` 可停用。OpenCode 统计支持 JSON / SQLite V1/V2；落盘 output 表示可见输出，Jolu 将其与独立 reasoning 相加；总量优先采用来源的 total，缺失字段保持未知。
 

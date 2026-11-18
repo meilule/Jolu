@@ -4,10 +4,10 @@
 
 **All your AI coding tools, managed in one place.**
 
-Quota always on your desktop island · Daily rewards in one click · Tasks that wait out quota limits and resume on their own
+Quota always on your desktop island · Daily rewards in one click · Tasks that wait out quota limits and resume on their own · One local address for every model
 
 [![Release](https://img.shields.io/github/v/release/meilule/Jolu?label=release&logo=github)](https://github.com/meilule/Jolu/releases/latest)
-![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-blue)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 
 [Download](https://github.com/meilule/Jolu/releases/latest) · [Report an issue](https://github.com/meilule/Jolu/issues)
 
@@ -95,8 +95,10 @@ Hand tasks to Claude Code or Codex without wasting a run when quota runs out:
 | Usage | Overview, analysis and call details; filter by time, provider, account and model, and export calls to CSV |
 | Sessions | Browse local sessions by project, search titles, session IDs or message text, read messages and continue in the original tool |
 | Automation | Let Claude Code / Codex run tasks now, on a schedule or once quota recovers; progress is kept when quota runs out and resumed later |
-| Skills | Scan, view, create, import, copy and enable/disable Claude Code and Codex Skills, with a backup before every write |
-| Settings | Launch at login, theme, local CLI proxy, data import/export and cleanup, notifications and do-not-disturb |
+| Skills | Scan, view, create, import, copy and enable/disable Skills of Claude Code, Codex, Gemini, OpenCode and more, with a backup before every write |
+| Agent | Lists the AI tools detected on this computer as cards; 11 of them wire to model routing in one click, with a change preview before and a restore after |
+| Model routing | One local address for official subscriptions, official keys and third-party keys, addressed as `source/model`; overview and per-session context observation, route log, routing groups, model pool, external access and middleware |
+| Settings | Launch at login, theme, network and privacy masking, data import/export and cleanup, notifications and do-not-disturb; shared instructions and subagents, WSL wiring, cost tuning advice |
 
 ![Jolu main window · Usage](./docs/assets/readme/panel-usage.png)
 
@@ -137,10 +139,18 @@ Volcengine Ark plan quotas require a control-plane AccessKey. Jolu does not stor
 
 ## Download and install
 
-Download `Windows-x86_64-Setup.exe` from [GitHub Releases](https://github.com/meilule/Jolu/releases), run the installer and launch Jolu. Windows 10 / 11 x64 is supported.
+Download the package for your platform from [GitHub Releases](https://github.com/meilule/Jolu/releases/latest):
 
+| Platform | File | Notes |
+| --- | --- | --- |
+| Windows 10 / 11 x64 | `Windows-x86_64-Setup.exe` | Installer, with in-app updates |
+| Windows 10 / 11 x64 | `Windows-x86_64-Portable.zip` | Portable, unzip and run; needs WebView2, update by downloading a new zip |
+| macOS (Apple silicon / Intel) | `macOS-arm64.dmg` / `macOS-x86_64.dmg` | Not signed with an Apple developer ID; allow it in System Settings on first launch |
+| Linux x86_64 | `Linux-x86_64.AppImage` / `Linux-x86_64.deb` | — |
+
+- Windows is the primary platform: features are built and verified there. The macOS and Linux builds compile and install but have not been tested systematically on real machines, and some features that read local tool data may not work.
 - Every version has its own release page; download older versions from their own pages.
-- The installer creates a Start menu entry and can create a desktop shortcut; uninstalling keeps app data by default.
+- The Windows installer creates a Start menu entry and can create a desktop shortcut; uninstalling keeps app data by default.
 
 ## Getting started
 
@@ -202,11 +212,60 @@ Latency, time to first token and status codes are shown only when the source pro
 - Enabling or disabling affects only that copy, never other copies with the same name; every write, overwrite or removal is backed up first.
 - Gemini, OpenCode, Qoder, Trae and ZCode directories are supported. WorkBuddy uses `.codebuddy/skills` in read-only mode; custom scan directories are also read-only. HTTPS Git import and draft-to-disk diffs are supported. Gemini/OpenCode toggles are name-based, unlike Claude/Codex per-copy toggles.
 
+### Agent: wire a tool to model routing in one click
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/readme/panel-agents-dark.png" />
+  <img src="./docs/assets/readme/panel-agents.png" alt="Agent page: AI tools detected on this computer as cards, with a switch to wire or unwire each" />
+</picture>
+
+- **Agent** in the sidebar lists the AI tools found on this computer as cards, counted as wired / available, with search; the switch on each card wires or unwires it.
+- **11 tools wire in one click**: Claude Code, Codex, Gemini CLI, OpenCode, ZCode, Kimi CLI, DeepSeek Harness, Pencil, Qoder, Qoder CN and Crush. You can preview the config changes before wiring; Jolu writes only the fields it manages and restores the pre-wiring snapshot when you unwire. Values you changed in the tool yourself are left alone.
+- **Detail page**: for Claude Code, pick a model per tier (opus / sonnet / haiku …) and a subagent model; other tools get a default model. The "Changes" tab lists exactly which lines Jolu changed.
+- Tools that are detected but have no dedicated wiring yet (such as Cline or GitHub Copilot CLI) show "Not supported yet"; you can also **Add a tool** yourself by giving its JSON / TOML / env config path and key names.
+- **Tools inside WSL**: under **Settings → Data and storage** you can wire Claude Code, Codex and OpenCode inside a WSL distro. Mirrored networking uses 127.0.0.1; NAT networking needs LAN sharing turned on first under "External access", and Jolu issues that tool its own key.
+- Pencil, Qoder, Crush and WSL wiring have not been verified with the real tools yet.
+
+### Model routing: one local address for every account
+
+**Model routing** in the sidebar puts official subscriptions, official keys and third-party keys behind one local address; every tool asks for models as `<source>/<model>`, so you don't enter an address and key in each tool. Nothing is forwarded by default: Jolu listens on a loopback port only after you start relaying, and tools go back to direct connections when you stop.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/readme/gateway-overview-dark.png" />
+  <img src="./docs/assets/readme/gateway-overview.png" alt="Model routing overview: today's requests, success rate, reroutes and failures, a 12-hour trend, sessions needing attention and context usage of active sessions" />
+</picture>
+
+- **Overview**: today's requests, success rate, in flight, reroutes, failures and response latency; the request trend over the last 12 hours; "Needs attention" flags sessions close to their context window; the active-session table shows how much context each session's latest request used and how much came from the cache.
+- **Session observation**: click "View context" on an active session to see what one request's context is made of — system prompt, tool definitions, Skills, memory, files, tool results and conversation — scaled to the upstream's real usage. Tool results are shown only as redacted summaries; their content is not stored.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/readme/gateway-session-dark.png" />
+  <img src="./docs/assets/readme/gateway-session.png" alt="Session observation: request path, context usage, prompt cache and the context broken down by category" />
+</picture>
+
+- **Route log**: one row per forwarded request — time, tool, requested model, source it was routed to, duration and result.
+- **Routing groups**: `group/<name>` bundles several `source/model` members, with order, rotate, by usage, smart, pace and by intent (a small model judges how hard each question is and sends it to a strong or light member); members that used up their quota move to the back, and single members can be paused.
+- **Model pool**: which sources and models are served; one platform can have several accounts, de-duplicated by platform / region / account identity.
+- **External access**: LAN sharing is off by default; issue named client keys to other devices or tools with expiry, model allow-list, read-only, and daily request / token limits.
+- **Middleware**: model-name mapping, parameter overrides, extra system prompt, blocked words, think-tag handling, or your own JS hook; each is dry-run before saving.
+- **Protocol translation**: third-party models that only offer a Chat API also work for Codex (Responses) and Claude Code (Anthropic Messages). When Codex keeps its ChatGPT sign-in and uses a third-party model, Jolu performs its remote compaction.
+- **Failing sources and safety**: paused, signed-out or exhausted sources stay listed with the reason, and requests get 401 / 429 / 503 accordingly; Jolu listens on loopback only (unless LAN sharing is on) and checks `Host` / `Origin`; after repeated failures it switches tools back to direct connections, or you can do so by hand; unwiring never deletes accounts, keys or route history.
+- Grok, OpenCode, ZCode, Qoder, Trae and both WorkBuddy editions have subscription adapters; **Qoder and Trae have not been verified with real accounts yet**.
+
 ### Settings
 
 ![Settings](./docs/assets/readme/panel-settings.png)
 
-General (launch at login, silent start, auto refresh), Appearance (light / dark / system), Network and proxy (local CLI proxy), Data and storage (import/export, retention, cleanup, open data folder), Notifications (do-not-disturb, balance alerts) and About.
+General (launch at login, silent start, auto refresh), Appearance (light / dark / system), Network and proxy (connection mode, privacy masking, web search plugin), Data and storage (import/export, retention, cleanup, open data folder), Notifications (do-not-disturb, balance alerts) and About.
+
+At the bottom of "Data and storage" are a few features without a final design yet:
+
+- **Operations**: keep the system awake, a daily warm-up, OTLP usage export, and each tool's version.
+- **Shared instructions and subagents**: one block of instructions written into the user-level instruction files of Claude Code, Codex, Gemini, OpenCode, Qwen and Droid (inside a Jolu-marked block; everything outside it stays yours); subagents written as files in each tool's own format. Files you changed are never overwritten.
+- **Tools inside WSL**: see the Agent section above.
+- **Cost tuning advice**: replays this computer's recent calls one by one and suggests when Claude Code / Codex should compact and whether the prompt cache should last 5 minutes or an hour to spend the fewest tokens. Advice only; nothing is changed.
+
+"About" also lists how each platform capability has been verified and on what evidence.
 
 ## Understanding the numbers
 
@@ -248,7 +307,8 @@ Automation tasks    ──run claude / codex locally─────────�
 - Statistics are stored in the local SQLite database `usage.db`; preferences in `settings.json`. The default Windows data folder is `%APPDATA%\dev.ningz.jolu`, which you can open from Settings.
 - Quota checks, credential refresh and model queries contact the corresponding services and send authorization as required by their APIs; "local storage" does not mean "never online".
 - Automation runs the original tools on your machine and never goes through a Jolu server; writing Skills changes the tool's folders and configuration, with a backup in the app data folder first.
-- If you enable the local proxy, model requests are forwarded through it to the configured upstream, and the related CLI configuration changes.
+- If you enable the local proxy or model routing, model requests are forwarded through this computer to the configured upstream, and the wired tools' configuration changes; unwiring restores it from a snapshot.
+- With **privacy masking** on, secrets and other private values in requests sent through model routing are replaced with placeholders and restored in the reply; the mapping lives in memory only.
 - API keys are handled only by the backend and shown masked in lists; never share the full data folder or credential files.
 
 ## FAQ
@@ -313,7 +373,7 @@ pnpm tauri dev
 
 # Frontend type check and unit tests
 pnpm --dir frontend typecheck
-node --test frontend/src/lib/*.test.mjs
+node --test frontend/src/lib/*.test.mjs frontend/src/hooks/*.test.mjs
 
 # Backend tests
 cargo test --manifest-path backend/Cargo.toml
@@ -323,6 +383,23 @@ pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 ```
 
 The installer is written to `backend/target/release/bundle/nsis/`. The first Rust build takes a while; if the dev port conflicts, check that the Vite address matches Tauri's `devUrl`.
+
+### Command line: `jolu`
+
+The CLI is not shipped in the installer; build it from source with `cargo build --release --manifest-path backend/Cargo.toml --bin jolu_cli`. It uses the same data folder as the desktop app (override with `JOLU_DATA_DIR`); `jolu help` lists everything. A few common ones:
+
+```bash
+jolu status                       # model routing overview and each tool's wiring
+jolu catalog                      # model catalog
+jolu tune --days 30               # cost tuning advice (read-only)
+jolu claude run --model kimi/k2   # run Claude Code through model routing once, without touching ~/.claude/settings.json
+echo sk-... | jolu provider add custom my-gateway --base-url https://… --protocol openai --model …
+jolu group add main rotate kimi/k2 zcode/glm-5   # create a routing group, effective immediately
+jolu settings set dnd on          # change an allow-listed setting; the desktop app picks it up within 2 seconds
+jolu use daily                    # switch Profile (carried out by the running desktop app)
+```
+
+Keys are read only from standard input, never from arguments; `save` / `use` / `serve` need the desktop app running.
 
 Session handoff supports incremental summaries, draft refinement and Markdown preview/export. Exploratory prompt evaluation covered five short sessions; it does not establish long-session quality. OpenCode JSON/SQLite V1/V2 usage parsing keeps unknown fields unknown and adds visible output and separate reasoning while preferring the source total. See [unverified integrations](docs/todo/2026-10-22-unverified-integrations.md). Update checks are on by default; set both `JOLU_UPDATES_ENABLED=0` and `VITE_JOLU_UPDATES_ENABLED=0` at build time to turn them off.
 
