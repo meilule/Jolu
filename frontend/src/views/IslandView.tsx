@@ -178,7 +178,8 @@ function StyleSection({ value, disabled, onChange }: { value: IslandStyle; disab
                   {option.title}
                   {active && <Check aria-hidden className="size-3.5 text-jolu-on" />}
                 </span>
-                <span className="text-[12px] leading-snug text-jolu-muted">{option.desc}</span>
+                {/* 卡片本身是按钮：全局 button 不折行会把说明裁掉（B5 窄窗口检查发现），说明文字显式允许折行 */}
+                <span className="whitespace-normal text-[12px] leading-snug text-jolu-muted">{option.desc}</span>
               </span>
             </button>
           )

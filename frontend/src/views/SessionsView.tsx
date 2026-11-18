@@ -161,12 +161,13 @@ export function SessionsView({ active, target, onDrillUsage, onCreateAutomation 
 
   return (
     <div className="relative flex w-full flex-col gap-3">
-      <div className="flex h-[92px] gap-2">
+      {/* 窄窗口（最小 900）时第五张合并卡放不下：整行折行，合并卡按内容宽换到下一行（B5 桌面端检查发现原先挤成竖排、撑出横向滚动） */}
+      <div className="flex flex-wrap gap-2">
         <Stat selected icon={<MessagesSquare />} label="线程" value={known ? String(totals.threads) : "—"} note="筛选内去重会话" />
         <Stat icon={<Layers />} label="消耗 Token" value={known ? formatTokens(totals.consumption) : "—"} note={totals.unknown ? `输入 + 输出 · ${totals.unknown} 条未知` : "输入 + 输出"} />
         <Stat icon={<Target />} label="缓存命中" value={known ? formatPercent(totals.hitRate) : "—"} note="缓存读取占输入" />
         <Stat icon={<Files />} label="记录文件" value={query.data ? String(query.data.files) : "—"} note="去重来源文件" />
-        <div className="flex min-w-0 flex-1 items-center rounded-[10px] border border-jolu-border bg-jolu-bg">
+        <div className="flex h-[92px] flex-1 items-center rounded-[10px] border border-jolu-border bg-jolu-bg">
           <Stat bare icon={<ArrowDownLeft />} label="输入 Token" value={known ? formatTokens(totals.input) : "—"} note="含缓存输入" />
           <span className="h-14 w-px bg-jolu-border" />
           <Stat bare icon={<Database />} label="缓存输入" value={known ? formatTokens(totals.cache) : "—"} note="已包含于输入" />
@@ -286,10 +287,10 @@ function Stat({ icon, label, value, note, selected, bare }: { icon: React.ReactN
   return (
     <div className={cn(
       "flex min-w-0 flex-col justify-center gap-2 px-3",
-      bare ? "flex-1" : "w-[136px] shrink-0 rounded-[10px] border",
+      bare ? "flex-1" : "h-[92px] w-[136px] shrink-0 rounded-[10px] border",
       !bare && (selected ? "border-transparent bg-jolu-selected" : "border-jolu-border bg-jolu-bg"),
     )}>
-      <span className={cn("flex h-3.5 items-center gap-[5px] text-[12px] [&_svg]:size-3.5", selected ? "text-jolu-on" : "text-jolu-muted")}>{icon}{label}</span>
+      <span className={cn("flex h-3.5 items-center gap-[5px] whitespace-nowrap text-[12px] [&_svg]:size-3.5", selected ? "text-jolu-on" : "text-jolu-muted")}>{icon}{label}</span>
       <span className={cn("tnum truncate text-[22px] font-semibold leading-none", selected ? "text-jolu-on" : "text-jolu-text")}>{value}</span>
       <span className="truncate text-[9px] text-jolu-muted">{note}</span>
     </div>

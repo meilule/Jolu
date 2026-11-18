@@ -180,14 +180,14 @@ function ToolCard({ row, selected, modelsCount, tierCount, busy, onSelect, onTog
           ) : row.supported ? (
             <>
               <span className="text-[11px] text-jolu-muted">接入设置</span>
-              <span className="text-[14px] font-semibold text-jolu-text">选择模型与接入方式</span>
-              <span className="text-[11px] text-jolu-muted">配置预览后再接入；模型路由里有 {modelsCount} 个模型</span>
+              <span className="max-w-full truncate text-[14px] font-semibold text-jolu-text">选择模型与接入方式</span>
+              <span className="max-w-full truncate text-[11px] text-jolu-muted" title={`配置预览后再接入；模型路由里有 ${modelsCount} 个模型`}>配置预览后再接入；模型路由里有 {modelsCount} 个模型</span>
             </>
           ) : (
             <>
               <span className="text-[11px] text-jolu-muted">接入设置</span>
-              <span className="text-[14px] font-semibold text-jolu-text">等待接入适配</span>
-              <span className="text-[11px] text-jolu-muted">模型来源与工具接入能力分别确认</span>
+              <span className="max-w-full truncate text-[14px] font-semibold text-jolu-text">等待接入适配</span>
+              <span className="max-w-full truncate text-[11px] text-jolu-muted">模型来源与工具接入能力分别确认</span>
             </>
           )}
         </button>

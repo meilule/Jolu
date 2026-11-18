@@ -118,7 +118,7 @@ export function SessionDetail({ session, connections, onDrillUsage, onContinue, 
         </Menu.Root>
       </div>
 
-      <div className="flex h-7 items-center gap-2">
+      <div className="flex min-h-7 flex-wrap items-center gap-x-2 gap-y-1">
         <Chip on={session.status === "done" || session.status === "running"}>{statusLabel(session.status)}</Chip>
         <Chip>{account ? accountLabel(account) : "未归属账号"}</Chip>
         <Chip>{page ? (page.available ? `${page.total} 条消息` : "无消息正文") : "— 条消息"}</Chip>
@@ -179,7 +179,8 @@ export function SessionDetail({ session, connections, onDrillUsage, onContinue, 
         <Eye aria-hidden className="size-[15px] shrink-0 text-jolu-muted" />
         <span className="whitespace-nowrap text-[12px] text-jolu-muted">本机会话 · 只读</span>
         <span className="flex-1" />
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+        {/* 按钮组可以收窄到所在栏宽：放不下时按钮换行（每个按钮自己不折字）。原先 shrink-0 让组按「三个一行」的宽度撑出详情栏（B5 桌面端 900 宽实测溢出 48px） */}
+        <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
           <button type="button" onClick={onCreateAutomation} className="inline-flex h-[34px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-jolu-selected px-3 text-xs font-medium text-jolu-on outline-none hover:bg-jolu-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent">
             <Bot aria-hidden className="size-4 shrink-0" />
             创建自动化
@@ -204,7 +205,7 @@ function MenuItem({ icon, children, onSelect, disabled }: { icon: React.ReactNod
 }
 
 function Chip({ on, children }: { on?: boolean; children: React.ReactNode }) {
-  return <span className={cn("inline-flex h-[22px] items-center rounded-[5px] px-2 text-[11px]", on ? "bg-jolu-selected text-jolu-on" : "bg-jolu-stage text-jolu-muted")}>{children}</span>
+  return <span className={cn("inline-flex h-[22px] max-w-full items-center truncate whitespace-nowrap rounded-[5px] px-2 text-[11px]", on ? "bg-jolu-selected text-jolu-on" : "bg-jolu-stage text-jolu-muted")}>{children}</span>
 }
 
 function SmallButton({ accent, onClick, children }: { accent?: boolean; onClick: () => void; children: React.ReactNode }) {

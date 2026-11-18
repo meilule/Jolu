@@ -78,7 +78,10 @@
 - [x] B2 Claude 拒绝 thinking 签名（400）后按点名位置剔块重发一次，并按来源记住（`thinking_guard` 400 节、`wire::with_thinking_repair`）
 - [x] B3 OTLP 导出带命名 Key 名（`jolu.gateway.key.request.count`，属性 `jolu.gateway_key.name`）
 - [x] B4 统计卡 5 处与骨架屏按容器宽度减列（`components/ui/MetricGrid.tsx`）
-- [ ] B5 会话详情按钮行与全局 `button { white-space: nowrap }` 的桌面端验证；账号管理窄屏无画板依据（待鼠鼠确认）
+- [x] B5 会话详情按钮行与全局 `button { white-space: nowrap }` 的桌面端验证（2026-11-18）；账号管理窄屏无画板依据仍待鼠鼠确认
+  - 方法：浏览器预览（示例数据）在 966 / 1280 宽逐页扫描所有可见按钮（文字被裁、单个文字节点折行、超出裁剪容器）；隔离桌面实例（WebView2）把布局宽设为最小窗口 900 与 1100，逐页查横向溢出，会话线程用写进隔离库的合成会话打开详情。脚本在 `output/acceptance/node/b5-*.mjs`，截图在 `output/acceptance/b5/`
+  - 发现并修复 4 处，都是窄窗口才出现、宽窗口布局不变：①会话详情底部按钮组 `shrink-0` 让组按「三个一行」撑出详情栏（900 宽溢出 48px、整页横向滚动 56px）——组改为可收窄、放不下时按钮换行；②会话页统计卡第五张合并卡在 900 宽被挤成竖排——整行 `flex-wrap`、标签不折行，约 1150 以下合并卡换到第二行，1200 及以上仍是一行；③会话详情标签（仅用量 / 未归属账号…）字内折行——标签不折字、整行可换行；④灵动岛页「灵动岛样式」两张卡片本身是按钮，全局不折行把说明裁掉——说明显式 `whitespace-normal`；另 Agent 卡片未接入态两行说明 900 宽超出 10px——改为省略号（同已接入态）
+  - 修复后桌面端 900 / 1100 宽各页无横向溢出；会话详情三个按钮单行、34px、不裁字。未覆盖：各弹窗内的按钮（要逐个打开），全局规则的风险仍只在「按钮里放长文本」时出现
 - [x] B6 搜索后端补 Brave / Exa / Firecrawl / You.com / DeepSeek / 元宝 6 个；豆包改按火山文档的 `Query` / `Result.WebResults` 形状（首版字段不符）；跨主机重定向不跟随（Key 在自定义头里）；MCP 依次尝试所有启用的后端
 - [x] B7 档位 effort 可用值校验（按 Claude Code 对各模型实际发送的范围，别家模型为全集；models.dev 没有 efforts 数据，未用）；顺带修 `autoMode` 字段名不一致导致 Auto 判别档被丢弃
 - [x] B8 `web_fetch`（每跳过 netguard 并把连接钉在检查过的地址上；MCP 工具 + `jolu_cli fetch`，真实网页已试读）
