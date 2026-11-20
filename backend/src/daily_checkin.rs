@@ -25,6 +25,8 @@ fn native_edition(id: &str, platform: &str) -> Option<&'static str> {
         | ("monitor:native:qoder:cn", "qoder")
         | ("monitor:native:trae:cn", "trae") => Some("cn"),
         ("monitor:native:workbuddy:ai", "workbuddy") => Some("ai"),
+        // ZCode 本机登录：礼包领取（不是每日签到），见 checkin_zcode 的头注释
+        ("monitor:native:zcode:main", "zcode") => Some("main"),
         ("monitor:native:qoder:global", "qoder") | ("monitor:native:trae:ide", "trae") => {
             Some("global")
         }
@@ -140,14 +142,16 @@ fn overview(conn: &Connection) -> Result<Overview, String> {
         .map_err(|_| "读取签到账号失败")?
         .into_iter()
         .filter(|c| {
-            c.kind == "auth" && matches!(c.platform.as_str(), "workbuddy" | "qoder" | "trae")
+            c.kind == "auth" && matches!(c.platform.as_str(), "workbuddy" | "qoder" | "trae" | "zcode")
         })
         .map(|c| {
             let account = display_account(conn, &c);
             AccountDto {
-            id: c.id,
-            platform: c.platform,
-            edition: c.edition,
+            id: c.id.clone(),
+            platform: c.platform.clone(),
+            // 原生连接的版本由 id 推导（`monitor:native:zcode:main` → "main"）：
+            // 连接表的 edition 列是给浏览器授权分支用的，原生连接一般为空
+            edition: c.edition.clone().or_else(|| native_edition(&c.id, &c.platform).map(str::to_string)),
             name: c.name,
             account,
             connection_status: c.status,
@@ -252,6 +256,7 @@ enum Account {
     Workbuddy(crate::checkin_workbuddy::Account),
     Qoder(crate::checkin_qoder::Account),
     Trae(crate::checkin_trae::Account),
+    Zcode(crate::checkin_zcode::Account),
 }
 impl Account {
     fn account_label(&self) -> Option<&str> {
@@ -259,6 +264,8 @@ impl Account {
             Self::Workbuddy(account) => account.account_label(),
             Self::Qoder(account) => account.session_account(),
             Self::Trae(account) => account.account_label(),
+            // ZCode 的账号名在会话 JWT 里，签到不用展示，交给额度卡
+            Self::Zcode(_) => None,
         }
     }
     fn identity(&self) -> &str {
@@ -266,6 +273,7 @@ impl Account {
             Self::Workbuddy(a) => a.identity(),
             Self::Qoder(a) => a.identity(),
             Self::Trae(a) => a.identity(),
+            Self::Zcode(a) => a.identity(),
         }
     }
     fn status(&self) -> Outcome {
@@ -273,6 +281,7 @@ impl Account {
             Self::Workbuddy(a) => a.status(),
             Self::Qoder(a) => a.status(),
             Self::Trae(a) => a.status(),
+            Self::Zcode(a) => a.status(),
         }
     }
     fn claim(&self, before_post: impl FnOnce() -> Result<(), Outcome>) -> Outcome {
@@ -280,6 +289,7 @@ impl Account {
             Self::Workbuddy(a) => a.claim(before_post),
             Self::Qoder(a) => a.claim(before_post),
             Self::Trae(a) => a.claim(before_post),
+            Self::Zcode(a) => a.claim(before_post),
         }
     }
 }
@@ -301,6 +311,7 @@ fn resolve(id: &str, c: &crate::connections::Creds) -> Result<(String, Account),
             }
             "qoder" => Account::Qoder(crate::checkin_qoder::Account::from_native(edition)?),
             "trae" => Account::Trae(crate::checkin_trae::Account::from_native(edition)?),
+            "zcode" => Account::Zcode(crate::checkin_zcode::Account::from_native(edition)?),
             _ => unreachable!(),
         };
         return Ok((edition.into(), account));

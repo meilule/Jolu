@@ -50,6 +50,7 @@ mod checkin_types;
 mod checkin_stats;
 mod checkin_workbuddy;
 mod checkin_qoder;
+mod checkin_zcode;
 mod checkin_trae;
 mod daily_checkin;
 mod coding_plan;
@@ -2039,6 +2040,7 @@ pub fn run() {
             gateway_group_move,
             gateway_set_slug,
             gateway_wiring_accept,
+            open_zcode_client,
             gateway_catalog,
             gateway_route_log,
             gateway_route_log_page,

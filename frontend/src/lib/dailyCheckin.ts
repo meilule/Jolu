@@ -5,6 +5,9 @@ export const CHECKIN_EDITIONS = [
   { id: "workbuddy-cn", platform: "workbuddy", edition: "cn", name: "WorkBuddy", region: "国内版", manual: true, description: "奖励以当前活动返回为准" },
   { id: "qoder-cn", platform: "qoder", edition: "cn", name: "Qoder", region: "国内版", manual: true, description: "北京时间 10:00 开启下一轮" },
   { id: "trae-cn", platform: "trae", edition: "cn", name: "Trae", region: "国内版", manual: true, description: "个人账号 · 北京时间每日更新" },
+  // ZCode 不是每日签到，是「礼包领取」：客户端按活动发放的额度包（如 300,000,000 tokens），
+  // 有一批就领一批，领完等下一批。文案如实写「礼包」，不冒充每日签到。
+  { id: "zcode-main", platform: "zcode", edition: "main", name: "ZCode", region: "本机登录", manual: true, description: "礼包领取 · 有可领额度时领取" },
   { id: "workbuddy-ai", platform: "workbuddy", edition: "ai", name: "WorkBuddy AI", region: "国际版", manual: false, description: "完成有效任务后自动结算，无需手动领取" },
   { id: "qoder-global", platform: "qoder", edition: "global", name: "Qoder", region: "国际版", manual: true, description: "北京时间 10:00 开启下一轮" },
   { id: "trae-global", platform: "trae", edition: "global", name: "Trae", region: "国际版", manual: false, description: "官方当前仅向国内版开放每日积分签到" },
@@ -20,7 +23,9 @@ export const ERROR_STATES: readonly string[] = ["unauthorized", "forbidden", "ra
 
 export function initialCheckinAccount(dto: CheckinAccountDto): CheckinAccount {
   const entry = CHECKIN_EDITIONS.find(e => e.platform === dto.platform && e.edition === dto.edition)
-  const outcome: CheckinOutcome = { state: entry && !entry.manual ? "unsupported" : "unknown", message: entry && !entry.manual ? entry.description : "尚未查询，请刷新状态", reward: null, unit: dto.platform === "qoder" ? "Credits" : "积分", period_key: null, reset_at: null }
+  // 单位跟平台走：Qoder 是 Credits，ZCode 是 tokens（礼包额度），其余是积分
+  const unit = dto.platform === "qoder" ? "Credits" : dto.platform === "zcode" ? "tokens" : "积分"
+  const outcome: CheckinOutcome = { state: entry && !entry.manual ? "unsupported" : "unknown", message: entry && !entry.manual ? entry.description : "尚未查询，请刷新状态", reward: null, unit, period_key: null, reset_at: null }
   return { ...dto, account_key: null, checked_at: null, outcome, statistics: null }
 }
 

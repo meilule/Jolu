@@ -610,9 +610,6 @@ pub(crate) fn dsh_creds_restore(text: &str) -> String {
 
 /* ─────────────────────────── 对外接口（wiring.rs 的分发点调用） ─────────────────────────── */
 
-pub(crate) fn is_dsh(agent: &str) -> bool {
-    agent == "dsh"
-}
 
 /// 主配置文件 = 第一个 profile 的 patch（探测与接线同源，files[0] 必须与它一致）。
 pub(crate) fn config_path(home: &Path) -> PathBuf {
@@ -636,10 +633,6 @@ pub(crate) fn current_token(home: &Path) -> Option<String> {
     dsh_current_token(&text)
 }
 
-/// 默认模型是否指向我们的路由（magpie dshStart 的 provider 判定）。
-pub(crate) fn selected_ours(text: &str) -> bool {
-    dsh_default_model(&dsh_parse(text).1).is_some()
-}
 
 /// 状态判定：patch 两项 + .env 令牌归属。kept 是旧接线记录里保留的令牌。
 pub(crate) fn wired(home: &Path, text: &str, port: u16, instance_short: &str, kept: Option<&str>) -> bool {
@@ -647,19 +640,10 @@ pub(crate) fn wired(home: &Path, text: &str, port: u16, instance_short: &str, ke
     dsh_wired(text, &env_text, port, instance_short, kept)
 }
 
-/// 另一个 Jolu 实例的接管标记：.env 令牌的实例尾号。
-pub(crate) fn foreign_instance(home: &Path, instance_short: &str) -> Option<String> {
-    let token = current_token(home)?;
-    if !token.starts_with("jolu-") {
-        return None;
-    }
-    let (_, suffix) = token.rsplit_once('.')?;
-    (suffix != instance_short).then(|| suffix.to_string())
-}
 
 /// 接线计划（多文件）：主 patch + 其余 profile patch + .env + credentials。
 pub(crate) struct DshWirePlan {
-    pub main_path: PathBuf,
+    /// 主 patch（第一个 profile）的新内容；路径由 `config_path` 给出（同一函数，无需重复存）
     pub main_text: String,
     pub extra: Vec<(PathBuf, String)>,
     pub snapshot: Option<Value>,
@@ -710,7 +694,6 @@ pub(crate) fn plan_wire_files(
     for (path, text) in &files {
         written.push((path.clone(), dsh_patch_wire(text, base, &selected, catalog)?));
     }
-    let main_path = written[0].0.clone();
     let main_text = written.remove(0).1;
     // .env：写我们的令牌
     let mut extra = written;
@@ -720,7 +703,7 @@ pub(crate) fn plan_wire_files(
     if creds_next != creds_text {
         extra.push((creds_path, creds_next));
     }
-    Ok(DshWirePlan { main_path, main_text, extra, snapshot })
+    Ok(DshWirePlan { main_text, extra, snapshot })
 }
 
 /// 断开（多文件）：每个 profile 还原快照原块，.env / credentials 还原用户的键或删我们的。

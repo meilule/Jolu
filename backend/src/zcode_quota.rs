@@ -584,7 +584,7 @@ enum AuthScheme {
 /// `X-Device-Mid`：官方客户端每次请求填一个 v4 UUID。这里在**内存里现生成**一个，
 /// 借用仓库已有的 `rsa`（它已重导出带 `getrandom` 的 `rand_core`，不新增依赖）。
 /// 绝不写 `~/.zcode` 或任何位置，也不进日志——它就是一次性的请求头。
-fn device_mid() -> String {
+pub(crate) fn device_mid() -> String {
     use rsa::rand_core::RngCore;
     let mut bytes = [0u8; 16];
     rsa::rand_core::OsRng.fill_bytes(&mut bytes);

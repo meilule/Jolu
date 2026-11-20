@@ -357,3 +357,34 @@ pub(crate) fn gateway_wiring_accept(app: tauri::AppHandle, agent: String) -> Res
 pub(crate) fn custom_backup_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     app.path().app_data_dir().map(|dir| dir.join("gateway-backups")).map_err(|e| format!("无法定位应用数据目录：{e}"))
 }
+
+/// 打开本机的 ZCode 客户端（签到页「去 ZCode 领取」用）。
+///
+/// 为什么需要：ZCode 的礼包领取接口要求阿里云人机验证（`code 3007`，2026-11-19 实测），
+/// 验证 token 只能在浏览器环境里生成，Jolu 不代领。所以签到卡片给一个直达客户端的入口，
+/// 让用户在官方界面里完成领取。
+///
+/// 只尝试 ZCode 已安装的固定位置（与探测 `dir_zcode` 同源），不猜、不搜 PATH：
+/// 找不到就如实报「未安装」，用户自己去开始菜单开。
+#[tauri::command]
+pub(crate) fn open_zcode_client() -> Result<(), String> {
+    let home = crate::creds::home().ok_or("未找到用户目录")?;
+    let candidates = [
+        // 官方安装器：%LOCALAPPDATA%\Programs\ZCode\ZCode.exe
+        std::env::var_os("LOCALAPPDATA")
+            .filter(|value| !value.is_empty())
+            .map(std::path::PathBuf::from)
+            .map(|local| local.join("Programs").join("ZCode").join("ZCode.exe")),
+        // 便携版 / 绿色版：<ZCode 数据目录同级>
+        Some(crate::creds::zcode_data_dir(&home).parent().map(|parent| parent.join("ZCode.exe")).unwrap_or_default()),
+    ];
+    for candidate in candidates.into_iter().flatten() {
+        if candidate.is_file() {
+            std::process::Command::new(&candidate)
+                .spawn()
+                .map_err(|error| format!("启动 ZCode 失败：{error}"))?;
+            return Ok(());
+        }
+    }
+    Err("未找到 ZCode 客户端，请在开始菜单中打开".into())
+}

@@ -17,9 +17,13 @@ test("身份更新同步已验证账号，缺失显示值必须清除旧账号�
   assert.equal(applyCheckinUpdate([previous],{...update,account:null})[0].account,null)
 })
 
-test("六种版本明确区分，仅真实提供手动签到的版本可领取", () => {
-  assert.equal(CHECKIN_EDITIONS.length, 6)
-  assert.deepEqual(CHECKIN_EDITIONS.filter(e => e.manual).map(e => e.id), ["workbuddy-cn", "qoder-cn", "trae-cn", "qoder-global"])
+test("七个版本明确区分，仅真实提供手动签到 / 领取的版本可操作", () => {
+  // 2026-11-19 加 ZCode（礼包领取，不是每日签到；领取要在客户端过人机验证）
+  assert.equal(CHECKIN_EDITIONS.length, 7)
+  assert.deepEqual(CHECKIN_EDITIONS.filter(e => e.manual).map(e => e.id), ["workbuddy-cn", "qoder-cn", "trae-cn", "zcode-main", "qoder-global"])
+  // ZCode 的单位是 tokens 而不是积分（礼包额度）
+  const zcode = initialCheckinAccount({ id: "z", platform: "zcode", edition: "main", name: "ZCode", connection_status: "connected" })
+  assert.equal(zcode.outcome.unit, "tokens")
   const ai = initialCheckinAccount({ id: "ai", platform: "workbuddy", edition: "ai", name: "AI", connection_status: "connected" })
   assert.equal(ai.outcome.state, "unsupported")
   assert.deepEqual(checkinTargets([ai, account("paused", { connection_status: "paused" })]), [])

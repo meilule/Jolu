@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { EVENTS } from "@/lib/events"
 import { CalendarCheck2, Check, Eye, EyeOff, Info, LoaderCircle, Plus, RefreshCw } from "lucide-react"
-import { api, isTauri, listenEvent } from "@/lib/api"
+import { api, invoke, isTauri, listenEvent } from "@/lib/api"
 import { checkinApi, type CheckinRecordDto, type CheckinUpdate } from "@/lib/checkinApi"
 import { demoCheckinApi } from "@/mock/checkin"
 import { CHECKIN_EDITIONS, STATE_LABELS, applyCheckinUpdate, checkinAccountLabel, checkinSummary, checkinTargets, currentOutcome, initialCheckinAccount, rewardLabel, uniqueCheckinAccounts, type CheckinAccount, type CheckinEdition } from "@/lib/dailyCheckin"
@@ -33,6 +33,18 @@ export function CheckinView({ active = true }: { active?: boolean }) {
     if (!provider) return
     connectingRef.current = provider
     setConnecting(provider)
+  }
+  /**
+   * ZCode 的礼包要在客户端里领（领取接口要求阿里云人机验证，Jolu 不代领）：
+   * 卡片上「去 ZCode 领取」直接打开客户端。
+   */
+  const openZcodeClient = async () => {
+    if (!isTauri) return
+    try {
+      await invoke<void>("open_zcode_client")
+    } catch (error) {
+      setError(String(error))
+    }
   }
   const [accounts, setAccounts] = useState<CheckinAccount[]>([])
   const [records, setRecords] = useState<CheckinRecordDto[]>([])
@@ -287,7 +299,7 @@ export function CheckinView({ active = true }: { active?: boolean }) {
         {CHECKIN_EDITIONS.map(entry => {
           const rows = accounts.filter(account => account.platform === entry.platform && account.edition === entry.edition)
           const displayed = selection.active ? rows : uniqueCheckinAccounts(rows.filter(account => account.connection_status !== "paused"))
-          return <CheckinCard key={entry.id} entry={entry} accounts={displayed} paused={selection.active ? 0 : rows.filter(account => account.connection_status === "paused").length} busy={busy} selection={selection} selectionDisabled={operationBusy} hidden={hidden} active={active} onConnect={() => openConnection(connectionProviderId({ platformId: entry.platform, edition: entry.edition }))} onQuery={account => void queryOne(account)} onClaim={account => void run(account)} onRemove={account => { if (operating.current) return; removingAccountRef.current = account; setRemovingAccount(account); setRemoveError(null) }} />
+          return <CheckinCard key={entry.id} entry={entry} accounts={displayed} paused={selection.active ? 0 : rows.filter(account => account.connection_status === "paused").length} busy={busy} selection={selection} selectionDisabled={operationBusy} hidden={hidden} active={active} onConnect={() => openConnection(connectionProviderId({ platformId: entry.platform, edition: entry.edition }))} onQuery={account => void queryOne(account)} onClaim={account => void run(account)} onRemove={account => { if (operating.current) return; removingAccountRef.current = account; setRemovingAccount(account); setRemoveError(null) }} onOpenZcodeClient={() => void openZcodeClient()} />
         })}
       </div>
       <p className="flex items-start gap-2.5 rounded-[10px] bg-jolu-side px-4 py-3 text-xs leading-relaxed text-jolu-muted"><Info aria-hidden className="mt-0.5 size-[17px] shrink-0" />账号沿用供应商连接；相同账号只领取一次。奖励和开放状态以平台实时返回为准。</p>
@@ -311,14 +323,27 @@ export function CheckinView({ active = true }: { active?: boolean }) {
   </section>
 }
 
+
+/**
+ * ZCode 的「签到」实际是礼包领取：文案如实区分，不把领取说成每日签到（鼠鼠 2026-11-19）。
+ *
+ * 而且 **Jolu 不代领**：ZCode 领取接口要求阿里云人机验证（`code 3007`），验证 token
+ * 只能在浏览器环境里生成。所以这里的动作是「去 ZCode 领取」——点开客户端让用户自己领，
+ * 不假装能在这里完成（`unsupported` 状态如实表达「不在 Jolu 职责内」）。
+ */
+const claimVerb = (platform: string) => (platform === "zcode" ? "去 ZCode 领取" : "签到")
+const claimedLabel = (platform: string) => (platform === "zcode" ? "本批已领取" : "本轮已签到")
+
 function failedUpdate(account: CheckinAccount, message: string, state: "failed" | "unknown" = "failed"): CheckinUpdate {
   return { id: account.id, account_key: null, account: null, checked_at: Date.now(), statistics: null, outcome: { state, message, reward: null, unit: account.outcome.unit, period_key: null, reset_at: null } }
 }
 
-function CheckinCard({ entry, accounts, paused, busy, hidden, active, onConnect, onQuery, onClaim, onRemove, selection, selectionDisabled }: {
+function CheckinCard({ entry, accounts, paused, busy, hidden, active, onConnect, onQuery, onClaim, onRemove, onOpenZcodeClient, selection, selectionDisabled }: {
   entry: CheckinEdition; accounts: CheckinAccount[]; paused: number; busy: boolean; hidden: boolean; active: boolean
   onConnect: () => void; onQuery: (account: CheckinAccount) => void; onClaim: (account: CheckinAccount) => void
   onRemove: (account: CheckinAccount) => void
+  /** 「去 ZCode 领取」：打开客户端（领取需要人机验证，Jolu 不代领） */
+  onOpenZcodeClient: () => void
   selection: AccountSelection; selectionDisabled: boolean
 }) {
   const [detailsAccountId, setDetailsAccountId] = useState<string | null>(null)
@@ -328,15 +353,18 @@ function CheckinCard({ entry, accounts, paused, busy, hidden, active, onConnect,
   return <article aria-label={`${entry.name} ${entry.region}`} data-checkin-edition={entry.id} className="jolu-card flex min-h-[210px] min-w-0 flex-col gap-3 rounded-xl border border-jolu-border bg-jolu-cc-surface p-4">
     <header className="flex items-center justify-between gap-2"><h2 className="flex min-w-0 items-center gap-2.5 text-base font-semibold text-jolu-text"><PlatformLogo platform={entry.platform} size={22} /><span className="truncate">{entry.name}</span></h2><span className="shrink-0 rounded-[5px] bg-jolu-side px-2 py-1 text-[12px] text-jolu-muted">{entry.region}</span></header>
     {!entry.manual && !accounts.length ? <><p className="text-xs text-jolu-muted">{entry.platform === "workbuddy" ? "自动活跃奖励" : "暂未开放"}</p><p className="text-2xl font-medium text-jolu-text">{entry.platform === "workbuddy" ? "无需签到" : "—"}</p><p className="text-[12px] leading-relaxed text-jolu-muted">{entry.description}</p><JoluButton className="mt-auto w-full" disabled>{entry.platform === "workbuddy" ? "无需手动领取" : "暂未开放"}</JoluButton></>
-    : !accounts.length ? <><p className="text-xs text-jolu-muted">{paused ? `${paused} 个账号已暂停连接` : "尚未连接账号"}</p><p className="text-2xl font-medium text-jolu-text">{entry.platform === "qoder" ? "每日 Credits" : "每日积分"}</p><p className="text-[12px] leading-relaxed text-jolu-muted">{entry.description}</p><JoluButton className="mt-auto w-full" variant="soft" disabled={busy} onClick={() => onConnect()}>{paused ? "管理连接" : "去连接"}</JoluButton></>
+    : !accounts.length ? <><p className="text-xs text-jolu-muted">{paused ? `${paused} 个账号已暂停连接` : "尚未连接账号"}</p><p className="text-2xl font-medium text-jolu-text">{entry.platform === "qoder" ? "每日 Credits" : entry.platform === "zcode" ? "礼包额度" : "每日积分"}</p><p className="text-[12px] leading-relaxed text-jolu-muted">{entry.description}</p><JoluButton className="mt-auto w-full" variant="soft" disabled={busy} onClick={() => onConnect()}>{paused ? "管理连接" : "去连接"}</JoluButton></>
     : <div className="flex flex-1 flex-col gap-4">
       {accounts.map(account => {
         const outcome = currentOutcome(account)
         const ready = outcome.state === "ready", claimed = outcome.state === "claimed"
         const accountPaused = account.connection_status === "paused"
         const label = checkinAccountLabel(account, hidden)
-        const actionLabel = accountPaused ? "已暂停" : !entry.manual ? entry.platform === "workbuddy" ? "无需手动领取" : "暂未开放" : ready ? "签到" : claimed ? "本轮已签到" : outcome.state === "unauthorized" ? "更新登录" : outcome.state === "inactive" ? "活动未开放" : STATE_LABELS[outcome.state]
-        const action = <JoluButton size="sm" className="w-full min-w-0 gap-1 px-2 text-[12px] [&_svg]:size-3.5" variant={ready || claimed ? "soft" : "neutral"} disabled={busy || accountPaused || !entry.manual || claimed || outcome.state === "unsupported" || outcome.state === "inactive"} aria-label={`${entry.name} ${entry.region} ${label} ${ready ? "签到" : claimed ? "本轮已签到" : outcome.state === "unauthorized" ? "更新登录" : "查询状态"}`} onClick={() => ready ? onClaim(account) : outcome.state === "unauthorized" ? onConnect() : onQuery(account)}>{claimed ? <Check aria-hidden /> : null}{actionLabel}</JoluButton>
+        const verb = claimVerb(entry.platform)
+        const actionLabel = accountPaused ? "已暂停" : !entry.manual ? entry.platform === "workbuddy" ? "无需手动领取" : "暂未开放" : ready ? verb : claimed ? claimedLabel(entry.platform) : outcome.state === "unauthorized" ? "更新登录" : outcome.state === "inactive" ? "活动未开放" : STATE_LABELS[outcome.state]
+        // ZCode 的 unsupported 不是「不能点」而是「去客户端领」：可点，点了打开 ZCode
+        const zcodeClient = entry.platform === "zcode" && outcome.state === "unsupported"
+        const action = <JoluButton size="sm" className="w-full min-w-0 gap-1 px-2 text-[12px] [&_svg]:size-3.5" variant={ready || claimed ? "soft" : "neutral"} disabled={busy || accountPaused || !entry.manual || claimed || (outcome.state === "unsupported" && !zcodeClient) || outcome.state === "inactive"} aria-label={`${entry.name} ${entry.region} ${label} ${ready ? verb : claimed ? claimedLabel(entry.platform) : outcome.state === "unauthorized" ? "更新登录" : "查询状态"}`} onClick={() => zcodeClient ? onOpenZcodeClient() : ready ? onClaim(account) : outcome.state === "unauthorized" ? onConnect() : onQuery(account)}>{claimed ? <Check aria-hidden /> : null}{actionLabel}</JoluButton>
         const deleteAction = <JoluButton size="sm" variant="danger-soft" className="px-2" aria-label={`删除账号 ${label}`} disabled={busy} onClick={() => onRemove(account)}>删除</JoluButton>
         return <div key={account.id} data-checkin-account={account.id} className={cn("flex flex-1 flex-col gap-2", selection.active && "rounded-lg p-2 ring-1 ring-inset", selection.active && (selection.selected.has(account.id) ? "ring-jolu-accent" : "ring-jolu-border"))}>
           <div className="flex items-start gap-2 text-xs">
@@ -344,7 +372,7 @@ function CheckinCard({ entry, accounts, paused, busy, hidden, active, onConnect,
             <span className="min-w-0 flex-1 break-all text-jolu-muted">账号：{label}</span>
             {accountPaused && <span className="shrink-0 text-[11px] text-jolu-muted">已暂停</span>}
           </div>
-          <div className="flex flex-wrap items-baseline justify-between gap-2"><p className={cn("text-2xl font-medium tabular-nums", ready || claimed ? "text-jolu-on" : "text-jolu-text")}>{!entry.manual ? entry.platform === "workbuddy" ? "自动活跃奖励" : "暂未开放" : outcome.reward !== null ? rewardLabel(outcome) : claimed ? "已领取" : "—"}</p>{entry.manual && <span className="text-[12px] text-jolu-muted">今日签到奖励</span>}</div>
+          <div className="flex flex-wrap items-baseline justify-between gap-2"><p className={cn("text-2xl font-medium tabular-nums", ready || claimed ? "text-jolu-on" : "text-jolu-text")}>{!entry.manual ? entry.platform === "workbuddy" ? "自动活跃奖励" : "暂未开放" : outcome.reward !== null ? rewardLabel(outcome) : claimed ? "已领取" : "—"}</p>{entry.manual && <span className="text-[12px] text-jolu-muted">{entry.platform === "zcode" ? "本批领取额度" : "今日签到奖励"}</span>}</div>
           <CheckinAccountStats key={`${account.id}:${account.account_key ?? account.account ?? "unknown"}`} accountId={account.id} statistics={account.statistics} official={outcome.official_statistics} identityKey={accountPaused ? null : entry.manual ? account.account_key : account.account ?? null} active={active} showHistory={entry.manual} accountLabel={label} providerLabel={`${entry.name} ${entry.region}`} statusMessage={accountPaused ? "该账号已暂停查询，配置与历史保留。" : account.checked_at === null ? entry.description : outcome.message} detailsOpen={detailsAccountId === account.id} onDetailsOpenChange={open => setDetailsAccountId(open ? account.id : null)} action={action} deleteAction={deleteAction} />
         </div>
       })}
