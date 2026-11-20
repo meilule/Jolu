@@ -122,7 +122,8 @@ export function SessionObservation({ platform, sessionId, view, groupName, onBac
   const lastReady = history?.find((row) => row.state === "ready")?.ts ?? null
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-3 px-8 pb-8 pt-2">
+    // @container：本组件的窄窗降级全部按这个容器的宽度判断（右侧详情面板宽，不随窗口直接变化）
+    <div className="@container flex min-w-0 flex-1 flex-col gap-3 px-8 pb-8 pt-2">
       <div className="flex items-center gap-2">
         <button type="button" onClick={onBack}
           className="flex items-center gap-1.5 text-meta text-jolu-muted outline-none hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent">
@@ -220,15 +221,15 @@ export function SessionObservation({ platform, sessionId, view, groupName, onBac
                 <Chip active={kind === null} onClick={() => chooseKind(null)} label="全部" />
                 {KINDS.map((meta) => <Chip key={meta.kind} active={kind === meta.kind} onClick={() => chooseKind(meta.kind)} label={meta.chip} />)}
               </div>
-              <div className="flex items-center gap-2.5">
-                <label className="flex h-9 w-72 items-center gap-1.5 rounded-lg border border-jolu-border px-2.5 focus-within:outline-2 focus-within:outline-jolu-accent">
+              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2">
+                <label className="flex h-9 w-full min-w-0 max-w-72 flex-1 items-center gap-1.5 rounded-lg border border-jolu-border px-2.5 focus-within:outline-2 focus-within:outline-jolu-accent">
                   <Search aria-hidden className="size-3.5 shrink-0 text-jolu-muted" />
                   <input value={search} onChange={(event) => { if (event.target.value) paused(); setSearch(event.target.value) }}
                     placeholder="搜索名称、路径或摘要" aria-label="搜索名称、路径或摘要"
                     className="min-w-0 flex-1 bg-transparent text-meta text-jolu-text outline-none placeholder:text-jolu-muted" />
                 </label>
-                <span className="flex-1" />
-                <span className="text-note text-jolu-muted">{countLabel(shown, kind)}</span>
+                <span className="hidden flex-1 @[640px]:block" />
+                <span className="whitespace-nowrap text-note text-jolu-muted">{countLabel(shown, kind)}</span>
                 <button type="button" onClick={() => setSort((mode) => (mode === "tokens" ? "kind" : "tokens"))}
                   className="flex h-9 items-center gap-1.5 rounded-lg border border-jolu-border px-3 text-meta font-medium text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
                   <ArrowDownWideNarrow aria-hidden className="size-3.5 text-jolu-muted" />
@@ -255,20 +256,22 @@ function Overview({ summary, groupName }: { summary: ContextSnapshotSummaryDto; 
   const cache = cacheCard(summary)
   return (
     <>
-      <div className="flex items-center gap-4 rounded-xl bg-jolu-side px-4 py-3">
+      {/* 链路行窄容器折行（三个格子 w-52 固定，不折行会互相挤压截断） */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl bg-jolu-side px-4 py-3">
         <ChainCell label="请求模型" value={chain.requested} mono />
         <ChevronRight aria-hidden className="size-4 shrink-0 text-jolu-muted" />
         <ChainCell label="路由分组" value={chain.group ?? "未经分组"} muted={!chain.group} />
         <ChevronRight aria-hidden className="size-4 shrink-0 text-jolu-muted" />
         <ChainCell label="实际模型 / 来源账号" value={chain.actual} grow />
       </div>
-      <div className="flex items-center gap-2.5 text-note text-jolu-muted">
-        <span className={cn("font-medium", run.tone === "on" ? "text-jolu-on" : run.tone === "danger" ? "text-jolu-danger" : "text-jolu-muted")}>● {run.status}</span>
-        {run.parts.map((part) => <span key={part} className="tabular-nums">{part}</span>)}
-        <span className="flex-1" />
-        <span className="tabular-nums">{ioSummary(summary)}</span>
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-note text-jolu-muted">
+        <span className={cn("font-medium whitespace-nowrap", run.tone === "on" ? "text-jolu-on" : run.tone === "danger" ? "text-jolu-danger" : "text-jolu-muted")}>● {run.status}</span>
+        {run.parts.map((part) => <span key={part} className="whitespace-nowrap tabular-nums">{part}</span>)}
+        <span className="hidden flex-1 @[640px]:block" />
+        <span className="whitespace-nowrap tabular-nums">{ioSummary(summary)}</span>
       </div>
-      <div className="grid grid-cols-[1fr_360px] gap-6 py-1">
+      {/* 双栏在窄容器降为上下堆叠（提示词缓存列 360px 固定，容器不足时被裁出面板） */}
+      <div className="grid gap-4 py-1 @[640px]:grid-cols-[1fr_360px] @[640px]:gap-6">
         <UsageBlock title="上下文占用" basis={ctx.basis} value={ctx.value} ratio={ctx.ratio} ratioText={ctx.ratio != null ? `${(ctx.ratio * 100).toFixed(1)}%` : null} note={ctx.note} danger={ctx.ratio != null && ctx.ratio >= 0.8} />
         <UsageBlock title="提示词缓存" basis="" value={cache.value} ratio={cache.ratio} ratioText={cache.ratio != null ? `占输入 ${(cache.ratio * 100).toFixed(1)}%` : null} note={cache.note} />
       </div>
@@ -278,7 +281,7 @@ function Overview({ summary, groupName }: { summary: ContextSnapshotSummaryDto; 
 
 function ChainCell({ label, value, mono, muted, grow }: { label: string; value: string; mono?: boolean; muted?: boolean; grow?: boolean }) {
   return (
-    <span className={cn("flex min-w-0 flex-col gap-1", grow ? "flex-1" : "w-52")}>
+    <span className={cn("flex min-w-0 flex-col gap-1", grow ? "min-w-[180px] flex-1" : "w-52 shrink-0")}>
       <span className="text-note text-jolu-muted">{label}</span>
       <span className={cn("truncate text-meta font-medium", mono && "font-mono", muted ? "text-jolu-muted" : "text-jolu-text")} title={value}>{value}</span>
     </span>
@@ -402,6 +405,19 @@ function CompositionArea({ detail, detailFailed, lastReady, onRetry, chart, part
   )
 }
 
+/**
+ * 明细表列定义：按容器宽度三档降列（表头 / 数据行 / 展开子行三处必须用同一套，否则错位）。
+ * 五列固定宽合计约 425px + 间距与内边距，右侧详情面板窄于 ~560px 时 Token 列被裁出面板
+ * （2026-11-17 尺寸扫描）。降级顺序按可推断性：「占输入」占比可由 Token 与总数推断先收，
+ * 「类别」已在筛选 chips 里表达次收；名称 / 次数 / Token 三列始终保留。
+ * 注意类名写死字面量——Tailwind 4 静态扫描，模板串拼接的类不会生成。
+ */
+const ITEM_GRID = [
+  "grid-cols-[minmax(0,1fr)_110px_60px_100px_155px]",
+  "@max-[619px]:grid-cols-[minmax(0,1fr)_110px_60px_100px]",
+  "@max-[459px]:grid-cols-[minmax(0,1fr)_60px_100px]",
+].join(" ")
+
 function ItemTable({ rows, counted, expanded, onToggle, snapshotId }: {
   rows: TableRow[]
   counted: boolean
@@ -411,8 +427,12 @@ function ItemTable({ rows, counted, expanded, onToggle, snapshotId }: {
 }) {
   return (
     <div className="flex flex-col overflow-hidden rounded-xl border border-jolu-border">
-      <div className="grid grid-cols-[minmax(0,1fr)_110px_60px_100px_155px] gap-3.5 bg-jolu-side px-4 py-2 text-note text-jolu-muted">
-        <span>名称 / 来源</span><span>类别</span><span>次数</span><span>{counted ? "Token · 换算" : "Token · 估算"}</span><span>占输入</span>
+      <div className={cn("grid gap-3.5 bg-jolu-side px-4 py-2 text-note text-jolu-muted", ITEM_GRID)}>
+        <span className="whitespace-nowrap">名称 / 来源</span>
+        <span className="whitespace-nowrap @max-[459px]:hidden">类别</span>
+        <span className="whitespace-nowrap">次数</span>
+        <span className="whitespace-nowrap">{counted ? "Token · 换算" : "Token · 估算"}</span>
+        <span className="whitespace-nowrap @max-[619px]:hidden">占输入</span>
       </div>
       {rows.length === 0 && <p className="border-t border-jolu-table-divider px-4 py-6 text-center text-meta text-jolu-muted">没有符合条件的条目。</p>}
       {rows.map((row) => {
@@ -421,7 +441,7 @@ function ItemTable({ rows, counted, expanded, onToggle, snapshotId }: {
         return (
           <div key={row.key} className="border-t border-jolu-table-divider">
             <button type="button" disabled={!row.expand} onClick={() => onToggle(row.key)} aria-expanded={row.expand ? open : undefined}
-              className="grid w-full grid-cols-[minmax(0,1fr)_110px_60px_100px_155px] items-center gap-3.5 px-4 py-2 text-left outline-none enabled:hover:bg-jolu-side/60 focus-visible:outline-2 focus-visible:outline-jolu-accent">
+              className={cn("grid w-full items-center gap-3.5 px-4 py-2 text-left outline-none enabled:hover:bg-jolu-side/60 focus-visible:outline-2 focus-visible:outline-jolu-accent", ITEM_GRID)}>
               <span className="flex min-w-0 items-center gap-2">
                 {row.expand
                   ? <ChevronRight aria-hidden className={cn("size-3 shrink-0 text-jolu-muted motion-safe:transition-transform motion-safe:duration-150", open && "rotate-90")} />
@@ -431,24 +451,24 @@ function ItemTable({ rows, counted, expanded, onToggle, snapshotId }: {
                   <span className="truncate text-note text-jolu-muted" title={row.subtitle}>{row.subtitle}</span>
                 </span>
               </span>
-              <span className="text-note text-jolu-muted">{meta.label}</span>
+              <span className="text-note text-jolu-muted @max-[459px]:hidden">{meta.label}</span>
               <span className="text-note tabular-nums text-jolu-muted">{row.countText}</span>
               <span className="text-note tabular-nums text-jolu-muted">{compactTokens(row.tokens)}</span>
-              <ShareCell share={row.share} fill={meta.fill} />
+              <span className="@max-[619px]:hidden"><ShareCell share={row.share} fill={meta.fill} /></span>
             </button>
             {open && row.expand === "calls" && row.tool && <CallsPanel snapshotId={snapshotId} tool={row.tool} counted={counted} />}
             {open && row.expand !== "calls" && row.children.length > 0 && (
               <div className="flex flex-col bg-jolu-side/40 py-1">
                 {row.children.map((child) => (
-                  <div key={child.key} className="grid grid-cols-[minmax(0,1fr)_110px_60px_100px_155px] items-center gap-3.5 py-1.5 pl-[42px] pr-4 text-note">
+                  <div key={child.key} className={cn("grid items-center gap-3.5 py-1.5 pl-[42px] pr-4 text-note", ITEM_GRID)}>
                     <span className="flex min-w-0 flex-col">
                       <span className="truncate text-jolu-text" title={child.name}>{child.name}</span>
                       {child.sub && <span className="truncate text-jolu-muted">{child.sub}</span>}
                     </span>
-                    <span />
+                    <span className="@max-[459px]:hidden" />
                     <span />
                     <span className="tabular-nums text-jolu-muted">{compactTokens(child.tokens)}</span>
-                    <ShareCell share={child.share} fill={meta.fill} />
+                    <span className="@max-[619px]:hidden"><ShareCell share={child.share} fill={meta.fill} /></span>
                   </div>
                 ))}
               </div>

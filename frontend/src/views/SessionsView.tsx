@@ -176,8 +176,8 @@ export function SessionsView({ active, target, onDrillUsage, onCreateAutomation 
         </div>
       </div>
 
-      <div className="flex h-[38px] items-center gap-2.5">
-        <label className="jolu-control flex h-[38px] w-[360px] items-center gap-2 rounded-lg border border-jolu-border bg-jolu-bg px-3 focus-within:border-jolu-accent">
+      <div className="flex min-h-[38px] flex-wrap items-center gap-x-2.5 gap-y-2">
+        <label className="jolu-control flex h-[38px] w-full min-w-0 max-w-[360px] flex-1 items-center gap-2 rounded-lg border border-jolu-border bg-jolu-bg px-3 focus-within:border-jolu-accent">
           <Search aria-hidden className="size-4 shrink-0 text-jolu-muted" />
           <input
             value={searchDraft}
@@ -191,12 +191,12 @@ export function SessionsView({ active, target, onDrillUsage, onCreateAutomation 
             className="min-w-0 flex-1 bg-transparent text-xs text-jolu-text outline-none placeholder:text-jolu-muted"
           />
         </label>
-        <span className="flex-1" />
-        <span className="text-[12px] text-jolu-muted">{minutes < 1 ? "刚刚同步" : `${minutes} 分钟前同步`}</span>
+        <span className="hidden flex-1 sm:block" />
+        <span className="whitespace-nowrap text-[12px] text-jolu-muted">{minutes < 1 ? "刚刚同步" : `${minutes} 分钟前同步`}</span>
         <ToolButton icon={<RefreshCw />} busy={scanning || query.refreshing} disabled={scanning || query.refreshing} onClick={() => void rescan()}>刷新</ToolButton>
       </div>
 
-      <div className="flex h-[34px] items-center gap-2">
+      <div className="flex min-h-[34px] flex-wrap items-center gap-2">
         <MenuFilter label="供应商筛选" value={platform ?? ALL} options={providerOptions()} onChange={(v) => {
           const next = v === ALL ? null : (v as PlatformId)
           setPlatform(next)
@@ -221,7 +221,8 @@ export function SessionsView({ active, target, onDrillUsage, onCreateAutomation 
 
       {query.error && <ErrorNotice error={query.error} stale={query.data !== null} onRetry={query.refresh} />}
 
-      <div ref={listMotion} className="flex h-[630px] gap-4">
+      {/* 详情面板最小宽 420：更窄的窗口整行横向滚动（列表 + 详情一起拖），内容不再被裁破版 */}
+      <div ref={listMotion} className="flex h-[630px] gap-4 overflow-x-auto pb-1 [scrollbar-width:thin]">
         {!query.data ? (
           !query.error && <LoadingSurface layout="sessions" label="正在读取本机会话" />
         ) : !all.length && !filtered ? (

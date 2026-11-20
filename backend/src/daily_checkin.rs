@@ -224,6 +224,46 @@ fn record(
     Ok(())
 }
 
+/// ZCode 的礼包「领了之后 banner 就消失」：单看接口分不清「本来就没有」和「刚领过」。
+/// 这里查最近一条领取记录，把「刚领过」补回成 `Claimed`，避免用户领完回来看不到痕迹。
+///
+/// 窗口取 7 天：ZCode 的礼包是限时活动（实测 `ends_at` 距开始约 14 小时），7 天足以覆盖
+/// 一次活动周期；更早的记录不再代表「本批」，让状态如实回到「当前没有可领取的礼包」。
+/// 只认 `claimed`：失败 / 未开放等记录不能冒充已领取。
+const ZCODE_RECENT_CLAIM_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
+fn recent_claim(conn: &Connection, platform: &str, key: &str) -> Option<(i64, Outcome)> {
+    let since = chrono::Utc::now().timestamp_millis() - ZCODE_RECENT_CLAIM_MS;
+    let mut stmt = conn
+        .prepare("SELECT outcome, created_ms FROM daily_checkin_records WHERE platform = ?1 AND account_key = ?2 AND created_ms >= ?3 ORDER BY created_ms DESC LIMIT 1")
+        .ok()?;
+    let (raw, created_ms): (String, i64) = stmt
+        .query_row(params![platform, key, since], |row| Ok((row.get(0)?, row.get(1)?)))
+        .ok()?;
+    let outcome: Outcome = serde_json::from_str(&raw).ok()?;
+    (outcome.state == State::Claimed).then_some((created_ms, outcome))
+}
+
+/// 接口说「没有可领的礼包」时，用最近领取记录补成「本批已领取」：
+/// 只对 ZCode 生效（其它三家的周期由服务端接口直接给，不需要推断）。
+/// 文案带上领取时间，让用户知道是哪次领的，而不是凭空一个「已领取」。
+fn annotate_zcode_claimed(conn: &Connection, platform: &str, key: &str, outcome: Outcome) -> Outcome {
+    if platform != "zcode" || outcome.state != State::Inactive {
+        return outcome;
+    }
+    let Some((created_ms, prior)) = recent_claim(conn, platform, key) else {
+        return outcome;
+    };
+    let at = chrono::DateTime::from_timestamp_millis(created_ms)
+        .map(|at| at.with_timezone(&chrono::Local).format("%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| "此前".into());
+    let mut claimed = Outcome::new(State::Claimed, format!("本批礼包已领取（{at}）"));
+    claimed.reward = prior.reward;
+    claimed.unit = prior.unit;
+    claimed.period_key = prior.period_key;
+    claimed
+}
+
 fn persist_snapshot(
     conn: &Connection,
     id: &str,
@@ -502,6 +542,21 @@ async fn execute(
         })
         .await
         .map_err(|_| "签到查询执行异常，请刷新状态")??;
+    // ZCode 领完礼包后 banner 消失，接口只能回「没有可领的」：用最近领取记录补成「已领取」，
+    // 避免用户领完回来看不到痕迹（2026-11-20 鼠鼠反馈）。只读查询，不改任何记录。
+    let outcome = match (&key, snapshot.platform.as_str(), claim) {
+        (Some(account_key), "zcode", false) => {
+            let pool = app.state::<crate::Db>().0.clone();
+            let account_key = account_key.clone();
+            let raw = outcome.clone();
+            let annotated = crate::with_database(pool, move |conn| {
+                Ok(annotate_zcode_claimed(conn, "zcode", &account_key, raw))
+            })
+            .await;
+            annotated.unwrap_or(outcome)
+        }
+        _ => outcome,
+    };
     let changed_id = id.clone();
     let saved_outcome = outcome.clone();
     // 本机记录始终归属原请求身份；页面键稍后按后置身份与数据库核验单独裁剪。
@@ -559,6 +614,62 @@ pub(crate) async fn daily_checkin_claim(
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    /// ZCode 的「领完 banner 就消失」：接口回 inactive 时要靠最近领取记录补成 claimed。
+    #[test]
+    fn zcode_inactive_becomes_claimed_when_a_claim_is_recent() {
+        let conn = crate::db::open(std::path::Path::new(":memory:")).unwrap();
+        init(&conn).unwrap();
+        let claimed = Outcome {
+            state: State::Claimed,
+            message: "已领取 1 个礼包：300,000,000 token".into(),
+            reward: Some(300_000_000.0),
+            unit: "token".into(),
+            period_key: Some("zcode:abc".into()),
+            reset_at: None,
+            server_time: None,
+            official_statistics: None,
+        };
+        let raw = serde_json::to_string(&claimed).unwrap();
+        conn.execute(
+            "INSERT INTO daily_checkin_records(connection_id,name,platform,edition,account_key,outcome,created_ms) VALUES('c','n','zcode','main','key-1',?1,?2)",
+            params![raw, chrono::Utc::now().timestamp_millis()],
+        ).unwrap();
+        let inactive = || Outcome::new(State::Inactive, "当前没有可领取的礼包");
+        // 刚领过 → 补成已领取，并带回当时的额度
+        let annotated = annotate_zcode_claimed(&conn, "zcode", "key-1", inactive());
+        assert_eq!(annotated.state, State::Claimed);
+        assert!(annotated.message.contains("本批礼包已领取"), "{}", annotated.message);
+        assert_eq!(annotated.reward, Some(300_000_000.0));
+        assert_eq!(annotated.unit, "token");
+        // 别的账号 / 别的平台不受影响
+        assert_eq!(annotate_zcode_claimed(&conn, "zcode", "key-2", inactive()).state, State::Inactive);
+        assert_eq!(annotate_zcode_claimed(&conn, "qoder", "key-1", inactive()).state, State::Inactive);
+    }
+
+    #[test]
+    fn zcode_claim_outside_the_window_or_not_a_claim_is_not_reused() {
+        let conn = crate::db::open(std::path::Path::new(":memory:")).unwrap();
+        init(&conn).unwrap();
+        let inactive = || Outcome::new(State::Inactive, "当前没有可领取的礼包");
+        // 8 天前的领取记录：超出窗口，回到「当前没有可领取的礼包」
+        let old = Outcome::new(State::Claimed, "旧记录");
+        conn.execute(
+            "INSERT INTO daily_checkin_records(connection_id,name,platform,edition,account_key,outcome,created_ms) VALUES('c','n','zcode','main','old',?1,?2)",
+            params![serde_json::to_string(&old).unwrap(), chrono::Utc::now().timestamp_millis() - 8 * 24 * 60 * 60 * 1000],
+        ).unwrap();
+        assert_eq!(annotate_zcode_claimed(&conn, "zcode", "old", inactive()).state, State::Inactive);
+        // 最近一次是失败：不能冒充已领取
+        let failed = Outcome::new(State::Failed, "查询失败");
+        conn.execute(
+            "INSERT INTO daily_checkin_records(connection_id,name,platform,edition,account_key,outcome,created_ms) VALUES('c','n','zcode','main','failed',?1,?2)",
+            params![serde_json::to_string(&failed).unwrap(), chrono::Utc::now().timestamp_millis()],
+        ).unwrap();
+        assert_eq!(annotate_zcode_claimed(&conn, "zcode", "failed", inactive()).state, State::Inactive);
+        // 已有礼包可领时不动（ready 不经过这个函数，这里只确认它只处理 inactive）
+        let ready = Outcome::new(State::Ready, "可领取");
+        assert_eq!(annotate_zcode_claimed(&conn, "zcode", "key-1", ready).state, State::Ready);
+    }
 
     #[test]
     fn native_sources_require_matching_platform_and_explicit_edition() {

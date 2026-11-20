@@ -41,25 +41,26 @@ export function AgentDirectory({ rows, selected, modelsCount, tierCount, busy, s
   return (
     // 子元素必须 shrink-0：flex-col 默认允许压缩，压缩后内容溢出被裁、滚动容器反而不触发滚动
     <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto px-8 pb-6 pt-6 [&>*]:shrink-0">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex flex-col gap-1.5">
-          <h1 className="text-[24px] font-semibold text-jolu-text">你的 AI 工具</h1>
+      {/* 窄窗口时按钮组折行（flex-wrap）：并排会把标题压到换行（2026-11-17 尺寸扫描） */}
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <h1 className="whitespace-nowrap text-[24px] font-semibold text-jolu-text">你的 AI 工具</h1>
           <p className="text-meta text-jolu-muted">接入模型路由，为每个工具配置顺手的模型。</p>
         </div>
         <div className="flex shrink-0 items-center gap-2.5">
           <button type="button" disabled={busy} onClick={onRedetect}
-            className="flex h-10 items-center gap-2 rounded-lg border border-jolu-border bg-jolu-bg px-3.5 text-meta text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
+            className="flex h-10 items-center gap-2 whitespace-nowrap rounded-lg border border-jolu-border bg-jolu-bg px-3.5 text-meta text-jolu-text outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
             <RefreshCw aria-hidden className={cn("size-3.5 text-jolu-muted", busy && "animate-spin")} />重新检测
           </button>
           <button type="button" onClick={onAddCustom} disabled={busy}
-            className="flex h-10 items-center gap-2 rounded-lg bg-jolu-text px-3.5 text-meta font-semibold text-jolu-bg outline-none hover:opacity-90 focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
+            className="flex h-10 items-center gap-2 whitespace-nowrap rounded-lg bg-jolu-text px-3.5 text-meta font-semibold text-jolu-bg outline-none hover:opacity-90 focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
             <Plus aria-hidden className="size-4" />添加工具
           </button>
         </div>
       </div>
 
-      {/* 接入状态筛选 + 搜索（画板 V8-01 筛选行） */}
-      <div className="agent-filter-row flex items-center justify-between gap-3">
+      {/* 接入状态筛选 + 搜索（画板 V8-01 筛选行）。窄窗口折行：chips 一行、搜索占满余宽 */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <div className="flex items-center gap-0.5 rounded-lg bg-jolu-side p-0.5" role="group" aria-label="接入状态筛选">
           {AGENT_FILTERS.map((item) => (
             <button key={item.id} type="button" aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}
@@ -74,14 +75,15 @@ export function AgentDirectory({ rows, selected, modelsCount, tierCount, busy, s
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2.5">
+        <div className="flex min-w-0 items-center gap-2.5">
           {(grid.hiddenCount > 0 || showHidden) && (
             <button type="button" onClick={() => onShowHidden(!showHidden)} aria-pressed={showHidden}
-              className="flex h-9 items-center gap-1.5 rounded-lg border border-jolu-border px-3 text-meta text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
+              className="flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-jolu-border px-3 text-meta text-jolu-text outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent">
               <EyeOff aria-hidden className="size-3.5 text-jolu-muted" />{showHidden ? "收起已隐藏" : `已隐藏 ${grid.hiddenCount}`}
             </button>
           )}
-          <label className="flex h-10 w-[250px] items-center gap-2.5 rounded-lg border border-jolu-border bg-jolu-bg px-3">
+          {/* 搜索框：与 chips 同行时分到剩余宽（250 封顶），折行后独占整行 */}
+          <label className="flex h-10 w-full min-w-0 max-w-[250px] flex-1 items-center gap-2.5 rounded-lg border border-jolu-border bg-jolu-bg px-3">
             <Search aria-hidden className="size-4 shrink-0 text-jolu-muted" />
             <input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="搜索工具" aria-label="搜索工具"
               className="min-w-0 flex-1 bg-transparent text-meta text-jolu-text outline-none placeholder:text-jolu-muted" />
@@ -89,18 +91,23 @@ export function AgentDirectory({ rows, selected, modelsCount, tierCount, busy, s
         </div>
       </div>
 
-      {/* 三列工具卡片栅格（画板 V8-01：卡 328×218） */}
-      <div className="agent-card-grid grid grid-cols-3 gap-4" key={`${filter}:${search}:${showHidden}`}>
-        {grid.rows.map((row) => (
-          <ToolCard key={row.agent} row={row} selected={selected === row.agent} modelsCount={modelsCount} tierCount={tierCount} busy={busy}
-            onSelect={() => onSelect(row.agent)} onToggle={() => onToggle(row)} />
-        ))}
+      {/* 三列工具卡片栅格（画板 V8-01：卡 328×218）。按容器宽度降列：三列需要约 1000px
+          内容宽（328×3 + 间距 + 页边距），不够就 2 列、再窄 1 列——否则卡内标题与状态行
+          被裁（2026-11-17 尺寸扫描）。容器查询在侧栏收起 / 展开时都准确；
+          @container 放外层壳（容器查询量的是最近容器祖先，不能和栅格同一元素）。 */}
+      <div className="@container" key={`${filter}:${search}:${showHidden}`}>
+        <div className="agent-card-grid grid gap-4 grid-cols-1 @[680px]:grid-cols-2 @[1000px]:grid-cols-3">
+          {grid.rows.map((row) => (
+            <ToolCard key={row.agent} row={row} selected={selected === row.agent} modelsCount={modelsCount} tierCount={tierCount} busy={busy}
+              onSelect={() => onSelect(row.agent)} onToggle={() => onToggle(row)} />
+          ))}
+        </div>
+        {grid.rows.length === 0 && (
+          <p className="rounded-xl border border-dashed border-jolu-border px-4 py-10 text-center text-meta text-jolu-muted">
+            {search ? "没有匹配的工具" : filter === "wired" ? "还没有已接入的工具，打开可接入卡上的开关即可接入" : "这个筛选下没有工具"}
+          </p>
+        )}
       </div>
-      {grid.rows.length === 0 && (
-        <p className="rounded-xl border border-dashed border-jolu-border px-4 py-10 text-center text-meta text-jolu-muted">
-          {search ? "没有匹配的工具" : filter === "wired" ? "还没有已接入的工具，打开可接入卡上的开关即可接入" : "这个筛选下没有工具"}
-        </p>
-      )}
 
       {/* 暂不能接入折叠条（画板 V8-01：48 高，右端查看原因） */}
       {grid.blocked.length > 0 && (

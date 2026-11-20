@@ -39,6 +39,11 @@ use std::time::Duration;
 const MARKETING: &str = "https://zcode.z.ai/api/v1/marketing/touch";
 const MAX_BYTES: u64 = 1024 * 1024;
 
+/// 没有可领礼包时的说明。**不能只说「没有」**：用户可能刚在 ZCode 客户端领过
+/// （Jolu 只负责提示，实际领取发生在客户端，Jolu 看不到那次动作），
+/// 所以把「可能已领」这条也讲明白，避免用户以为「明明领了却说没有」。
+const INACTIVE_MESSAGE: &str = "当前没有可领取的礼包；如果你已在 ZCode 客户端领取，属正常";
+
 pub(crate) struct Account {
     jwt: String,
     /// 账号身份：JWT 派生的哈希（`zcode_quota::account_identity` 同款口径），
@@ -69,14 +74,30 @@ impl Account {
         &self.identity
     }
 
-    /// 状态：查 `preview` 看有没有可领的礼包。
-    /// 有 → `Ready`（带条数与总额度）；空列表 → `Inactive`（如实说「没有可领」）。
+    /// 状态：先看有没有可领的新礼包，再看已领取的是否还在生效。
+    ///
+    /// 服务端的两份数据（2026-11-20 实测）：
+    ///   - `marketing/touch` 的 banner：**可领的**活动（点「领取」前的提示）；
+    ///   - `billing/balance` 的 `plans`：**已领取且生效中**的套餐（`status: "active"`），
+    ///     带 `plan_id` / `name` / `entitlements` / `ends_at`。
+    /// 领取后 banner 消失、plans 里多一条 —— 所以「领了」是可查的服务端事实，
+    /// 不用靠本地记录推断（那是方案 A 的兜底，见 daily_checkin 的 annotate_zcode_claimed）。
     pub(crate) fn status(&self) -> Outcome {
-        match self.preview() {
-            Ok(plans) if plans.is_empty() => {
-                Outcome::new(State::Inactive, "当前没有可领取的礼包").with_unit("tokens")
-            }
-            Ok(plans) => {
+        let plans = match self.preview() {
+            Ok(plans) => plans,
+            Err(outcome) => return outcome,
+        };
+        if plans.is_empty() {
+            // 没有可领的：查已领取的礼包是否仍在生效
+            return match self.active_plan() {
+                Ok(Some(claimed)) => claimed,
+                Ok(None) => Outcome::new(State::Inactive, INACTIVE_MESSAGE).with_unit("tokens"),
+                // 余额接口读不到时不能断言「没有」：如实报查询失败
+                Err(outcome) => outcome,
+            };
+        }
+        {
+            {
                 let total: f64 = plans.iter().map(|plan| plan.grant_total()).sum();
                 let mut outcome = Outcome::new(
                     State::Ready,
@@ -91,8 +112,31 @@ impl Account {
                 outcome.period_key = Some(plans_key(&plans));
                 outcome
             }
-            Err(outcome) => outcome,
         }
+    }
+
+    /// 查 `billing/balance` 里已领取且生效中的礼包套餐。
+    /// 有 → `Claimed`（带额度和到期时间）；没有 → `Ok(None)` 交给调用方判 `Inactive`。
+    fn active_plan(&self) -> Result<Option<Outcome>, Outcome> {
+        let client = self.client()?;
+        let response = client
+            .get(crate::zcode_quota::balance_url())
+            .bearer_auth(&self.jwt)
+            .header("Accept", "application/json")
+            .header("X-Device-Mid", crate::zcode_quota::device_mid())
+            .header("X-Client-Language", "zh-CN")
+            .header("X-ZCode-App-Version", crate::zcode_quota::app_version())
+            .header("X-Platform", platform_tag())
+            .send()
+            .map_err(|_| Outcome::new(State::Failed, "无法连接 ZCode 余额接口，请检查网络"))?;
+        let status = response.status().as_u16();
+        let body = read_body(response, "礼包余额")?;
+        if !(200..300).contains(&status) {
+            return Err(http_error(status));
+        }
+        let value: Value = serde_json::from_slice(&body)
+            .map_err(|_| Outcome::new(State::Failed, "ZCode 余额响应无法识别"))?;
+        Ok(parse_active_plan(&value))
     }
 
     /// 领取：**Jolu 不代领**，只如实告诉用户去 ZCode 客户端领。
@@ -107,7 +151,7 @@ impl Account {
     pub(crate) fn claim(&self, before_post: impl FnOnce() -> Result<(), Outcome>) -> Outcome {
         let plans = match self.preview() {
             Ok(plans) if plans.is_empty() => {
-                return Outcome::new(State::Inactive, "当前没有可领取的礼包").with_unit("tokens")
+                return Outcome::new(State::Inactive, INACTIVE_MESSAGE).with_unit("tokens")
             }
             Ok(plans) => plans,
             Err(outcome) => return outcome,
@@ -147,7 +191,7 @@ impl Account {
             // v4 UUID（`zcode_quota::device_mid`），X-Client-Language 与版本号同样必需
             .header("X-Device-Mid", crate::zcode_quota::device_mid())
             .header("X-Client-Language", "zh-CN")
-            .header("X-ZCode-App-Version", crate::zcode_quota::ZCODE_APP_VERSION)
+            .header("X-ZCode-App-Version", crate::zcode_quota::app_version())
             .header("X-Platform", platform_tag())
             .send()
             .map_err(|_| Outcome::new(State::Failed, "无法连接 ZCode 礼包接口，请检查网络"))?;
@@ -200,6 +244,66 @@ impl Plan {
     }
 }
 
+
+/// 从 `billing/balance` 的 `data.plans` 里找已领取且生效中的礼包套餐。
+///
+/// 2026-11-20 实测的响应形状（领取 WEEKEND BUILD 之后）：
+/// ```json
+/// {"data":{"plans":[{"user_plan_id":"upl_…","plan_id":"zcode-v3-start-plan-wk-1120",
+///   "name":"ZCODE WEEKEND BUILD","status":"active","starts_at":…,"ends_at":…,
+///   "entitlements":[{"show_name":"GLM-5.3-Flash","meter":"model_usage",
+///     "unit_type":"token","grant_units":500000000,"period":"one_time"}]}],
+///   "balances":[]}}
+/// ```
+/// 只认 `status == "active"` 且未过期的：其它状态（expired / cancelled）如实不算已领取。
+/// `balances` 为空是正常的——礼包额度记在 `plans`，`balances` 是另一类（订阅余额桶）。
+fn parse_active_plan(value: &Value) -> Option<Outcome> {
+    let now = value
+        .get("data")
+        .and_then(|d| d.get("server_time"))
+        .and_then(Value::as_i64)
+        .unwrap_or_else(|| chrono::Utc::now().timestamp());
+    let plans = value.get("data")?.get("plans")?.as_array()?;
+    let plan = plans.iter().find(|plan| {
+        let active = plan.get("status").and_then(Value::as_str) == Some("active");
+        let not_expired = plan
+            .get("ends_at")
+            .and_then(Value::as_i64)
+            .is_none_or(|ends_at| ends_at > now);
+        active && not_expired
+    })?;
+    let name = plan.get("name").and_then(Value::as_str).map(str::trim).filter(|name| !name.is_empty()).unwrap_or("礼包");
+    let plan_id = plan.get("plan_id").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    let entitlements = plan.get("entitlements").and_then(Value::as_array);
+    let grant: f64 = entitlements
+        .into_iter()
+        .flatten()
+        .filter(|e| e.get("meter").and_then(Value::as_str) == Some("model_usage"))
+        .filter_map(|e| e.get("grant_units").and_then(Value::as_f64))
+        .fold(0.0, f64::max);
+    let unit = entitlements
+        .into_iter()
+        .flatten()
+        .find_map(|e| e.get("unit_type").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()).map(str::to_string))
+        .unwrap_or_else(|| "tokens".into());
+    // 到期时间写进文案：礼包是限时的，用户要知道还能用多久
+    let expiry = plan
+        .get("ends_at")
+        .and_then(Value::as_i64)
+        .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+        .map(|at| at.with_timezone(&chrono::Local).format("%m-%d %H:%M").to_string());
+    let detail = if grant > 0.0 { format!("：{}", format_units(grant, &unit)) } else { String::new() };
+    let message = match expiry {
+        Some(at) => format!("已领取 {name}{detail}，{at} 前有效"),
+        None => format!("已领取 {name}{detail}"),
+    };
+    let mut outcome = Outcome::new(State::Claimed, message);
+    outcome.reward = (grant > 0.0).then_some(grant);
+    outcome.unit = unit;
+    outcome.period_key = (!plan_id.is_empty()).then(|| format!("zcode:{plan_id}"));
+    outcome.reset_at = plan.get("ends_at").and_then(Value::as_i64);
+    Some(outcome)
+}
 
 /// 从营销 banner 响应里取可领礼包。结构（2026-11-19 实测）：
 /// `data.deliveries[] → banner.buttons[] → action.type == "claim_zcode_plan"
@@ -408,6 +512,63 @@ mod tests {
                 }]
             }
         })
+    }
+
+    /// 领取后 balance 里出现的套餐（2026-11-20 真实响应缩影）。
+    fn balance_after_claim() -> Value {
+        json!({
+            "code": 0,
+            "data": {
+                "server_time": 1_795_182_232i64,
+                "plans": [{
+                    "user_plan_id": "upl_2123773540963475456",
+                    "plan_id": "zcode-v3-start-plan-wk-1120",
+                    "name": "ZCODE WEEKEND BUILD",
+                    "description": "",
+                    "priority": 101,
+                    "status": "active",
+                    "starts_at": 1_795_182_044i64,
+                    "ends_at": 1_795_395_600i64,
+                    "entitlements": [{
+                        "entitlement_id": "ent-zcode-v3-start-plan-wk-1120-1",
+                        "show_name": "GLM-5.3-Flash",
+                        "meter": "model_usage",
+                        "unit_type": "token",
+                        "capabilities": ["model:glm-5.3-flash"],
+                        "grant_units": 500_000_000.0,
+                        "period": "one_time",
+                        "priority": 101
+                    }]
+                }],
+                "balances": []
+            }
+        })
+    }
+
+    #[test]
+    fn claimed_plan_from_balance_is_read_as_claimed() {
+        // 领完 banner 消失，但 balance.plans 里有生效中的套餐：应显示「已领取」而不是「没有」
+        let outcome = parse_active_plan(&balance_after_claim()).expect("应识别为已领取");
+        assert_eq!(outcome.state, State::Claimed);
+        assert!(outcome.message.contains("ZCODE WEEKEND BUILD"), "{}", outcome.message);
+        assert_eq!(outcome.reward, Some(500_000_000.0));
+        assert_eq!(outcome.unit, "token");
+        assert!(outcome.message.contains("前有效"), "限时礼包要带到期时间：{}", outcome.message);
+        assert_eq!(outcome.period_key.as_deref(), Some("zcode:zcode-v3-start-plan-wk-1120"));
+    }
+
+    #[test]
+    fn inactive_plan_or_no_plan_is_not_claimed() {
+        // 没有 plans：未领取
+        assert!(parse_active_plan(&json!({ "code": 0, "data": { "plans": [], "balances": [] } })).is_none());
+        // 状态不是 active：不算已领取
+        let mut value = balance_after_claim();
+        value["data"]["plans"][0]["status"] = json!("expired");
+        assert!(parse_active_plan(&value).is_none());
+        // 已过期（ends_at 早于 server_time）：不算生效中
+        let mut value = balance_after_claim();
+        value["data"]["plans"][0]["ends_at"] = json!(1_795_182_000i64);
+        assert!(parse_active_plan(&value).is_none());
     }
 
     #[test]

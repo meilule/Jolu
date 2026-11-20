@@ -231,15 +231,17 @@ function SessionLine({ row, nowMs, contextsFailed, onOpen }: { row: ActiveSessio
     </span>
   )
   const openButton = (
-    <button type="button" onClick={onOpen}
+    <button type="button" onClick={(event) => { event.stopPropagation(); onOpen() }}
       className="whitespace-nowrap text-note font-medium text-jolu-on outline-none hover:underline focus-visible:outline-2 focus-visible:outline-jolu-accent">
       查看上下文
     </button>
   )
   return (
     <>
-      {/* 表格形态 */}
-      <div className={cn("grid items-center gap-3 border-t border-jolu-table-divider px-5 py-2.5 text-meta @max-[619px]:hidden", SESSION_GRID)}>
+      {/* 表格形态。整行可点进会话观察：窄容器收掉「查看上下文」按钮列后入口不丢 */}
+      <div role="button" tabIndex={0} onClick={onOpen}
+        onKeyDown={(event) => { if (event.key === "Enter") onOpen() }}
+        className={cn("grid cursor-pointer items-center gap-3 border-t border-jolu-table-divider px-5 py-2.5 text-meta outline-none hover:bg-jolu-side/60 focus-visible:outline-2 focus-visible:outline-jolu-accent @max-[619px]:hidden", SESSION_GRID)}>
         <span className="flex min-w-0 items-center gap-2.5">
           {row.agent ? <AgentBadge agent={row.agent} name={agentName ?? row.agent} size={24} /> : <span aria-hidden className="size-6 shrink-0 rounded-[7px] bg-jolu-side" />}
           <span className="flex min-w-0 flex-col">
@@ -267,8 +269,10 @@ function SessionLine({ row, nowMs, contextsFailed, onOpen }: { row: ActiveSessio
         <span className="text-right">{openButton}</span>
       </div>
 
-      {/* 卡片形态（容器 < 620px）：所有字段都显示，不用表头 */}
-      <div className="flex flex-col gap-2 border-t border-jolu-table-divider px-5 py-3 text-meta @[620px]:hidden">
+      {/* 卡片形态（容器 < 620px）：所有字段都显示，不用表头。整行可点同上 */}
+      <div role="button" tabIndex={0} onClick={onOpen}
+        onKeyDown={(event) => { if (event.key === "Enter") onOpen() }}
+        className="flex cursor-pointer flex-col gap-2 border-t border-jolu-table-divider px-5 py-3 text-meta outline-none hover:bg-jolu-side/60 focus-visible:outline-2 focus-visible:outline-jolu-accent @[620px]:hidden">
         <div className="flex min-w-0 items-center gap-2.5">
           {row.agent ? <AgentBadge agent={row.agent} name={agentName ?? row.agent} size={24} /> : <span aria-hidden className="size-6 shrink-0 rounded-[7px] bg-jolu-side" />}
           <span className="flex min-w-0 flex-col">

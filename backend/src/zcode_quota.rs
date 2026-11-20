@@ -31,14 +31,96 @@ use std::path::Path;
 /// **ZCode 升级后同步更新**，并按 `gateway::zcode_start_prompt` 模块头核对着装常量。
 pub(crate) const ZCODE_APP_VERSION: &str = "3.17.2";
 
+/// 读取本机 ZCode.exe 的真实版本（前三段，如 `3.18.2`）。
+///
+/// **为什么必须动态读**：服务端按 `app_version` 精确匹配决定是否下发活动
+/// （2026-11-20 实测：3.17.2 拿不到 banner，3.18.2 才拿到 WEEKEND BUILD；
+/// 3.18.0 也拿不到）。写死的版本号一旦落后，用户在客户端看得到礼包、Jolu 却查不到，
+/// 表现为「明明有活动却说没有」。
+///
+/// 来源优先级（都只读本机文件，不联网）：
+///   1. `ZCode.exe` 的 `ProductVersion`（Windows 文件版本信息，最准）；
+///   2. 退回 [`ZCODE_APP_VERSION`] 内置值（非 Windows 或读不到时）。
+pub(crate) fn app_version() -> String {
+    #[cfg(windows)]
+    {
+        if let Some(version) = exe_product_version() {
+            return version;
+        }
+    }
+    ZCODE_APP_VERSION.to_string()
+}
+
+/// Windows：用 PowerShell 读文件版本信息（避免为这一处引入 windows crate 的版本资源解析）。
+/// 只在本机执行一次并缓存，失败时返回 None 让调用方退回内置值。
+#[cfg(windows)]
+fn exe_product_version() -> Option<String> {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<Option<String>> = OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            let exe = zcode_exe_path()?;
+            let output = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", &format!(
+                    "(Get-Item '{}').VersionInfo.ProductVersion",
+                    exe.display()
+                )])
+                .output()
+                .ok()?;
+            let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            // "3.18.2.10443" → "3.18.2"
+            let parts: Vec<&str> = raw.split('.').collect();
+            (parts.len() >= 3).then(|| parts[..3].join("."))
+        })
+        .clone()
+}
+
+/// ZCode.exe 的位置：`%LOCALAPPDATA%\Programs\ZCode` 或数据目录同级（便携版）。
+#[cfg(windows)]
+fn zcode_exe_path() -> Option<std::path::PathBuf> {
+    // 1. 正在运行的 ZCode 进程 —— 最可靠：用户装在哪都不用猜，绿色版 / 自定义目录也对
+    if let Some(path) = running_exe_path() {
+        return Some(path);
+    }
+    // 2. 官方安装器：%LOCALAPPDATA%\Programs\ZCode\ZCode.exe
+    let home = crate::creds::home()?;
+    let local = std::env::var_os("LOCALAPPDATA")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .map(|local| local.join("Programs").join("ZCode").join("ZCode.exe"))
+        .filter(|path| path.is_file());
+    local.or_else(|| {
+        // 3. 便携版：数据目录同级
+        let beside_data = crate::creds::zcode_data_dir(&home).parent().map(|parent| parent.join("ZCode.exe"))?;
+        beside_data.is_file().then_some(beside_data)
+    })
+}
+
+/// 从运行中的 `ZCode.exe` 进程取可执行文件路径（PowerShell `Get-Process`）。
+/// 只在 ZCode 运行时有效；没运行就返回 None 交给后面的固定位置兜底。
+#[cfg(windows)]
+fn running_exe_path() -> Option<std::path::PathBuf> {
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "(Get-Process ZCode -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1).Path",
+        ])
+        .output()
+        .ok()?;
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let path = std::path::PathBuf::from(raw);
+    (path.is_file()).then_some(path)
+}
+
 /// ZCode 账号额度端点（官方客户端同源，非公开文档 API），带上客户端版本。
 pub(crate) fn balance_url() -> String {
-    format!("https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version={ZCODE_APP_VERSION}")
+    format!("https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version={}", app_version())
 }
 
 /// 该端点按官方客户端识别请求；UA 之外的字段都不猜。
 fn zcode_user_agent() -> String {
-    format!("ZCode/{ZCODE_APP_VERSION}")
+    format!("ZCode/{}", app_version())
 }
 
 /// Coding Plan Key 的 providerId 决定它属于哪个站点：`bigmodel*` 中国站、`zai*` 国际站。

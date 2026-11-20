@@ -20,10 +20,12 @@ use serde_json::Value;
 
 pub(crate) const START_BASE: &str = "https://zcode.z.ai/api/v1/zcode-plan/anthropic";
 const ZCODE_SITE: &str = "https://zcode.z.ai";
-// 着装请求与余额查询共用同一个 ZCode 版本（升级时只改 zcode_quota 那一处；
-// 下面的 UA 字面量由测试保证与它一致）。
-use crate::zcode_quota::ZCODE_APP_VERSION as APP_VERSION;
-const UA: &str = "ZCode/3.17.2 ai-sdk/anthropic/3.0.81";
+// 着装请求与余额查询共用同一个 ZCode 版本：`zcode_quota::app_version()` 从本机 ZCode.exe
+// 读真实版本（服务端按 app_version 精确匹配决定是否下发活动，写死会落后——2026-11-20 实测
+// 3.17.2 拿不到礼包 banner、3.18.2 才拿到）。UA 里的版本也跟它走，测试保证两者一致。
+fn user_agent() -> String {
+    format!("ZCode/{} ai-sdk/anthropic/3.0.81", crate::zcode_quota::app_version())
+}
 
 /// ZCode 客户端注册表里的模型 id 写法（magpie 插件 `MODELS`）。余额桶把模型写成小写
 /// （`glm-5.3-flash`），请求要用这里的写法；不认识的名字按桶里原样保留。
@@ -311,8 +313,8 @@ pub(crate) async fn forward(
     let mut headers = HeaderMap::new();
     headers.insert("content-type", HeaderValue::from_static("application/json"));
     headers.insert("HTTP-Referer", HeaderValue::from_static(ZCODE_SITE));
-    headers.insert("user-agent", HeaderValue::from_static(UA));
-    headers.insert("X-ZCode-App-Version", HeaderValue::from_static(APP_VERSION));
+    headers.insert("user-agent", HeaderValue::from_str(&user_agent()).unwrap_or_else(|_| HeaderValue::from_static("ZCode/3.17.2 ai-sdk/anthropic/3.0.81")));
+    headers.insert("X-ZCode-App-Version", HeaderValue::from_str(&crate::zcode_quota::app_version()).unwrap_or_else(|_| HeaderValue::from_static("3.17.2")));
     headers.insert("X-Device-Mid", HeaderValue::from_str(&device).unwrap_or(HeaderValue::from_static("")));
     headers.insert(
         "x-session-id",
@@ -798,8 +800,11 @@ mod tests {
 
     #[test]
     fn balance_url_carries_app_version_and_ua_matches_it() {
-        assert!(balance_url().ends_with(&format!("?app_version={APP_VERSION}")));
-        assert!(UA.starts_with(&format!("ZCode/{APP_VERSION} ")));
+        // 版本从本机 ZCode.exe 动态读（读不到退回内置值）：只断言两者同源、格式正确
+        let version = crate::zcode_quota::app_version();
+        assert!(balance_url().ends_with(&format!("?app_version={version}")));
+        assert!(user_agent().starts_with(&format!("ZCode/{version} ")));
+        assert_eq!(version.split('.').count(), 3, "版本号取三段：{version}");
     }
 
     /* ───── C5 边缘防火墙保持 ───── */
