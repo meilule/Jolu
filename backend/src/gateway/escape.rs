@@ -209,7 +209,7 @@ fn plan_agent(
         },
         // Kimi 与 ZCode 共用网关模型目录（serve 中启用的全部 `来源/模型`）；magpie 按工具
         // 过滤清单（magpieModels("kimi")），Jolu 目录暂无按工具的能力标记，先全量给
-        &if matches!(agent, "zcode" | "kimi" | "dsh") || crate::gateway::wiring_extra::is_extra(agent) { zcode_models(app) } else { Vec::new() },
+        &if matches!(agent, "zcode" | "kimi" | "dsh" | "pi") || crate::gateway::wiring_extra::is_extra(agent) { zcode_models(app) } else { Vec::new() },
     )
 }
 

@@ -18,7 +18,7 @@ use crate::gateway::wiring_store::{Applied, TierModels, WiringRecord};
 /// 支持的 agent 标识（与 `providerCatalog` 的平台 id 对齐）。
 /// 后四家（Pencil / Qoder / Qoder CN / Crush）的适配在 `wiring_extra.rs`（5.11）
 // dsh 的适配在 `wiring_dsh.rs`（多 profile patch + .env + credentials，magpie dsh.go 裁剪版）
-pub const AGENTS: [&str; 11] = ["claude-code", "codex", "zcode", "gemini", "opencode", "kimi", "dsh", "pencil", "qoder", "qoder-cn", "crush"];
+pub const AGENTS: [&str; 11] = ["claude-code", "codex", "zcode", "gemini", "opencode", "kimi", "dsh", "pencil", "qoder", "qoder-cn", "pi"];
 
 pub fn is_agent(agent: &str) -> bool {
     AGENTS.contains(&agent)
@@ -1331,6 +1331,7 @@ fn config_path(agent: &str) -> Option<PathBuf> {
         // Kimi CLI / Kimi Code（magpie kimi.go kimiDir：新版 `~/.kimi-code`，旧版 `~/.kimi`）
         "kimi" => kimi_dir(&home).0.join("config.toml"),
         "dsh" => super::wiring_dsh::config_path(&home),
+        "pi" => super::wiring_pi::config_path(&home),
         other if super::wiring_extra::is_extra(other) => super::wiring_extra::config_path(other, &home)?,
         _ => return None,
     })
@@ -1425,6 +1426,7 @@ fn foreign_marker(agent: &str, text: &str, instance_short: &str) -> Option<Strin
         "kimi" => kimi_current_token(text),
         // dsh 的令牌在 .env 不在 patch 里，读文件（其余 agent 的令牌都在 text 里）
         "dsh" => crate::creds::home().and_then(|home| super::wiring_dsh::current_token(&home)),
+        "pi" => super::wiring_pi::current_token(text),
         other if super::wiring_extra::is_extra(other) => super::wiring_extra::current_token(other, text),
         _ => None,
     }?;
@@ -1475,6 +1477,19 @@ fn ours_with(agent: &str, text: &str, port: u16, instance_short: &str, kept: Opt
                 && text.parse::<toml_edit::DocumentMut>().map(|document| kimi_default_ours(&document)).unwrap_or(false)
         }
         "dsh" => crate::creds::home().is_some_and(|home| super::wiring_dsh::wired(&home, text, port, instance_short, kept)),
+        // Pi：provider 指向网关 + 默认 provider 是 jolu（settings.json 另读）
+        "pi" => {
+            let base = super::wiring_pi::current_base(text).unwrap_or_default();
+            let token = super::wiring_pi::current_token(text).unwrap_or_default();
+            let settings = crate::creds::home()
+                .map(|home| crate::steady::read_optional(&super::wiring_pi::settings_path(&home)).ok().flatten().unwrap_or_default())
+                .unwrap_or_default();
+            points_at_gateway(&base, port)
+                && (token == token_for("pi", instance_short)
+                    || token.starts_with("jolu-")
+                    || kept.is_some_and(|kept| !kept.is_empty() && token == kept))
+                && super::wiring_pi::selected_ours(&settings)
+        }
         // 5.11 四家 JSON：provider 段指到网关、令牌是我们的，且工具当前选的是 Jolu 的模型
         other if super::wiring_extra::is_extra(other) => {
             let base = super::wiring_extra::current_base(other, text).unwrap_or_default();
@@ -1643,6 +1658,7 @@ fn restart_notice(agent: &str) -> &'static str {
         "zcode" => "需重启 ZCode 后生效",
         "kimi" => "需重启 Kimi 后生效",
         "dsh" => super::wiring_dsh::restart_notice(),
+        "pi" => super::wiring_pi::restart_notice(),
         other if super::wiring_extra::is_extra(other) => super::wiring_extra::restart_notice(other),
         _ => "需重启后生效",
     }
@@ -1757,6 +1773,15 @@ pub(crate) fn plan_wire(
             let legacy = kimi_dir(&home).1;
             (kimi_wire(&original, &base, &token, model, catalog_models, legacy)?, kimi_snapshot(&original))
         }
+        "pi" => {
+            // 双文件：models.json（provider + 模型清单）+ settings.json（默认 provider/model）
+            let home = crate::creds::home().ok_or("未找到用户目录")?;
+            let settings_path = super::wiring_pi::settings_path(&home);
+            let settings_text = crate::steady::read_optional(&settings_path).map_err(|e| format!("读取 {} 失败：{e}", settings_path.display()))?.unwrap_or_default();
+            let (models_next, settings_next, snapshot) = super::wiring_pi::wire(&original, &settings_text, &base, &token, model, catalog_models)?;
+            extra_files.push((settings_path, settings_next.into_bytes()));
+            (models_next, snapshot)
+        }
         "dsh" => {
             // 多文件：每个 profile 的 patch + .env + credentials refs（wiring_dsh 组装）
             let home = crate::creds::home().ok_or("未找到用户目录")?;
@@ -1779,7 +1804,7 @@ pub(crate) fn plan_wire(
         token: if agent == "codex" {
             (!codex_oauth).then(|| token.clone())
         } else {
-            (matches!(agent, "claude-code" | "gemini" | "opencode" | "zcode" | "kimi" | "dsh") || super::wiring_extra::is_extra(agent)).then(|| token.clone())
+            (matches!(agent, "claude-code" | "gemini" | "opencode" | "zcode" | "kimi" | "dsh" | "pi") || super::wiring_extra::is_extra(agent)).then(|| token.clone())
         },
         provider: (agent == "codex" && !codex_oauth).then(|| CODEX_PROVIDER.to_string()),
         mode: (agent == "codex").then(|| if codex_oauth { "oauth" } else { "provider" }.to_string()),
@@ -1958,6 +1983,23 @@ pub(crate) fn plan_unwire(agent: &str, port: u16, record: Option<&WiringRecord>)
                 return Ok(None);
             }
             kimi_restore(&original, saved.as_ref())?
+        }
+        "pi" => {
+            // 双文件还原：models.json 删 provider；settings.json 还原默认（用户改过就不动）
+            let home = crate::creds::home().ok_or("未找到用户目录")?;
+            let settings_path = super::wiring_pi::settings_path(&home);
+            let settings_text = crate::steady::read_optional(&settings_path).map_err(|e| format!("读取 {} 失败：{e}", settings_path.display()))?.unwrap_or_default();
+            let base_ours = super::wiring_pi::current_base(&original).is_some_and(|base| is_gateway_value(&base));
+            let token_ours = super::wiring_pi::current_token(&original).is_some_and(|token| token.starts_with("jolu-"));
+            if !base_ours && !token_ours {
+                return Ok(None);
+            }
+            let (models_next, settings_next) = super::wiring_pi::restore(&original, &settings_text, saved.as_ref())?;
+            let mut files = vec![(path.clone(), models_next.into_bytes())];
+            if settings_next != settings_text {
+                files.push((settings_path, settings_next.into_bytes()));
+            }
+            return Ok(Some(files));
         }
         "dsh" => {
             // 多文件还原：每个 profile 的 patch + .env + credentials（快照按文件分组）。
@@ -2824,7 +2866,7 @@ mod tests {
 
     #[test]
     fn agent_whitelist_covers_catalog_platforms() {
-        for agent in ["claude-code", "codex", "zcode", "gemini", "opencode", "kimi", "pencil", "qoder", "qoder-cn", "crush"] {
+        for agent in ["claude-code", "codex", "zcode", "gemini", "opencode", "kimi", "pencil", "qoder", "qoder-cn", "pi"] {
             assert!(is_agent(agent), "{agent}");
         }
         // 5.11：Qoder CLI 接入的是 Jolu 网关令牌（写进它的 settings.json），不代管 Qoder 账号的密钥；

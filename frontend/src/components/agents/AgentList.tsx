@@ -6,9 +6,9 @@ import { PlatformLogo } from "@/components/brand/PlatformLogo"
 import opencodeLogo from "@/assets/platforms/opencode.svg"
 // 多色 / 位图类官方 logo（不适合内嵌单色 path，与 opencode 同走 img）
 import vscodeLogo from "@/assets/agents/vscode.svg"
-import droidLogo from "@/assets/agents/droid.svg"
 import continueLogo from "@/assets/agents/continue.png"
 import pencilLogo from "@/assets/agents/pencil.png"
+import piLogo from "@/assets/agents/pi.svg"
 
 /**
  * Agent 页 · 列表态（Jolu.pen「统一网关 · R2 重设计」V8 画板 V8-01 / V8-02）：
@@ -228,8 +228,6 @@ const PLATFORM_OF: Readonly<Record<string, string>> = {
   qwen: "qwen",
   cline: "cline",
   copilot: "copilot",
-  goose: "goose",
-  zed: "zed",
   // DeepSeek Harness 是 DeepSeek 家的编码 harness，用 DeepSeek 品牌图形
   dsh: "deepseek",
   qoder: "qoder",
@@ -240,9 +238,10 @@ const PLATFORM_OF: Readonly<Record<string, string>> = {
 /** 有官方位图 / 多色资产的工具：这些图形自带配色或底色，不适合做单色 path，直接 img（同 opencode） */
 const AGENT_IMAGES: Readonly<Record<string, string>> = {
   vscode: vscodeLogo,
-  droid: droidLogo,
   continue: continueLogo,
   pencil: pencilLogo,
+  // Pi 官方 logo（pi.dev 首页的 pi-logo-mark，三色几何图形）
+  pi: piLogo,
 }
 
 export function AgentBadge({ agent, name, size }: { agent: string; name: string; size: 24 | 34 | 38 | 40 }) {

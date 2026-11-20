@@ -224,49 +224,25 @@ fn dir_cline(home: &Path) -> Option<PathBuf> {
         .or_else(|| Some(home.join(".cline")))
 }
 
-fn dir_droid(home: &Path) -> Option<PathBuf> {
-    // magpie droid.go: `at.open(filepath.Join(home, ".factory"))`
-    Some(home.join(".factory"))
-}
-
-fn dir_zed(home: &Path) -> Option<PathBuf> {
-    // magpie zed.go：Windows 在 `%APPDATA%\Zed`，其余 `~/.config/zed`
-    #[cfg(windows)]
-    {
-        if let Some(roaming) = std::env::var_os("APPDATA").map(PathBuf::from) {
-            let dir = roaming.join("Zed");
-            if dir.is_dir() {
-                return Some(dir);
+/// Pi（badlogic/pi-mono 的 coding agent）：`PI_CODING_AGENT_DIR` 覆盖（`~` 展开为 home，
+/// 相对路径不认——Pi 会按工作目录解析，Jolu 无从得知，magpie piDir 同款），缺省 `~/.pi/agent`。
+/// 该目录里 settings.json 是设置、models.json 是 provider 与模型清单（接线写后者）。
+fn dir_pi(home: &Path) -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("PI_CODING_AGENT_DIR").filter(|value| !value.is_empty()) {
+        let raw = PathBuf::from(&dir);
+        // `~` 与 `~/…`（Windows 上 `~\…`）展开为 home；相对路径不认，退回缺省
+        let expanded = match raw.to_str().and_then(|text| text.strip_prefix('~')) {
+            Some(rest) => {
+                let rest = rest.trim_start_matches(['/', '\\']);
+                if rest.is_empty() { home.to_path_buf() } else { home.join(rest) }
             }
+            None => raw,
+        };
+        if expanded.is_absolute() {
+            return Some(expanded);
         }
     }
-    let xdg = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".config"));
-    Some(xdg.join("zed"))
-}
-
-/// Crush：Windows 上配置在 `%LOCALAPPDATA%\crush`（magpie crush()），其余系统 `<XDG_CONFIG_HOME 或 ~/.config>/crush`；
-/// 与接线（`gateway::wiring_extra::crush_dir`）共用一处判定
-fn dir_crush(home: &Path) -> Option<PathBuf> {
-    Some(crate::gateway::wiring_extra::crush_dir(home))
-}
-
-fn dir_goose(home: &Path) -> Option<PathBuf> {
-    // magpie agents.go::gooseIn：Windows 上 Goose 的配置在 `%APPDATA%\Block\goose\config`，
-    // 其余系统在 `<XDG_CONFIG_HOME 或 ~/.config>/goose`
-    #[cfg(windows)]
-    {
-        if let Some(roaming) = std::env::var_os("APPDATA").filter(|value| !value.is_empty()) {
-            return Some(PathBuf::from(roaming).join("Block").join("goose").join("config"));
-        }
-    }
-    let xdg = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".config"));
-    Some(xdg.join("goose"))
+    Some(home.join(".pi").join("agent"))
 }
 
 fn dir_continue(home: &Path) -> Option<PathBuf> {
@@ -333,7 +309,15 @@ fn dir_qoder(home: &Path) -> Option<PathBuf> { env_or_home("QODER_CONFIG_DIR", h
 fn dir_qoder_cn(home: &Path) -> Option<PathBuf> { env_or_home("QODERCN_CONFIG_DIR", home, ".qoder-cn") }
 fn dir_workbuddy(home: &Path) -> Option<PathBuf> { env_or_home("WORKBUDDY_CONFIG_DIR", home, ".workbuddy") }
 
-const SPECS: [Spec; 20] = [
+/// 探测规格表。顺序即界面展示顺序，与 `agent_version::AGENTS` 一致。
+///
+/// 2026-11-20 按 Stack Overflow《2026 开发者调查》（n=12,255）精简：删掉榜单里
+/// 没有、国内也基本没人用、且接线成本高的三家——
+///   - Droid（Factory 私有，榜单无，接线要数组插项）
+///   - Zed（编辑器，榜单无，接线要写 Windows 凭据库）
+///   - Goose（Block 内部工具，榜单无）
+/// 新增 Pi（榜单第 12 名，4.4%）：本机已装（~/.pi/agent），配置是标准 JSON。
+const SPECS: [Spec; 17] = [
     Spec { agent: "claude-code", name: "Claude Code", bin: "claude", dir: dir_claude, file: "settings.json", sign_in: ".credentials.json", detect: Detect::Standard, bin_not: None },
     Spec { agent: "codex", name: "Codex", bin: "codex", dir: dir_codex, file: "config.toml", sign_in: "auth.json", detect: Detect::Standard, bin_not: None },
     Spec { agent: "zcode", name: "ZCode", bin: "zcode", dir: dir_zcode, file: "v2/provider_config.json", sign_in: "", detect: Detect::Standard, bin_not: None },
@@ -342,10 +326,7 @@ const SPECS: [Spec; 20] = [
     Spec { agent: "qwen", name: "Qwen Code", bin: "qwen", dir: dir_qwen, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "kimi", name: "Kimi CLI", bin: "kimi", dir: dir_kimi, file: "config.toml", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "cline", name: "Cline", bin: "cline", dir: dir_cline, file: "settings/providers.json", sign_in: "", detect: Detect::Standard, bin_not: None },
-    Spec { agent: "droid", name: "Droid", bin: "droid", dir: dir_droid, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
-    Spec { agent: "zed", name: "Zed", bin: "zed", dir: dir_zed, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
-    Spec { agent: "crush", name: "Crush", bin: "crush", dir: dir_crush, file: "crush.json", sign_in: "", detect: Detect::Standard, bin_not: None },
-    Spec { agent: "goose", name: "Goose", bin: "goose", dir: dir_goose, file: "config.yaml", sign_in: "", detect: Detect::Standard, bin_not: Some(go_program) },
+    Spec { agent: "pi", name: "Pi", bin: "pi", dir: dir_pi, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "continue", name: "Continue", bin: "cn", dir: dir_continue, file: "config.yaml", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "pencil", name: "Pencil", bin: "", dir: dir_pencil, file: "models.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "dsh", name: "DeepSeek Harness", bin: "dsh", dir: dir_dsh, file: "config.yaml", sign_in: "", detect: Detect::Standard, bin_not: None },
@@ -1079,23 +1060,20 @@ mod tests {
         std::fs::remove_dir_all(&home).ok();
     }
 
-    /// Goose：PATH 上的 goose 是 Go 写的（pressly 的迁移工具）→ 当作没找到命令；
-    /// 不是 Go 写的 → 照常找到。其他家不受 bin_not 影响
+    /// `Spec.bin_not` 钩子本身：Go 写的同名程序不算找到，非 Go 的照常。
+    /// （原来用它甄别 Goose；2026-11-20 Goose 精简掉后，这里直接测钩子机制，
+    /// 避免删掉一个工具就丢掉这条能力测试。）
     #[test]
-    fn go_goose_on_path_is_not_block_goose() {
-        let home = temp_home("go-goose");
+    fn a_bin_not_hook_rejects_a_named_lookalike() {
+        let home = temp_home("bin-not");
         std::fs::create_dir_all(home.join("bins")).unwrap();
         let mut go = b"MZ".to_vec();
         go.extend_from_slice(GO_BUILD_INFO_MAGIC);
         std::fs::write(home.join("bins").join("goose.exe"), &go).unwrap();
-        std::fs::write(home.join("bins").join("qwen.exe"), &go).unwrap();
-        let results = discover_with(&home, &test_bins(&home));
-        let goose = agent_of(&results, "goose");
-        assert!(!goose.cli_found, "Go 写的 goose 不是 Block 的 Goose");
-        assert_eq!(goose.cli_path, None);
-        assert!(agent_of(&results, "qwen").cli_found, "没设 bin_not 的工具不做甄别");
+        // 钩子直接对着这个路径判：Go 魔数在 → 拒绝
+        assert!(go_program(&home.join("bins").join("goose.exe")), "Go 写的同名程序要被拒绝");
         std::fs::write(home.join("bins").join("goose.exe"), b"MZ rust goose").unwrap();
-        assert!(agent_of(&discover_with(&home, &test_bins(&home)), "goose").cli_found);
+        assert!(!go_program(&home.join("bins").join("goose.exe")), "非 Go 写的照常找到");
         std::fs::remove_dir_all(&home).ok();
     }
 
@@ -1133,15 +1111,6 @@ mod tests {
     fn only_goose_has_bin_not() {
         for spec in &SPECS {
             assert_eq!(spec.bin_not.is_some(), spec.agent == "goose", "{}", spec.agent);
-        }
-    }
-
-    /// Goose 在 Windows 上的配置目录是 `%APPDATA%\Block\goose\config`（magpie gooseIn）
-    #[cfg(windows)]
-    #[test]
-    fn goose_dir_on_windows_is_under_appdata_block() {
-        if let Some(roaming) = std::env::var_os("APPDATA").filter(|value| !value.is_empty()) {
-            assert_eq!(dir_goose(Path::new("H")), Some(PathBuf::from(roaming).join("Block").join("goose").join("config")));
         }
     }
 
@@ -1289,13 +1258,13 @@ mod tests {
         // 没装过 Codex，只是被「应用到原工具」写了 auth.json
         std::fs::create_dir_all(home.join(".codex")).unwrap();
         std::fs::write(home.join(".codex").join("auth.json"), b"{}").unwrap();
-        // Droid 只有 npx skills 建的 skills
-        std::fs::create_dir_all(home.join(".factory").join("skills")).unwrap();
+        // Pi 只有 npx skills 建的 skills
+        std::fs::create_dir_all(home.join(".pi").join("agent").join("skills")).unwrap();
         // Kimi 有真实的历史文件
         std::fs::create_dir_all(home.join(".kimi")).unwrap();
         std::fs::write(home.join(".kimi").join("history.jsonl"), b"").unwrap();
         let results = discover_with(&home, &test_bins(&home));
-        for agent in ["qwen", "codex", "droid"] {
+        for agent in ["qwen", "codex", "pi"] {
             assert_eq!(agent_of(&results, agent).state, "not_found", "{agent} 只有残留不该算装了");
         }
         let kimi = agent_of(&results, "kimi");

@@ -16,7 +16,7 @@ use serde_json::{json, Map, Value};
 
 use super::wiring::ZcodeModel;
 
-pub(crate) const AGENTS: [&str; 4] = ["pencil", "qoder", "qoder-cn", "crush"];
+pub(crate) const AGENTS: [&str; 3] = ["pencil", "qoder", "qoder-cn"];
 
 /// Jolu 在这几家配置里的 provider 段名
 const SLOT: &str = "jolu";
@@ -29,22 +29,11 @@ fn env_dir(name: &str) -> Option<PathBuf> {
     std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from)
 }
 
-/// Crush 的配置文件：Windows 上 `%LOCALAPPDATA%\crush\crush.json`（magpie crush()：那里同时是
-/// 它的数据文件）；其余系统 `<XDG_CONFIG_HOME 或 ~/.config>/crush/crush.json`。
-pub(crate) fn crush_dir(home: &Path) -> PathBuf {
-    #[cfg(windows)]
-    if let Some(local) = env_dir("LOCALAPPDATA") {
-        return local.join("crush");
-    }
-    env_dir("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config")).join("crush")
-}
-
 pub(crate) fn config_path(agent: &str, home: &Path) -> Option<PathBuf> {
     Some(match agent {
         "pencil" => home.join(".pencil").join("models.json"),
         "qoder" => env_dir("QODER_CONFIG_DIR").unwrap_or_else(|| home.join(".qoder")).join("settings.json"),
         "qoder-cn" => env_dir("QODERCN_CONFIG_DIR").unwrap_or_else(|| home.join(".qoder-cn")).join("settings.json"),
-        "crush" => crush_dir(home).join("crush.json"),
         _ => return None,
     })
 }
@@ -53,7 +42,6 @@ pub(crate) fn restart_notice(agent: &str) -> &'static str {
     match agent {
         "pencil" => "Pencil 启动时读自定义模型：重启 Pencil 后在模型选择器里选 Jolu 的模型",
         "qoder" | "qoder-cn" => "新会话生效；已打开的会话保持原模型",
-        "crush" => "需重启 Crush 后生效",
         _ => "需重启后生效",
     }
 }
@@ -85,15 +73,15 @@ fn str_at<'a>(value: Option<&'a Value>, key: &str) -> Option<&'a str> {
 }
 
 /// 当前 `providers.jolu` 里写的网关地址
-pub(crate) fn current_base(agent: &str, text: &str) -> Option<String> {
+pub(crate) fn current_base(_agent: &str, text: &str) -> Option<String> {
     let root = parse(text).ok()?;
-    let key = if agent == "crush" { "base_url" } else { "baseUrl" };
+    let key = "baseUrl";
     str_at(slot(&root), key).map(|s| s.trim().to_string())
 }
 
-pub(crate) fn current_token(agent: &str, text: &str) -> Option<String> {
+pub(crate) fn current_token(_agent: &str, text: &str) -> Option<String> {
     let root = parse(text).ok()?;
-    let key = if agent == "crush" { "api_key" } else { "apiKey" };
+    let key = "apiKey";
     str_at(slot(&root), key).map(|s| s.trim().to_string())
 }
 
@@ -103,7 +91,6 @@ pub(crate) fn selected_ours(agent: &str, text: &str) -> bool {
     let Ok(root) = parse(text) else { return false };
     match agent {
         "qoder" | "qoder-cn" => root.pointer("/model/name").and_then(Value::as_str).is_some_and(|name| name.starts_with("jolu/")),
-        "crush" => ["large", "small"].iter().any(|kind| root.pointer(&format!("/models/{kind}/provider")).and_then(Value::as_str) == Some(SLOT)),
         _ => slot(&root).is_some(),
     }
 }
@@ -148,18 +135,6 @@ fn qoder_provider(base: &str, token: &str, selected: &str, catalog: &[ZcodeModel
     json!({"displayName": "Jolu", "protocol": "openai", "baseUrl": format!("{base}/v1"), "apiKey": token, "model": selected, "models": models})
 }
 
-fn crush_provider(base: &str, token: &str, catalog: &[ZcodeModel]) -> Value {
-    let models: Vec<Value> = catalog
-        .iter()
-        .map(|m| {
-            let window = if m.context > 0 { m.context } else { 200_000 };
-            let out = if m.output > 0 { m.output.min(window) } else { 16_384 };
-            json!({"id": m.id, "name": m.name, "context_window": window, "default_max_tokens": out, "can_reason": false, "supports_attachments": m.image})
-        })
-        .collect();
-    json!({"type": "openai", "name": "Jolu", "base_url": format!("{base}/v1"), "api_key": token, "models": models})
-}
-
 fn object_at<'a>(root: &'a mut Value, key: &str) -> Result<&'a mut Map<String, Value>, String> {
     let object = root.as_object_mut().ok_or("配置顶层不是对象")?;
     let entry = object.entry(key.to_string()).or_insert_with(|| json!({}));
@@ -176,20 +151,12 @@ pub(crate) fn wire(agent: &str, text: &str, base: &str, token: &str, model: Opti
     let provider = match agent {
         "pencil" => pencil_provider(base, token, catalog),
         "qoder" | "qoder-cn" => qoder_provider(base, token, &selected, catalog),
-        "crush" => crush_provider(base, token, catalog),
         _ => return Err("该工具不在接线范围".into()),
     };
     object_at(&mut root, "providers")?.insert(SLOT.into(), provider);
     match agent {
         "qoder" | "qoder-cn" => {
             object_at(&mut root, "model")?.insert("name".into(), json!(format!("{SLOT}/{selected}")));
-        }
-        "crush" => {
-            // 整个选择对象替换：Crush 把按模型的 max_tokens 等记在里面，不能挂到我们的模型上（magpie replacePick）
-            let models = object_at(&mut root, "models")?;
-            for kind in ["large", "small"] {
-                models.insert(kind.into(), json!({"provider": SLOT, "model": selected}));
-            }
         }
         _ => {}
     }
@@ -211,13 +178,6 @@ pub(crate) fn snapshot(agent: &str, text: &str) -> Option<Value> {
         "qoder" | "qoder-cn" => {
             if let Some(name) = root.pointer("/model/name").filter(|v| !v.as_str().is_some_and(|s| s.starts_with("jolu/"))) {
                 saved.insert("model.name".into(), name.clone());
-            }
-        }
-        "crush" => {
-            for kind in ["large", "small"] {
-                if let Some(pick) = root.pointer(&format!("/models/{kind}")).filter(|v| v.get("provider").and_then(Value::as_str) != Some(SLOT)) {
-                    saved.insert(format!("models.{kind}"), pick.clone());
-                }
             }
         }
         _ => {}
@@ -264,25 +224,6 @@ pub(crate) fn restore(agent: &str, text: &str, saved: Option<&Value>) -> Result<
                 }
                 prune_empty(&mut root, "model");
             }
-        }
-        "crush" => {
-            if let Some(models) = root.get_mut("models").and_then(Value::as_object_mut) {
-                for kind in ["large", "small"] {
-                    let ours = models.get(kind).and_then(|v| v.get("provider")).and_then(Value::as_str) == Some(SLOT);
-                    if !ours {
-                        continue;
-                    }
-                    match saved_at(&format!("models.{kind}")) {
-                        Some(pick) => {
-                            models.insert(kind.into(), pick);
-                        }
-                        None => {
-                            models.remove(kind);
-                        }
-                    }
-                }
-            }
-            prune_empty(&mut root, "models");
         }
         _ => {}
     }
@@ -335,22 +276,6 @@ mod tests {
     }
 
     #[test]
-    fn crush_replaces_picks_and_restores_them() {
-        let original = r#"{"models":{"large":{"provider":"openai","model":"gpt-5","max_tokens":9000}},"providers":{"openai":{"api_key":"sk-x"}}}"#;
-        let saved = snapshot("crush", original);
-        let wired = wire("crush", original, BASE, "jolu-crush.abcd1234", Some("group/main"), &catalog()).unwrap();
-        let root: Value = serde_json::from_str(&wired).unwrap();
-        assert_eq!(root["models"]["large"], json!({"provider": "jolu", "model": "group/main"}), "整个选择对象替换，不带别的模型的 max_tokens");
-        assert_eq!(root["models"]["small"]["provider"], "jolu");
-        assert_eq!(root["providers"]["jolu"]["type"], "openai");
-        assert_eq!(root["providers"]["jolu"]["models"][1]["context_window"], 200_000);
-        assert_eq!(root["providers"]["jolu"]["models"][1]["supports_attachments"], true);
-        assert!(selected_ours("crush", &wired));
-        let restored: Value = serde_json::from_str(&restore("crush", &wired, saved.as_ref()).unwrap()).unwrap();
-        assert_eq!(restored, serde_json::from_str::<Value>(original).unwrap());
-    }
-
-    #[test]
     fn pencil_writes_full_model_entries_and_keeps_theirs_slot() {
         let original = r#"{"providers":{"jolu":{"baseUrl":"https://my-own","apiKey":"k"},"other":{}}}"#;
         let saved = snapshot("pencil", original);
@@ -376,8 +301,8 @@ mod tests {
 
     #[test]
     fn snapshot_ignores_values_we_wrote() {
-        let wired = wire("crush", "{}", BASE, TOKEN, None, &catalog()).unwrap();
-        assert_eq!(snapshot("crush", &wired), Some(json!({})));
+        let wired = wire("pencil", "{}", BASE, TOKEN, None, &catalog()).unwrap();
+        assert_eq!(snapshot("pencil", &wired), Some(json!({})));
         let wired = wire("qoder", "{}", BASE, TOKEN, None, &catalog()).unwrap();
         assert_eq!(snapshot("qoder", &wired), Some(json!({})));
     }

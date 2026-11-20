@@ -196,7 +196,7 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
         );
         -- 接线记录（agent_wiring）外键指向这张表；INSERT OR IGNORE 每次开库都会跑，
         -- 新加的 agent 补一行即可让老库也能接（wiring.rs 的 AGENTS 是真正的开关清单）
-        INSERT OR IGNORE INTO agents(id) VALUES ('claude-code'),('codex'),('zcode'),('gemini'),('opencode'),('kimi'),('dsh'),('pencil'),('qoder'),('qoder-cn'),('crush');
+        INSERT OR IGNORE INTO agents(id) VALUES ('claude-code'),('codex'),('zcode'),('gemini'),('opencode'),('kimi'),('dsh'),('pencil'),('qoder'),('qoder-cn'),('pi');
         CREATE TABLE IF NOT EXISTS agent_wiring (
             agent_id      TEXT PRIMARY KEY REFERENCES agents(id),
             instance_id   TEXT NOT NULL,
