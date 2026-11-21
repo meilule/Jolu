@@ -413,12 +413,26 @@ function squarify(vals: number[], rect: Rect): Rect[] {
     if (w >= h) {
       const cw = sum / h
       let cy = y
-      for (const v of row) { const ch = (v * k) / cw; out.push({ x, y: cy, w: cw, h: ch }); cy += ch }
+      for (let i = 0; i < row.length; i++) {
+        // 最后一块吃满剩余高度，而不是按自己的值再算一遍：逐块累加 `cy += ch` 会
+        // 让浮点误差攒到末块上，最后一块的 y + h 可能略大于 1，渲染时就超出画布
+        // （现场：绿色「会话」块从底边溢出来）。
+        const last = i === row.length - 1
+        const ch = last ? y + h - cy : (row[i] * k) / cw
+        out.push({ x, y: cy, w: cw, h: Math.max(0, ch) })
+        cy += ch
+      }
       x += cw; w -= cw
     } else {
       const rh = sum / w
       let cx = x
-      for (const v of row) { const cw = (v * k) / rh; out.push({ x: cx, y, w: cw, h: rh }); cx += cw }
+      for (let i = 0; i < row.length; i++) {
+        // 同理：末块宽度吃满剩余，避免累加误差让它越过右边界
+        const last = i === row.length - 1
+        const cw = last ? x + w - cx : (row[i] * k) / rh
+        out.push({ x: cx, y, w: Math.max(0, cw), h: rh })
+        cx += cw
+      }
       y += rh; h -= rh
     }
   }
@@ -456,10 +470,11 @@ export function treemap(
   const usedRect: Rect = { x: 0, y: 0, w: usedLen, h: 1 }
 
   /* 最小可点面积：把过小的块的「虚拟面积」抬到刚好超过 TILE_FLOOR。
-     面积按真实画布算（调用方给 canvasW × canvasH），没有就按 900×200 估。
-     公式来自 magpie：lo = 总token × TILE_FLOOR / 画布面积 —— 即
-     「一个占满 TILE_FLOOR 面积的块对应多少 token」。 */
-  const area = Math.max(1, canvasW * canvasH)
+     面积要按**已用区的实际面积**算，不是整个画布：窗口只用到 3% 时 `usedLen` 被
+     下限抬到 0.18，已用区只有 900×200×0.18 = 32,400px²。按整块画布算会把下限
+     低估 5 倍，小类仍然被压成 2px 高的细条（现场：绿色的「会话」块薄到渲染成负高度、
+     看起来从底边溢出来）。 */
+  const area = Math.max(1, canvasW * canvasH * usedLen)
   const sum = data.reduce((s, it) => s + it.tokens, 0)
   const lo = (sum * TILE_FLOOR) / area
   const values = data.map((it) => Math.max(it.tokens, lo))

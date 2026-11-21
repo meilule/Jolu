@@ -471,12 +471,22 @@ function CompositionArea({ detail, detailFailed, lastReady, onRetry, chart, part
             const meta = kindMeta(tile.kind ?? "unknown")
             const share = total > 0 ? tile.tokens / total : 0
             const pct = (share * 100).toFixed(1)
+            /* 块与块之间的缝：固定 3px。小到 4px 高的块减完会变成负高度，
+               浏览器按 0 处理或按内容撑开，看上去就像从画布边上溢出来。
+               所以按实际高度收缝：不足 10px 的块只留 1px。 */
+            const rawW = tile.w * (treeW || 600)
+            const rawH = tile.h * TREEMAP_H_PX
+            const gapW = rawW < 40 ? 1 : 3
+            const gapH = rawH < 10 ? 1 : 3
             /* 按「像素尺寸」而不是「占比」决定信息密度 —— 占比 12% 的块可能又宽又扁，
                64px 高装不下三行（实测会被裁成半个字）。这里换算成真实像素： */
-            const tw = tile.w * (treeW || 600) - 3
-            const th = tile.h * TREEMAP_H_PX - 3
-            const innerH = th - 16   // p-2 = 上下各 8
-            const innerW = tw - 16
+            const tw = tile.w * (treeW || 600) - gapW
+            const th = tile.h * TREEMAP_H_PX - gapH
+            /* 内边距按块高自适应：p-2 上下共 16px 比薄块本身还高，
+               内容会撑破边界（现场：4px 高的「会话」块被挤到底边外）。 */
+            const pad = th < 16 ? 1 : 8
+            const innerH = th - pad * 2
+            const innerW = tw - pad * 2
             /* 三行：13px 名称 + 15px 数值 + 12px 占比 ≈ 48px，留余量到 52；
                两行：12px + 12px ≈ 28px，留余量到 30。 */
             const big = innerH >= 52 && innerW >= 92
@@ -486,7 +496,7 @@ function CompositionArea({ detail, detailFailed, lastReady, onRetry, chart, part
                 onPointerEnter={() => setHot(tile.kind)} onFocus={() => setHot(tile.kind)}
                 title={`${meta.label} · ${compactTokens(tile.tokens)}（${pct}%）${tile.floored ? " · 面积已放大便于点击" : ""}`}
                 className={cn(
-                  "absolute flex flex-col items-start justify-start gap-0.5 overflow-hidden p-2 text-left outline-none",
+                  "absolute flex flex-col items-start justify-start gap-0.5 overflow-hidden text-left outline-none",
                   "focus-visible:outline-2 focus-visible:outline-jolu-accent",
                   "transition-[opacity,scale] duration-150 motion-safe:active:scale-[0.985]",
                   meta.fill, meta.ink,
@@ -496,8 +506,9 @@ function CompositionArea({ detail, detailFailed, lastReady, onRetry, chart, part
                 style={{
                   left: `calc(${tile.x * 100}% + 2px)`,
                   top: `calc(${tile.y * 100}% + 2px)`,
-                  width: `calc(${tile.w * 100}% - 3px)`,
-                  height: `calc(${tile.h * 100}% - 3px)`,
+                  width: `calc(${tile.w * 100}% - ${gapW}px)`,
+                  height: `calc(${tile.h * 100}% - ${gapH}px)`,
+                  padding: pad,
                   borderRadius: 6,
                 }}>
                 <span className={cn("w-full truncate font-semibold", big ? "text-[13px]" : "text-note")}>

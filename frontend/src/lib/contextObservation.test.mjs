@@ -155,3 +155,24 @@ test("矩形图：面积按 token，铺满且不重叠", () => {
   }
   assert.deepEqual(treemap([{ kind: "chat", tokens: 0 }]), [])
 })
+
+test("矩形图：已用区只占一小条时，小类也要有可点高度", () => {
+  // 现场（2026-11-22 截图）：窗口 1M 只用了 26.7K，已用区被压到画布 28%；
+  // 「会话」只有 2 token，原先的下限按整块画布算，抬完仍只有 2.2px 高——
+  // 减掉 3px 缝隙后是负高度，浏览器按内容撑开，看起来就从画布底边溢出来。
+  const parts = [
+    { kind: "memory", tokens: 12400 }, { kind: "tools", tokens: 9300 },
+    { kind: "system", tokens: 3300 }, { kind: "skills", tokens: 1700 },
+    { kind: "chat", tokens: 2 },
+  ]
+  const tiles = treemap(parts, 1_000_000, 900, 200)
+  for (const t of tiles) {
+    assert.ok(t.x >= -1e-9 && t.y >= -1e-9, `${t.kind} 不能有负坐标`)
+    assert.ok(t.x + t.w <= 1 + 1e-9, `${t.kind} 右边溢出：${t.x + t.w}`)
+    assert.ok(t.y + t.h <= 1 + 1e-9, `${t.kind} 底边溢出：${t.y + t.h}`)
+  }
+  const chat = tiles.find((t) => t.kind === "chat")
+  // 200px 高的画布上，2 token 的块必须至少 5px 才画得出一个能点的方块
+  assert.ok(chat.h * 200 >= 5, `最小的类只有 ${(chat.h * 200).toFixed(1)}px 高，太薄`)
+  assert.equal(chat.floored, true, "被抬过面积的块要标记，界面据此说明")
+})
