@@ -211,7 +211,8 @@ export function SessionObservation({ platform, sessionId, view, groupName, onBac
             <ChartToggle active={chart === "treemap"} onClick={() => setChart("treemap")} icon={LayoutGrid} label="矩形图" />
           </div>
           <CompositionArea detail={detail} detailFailed={detailFailed} lastReady={lastReady} onRetry={() => void loadDetail()}
-            chart={chart} parts={parts} total={total} kind={kind} onKind={chooseKind} />
+            chart={chart} parts={parts} total={total} kind={kind} onKind={chooseKind}
+            ctxWindow={summary?.window_tokens ?? null} />
           {detail?.parts && (
             <>
               <p className="text-note text-jolu-muted">
@@ -330,7 +331,10 @@ function Chip({ active, onClick, label }: { active: boolean; onClick: () => void
   )
 }
 
-function CompositionArea({ detail, detailFailed, lastReady, onRetry, chart, parts, total, kind, onKind }: {
+/** 矩形图容器高度（与下面 className 的 h-[200px] 必须一致；treemap 返回的是 0–1 比例） */
+const TREEMAP_H_PX = 200
+
+function CompositionArea({ detail, detailFailed, lastReady, onRetry, chart, parts, total, kind, onKind, ctxWindow }: {
   detail: ContextSnapshotDetailDto | null | undefined
   detailFailed: boolean
   lastReady: number | null
@@ -340,7 +344,36 @@ function CompositionArea({ detail, detailFailed, lastReady, onRetry, chart, part
   total: number
   kind: ContextKind | null
   onKind: (kind: ContextKind | null) => void
+  /** 上下文窗口总量；给了就在矩形图里画「剩余空间」块 */
+  ctxWindow: number | null
 }) {
+  /* 所有 hooks 必须在任何 early return 之前 —— 下面有 6 个按 detail 状态提前 return 的分支，
+     hooks 放在它们之后会导致不同渲染间 hook 数量变化（React 会直接报错）。 */
+  /**
+   * 挤压波的开关。CSS 动画只在属性变化时重播，同一段动画连点两次不会动；
+   * 每次点击把 a/b 翻转一次，data-wave 变了动画就重新开始（Bencho 用的同一招）。
+   */
+  const [wave, setWave] = useState<"a" | "b">("a")
+  /**
+   * 悬停中的类别（Bencho Context meter 的 hot）。
+   * 条、图例、选中提示三处共享它，所以悬停任一处其余两处同时响应：
+   * 条上其余色块淡到 22%，图例对应项加底，数字显示该类的 Token 与占比。
+   * 只做视觉，不改筛选（筛选是 click）。
+   */
+  const [hot, setHot] = useState<ContextKind | null>(null)
+  /** 矩形图容器的真实宽度：treemap 返回 0–1 比例，要换算成像素才能判断放得下几行字 */
+  const [treeW, setTreeW] = useState(0)
+  const treeRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    // 只有矩形图分支会挂 treeRef（堆叠条时它是 null），此时不必观察
+    const el = treeRef.current
+    if (!el) return
+    const ro = new ResizeObserver(([entry]) => setTreeW(Math.round(entry.contentRect.width)))
+    ro.observe(el)
+    setTreeW(Math.round(el.getBoundingClientRect().width))
+    return () => ro.disconnect()
+  }, [chart])
+
   if (detailFailed && !detail) return <StateCard title="读取失败" detail="这次请求的上下文读取失败。" action={{ label: "重试读取", run: onRetry }} />
   if (detail === undefined) return <Skeleton lines={2} label="正在读取上下文组成" />
   if (detail === null) return <StateCard title="暂无请求" detail="这次请求的快照已被清理（每个会话只保留最近 20 次）。" />
@@ -354,53 +387,184 @@ function CompositionArea({ detail, detailFailed, lastReady, onRetry, chart, part
     )
   }
   const selected = kind ? parts.find((part) => part.kind === kind) : null
+  const press = (next: ContextKind | null) => {
+    setWave((w) => (w === "a" ? "b" : "a"))
+    onKind(next)
+  }
   return (
     <div className="flex flex-col gap-2.5">
       {chart === "bar" ? (
-        <div className="flex h-8 gap-0.5 overflow-hidden rounded-md" onClick={(event) => { if (event.target === event.currentTarget) onKind(null) }}>
-          {parts.filter((part) => part.tokens > 0).map((part) => {
+        /* 一条被切开的整体：两端 OUTER 圆角、接缝 INNER 圆角（不用容器 overflow 裁剪）。
+           宽度是真实的 flex-grow 过渡，所以数据变化时是「收拢 / 张开」而不是瞬间跳；
+           点击筛选时整条按 wave 挤压一次（38% 压到最低、72% 轻微过冲），
+           每个色块的挤压延迟依次递增，形成一道从左往右的波。 */
+        <div
+          className="ctx-bar flex h-8 gap-0.5"
+          data-wave={wave}
+          onClick={(event) => { if (event.target === event.currentTarget) press(null) }}
+          onPointerLeave={() => setHot(null)}
+        >
+          {parts.filter((part) => part.tokens > 0).map((part, n, shown) => {
             const meta = kindMeta(part.kind)
             return (
               <button key={part.kind} type="button" aria-label={`${meta.label} ${compactTokens(part.tokens)}`} title={`${meta.label} · ${compactTokens(part.tokens)}（${((part.share ?? 0) * 100).toFixed(1)}%）`}
-                onClick={() => onKind(kind === part.kind ? null : part.kind)}
-                className={cn("h-full min-w-[3px] outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent motion-safe:transition-opacity motion-safe:duration-150", meta.fill, kind && kind !== part.kind && "opacity-35")}
-                style={{ flexGrow: part.tokens, flexBasis: 0 }} />
+                onClick={() => press(kind === part.kind ? null : part.kind)}
+                onPointerEnter={() => setHot(part.kind)}
+                onFocus={() => setHot(part.kind)}
+                className={cn(
+                  "ctx-seg h-full min-w-[3px] outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent",
+                  meta.fill,
+                )}
+                // 悬停优先于筛选：悬停别的类时，当前类保持高亮、其余淡出
+                data-dim={(hot !== null ? hot !== part.kind : kind !== null && kind !== part.kind) || undefined}
+                style={{
+                  flexGrow: part.tokens,
+                  flexBasis: 0,
+                  // 两端圆、接缝方：读起来是一根完整的条被切开，而不是几块独立色块
+                  borderTopLeftRadius: n === 0 ? 8 : 2,
+                  borderBottomLeftRadius: n === 0 ? 8 : 2,
+                  borderTopRightRadius: n === shown.length - 1 ? 8 : 2,
+                  borderBottomRightRadius: n === shown.length - 1 ? 8 : 2,
+                  // 挤压波：每块比前一块晚 45ms，整条像被按了一下
+                  "--ctx-wave": `${n * 45}ms`,
+                } as React.CSSProperties} />
             )
           })}
         </div>
       ) : (
-        <div className="relative h-[180px] overflow-hidden rounded-md" onClick={(event) => { if (event.target === event.currentTarget) onKind(null) }}>
-          {treemap(parts).map((tile) => {
-            const meta = kindMeta(tile.kind)
-            const pct = total > 0 ? ((tile.tokens / total) * 100).toFixed(1) : null
+        /* 矩形图（squarified treemap）。三处刻意的设计：
+           1) 间隙用 gap 而不是 border —— 之前 border-2 让每个块都缩进 2px，
+              实际可点击区域比数据显示的小，且小块被边框吃掉一半；
+              改 outer padding + 块内 inset 后，块与块之间的缝恒为 3px。
+           2) 小色块只显示名称，Token 与占比靠 title / 悬停联动区读 ——
+              之前 6.3% 在 1.7K 的小块里被裁成「6.3」，反而更乱。
+           3) 占比 ≥12% 的块把数值放大一档，大的块不会显得空。 */
+        <div
+          ref={treeRef}
+          className="relative h-[200px] rounded-lg bg-jolu-stage p-[3px]"
+          onClick={(event) => { if (event.target === event.currentTarget) press(null) }}
+          onPointerLeave={() => setHot(null)}
+        >
+          {treemap(parts, ctxWindow, treeW || 900, TREEMAP_H_PX).map((tile) => {
+            /* 剩余空间块：不参与图例/筛选/悬停，只表达「窗口还有多少余量」 */
+            if (tile.free) {
+              const pct = ctxWindow ? Math.round((tile.tokens / ctxWindow) * 100) : null
+              const wide = (tile.w * (treeW || 600)) >= 80
+              return (
+                <div key="__free"
+                  className="absolute flex flex-col items-center justify-center gap-0.5 overflow-hidden rounded-[6px] text-center"
+                  style={{
+                    left: `calc(${tile.x * 100}% + 2px)`,
+                    top: `calc(${tile.y * 100}% + 2px)`,
+                    width: `calc(${tile.w * 100}% - 3px)`,
+                    height: `calc(${tile.h * 100}% - 3px)`,
+                    background: "color-mix(in srgb, var(--jolu-text) 5%, transparent)",
+                  }}
+                  title={`剩余上下文空间 ${compactTokens(tile.tokens)}`}
+                >
+                  {wide && <span className="text-note text-jolu-muted">剩余</span>}
+                  {wide && <span className="text-note tabular-nums text-jolu-muted">{compactTokens(tile.tokens)}</span>}
+                  {wide && pct != null && <span className="text-note tabular-nums text-jolu-muted/70">{pct}%</span>}
+                </div>
+              )
+            }
+            const meta = kindMeta(tile.kind ?? "unknown")
+            const share = total > 0 ? tile.tokens / total : 0
+            const pct = (share * 100).toFixed(1)
+            /* 按「像素尺寸」而不是「占比」决定信息密度 —— 占比 12% 的块可能又宽又扁，
+               64px 高装不下三行（实测会被裁成半个字）。这里换算成真实像素： */
+            const tw = tile.w * (treeW || 600) - 3
+            const th = tile.h * TREEMAP_H_PX - 3
+            const innerH = th - 16   // p-2 = 上下各 8
+            const innerW = tw - 16
+            /* 三行：13px 名称 + 15px 数值 + 12px 占比 ≈ 48px，留余量到 52；
+               两行：12px + 12px ≈ 28px，留余量到 30。 */
+            const big = innerH >= 52 && innerW >= 92
+            const mid = innerH >= 30 && innerW >= 52
             return (
-              <button key={tile.kind} type="button" onClick={() => onKind(kind === tile.kind ? null : tile.kind)} title={`${meta.label} · ${compactTokens(tile.tokens)}`}
-                className={cn("absolute flex flex-col items-start gap-0.5 overflow-hidden border-2 border-jolu-bg p-2 text-left outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent motion-safe:transition-opacity motion-safe:duration-150",
-                  meta.fill, meta.ink, kind && kind !== tile.kind && "opacity-35")}
-                style={{ left: `${tile.x * 100}%`, top: `${tile.y * 100}%`, width: `${tile.w * 100}%`, height: `${tile.h * 100}%` }}>
-                <span className="truncate text-note font-semibold">{meta.label}</span>
-                <span className="truncate text-note tabular-nums">{compactTokens(tile.tokens)}{pct && tile.w > 0.18 ? ` · ${pct}%` : ""}</span>
+              <button key={tile.kind ?? "unknown"} type="button" onClick={() => press(kind === tile.kind ? null : tile.kind!)}
+                onPointerEnter={() => setHot(tile.kind)} onFocus={() => setHot(tile.kind)}
+                title={`${meta.label} · ${compactTokens(tile.tokens)}（${pct}%）${tile.floored ? " · 面积已放大便于点击" : ""}`}
+                className={cn(
+                  "absolute flex flex-col items-start justify-start gap-0.5 overflow-hidden p-2 text-left outline-none",
+                  "focus-visible:outline-2 focus-visible:outline-jolu-accent",
+                  "transition-[opacity,scale] duration-150 motion-safe:active:scale-[0.985]",
+                  meta.fill, meta.ink,
+                  // 悬停优先于筛选，与堆叠条同一套规则
+                  (hot !== null ? hot !== tile.kind : kind !== null && kind !== tile.kind) && "opacity-35",
+                )}
+                style={{
+                  left: `calc(${tile.x * 100}% + 2px)`,
+                  top: `calc(${tile.y * 100}% + 2px)`,
+                  width: `calc(${tile.w * 100}% - 3px)`,
+                  height: `calc(${tile.h * 100}% - 3px)`,
+                  borderRadius: 6,
+                }}>
+                <span className={cn("w-full truncate font-semibold", big ? "text-[13px]" : "text-note")}>
+                  {meta.label}
+                </span>
+                {mid && (
+                  <span className={cn("w-full truncate tabular-nums opacity-80", big ? "text-[15px] font-semibold" : "text-note")}>
+                    {compactTokens(tile.tokens)}
+                  </span>
+                )}
+                {big && <span className="text-note tabular-nums opacity-70">{pct}%</span>}
               </button>
             )
           })}
         </div>
       )}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+      {/* 图例与条双向联动：悬停图例 → 对应的条块保持、其余淡出；
+          悬停条 → 对应图例加底。这是 Bencho Context meter 的 hot 状态，
+          只做视觉提示，不改变筛选（筛选仍是 click）。 */}
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-1" onPointerLeave={() => setHot(null)}>
         {parts.map((part) => {
           const meta = kindMeta(part.kind)
+          const on = hot === part.kind
+          const dim = hot !== null && !on
           return (
-            <span key={part.kind} className="flex items-center gap-1.5 text-note text-jolu-muted">
-              <span aria-hidden className={cn("size-[7px] rounded-[2px]", meta.fill)} />
-              {meta.label} {compactTokens(part.tokens)}
-            </span>
+            <button
+              key={part.kind}
+              type="button"
+              onPointerEnter={() => setHot(part.kind)}
+              onFocus={() => setHot(part.kind)}
+              onBlur={() => setHot(null)}
+              aria-label={`${meta.label} ${compactTokens(part.tokens)}`}
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-note outline-none transition-colors duration-150",
+                "focus-visible:outline-2 focus-visible:outline-jolu-accent",
+                on ? "bg-jolu-stage text-jolu-text" : "text-jolu-muted",
+                dim && "opacity-45",
+              )}
+            >
+              <span aria-hidden className={cn("size-[7px] shrink-0 rounded-[2px]", meta.fill)} />
+              <span className="whitespace-nowrap">{meta.label}</span>
+              <span className="tabular-nums">{compactTokens(part.tokens)}</span>
+              {/* 悬停时补上占比——平时不占位置，避免图例跳动 */}
+              {on && part.share != null && (
+                <span className="tabular-nums text-jolu-on">{(part.share * 100).toFixed(1)}%</span>
+              )}
+            </button>
           )
         })}
       </div>
-      {selected && (
-        <p className="text-note text-jolu-on">
-          已选：{kindMeta(selected.kind).label} · {compactTokens(selected.tokens)}{selected.share != null ? `（${(selected.share * 100).toFixed(1)}%）` : ""}　/　点击空白或「全部」清除筛选
-        </p>
-      )}
+      {/* 悬停也能读详情：鼠标扫过条/图例时就显示，不用先点击筛选。
+          悬停优先（hot），其次是已选（kind）。 */}
+      {(hot !== null || selected) && (() => {
+        const shown = hot !== null ? parts.find((part) => part.kind === hot) : selected
+        if (!shown) return null
+        const meta = kindMeta(shown.kind)
+        const isHot = hot !== null
+        return (
+          <p className={cn("text-note", isHot ? "text-jolu-muted" : "text-jolu-on")}>
+            {isHot ? "悬停：" : "已选："}
+            <b className="font-medium text-jolu-text">{meta.label}</b>
+            {" · "}{compactTokens(shown.tokens)}
+            {shown.share != null && `（${(shown.share * 100).toFixed(1)}%）`}
+            {!isHot && <span className="text-jolu-muted">　/　点击空白或「全部」清除筛选</span>}
+          </p>
+        )
+      })()}
     </div>
   )
 }

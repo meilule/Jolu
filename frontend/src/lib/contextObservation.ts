@@ -22,15 +22,25 @@ export interface KindMeta {
   ink: string
 }
 
+/**
+ * 类别色板（2026-11-21 重定）。
+ *
+ * 之前借用 jolu-* 语义色，后四个（pressed/track/selected/stage）在浅色主题里
+ * 都是浅灰绿，矩形图里完全分不清 —— 这是"难看"的主因。
+ * 现在按色相跳跃定色，校验口径同 --chart-*：明度带、色相间隔 ≥40°、
+ * 红绿色盲相邻对可分辨。fill/ink 都走 CSS 变量，深色主题自动换一套提亮的。
+ *
+ * 顺序即视觉权重：框架类（system/unknown）用中性灰，内容类用彩色。
+ */
 export const KINDS: readonly KindMeta[] = [
-  { kind: "system", label: "系统提示词", chip: "系统提示词", fill: "bg-jolu-text", ink: "text-jolu-bg" },
-  { kind: "tools", label: "工具定义", chip: "工具", fill: "bg-jolu-on", ink: "text-jolu-bg" },
-  { kind: "skills", label: "Skills", chip: "Skills", fill: "bg-jolu-accent", ink: "text-jolu-text" },
-  { kind: "memory", label: "记忆", chip: "记忆", fill: "bg-jolu-muted", ink: "text-jolu-bg" },
-  { kind: "files", label: "文件", chip: "文件", fill: "bg-jolu-pressed", ink: "text-jolu-text" },
-  { kind: "results", label: "工具结果", chip: "工具结果", fill: "bg-jolu-track", ink: "text-jolu-text" },
-  { kind: "chat", label: "会话", chip: "会话", fill: "bg-jolu-selected", ink: "text-jolu-text" },
-  { kind: "unknown", label: "未分类", chip: "未分类", fill: "bg-jolu-stage", ink: "text-jolu-text" },
+  { kind: "system", label: "系统提示词", chip: "系统提示词", fill: "bg-[var(--ctx-system)]", ink: "text-[var(--ctx-ink-light)]" },
+  { kind: "tools", label: "工具定义", chip: "工具", fill: "bg-[var(--ctx-tools)]", ink: "text-[var(--ctx-ink-light)]" },
+  { kind: "skills", label: "Skills", chip: "Skills", fill: "bg-[var(--ctx-skills)]", ink: "text-[var(--ctx-ink-dark)]" },
+  { kind: "memory", label: "记忆", chip: "记忆", fill: "bg-[var(--ctx-memory)]", ink: "text-[var(--ctx-ink-light)]" },
+  { kind: "files", label: "文件", chip: "文件", fill: "bg-[var(--ctx-files)]", ink: "text-[var(--ctx-ink-dark)]" },
+  { kind: "results", label: "工具结果", chip: "工具结果", fill: "bg-[var(--ctx-results)]", ink: "text-[var(--ctx-ink-light)]" },
+  { kind: "chat", label: "会话", chip: "会话", fill: "bg-[var(--ctx-chat)]", ink: "text-[var(--ctx-ink-dark)]" },
+  { kind: "unknown", label: "未分类", chip: "未分类", fill: "bg-[var(--ctx-unknown)]", ink: "text-[var(--ctx-ink-light)]" },
 ]
 
 export const kindMeta = (kind: string): KindMeta => KINDS.find((meta) => meta.kind === kind) ?? KINDS[KINDS.length - 1]
@@ -357,66 +367,119 @@ export function historyLabel(s: ContextSnapshotSummaryDto, latest: boolean, sele
   const usage = s.input_tokens != null ? `输入 ${compactTokens(s.input_tokens)}` : s.estimated != null ? `估算 ${compactTokens(s.estimated)}` : "用量未提供"
   return [latest ? "最新" : null, selected ? "已选" : null, status, usage].filter(Boolean).join(" · ")
 }
-
-/* ───────────────────────── 矩形图（V10-09） ───────────────────────── */
+/* ───────────────────────── 矩形图（V10-09，2026-11-21 重做） ───────────────────────── */
 
 export interface Tile {
-  kind: ContextKind
+  kind: ContextKind | null
   tokens: number
+  /** 0–1 比例，相对整个画布（已用区 + 剩余区共同构成 1） */
   x: number
   y: number
   w: number
   h: number
+  /** 剩余空间块：只画底色与「剩余 N」，不进图例、不参与筛选 */
+  free?: boolean
+  /** 面积被抬到最小可点值（真实占比更小），文案需标注 */
+  floored?: boolean
 }
 
-/** 按 token 面积排的矩形图（squarified），坐标为 0–1 的比例；0 的类别不出图块 */
-export function treemap(items: { kind: ContextKind; tokens: number }[]): Tile[] {
-  const data = items.filter((it) => it.tokens > 0).sort((a, b) => b.tokens - a.tokens)
-  const total = data.reduce((sum, it) => sum + it.tokens, 0)
-  if (total <= 0) return []
-  const tiles: Tile[] = []
-  let x = 0
-  let y = 0
-  let w = 1
-  let h = 1
-  let rest = data.map((it) => ({ ...it, area: it.tokens / total }))
-  const worst = (row: { area: number }[], side: number) => {
-    const sum = row.reduce((s, r) => s + r.area, 0)
-    const max = Math.max(...row.map((r) => r.area))
-    const min = Math.min(...row.map((r) => r.area))
-    return Math.max((side * side * max) / (sum * sum), (sum * sum) / (side * side * min))
+/* 参考 magpie internal/gui/assets/context.js 的 tilesOf，三处关键设计：
+   1) 画布分成「已用区 + 剩余区」，剩余区是一块明显的浅色 —— 一眼看出还有多少余量。
+      之前只画已用内容，20% 满的窗口看起来也是满的。
+   2) 已用区长度的曲线是 share^0.35 而不是线性：窗口只有 8% 满时，
+      已用区仍占画布 41%，里面的块才读得出来；窗口满了仍然是满的。
+   3) 每块强制最小可点面积（TILE_FLOOR）—— 否则小类被挤成细条，既读不出也点不到。 */
+/** 最小可点面积（真实 px²）。magpie 用 700 —— 一个约 26×26 的方块，手指/鼠标够得着 */
+const TILE_FLOOR = 700
+/** 已用区长度的曲线指数：0.35（magpie 实测值） */
+const USED_CURVE = 0.35
+
+type Rect = { x: number; y: number; w: number; h: number }
+
+/** squarified treemap（Bruls），在给定矩形里按 v 分配；坐标是 0–1 比例 */
+function squarify(vals: number[], rect: Rect): Rect[] {
+  const out: Rect[] = []
+  const total = vals.reduce((s, v) => s + Math.max(v, 0), 0)
+  if (!total || rect.w <= 0 || rect.h <= 0) return out
+  const k = (rect.w * rect.h) / total
+  let { x, y, w, h } = rect
+  const worst = (row: number[], side: number) => {
+    let sum = 0, hi = 0, lo = Infinity
+    for (const v of row) { const s = v * k; sum += s; hi = Math.max(hi, s); lo = Math.min(lo, s) }
+    return Math.max((side * side * hi) / (sum * sum), (sum * sum) / (side * side * lo))
   }
-  while (rest.length > 0) {
-    const side = Math.min(w, h)
-    const row = [rest[0]]
-    let i = 1
-    while (i < rest.length && worst([...row, rest[i]], side) <= worst(row, side)) {
-      row.push(rest[i])
-      i += 1
-    }
-    rest = rest.slice(i)
-    const sum = row.reduce((s, r) => s + r.area, 0)
+  const lay = (row: number[]) => {
+    const sum = row.reduce((acc, v) => acc + v * k, 0)
     if (w >= h) {
-      const colW = sum / h
+      const cw = sum / h
       let cy = y
-      for (const r of row) {
-        const rh = r.area / colW
-        tiles.push({ kind: r.kind, tokens: r.tokens, x, y: cy, w: colW, h: rh })
-        cy += rh
-      }
-      x += colW
-      w -= colW
+      for (const v of row) { const ch = (v * k) / cw; out.push({ x, y: cy, w: cw, h: ch }); cy += ch }
+      x += cw; w -= cw
     } else {
-      const rowH = sum / w
+      const rh = sum / w
       let cx = x
-      for (const r of row) {
-        const rw = r.area / rowH
-        tiles.push({ kind: r.kind, tokens: r.tokens, x: cx, y, w: rw, h: rowH })
-        cx += rw
-      }
-      y += rowH
-      h -= rowH
+      for (const v of row) { const cw = (v * k) / rh; out.push({ x: cx, y, w: cw, h: rh }); cx += cw }
+      y += rh; h -= rh
     }
+  }
+  let row: number[] = []
+  for (const v of vals) {
+    if (v <= 0) continue
+    const side = Math.min(w, h)
+    if (!row.length || worst([...row, v], side) <= worst(row, side)) { row.push(v); continue }
+    lay(row); row = [v]
+  }
+  if (row.length) lay(row)
+  return out
+}
+
+/**
+ * 上下文组成矩形图。坐标是 0–1 比例。
+ *
+ * @param window 上下文窗口总量。给了就画「已用 + 剩余」两块；不给就退化成纯占比图
+ *               （与旧行为一致，用于窗口容量未知的模型）。
+ */
+export function treemap(
+  items: { kind: ContextKind; tokens: number }[],
+  window?: number | null,
+  canvasW = 900,
+  canvasH = 200,
+): Tile[] {
+  const data = items.filter((it) => it.tokens > 0).sort((a, b) => b.tokens - a.tokens)
+  const used = data.reduce((sum, it) => sum + it.tokens, 0)
+  if (used <= 0) return []
+  const hasRoom = window != null && window > used
+
+  /* 已用区长度：share^0.35。8% 满 → 41% 画布；满 → 100%。
+     没有窗口数据时整块画布都给已用内容。 */
+  const usedLen = hasRoom ? Math.max(Math.pow(used / window!, USED_CURVE), 0.18) : 1
+  const usedRect: Rect = { x: 0, y: 0, w: usedLen, h: 1 }
+
+  /* 最小可点面积：把过小的块的「虚拟面积」抬到刚好超过 TILE_FLOOR。
+     面积按真实画布算（调用方给 canvasW × canvasH），没有就按 900×200 估。
+     公式来自 magpie：lo = 总token × TILE_FLOOR / 画布面积 —— 即
+     「一个占满 TILE_FLOOR 面积的块对应多少 token」。 */
+  const area = Math.max(1, canvasW * canvasH)
+  const sum = data.reduce((s, it) => s + it.tokens, 0)
+  const lo = (sum * TILE_FLOOR) / area
+  const values = data.map((it) => Math.max(it.tokens, lo))
+
+  const rects = squarify(values, usedRect)
+  const tiles: Tile[] = rects.map((r, i) => ({
+    kind: data[i].kind,
+    // 展示用真实 token；面积可能因为 TILE_FLOOR 被抬高过
+    tokens: data[i].tokens,
+    x: r.x, y: r.y, w: r.w, h: r.h,
+    floored: data[i].tokens < lo ? true : undefined,
+  }))
+
+  if (hasRoom) {
+    tiles.push({
+      kind: null,
+      tokens: (window as number) - used,
+      x: usedLen, y: 0, w: 1 - usedLen, h: 1,
+      free: true,
+    })
   }
   return tiles
 }
