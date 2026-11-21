@@ -60,6 +60,7 @@ scripts/
 - 按日期记录的文档：`YYYY-MM-DD-主题.md`，放进上面对应的目录；不要再新建 `docs/superpowers/`，Superpowers 的计划写到 `docs/plans/`，设计说明写到 `docs/specs/`。
 - **自带滚动的整页（Agent / 模型路由 / 供应商）必须用 `components/panel/PanelPage.tsx`**：主面板内容区是 `overflow-hidden` 的 flex 项，页面里写 `h-full` 会按内容高解析，`absolute inset-0` 的抽屉会随之缩成内容高（表现为页面中部截断、下方大片空白）。PanelPage 用 `absolute inset-0` 钉住可视区；新增同类页面时在 `PANEL_PAGE_PAGES` 登记，MainPanelWindow 靠 `usesOwnScroll` 统一处理，不要再写散落的 `page === xx` 特例。
 - 前端：组件 `PascalCase.tsx`（一个文件导出多个基础组件时用 camelCase，如 `primitives.tsx`）；hook `useXxx.ts` 放在 `hooks/`；纯逻辑 `camelCase.ts`；测试 `<源文件名>.test.mjs`，与源文件同名同目录。
+- **下拉 / 单选选择器一律用 `frontend/src/components/ui/SelectField.tsx`**，禁止自建 `Menu.RadioGroup` 或原生 `<select>`。样式 / 动效 / 宽度挡位 / 无障碍规范见 `frontend/src/components/ui/DROPDOWN-SPEC.md`，清单与迁移状态见 `DROPDOWN-INVENTORY.md`；`className` 只放视觉微调，宽度用 `width` 挡位。
 - 后端 Rust：`snake_case.rs`；脚本：`kebab-case`。
 - 发布脚本在 `scripts/release/`，发行工作流是 `.github/workflows/release.yml`：**每次推送 main 都会发一个新的公开版本**，不需要发版的提交在信息中加 `[skip ci]`。规则见 `docs/release-versioning.md`。
 - 检查更新默认启用；构建时同时设置 `JOLU_UPDATES_ENABLED=0` / `VITE_JOLU_UPDATES_ENABLED=0` 可停用。Release 必须附正式私钥签名的安装包与 `latest.json`，否则检查会失败。测试公钥和本地端点仅放 output 的覆盖配置，不修改生产配置。

@@ -2,7 +2,7 @@ import { JoluSwitch as Switch } from "@/components/ui/JoluSwitch"
 import { ContentTransition, LoadingSurface } from "@/components/ui/LoadingSurface"
 import { useMemo, useRef, useState, type ReactNode, useEffect } from "react"
 import * as Menu from "@radix-ui/react-dropdown-menu"
-import { Check, CopyPlus, Ellipsis, Info, LoaderCircle, PictureInPicture2, RefreshCw, Scan } from "lucide-react"
+import { Check, CopyPlus, Ellipsis, LoaderCircle, PictureInPicture2, RefreshCw, Scan } from "lucide-react"
 import { api, DEFAULT_ISLAND_LINKAGE, isTauri, type AppSettings, type DockEdgeDto, type IslandStyle } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { PLATFORMS } from "@/lib/platforms"
@@ -67,7 +67,7 @@ export function IslandView() {
           title="显示灵动岛"
           desc="控制本体与全部分身；与右上角按钮、系统托盘同步"
           className="h-[60px] rounded-[10px]"
-          control={<Switch on={s.island_visible} disabled={disabled || cfg.isSaving("island_visible") || !isTauri} label="显示灵动岛" onChange={(on) => void cfg.setIslandVisible(on)} />}
+          control={<Switch liquid on={s.island_visible} disabled={disabled || cfg.isSaving("island_visible") || !isTauri} label="显示灵动岛" onChange={(on) => void cfg.setIslandVisible(on)} />}
         />
 
         <StyleSection
@@ -78,9 +78,9 @@ export function IslandView() {
 
         <div className="grid w-full grid-cols-2 gap-5">
           <Group title="窗口行为">
-            <Row title="灵动岛置顶" desc="本体与全部分身保持在其他窗口之上" control={<Switch on={s.always_on_top} disabled={disabled || cfg.isSaving("always_on_top")} label="灵动岛置顶" onChange={(on) => void cfg.setTopmost(on)} />} />
-            <Row title="贴边停靠" desc="拖到屏幕边缘自动吸附；关闭后解除停靠" control={<Switch on={s.dock_enabled} disabled={disabled || cfg.isSaving("dock_enabled")} label="贴边停靠" onChange={(on) => void cfg.setDockEnabled(on)} />} />
-            <Row title="免打扰" desc="暂停增量提示、水位提醒与通知；继续采集" control={<Switch on={s.dnd} disabled={disabled || cfg.isSaving("dnd")} label="免打扰" onChange={(on) => void cfg.setDnd(on)} />} />
+            <Row title="灵动岛置顶" desc="本体与全部分身保持在其他窗口之上" control={<Switch liquid on={s.always_on_top} disabled={disabled || cfg.isSaving("always_on_top")} label="灵动岛置顶" onChange={(on) => void cfg.setTopmost(on)} />} />
+            <Row title="贴边停靠" desc="拖到屏幕边缘自动吸附；关闭后解除停靠" control={<Switch liquid on={s.dock_enabled} disabled={disabled || cfg.isSaving("dock_enabled")} label="贴边停靠" onChange={(on) => void cfg.setDockEnabled(on)} />} />
+            <Row title="免打扰" desc="暂停增量提示、水位提醒与通知；继续采集" control={<Switch liquid on={s.dnd} disabled={disabled || cfg.isSaving("dnd")} label="免打扰" onChange={(on) => void cfg.setDnd(on)} />} />
           </Group>
           <Group title="显示外观">
             <Row
@@ -105,10 +105,10 @@ export function IslandView() {
 
         {/* 4.2b 灵动岛联动（调研 docs/specs/2026-11-05-island-live-linkage.md §4 #5–#9；无画板，待确认） */}
         <Group title="联动（待确认）">
-          <Row title="阈值与事件动效" desc="额度到 80%、用尽、网关拒绝、新会话开始时岛上闪一下；免打扰或减少动效时只改颜色" control={<Switch on={linkage.signals} disabled={disabled || cfg.isSaving("island_linkage")} label="阈值与事件动效" onChange={(on) => void cfg.setIslandLinkage({ signals: on })} />} />
-          <Row title="严格模式" desc="「正在写」只认运行中的会话或网关在途；只有最近写入记录时显示「不知道」，宁可不亮" control={<Switch on={linkage.strict_writing} disabled={disabled || cfg.isSaving("island_linkage")} label="严格模式" onChange={(on) => void cfg.setIslandLinkage({ strict_writing: on })} />} />
-          <Row title="跟随主窗口" desc="主窗口在看某个连接的用量或供应商时，本体岛临时显示那个连接；分身不跟随" control={<Switch on={linkage.follow_main} disabled={disabled || cfg.isSaving("island_linkage")} label="跟随主窗口" onChange={(on) => void cfg.setIslandLinkage({ follow_main: on })} />} />
-          <Row title="按最近活跃自动选主" desc="某个分身所在的平台比本体明显更活跃（领先 1 分钟以上，且 2 分钟内有请求）时，自动与本体互换；同平台的分身不比较" control={<Switch on={linkage.auto_focus} disabled={disabled || cfg.isSaving("island_linkage")} label="按最近活跃自动选主" onChange={(on) => void cfg.setIslandLinkage({ auto_focus: on })} />} />
+          <Row title="阈值与事件动效" desc="额度到 80%、用尽、网关拒绝、新会话开始时岛上闪一下；免打扰或减少动效时只改颜色" control={<Switch liquid on={linkage.signals} disabled={disabled || cfg.isSaving("island_linkage")} label="阈值与事件动效" onChange={(on) => void cfg.setIslandLinkage({ signals: on })} />} />
+          <Row title="严格模式" desc="「正在写」只认运行中的会话或网关在途；只有最近写入记录时显示「不知道」，宁可不亮" control={<Switch liquid on={linkage.strict_writing} disabled={disabled || cfg.isSaving("island_linkage")} label="严格模式" onChange={(on) => void cfg.setIslandLinkage({ strict_writing: on })} />} />
+          <Row title="跟随主窗口" desc="主窗口在看某个连接的用量或供应商时，本体岛临时显示那个连接；分身不跟随" control={<Switch liquid on={linkage.follow_main} disabled={disabled || cfg.isSaving("island_linkage")} label="跟随主窗口" onChange={(on) => void cfg.setIslandLinkage({ follow_main: on })} />} />
+          <Row title="按最近活跃自动选主" desc="某个分身所在的平台比本体明显更活跃（领先 1 分钟以上，且 2 分钟内有请求）时，自动与本体互换；同平台的分身不比较" control={<Switch liquid on={linkage.auto_focus} disabled={disabled || cfg.isSaving("island_linkage")} label="按最近活跃自动选主" onChange={(on) => void cfg.setIslandLinkage({ auto_focus: on })} />} />
           <Row title="ZCode 只看这一家" desc="本体岛在 ZCode 时只列这一家的会话（按会话行的来源名）；只作显示筛选，不改额度查询" control={<SelectField className={cn(SELECT, "w-[170px]")} label="ZCode 只看这一家" disabled={disabled || cfg.isSaving("island_linkage")} value={linkage.zcode_provider ?? ""} options={providerOptions} onValueChange={(v) => void cfg.setIslandLinkage({ zcode_provider: v || null })} />} />
         </Group>
 
@@ -134,11 +134,6 @@ export function IslandView() {
         />
       </div>}
       </ContentTransition>
-
-      <p className="flex items-center gap-[7px] text-[12px] text-jolu-muted">
-        <Info aria-hidden className="size-3.5 shrink-0" />
-        设置即时生效；主面板与灵动岛同步切换主题。
-      </p>
     </div>
   )
 }
@@ -154,7 +149,6 @@ function StyleSection({ value, disabled, onChange }: { value: IslandStyle; disab
     <section className="flex w-full flex-col gap-2">
       <div className="flex items-baseline justify-between gap-4">
         <h2 className="text-sm font-semibold text-jolu-text">灵动岛样式</h2>
-        <span className="text-[12px] text-jolu-muted">本体与全部分身同时切换，随时可改回</span>
       </div>
       <div role="radiogroup" aria-label="灵动岛样式" className="grid grid-cols-2 gap-5">
         {STYLE_OPTIONS.map((option) => {
@@ -316,7 +310,7 @@ function ClonesSection({ settings, ready }: { settings: AppSettings; ready: bool
         ))}
       </div>
       {conn.error && <p role="status" className="text-[12px] text-jolu-danger">连接列表读取失败：{conn.error}</p>}
-      <p className="text-[12px] text-jolu-muted">新分身沿用来源窗口的连接；最多 8 个，最后一个不可销毁。关闭显示时，连接与位置操作禁用。</p>
+      <p className="text-[12px] text-jolu-muted" title="新分身沿用来源窗口的连接；关闭显示时，连接与位置操作禁用">最多 8 个，最后一个不可销毁</p>
       {destroying && <ConfirmDialog returnFocusTo={destroying.trigger} title={`销毁「${destroying.name}」？`} description="将关闭这个灵动岛并移除它的窗口配置。账号连接和历史统计会保留。" confirmLabel="销毁灵动岛" danger onClose={() => setDestroying(null)} onConfirm={async () => { await api.islandAction("clone_destroy", destroying.id); toast.success(`已销毁${destroying.name}`) }} />}
     </section>
   )
@@ -382,13 +376,12 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-/** 设置行：标题 13/500 + 说明 11 灰字，控件靠右；card 为独立带框的一行 */
+/** 设置行：标题 13/500 + 控件靠右；说明收进行悬停提示（默认不占版面）；card 为独立带框的一行 */
 function Row({ title, desc, control, card = false, className }: { title: string; desc: string; control: ReactNode; card?: boolean; className?: string }) {
   return (
-    <div className={cn("flex h-14 items-center gap-[18px] px-4", card && "jolu-card border border-jolu-border bg-jolu-cc-surface", className)}>
+    <div title={desc} className={cn("flex h-14 items-center gap-[18px] px-4", card && "jolu-card border border-jolu-border bg-jolu-cc-surface", className)}>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-[13px] font-medium text-jolu-text">{title}</span>
-        <span className="truncate text-[12px] text-jolu-muted" title={desc}>{desc}</span>
+        <span className="truncate text-[13px] font-medium text-jolu-text">{title}</span>
       </div>
       <div className="shrink-0">{control}</div>
     </div>

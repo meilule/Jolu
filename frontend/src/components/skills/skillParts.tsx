@@ -7,6 +7,7 @@ import {
   LayoutDashboard, NotebookPen, Palette, ScanText, Search, X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useGlidePill } from "@/hooks/useGlidePill"
 import { PENDING_SKILL_PROVIDERS, SKILL_PLATFORMS, inlineParts, markdownBlocks, splitFrontmatter } from "@/lib/skillsManager"
 import type { SkillItemDto, SkillPlatformDto } from "@/lib/skillsApi"
 import { PlatformLogo } from "@/components/brand/PlatformLogo"
@@ -59,6 +60,8 @@ export function ProviderMark({ platform, size = 18 }: { platform: string; size?:
 /* ───────────── 供应商下拉（画板 76） ───────────── */
 
 export function ProviderMenu({ value, platforms, onChange }: { value: string; platforms: SkillPlatformDto[]; onChange: (platform: string) => void }) {
+  // 共享滑块动效：只往菜单里插一个滑块，菜单与行的类名一字不改
+  const glide = useGlidePill()
   const [query, setQuery] = useState("")
   const total = platforms.reduce((sum, p) => sum + p.count, 0)
   const q = query.trim().toLowerCase()
@@ -90,7 +93,7 @@ export function ProviderMenu({ value, platforms, onChange }: { value: string; pl
         <ChevronDown aria-hidden className="size-4 text-jolu-muted" />
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Content align="start" sideOffset={6} collisionPadding={12} className="motion-popover z-[100] flex w-[336px] flex-col gap-2 rounded-xl border border-jolu-border bg-jolu-cc-surface p-3 shadow-popover" style={{ maxHeight: "min(520px, var(--radix-dropdown-menu-content-available-height))" }}>
+        <Menu.Content ref={glide} align="start" sideOffset={6} collisionPadding={12} className="motion-popover z-[100] flex w-[336px] flex-col gap-2 rounded-xl border border-jolu-border bg-jolu-cc-surface p-3 shadow-popover" style={{ maxHeight: "min(520px, var(--radix-dropdown-menu-content-available-height))" }}>
           <label className="flex h-[34px] shrink-0 items-center gap-2 rounded-[7px] bg-jolu-side px-2.5">
             <Search aria-hidden className="size-4 text-jolu-muted" />
             <input

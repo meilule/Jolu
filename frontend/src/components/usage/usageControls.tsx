@@ -3,6 +3,7 @@ import * as Menu from "@radix-ui/react-dropdown-menu"
 import { forwardRef, type ReactNode } from "react"
 import { Check, ChartNoAxesCombined, ChevronDown, LoaderCircle, RefreshCw, RotateCcw, Square, SquareCheck } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useGlidePill } from "@/hooks/useGlidePill"
 import { PROVIDERS, providerEntry } from "@/lib/providerCatalog"
 import { UNATTRIBUTED_ACCOUNT, accountLabel, accountsTriggerLabel } from "@/lib/usageFilters"
 import { JoluButton } from "@/components/ui/JoluButton"
@@ -95,6 +96,8 @@ export function MenuFilter({ value, options, onChange, label, trailingChevron }:
   label: string
   trailingChevron?: boolean
 }) {
+  // 共享滑块动效：只往菜单里插一个滑块，菜单与行的类名一字不改
+  const glide = useGlidePill()
   const selected = options.find((option) => option.value === value) ?? options[0]
   return (
     <Menu.Root modal={false}>
@@ -102,7 +105,7 @@ export function MenuFilter({ value, options, onChange, label, trailingChevron }:
         <FilterTrigger aria-label={label} trailingChevron={trailingChevron}>{selected?.label}</FilterTrigger>
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Content align="start" sideOffset={6} collisionPadding={12} className={MENU_CLASS} style={{ maxHeight: "min(320px, var(--radix-dropdown-menu-content-available-height))" }}>
+        <Menu.Content ref={glide} align="start" sideOffset={6} collisionPadding={12} className={MENU_CLASS} style={{ maxHeight: "min(320px, var(--radix-dropdown-menu-content-available-height))" }}>
           <Menu.RadioGroup value={value} onValueChange={onChange}>
             {options.map((option) => (
               <Menu.RadioItem key={option.value} value={option.value} className={cn(ITEM_CLASS, "pr-7 data-[state=checked]:text-jolu-on")}>
