@@ -68,15 +68,13 @@ export function DataSection({ cfg, onOpenSkills }: { cfg: Cfg; onOpenSkills: () 
       </div>
       {failure && isTauri && <p role="alert" className="-mt-2 text-[12px] text-jolu-danger">本地数据概览读取失败：{failure}</p>}
 
-      <SettingsGroup title="导入与导出" desc="统计记录和会话标题可迁移，导入时自动去重。">
+      <SettingsGroup title="导入与导出">
         <SettingsRow
           title="导出本地数据"
-          desc="选择供应商与日期范围后导出 JSON。"
           control={<ActionButton disabled={!isTauri} onClick={() => setDialog("export")}>导出数据</ActionButton>}
         />
         <SettingsRow
           title="导入已有数据"
-          desc="预览记录数量、重复项和无效项后确认。"
           // 有预览卡片（含确认导入进行中）时禁用，先取消或关闭卡片再重新选择文件
           control={<ActionButton busy={previewing} disabled={!isTauri || preview !== null} onClick={pickImport}>{previewing ? "读取中…" : "导入数据"}</ActionButton>}
         />
@@ -99,10 +97,10 @@ export function DataSection({ cfg, onOpenSkills }: { cfg: Cfg; onOpenSkills: () 
         </div>
       </SettingsGroup>
 
-      <SettingsGroup title="历史数据保留" desc="默认不自动删除历史数据。">
+      <SettingsGroup title="历史数据保留">
         <SettingsRow
           title="自动清理规则"
-          desc="仅影响 Jolu 本地统计记录。"
+          desc="只影响 Jolu 本地统计"
           control={
             <SelectButton
               label="自动清理规则"
@@ -115,20 +113,18 @@ export function DataSection({ cfg, onOpenSkills }: { cfg: Cfg; onOpenSkills: () 
         />
         <SettingsRow
           title="手动清理历史"
-          desc="预览日期和记录数量后再确认。"
           control={<ActionButton disabled={!isTauri} onClick={() => setDialog("cleanup")}>预览清理</ActionButton>}
         />
       </SettingsGroup>
 
-      <SettingsGroup title="存储位置" desc="查看本机数据与 Skills 所在位置。">
+      <SettingsGroup title="存储位置">
         <SettingsRow
           title="Jolu 数据目录"
-          desc="打开当前应用数据文件夹。"
           control={<ActionButton disabled={!isTauri} onClick={() => void api.openDataDirectory().catch((reason) => toast.danger("打开数据目录失败", String(reason)))}>打开文件夹</ActionButton>}
         />
         <SettingsRow
           title="Skills 扫描目录"
-          desc="项目与全局目录在 Skills 模块管理。"
+          desc="项目与全局目录在 Skills 模块里改"
           control={<ActionButton tone="soft" onClick={onOpenSkills}>前往 Skills<ChevronRight aria-hidden className="size-3.5" /></ActionButton>}
         />
       </SettingsGroup>

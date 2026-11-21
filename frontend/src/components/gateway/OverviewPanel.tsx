@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { CalendarDays, Check, ChevronRight, CircleAlert, RefreshCw, Search, SlidersHorizontal, Wrench } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useGlidePill } from "@/hooks/useGlidePill"
 import type { ContextSessionRowDto, DayOverviewDto, RouteLogDto } from "@/lib/gatewayApi"
 import type { SessionView } from "@/lib/gatewaySessions"
 import { relativeTime } from "@/lib/gatewaySessions"
@@ -339,6 +340,8 @@ function clock(ts: number): string {
  * 点外与 Escape 关闭（automation/SkillPicker 同款）。
  */
 function RangePicker({ range, onRange }: { range: OverviewRange["id"]; onRange: (next: OverviewRange["id"]) => void }) {
+  // 共享滑块动效：只往菜单里插一个滑块，菜单与行的类名一字不改
+  const glide = useGlidePill()
   const [open, setOpen] = useState(false)
   /** 退出动画期间保持渲染，120ms 后真正卸载（gw-pop-out 的时长） */
   const [closing, setClosing] = useState(false)
@@ -386,7 +389,7 @@ function RangePicker({ range, onRange }: { range: OverviewRange["id"]; onRange: 
         <ChevronRight aria-hidden className={cn("size-3 rotate-90 text-jolu-muted transition-transform duration-[160ms]", open && "rotate-[-90deg]")} />
       </button>
       {open && (
-        <div role="menu" className={cn("absolute right-0 top-11 z-20 w-40 rounded-lg border border-jolu-border bg-jolu-bg p-1 shadow-[0_10px_24px_var(--jolu-cc-popup-shadow)]", closing ? "gw-pop-out" : "gw-pop")}>
+        <div ref={glide} role="menu" className={cn("absolute right-0 top-11 z-20 w-40 rounded-lg border border-jolu-border bg-jolu-bg p-1 shadow-[0_10px_24px_var(--jolu-cc-popup-shadow)]", closing ? "gw-pop-out" : "gw-pop")}>
           {OVERVIEW_RANGES.map((option) => (
             <button key={option.id} type="button" role="menuitemradio" aria-checked={option.id === range}
               onClick={() => { close(); onRange(option.id) }}

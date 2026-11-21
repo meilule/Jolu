@@ -295,5 +295,5 @@ export function useLiveUsage(platform: string, enabled = true, dnd = false, paus
 /** 会话行的来源（4.2）：只有归到唯一已存连接（exact / mapped）时才给，平台档不显示 */
 function sessionSource(attribution: Parameters<typeof islandAttribution>[0]): SessionActivity["source"] {
   const view = islandAttribution(attribution)
-  return view ? { name: view.name, confidence: view.confidence } : undefined
+  return view ? { id: view.id, name: view.name, confidence: view.confidence } : undefined
 }

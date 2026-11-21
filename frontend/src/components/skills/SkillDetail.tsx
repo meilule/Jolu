@@ -11,7 +11,7 @@ import { demoSkillDetail } from "@/mock/skills"
 import { JoluButton } from "@/components/ui/JoluButton"
 import { Tip } from "@/components/ui/Tip"
 import { useToast } from "@/components/ui/Toast"
-import { providerName } from "@/components/usage/usageControls"
+import { providerName } from "@/lib/providerCatalog"
 import { MarkdownPreview, SkillIcon, Tag } from "./skillParts"
 
 const SCOPE_DETAIL: Record<SkillItemDto["scope"], string> = {
@@ -142,7 +142,7 @@ export function SkillDetail({ item, onBack, onEdit, onCopy, onOpenDir }: {
             <span className="text-[11px] text-jolu-muted">{current.original_path ? "原所在目录" : "所在目录"}</span>
             <span className="break-all font-mono text-[12px] text-jolu-muted">{current.original_path ?? current.path}</span>
             {current.original_path && (
-              <span className="text-[11px] text-jolu-muted">已移到 Jolu 停用区（工具不会加载），启用时移回原目录：<span className="break-all font-mono">{current.path}</span></span>
+              <span className="text-[11px] text-jolu-muted">已移到 Jolu 停用区（工具不会加载）：<span className="break-all font-mono">{current.path}</span></span>
             )}
             <JoluButton variant="outline" size="sm" className="h-[30px] self-start" onClick={() => void copyPath()}><Copy aria-hidden />复制路径</JoluButton>
           </aside>

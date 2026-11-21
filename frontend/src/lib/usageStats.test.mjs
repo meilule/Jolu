@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import {
   activityLevel, calendarWeeks, callStatus, canConfirmRange, changeText, effortLabel, formatTokens, formatUsd,
-  modelDisplayName, monthGrid, monthLabels, outputTps, pageWindow, pickDate, rangeDays, rangeLabel, rangeToMillis, zoneName,
+  modelDisplayName, monthGrid, monthLabels, outputTps, pageWindow, pickDate, providerTokenCell, rangeDays, rangeLabel, rangeToMillis, zoneName,
 } from "./usageStats.ts"
 
 const now = new Date(2026, 9, 21, 12, 38)
@@ -51,10 +51,36 @@ test("数值格式与缺失值", () => {
   assert.equal(changeText(100, 0), null)
 })
 
+test("供应商行 Token 三态：全覆盖紧凑、部分覆盖给已知小计、全未知仍是破折号", () => {
+  // 全覆盖：主数字为组内合计，不额外占一行说明
+  assert.deepEqual(
+    providerTokenCell({ requests: 100, tokens: 6_800_000, known_tokens: 6_800_000, known_requests: 100 }),
+    { value: "6.80 M", note: null },
+  )
+  // 部分覆盖：后端 tokens 为 null，但已知小计是真实值；按 ZCode 实际样本核对覆盖数
+  assert.deepEqual(
+    providerTokenCell({ requests: 1599, tokens: null, known_tokens: 754_323_790, known_requests: 1594 }),
+    { value: "754.32 M", note: "1594 / 1599 条有 Token" },
+  )
+  // 全未知：known_tokens 只是 0，不能显示成 0
+  assert.deepEqual(
+    providerTokenCell({ requests: 12, tokens: null, known_tokens: 0, known_requests: 0 }),
+    { value: "—", note: "0 / 12 条有 Token" },
+  )
+})
+
 test("调用状态、思考强度与 TPS", () => {
-  assert.deepEqual(callStatus({ failed: false, status_code: null }), { label: "成功", ok: true })
-  assert.deepEqual(callStatus({ failed: true, status_code: 429 }), { label: "429 限流", ok: false })
-  assert.deepEqual(callStatus({ failed: true, status_code: 504 }), { label: "超时", ok: false })
+  assert.deepEqual(callStatus({ failed: false, status_code: null }), { label: "成功", tone: "ok" })
+  assert.deepEqual(callStatus({ failed: true, status_code: 429 }), { label: "429 限流", tone: "error" })
+  assert.deepEqual(callStatus({ failed: true, status_code: 504 }), { label: "超时", tone: "error" })
+  // ZCode 原生 cancelled：单独显示「已取消」，中性色，不能画成失败红
+  assert.deepEqual(callStatus({ failed: false, cancelled: true, status_code: null }), { label: "已取消", tone: "muted" })
+  assert.deepEqual(callStatus({ failed: false, unknown: true, status_code: null }), { label: "状态未知", tone: "muted" })
+  assert.deepEqual(callStatus({ failed: true, unknown: true, status_code: 500 }), { label: "失败 500", tone: "error" })
+  // 后端把取消与失败拆成互斥两个字段：cancelled 优先，即便 failed 意外为真也不冒充失败
+  assert.deepEqual(callStatus({ failed: true, cancelled: true, status_code: null }), { label: "已取消", tone: "muted" })
+  // 旧后端不返回 cancelled 字段时行为不变
+  assert.deepEqual(callStatus({ failed: false, status_code: 200 }), { label: "成功", tone: "ok" })
   assert.equal(effortLabel("high"), "高")
   assert.equal(effortLabel(null), "—")
   assert.equal(outputTps({ output: 100, duration_ms: 3_000, first_token_ms: 500 }), 40)

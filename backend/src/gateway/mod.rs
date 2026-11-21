@@ -61,6 +61,7 @@ pub(crate) mod wiring_pi;
 pub(crate) mod wiring_qwen;
 pub(crate) mod wiring_workbuddy;
 pub(crate) mod wiring_specs;
+pub(crate) mod header_probe;
 pub(crate) mod yaml_lines;
 pub(crate) mod wiring_extra;
 pub(crate) mod wiring_wsl;

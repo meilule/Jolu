@@ -31,7 +31,7 @@ try {
     providers: () => page.getByRole('heading',{name:'连接你的 AI 工具',exact:true}),
     usage: () => page.getByRole('tab',{name:'概览',exact:true}),
     sessions: () => page.getByRole('button',{name:'更多会话操作',exact:true}),
-    automation: () => page.getByRole('heading',{name:'把重复工作交给 AI',exact:true}),
+    automation: () => page.getByRole('heading',{name:'任务',exact:true}),
     skills: () => page.getByRole('heading',{name:'我的 Skills',exact:true}),
     settings: () => page.getByRole('heading',{name:'常规',exact:true}),
   }

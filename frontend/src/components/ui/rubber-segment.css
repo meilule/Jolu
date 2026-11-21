@@ -1,0 +1,195 @@
+/* ══ RubberSegment ═════════════════════════════════════════════
+   带橡皮滑块的分段控件（React Bits RubberSegment 的零依赖移植）。
+   位置与宽度由 JS 逐帧写到 --rs-l / --rs-w 上；这里的 transition 只在
+   「非动画帧」生效（drag 结束时靠它补最后的微调）。 */
+
+.rubber-segment {
+  /* 轨道底不能用 jolu-side：浅色主题下它与 jolu-bg 同为 #ffffff，
+     白滑块贴白底 = 看不出边界（项目里 motion-button 的注释也记过这个坑）。
+     jolu-stage 是 #f4f4f5，深浅两个主题都有区分度。 */
+  --rs-track: var(--jolu-stage);
+  --rs-thumb: var(--jolu-bg);
+  --rs-ink: var(--jolu-muted);
+  --rs-ink-active: var(--jolu-on);
+  --rs-radius: 10px;
+  --rs-inset: 3px;
+  --rs-thumb-radius: 7px;
+  --rs-h: 36px;
+  --rs-font: 13px;
+  --rs-pad: 14px;
+  --rs-min: 44px;
+  --rs-idle: 0.72;
+  --rs-hover: 0.95;
+  --rs-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --rs-l: 0px;
+  --rs-w: 0px;
+
+  position: relative;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: auto;
+  vertical-align: middle;
+  padding: var(--rs-inset);
+  border-radius: var(--rs-radius);
+  /* V6 画板：浅底 + 细描边的圆角容器 */
+  border: 1px solid var(--jolu-border);
+  background: var(--rs-track);
+  box-sizing: border-box;
+  font-family: inherit;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 等宽槽：每列平分 */
+.rubber-segment[data-equal] {
+  grid-auto-columns: minmax(0, 1fr);
+}
+
+.rubber-segment[aria-disabled="true"] {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.rubber-segment__item {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: calc(var(--rs-h) - var(--rs-inset) * 2);
+  min-width: var(--rs-min);
+  margin: 0;
+  padding: 0 var(--rs-pad);
+  border: 0;
+  border-radius: var(--rs-thumb-radius);
+  background: none;
+  color: var(--rs-ink);
+  opacity: var(--rs-idle);
+  font: inherit;
+  font-size: var(--rs-font);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+  transition: opacity 160ms ease;
+}
+
+.rubber-segment__item[aria-checked="true"] {
+  cursor: default;
+}
+
+.rubber-segment[data-draggable] .rubber-segment__item[aria-checked="true"] {
+  cursor: grab;
+}
+
+.rubber-segment[data-held],
+.rubber-segment[data-held] .rubber-segment__item {
+  cursor: grabbing;
+}
+
+/* 按下的轻微内缩（只在「点非滑块区域」时由 JS 打标记） */
+.rubber-segment__item[data-pressed] {
+  transform: scale(0.96);
+  transition: opacity 160ms ease, transform 160ms var(--rs-ease-out);
+}
+
+.rubber-segment__item:focus-visible {
+  outline: 2px solid var(--jolu-accent);
+  outline-offset: 2px;
+  border-radius: var(--rs-thumb-radius);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .rubber-segment__item[aria-checked="false"]:hover {
+    opacity: var(--rs-hover);
+  }
+}
+
+/* 滑块：绝对定位，位置/宽度吃 --rs-l / --rs-w。
+   内部是一份「等宽排布的文字副本」，overflow hidden 裁出滑块覆盖的那一段，
+   所以滑块滑到哪，哪一段文字就变成 activeTextColor。 */
+.rubber-segment__thumb {
+  position: absolute;
+  top: var(--rs-inset);
+  left: var(--rs-inset);
+  z-index: 0;
+  /* 铺满整个轨道内部（不是槽宽）—— 内部再放一份完整文字，靠 clip-path 裁出当前槽。
+     这样文字副本能铺满，裁剪区域由 --rs-l / --rs-w 控制，两者互不干涉。 */
+  width: calc(100% - var(--rs-inset) * 2);
+  height: calc(var(--rs-h) - var(--rs-inset) * 2);
+  border-radius: var(--rs-thumb-radius);
+  background: transparent;
+  pointer-events: none;
+  transition: var(--rs-transition, none);
+  opacity: 0;
+}
+
+/* 滑块的可视背景：独立一层，按 --rs-l / --rs-w 实体移动（保留滑动手感）。
+   它与文字裁切窗分离：
+   - .thumb::before 是「实体」→ 位置/宽度动画，产生滑动与拉伸的观感
+   - .thumb 自身是「裁切窗」→ clip-path 决定哪段文字变深色
+   两者用同一组变量，所以永远同步。 */
+.rubber-segment__thumb::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: var(--rs-w);
+  transform: translateX(var(--rs-l));
+  border-radius: var(--rs-thumb-radius);
+  background: var(--rs-thumb);
+  /* 与 V6 画板一致：白底滑块 + 一圈细描边，浅色主题下才看得出边界 */
+  border: 1px solid var(--jolu-border);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, #000 10%, transparent),
+    0 2px 8px color-mix(in srgb, #000 6%, transparent);
+  box-sizing: border-box;
+  transition: var(--rs-transition, none);
+}
+
+/* 文字只在上面的实体范围内可见 */
+.rubber-segment__thumb {
+  clip-path: inset(
+    0 calc(100% - var(--rs-l) - var(--rs-w)) 0 var(--rs-l)
+    round var(--rs-thumb-radius)
+  );
+}
+
+.rubber-segment__thumb[data-ready] {
+  opacity: 1;
+}
+
+/* 副本行：铺满滑块（= 轨道内部），不做位移 —— 文字与真实按钮同位 */
+.rubber-segment__copy-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: auto;
+  height: 100%;
+}
+
+.rubber-segment[data-equal] .rubber-segment__copy-row {
+  grid-auto-columns: minmax(0, 1fr);
+}
+
+/* 减少动效：滑块直接跳，不做拉伸/压缩 */
+@media (prefers-reduced-motion: reduce) {
+  .rubber-segment__item {
+    transition: opacity 160ms ease;
+  }
+  .rubber-segment__thumb {
+    transition: none;
+  }
+}
+
+html.reduce-motion .rubber-segment__item {
+  transition: opacity 160ms ease;
+}
+html.reduce-motion .rubber-segment__thumb {
+  transition: none;
+}

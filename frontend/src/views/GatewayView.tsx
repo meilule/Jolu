@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Activity, GitFork, Layers, ListFilter, Network } from "lucide-react"
+import { Activity, GitFork, Layers, ListFilter, MoreHorizontal, Network } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api, invoke, isTauri, listenEvent } from "@/lib/api"
 import { EVENTS } from "@/lib/events"
@@ -20,6 +20,7 @@ import { useToast } from "@/components/ui/Toast"
 import { ConfirmDialog as ActionConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { RouteLogPanel } from "@/components/gateway/RouteLogPanel"
 import { PanelPage } from "@/components/panel/PanelPage"
+import { RubberSegment } from "@/components/ui/RubberSegment"
 import { OverviewPanel, type AttentionItem } from "@/components/gateway/OverviewPanel"
 import { SessionObservation } from "@/components/gateway/SessionObservation"
 import { GroupsPanel } from "@/components/gateway/GroupsPanel"
@@ -361,10 +362,7 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
         )}
         {tab === "log" && (
           <div className="flex min-w-0 flex-1 flex-col gap-4 px-8 pb-8 pt-2">
-            <div className="flex flex-col gap-1.5">
-              <h2 className="text-[20px] font-semibold text-jolu-text">路由流水</h2>
-              <p className="text-meta text-jolu-muted">每次请求选了哪个来源、改道几次、结果如何（本页签暂无 V6 画板，沿用 V5 面板）</p>
-            </div>
+            <h2 className="text-[20px] font-semibold text-jolu-text">路由流水</h2>
             <RouteLogPanel desktop={isTauri} connections={connections} tick={tick} />
           </div>
         )}
@@ -406,24 +404,40 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
   )
 }
 
-/** 页签条（V6 画板：浅底圆角容器，选中项白底描边 + 品牌色文字）。 */
+/**
+ * 页签条 —— 橡皮滑块分段控件（React Bits RubberSegment 的零依赖移植，见 components/ui/RubberSegment.tsx）。
+ *
+ * 改动前是「选中项自己加白底 + 边框」，切页签时两块色块交替淡入淡出。
+ * 现在是一个共享滑块在槽位间滑动：点选先向两侧膨胀覆盖「旧槽 + 新槽」，
+ * 再收缩落位，落点后缘还有一点点压缩回弹；按住滑块可直接拖、快速甩动会带惯性。
+ *
+ * 外观仍是 V6 画板的浅底圆角容器 + 白底滑块，只是把「换底」换成了「移动一个物体」。
+ */
 function TabBar({ tab, onTab }: { tab: Tab; onTab: (tab: Tab) => void }) {
   return (
-    <div className="flex items-center gap-1 rounded-xl border border-jolu-border bg-jolu-side p-1" role="tablist" aria-label="模型路由">
-      {TABS.map(({ id, label, icon: Icon }) => {
-        const active = tab === id
-        return (
-          <button key={id} type="button" role="tab" aria-selected={active} onClick={() => onTab(id)}
-            className={cn(
-              "flex h-10 flex-1 items-center justify-center gap-2 rounded-[9px] text-meta outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent",
-              active ? "border border-jolu-border bg-jolu-bg font-semibold text-jolu-on shadow-sm" : "text-jolu-muted hover:text-jolu-text",
-            )}>
+    <RubberSegment
+      className="w-full"
+      aria-label="模型路由"
+      size="md"
+      radius={12}
+      inset={4}
+      equalSlots
+      stretch={100}
+      squash={3}
+      glide={75}
+      draggable
+      value={tab}
+      onChange={(next) => onTab(next as Tab)}
+      items={TABS.map(({ id, label, icon: Icon }) => ({
+        value: id,
+        label: (
+          <>
             {id === "middleware" ? <SlidersIcon className="size-3.5" /> : <Icon aria-hidden className="size-3.5" />}
             {label}
-          </button>
-        )
-      })}
-    </div>
+          </>
+        ),
+      }))}
+    />
   )
 }
 
@@ -491,11 +505,13 @@ function MoreMenu({ items }: { items: MoreMenuItem[] }) {
     <div ref={rootRef} className="relative shrink-0">
       <button type="button" aria-label="更多操作" aria-expanded={open} data-open={open} onClick={() => (open ? close() : setOpen(true))}
         className={cn(
-          // 悬停用 jolu-stage：浅色主题 jolu-side 与 jolu-bg 同为 #ffffff，白上白无反馈
-          "motion-button flex h-10 w-11 cursor-pointer items-center justify-center gap-1 whitespace-nowrap rounded-lg border outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent",
+          // 悬停用 jolu-stage：浅色主题 jolu-side 与 jolu-bg 同为 #ffffff，白上白无反馈。
+          // 宽度用 px 而不是固定 w-11：按钮里是「图标 + 文字」两段，
+          // 固定 44px 装不下（文字会被压扁/溢出）。h-10 与旁边「开启中转」按钮同高。
+          "motion-button flex h-10 shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent",
           open ? "border-jolu-accent/45 bg-jolu-side" : "border-jolu-border bg-jolu-bg hover:bg-jolu-stage active:bg-jolu-cc-pressed",
         )}>
-        <span className="text-meta font-semibold text-jolu-muted">···</span>
+        <MoreHorizontal aria-hidden className="size-4 shrink-0 text-jolu-muted" />
         <span className="text-meta font-medium text-jolu-text">更多</span>
       </button>
       {open && (

@@ -100,8 +100,6 @@ export interface IslandData {
   signal?: { kind: string; label: string; at: number; motion: boolean } | null
   /** 4.2b：正在跟随主窗口看的连接（本体岛）；点「解除」回到自己的连接 */
   following?: { label: string; onUnfollow: () => void } | null
-  /** 4.2b：本体岛只看这一家 ZCode provider；null = 全部 */
-  providerFilter?: string | null
 }
 
 function Shell({

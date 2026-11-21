@@ -69,7 +69,7 @@ export function RenameDialog({ connection, busy, onClose, onSave }: { connection
       <div className="flex flex-col gap-1">
         <span className="text-[9.5px] text-jolu-muted">菜单 id</span>
         <input value={slug} onChange={(event) => setSlug(event.target.value)} className={cn("h-9 rounded-lg border bg-jolu-side px-3 text-[12px] text-jolu-text outline-none", invalid ? "border-jolu-danger" : "border-jolu-border focus:border-jolu-accent")} />
-        {invalid ? <span className="text-[8.5px] text-jolu-danger">{reserved ? `「${slug}」是保留字，建议改用 ${slug}-src` : "只能使用小写字母、数字和连字符，不能以连字符开头。"}</span> : <span className="text-[8.5px] text-jolu-muted">Agent 配置里存的是这个 id；改名不会改它，改 id 后旧 id 会返回 404 并说明新名字。</span>}
+        {invalid ? <span className="text-[8.5px] text-jolu-danger">{reserved ? `「${slug}」是保留字，建议改用 ${slug}-src` : "只能使用小写字母、数字和连字符，不能以连字符开头。"}</span> : <span className="text-[8.5px] text-jolu-muted">Agent 配置里存的是这个 id；改 id 后旧 id 会返回 404</span>}
       </div>
     </Modal>
   )
@@ -124,7 +124,7 @@ export function CatalogDialog({ models, onClose }: { models: CatalogModelDto[]; 
   const toast = useToast()
   return (
     <Modal title="模型池里的模型" onClose={onClose} footer={<Button label="关闭" onClick={onClose} />}>
-      <p className="text-[9.5px] text-jolu-muted">复制「来源/模型」填入调用工具。订阅模型菜单不代表已完成真实调用验收。</p>
+      <p className="text-[9.5px] text-jolu-muted">复制「来源/模型」填入调用工具</p>
       <div className="flex max-h-[50vh] flex-col gap-1 overflow-y-auto">
         {models.map((model) => (
           <div key={model.id} className="flex items-center gap-2 rounded-lg bg-jolu-side px-2.5 py-1.5">

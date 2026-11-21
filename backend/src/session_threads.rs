@@ -153,7 +153,8 @@ pub fn list(conn: &Connection, f: &SessionFilter) -> rusqlite::Result<SessionLis
                 SUM(r.cache_read_tokens), MIN(r.cache_read_known), SUM(r.cache_write_tokens), MIN(r.cache_write_known),
                 SUM(r.output_tokens), MIN(r.output_known),
                 MIN(r.connection_id), MAX(r.connection_id), SUM(r.connection_id IS NULL),
-                s.title, s.activity_state, s.cwd
+                s.title, s.activity_state, s.cwd, s.activity_updated_ms,
+                MAX(CASE WHEN r.source LIKE 'native:zcode:%' THEN 1 ELSE 0 END)
          FROM requests r LEFT JOIN sessions s ON s.platform = r.platform AND s.session_id = r.session_id
          WHERE r.session_id IS NOT NULL AND r.session_id <> ''",
     );
@@ -203,13 +204,15 @@ pub fn list(conn: &Connection, f: &SessionFilter) -> rusqlite::Result<SessionLis
                 platform,
             },
             r.get::<_, Option<String>>(17)?,
+            r.get::<_, Option<i64>>(19)?,
+            r.get::<_, i64>(20)? != 0,
         ))
     })?;
     let needle = f.search.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_lowercase);
     let mut used = std::collections::HashSet::new();
     let mut sessions = Vec::new();
     for row in rows {
-        let (mut item, activity) = row?;
+        let (mut item, activity, activity_updated, zcode_native) = row?;
         if zcode_child_session(zcode_children.as_ref(), &item.platform, &item.session_id) {
             continue;
         }
@@ -231,8 +234,13 @@ pub fn list(conn: &Connection, f: &SessionFilter) -> rusqlite::Result<SessionLis
                 continue;
             }
         }
-        item.status = if !item.has_source {
+        // 数据库来源也能提供状态。旧库中的默认 done 没有时间戳，不能当作真实事件。
+        // ZCode 的运行状态可能在工具异常退出后停留，按采集器的宽限期保守降级。
+        let database_activity = item.platform == "zcode" && zcode_native && activity_updated.is_some();
+        item.status = if !item.has_source && !database_activity {
             if crate::platforms::native(&item.platform) { "recent".into() } else { "usage_only".into() }
+        } else if database_activity {
+            crate::native_sources::zcode_observed_state(activity.as_deref(), activity_updated, chrono::Utc::now().timestamp_millis()).into()
         } else {
             match activity.as_deref() {
                 Some("running") => "running".into(),
@@ -1246,6 +1254,33 @@ pub fn continue_session(conn: &Connection, platform: &str, session_id: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_database_activity_requires_evidence_and_expires() {
+        let conn = crate::db::open(Path::new(":memory:")).unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        for (platform, source, id) in [
+            ("zcode", "native:zcode:main", "fresh"),
+            ("zcode", "native:zcode:main", "stale"),
+            ("zcode", "native:zcode:main", "legacy"),
+            ("gemini", "native:gemini:main", "other"),
+        ] {
+            conn.execute(
+                "INSERT INTO requests(platform, source, dedup_key, session_id, ts) VALUES(?1, ?2, ?3, ?3, ?4)",
+                rusqlite::params![platform, source, id, now],
+            ).unwrap();
+        }
+        crate::db::set_session_activity(&conn, "zcode", "fresh", "running", now).unwrap();
+        crate::db::set_session_activity(&conn, "zcode", "stale", "running", now - crate::native_sources::ZCODE_RUNNING_GRACE_MS - 1).unwrap();
+        conn.execute("INSERT INTO sessions(platform, session_id) VALUES('zcode', 'legacy')", []).unwrap();
+        crate::db::set_session_activity(&conn, "gemini", "other", "done", now).unwrap();
+        let result = list(&conn, &SessionFilter::default()).unwrap();
+        let status = |id: &str| result.sessions.iter().find(|s| s.session_id == id).unwrap().status.as_str();
+        assert_eq!(status("fresh"), "running");
+        assert_eq!(status("stale"), "recent");
+        assert_eq!(status("legacy"), "recent");
+        assert_eq!(status("other"), "recent");
+    }
 
     #[test]
     fn message_read_failure_is_not_reported_as_partial_success() {

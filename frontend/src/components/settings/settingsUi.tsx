@@ -3,7 +3,8 @@ import { Info, LoaderCircle, type LucideIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SelectField, type SelectOption } from "@/components/ui/SelectField"
 
-/** 设置分组卡片（画板 86）：左右 20 内边距、圆角 12；有图标时标题行 66 高 */
+/** 设置分组卡片（画板 86）：左右 20 内边距、圆角 12；有图标时标题行 66 高。
+ *  `desc` 只留给状态与条件说明（读取中、不可用原因），标语不要放进来。 */
 export function SettingsGroup({ icon: Icon, title, desc, children, className }: {
   icon?: LucideIcon
   title: string
@@ -29,7 +30,8 @@ export function SettingsGroup({ icon: Icon, title, desc, children, className }: 
   )
 }
 
-/** 设置行：标题 13/500 + 说明 11，控件靠右；行之间是上边框 */
+/** 设置行：标题 13/500 + 说明 11，控件靠右；行之间是上边框。
+ *  `desc` 只用于状态与条件说明（当前是否生效、为何不可用），标语请直接去掉。 */
 export function SettingsRow({ title, desc, control, className, descClassName }: {
   title: ReactNode
   desc?: ReactNode

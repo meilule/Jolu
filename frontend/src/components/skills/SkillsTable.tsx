@@ -3,7 +3,7 @@ import { ChevronRight, Copy, Ellipsis, FolderOpen, Pencil, Square, SquareCheck, 
 import { cn } from "@/lib/utils"
 import { scopeLabel, sourceLabel, statusLabel, toggleBlocked } from "@/lib/skillsManager"
 import type { SkillItemDto } from "@/lib/skillsApi"
-import { providerName } from "@/components/usage/usageControls"
+import { providerName } from "@/lib/providerCatalog"
 import { SkillIcon, SkillSwitch, Tag } from "./skillParts"
 
 export function skillKey(item: Pick<SkillItemDto, "platform" | "path">): string {

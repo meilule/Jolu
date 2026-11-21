@@ -548,6 +548,14 @@ pub(crate) async fn handle(
     // V10 上下文观察：有会话标识的请求在选路前按调用方协议解析一次（后台线程，不阻塞转发），
     // 响应结束时用上游用量校准（context/capture.rs；挂点决定见执行文档 §6）
     let session_ref = session_identity(agent.as_deref(), &headers, &body);
+    // 诊断（默认关闭，`JOLU_HEADER_PROBE=1` 才写）：查「这家的会话标识叫什么、有没有」。
+    // 只记头名与 UA，不记任何头的值——密钥不能进日志。
+    crate::gateway::header_probe::record(
+        agent.as_deref(),
+        &headers,
+        &body,
+        session_ref.as_ref().map(|s| (s.platform.as_str(), s.session_id.as_str())),
+    );
     let capture = session_ref.as_ref().map(|s| {
         crate::gateway::context::capture::Capture::start(
             deps.db.clone(),

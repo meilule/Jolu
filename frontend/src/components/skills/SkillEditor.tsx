@@ -11,7 +11,7 @@ import {
 import { JoluButton } from "@/components/ui/JoluButton"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { useToast } from "@/components/ui/Toast"
-import { providerName } from "@/components/usage/usageControls"
+import { providerName } from "@/lib/providerCatalog"
 import { DialogShell, Field, FieldSelect, INPUT_CLASS, MarkdownPreview, Tag } from "./skillParts"
 
 /** 差异弹窗读取到的磁盘版本 */

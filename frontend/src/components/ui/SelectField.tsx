@@ -1,6 +1,6 @@
 import * as Menu from "@radix-ui/react-dropdown-menu"
 import { Check, ChevronDown, Search } from "lucide-react"
-import { useCallback, useEffect, useLayoutEffect, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useId, useLayoutEffect, useState, type ReactNode } from "react"
 import { cn } from "@/lib/utils"
 
 export interface SelectOption {
@@ -97,6 +97,9 @@ export function SelectField({ value, options, onValueChange, label, disabled,
    */
   searchable?: boolean
 }) {
+  /* React 会把 useId() 的 ":r6:" 渲染成 "_r_6_" 写进 DOM。
+     查询时要对齐这个格式，否则 CSS.escape(":r6:") 永远匹配不到。 */
+  const uid = useId().replace(/[:]/g, "_")
   const [query, setQuery] = useState("")
 
   /**
@@ -135,7 +138,9 @@ export function SelectField({ value, options, onValueChange, label, disabled,
             // 外观（去边框 / 透明底 / 无焦点环 / 无内边距）全部由 index.css 的
             // `html:not(.island-window) .jolu-select-trigger--filter` 规则接管，
             // 因为全局规则权重更高，Tailwind 工具类压不住。
-            variant === "filter" && "jolu-select-trigger--filter h-9 rounded-[9px] text-meta",
+            // 筛选条：去壳后撑满外层 label（宽度由外层定，不用 width 挡位），
+            // 高度与 label 一致，内边距 0（外层 label 已给 pl/pr）
+            variant === "filter" && "jolu-select-trigger--filter h-9 w-full rounded-[9px] text-meta",
             // 表单下拉：与同表单里的 input 同高（38px）、10px 圆角、全宽
             variant === "form" && "h-[38px] w-full rounded-[10px] border bg-jolu-bg px-3 text-xs hover:bg-jolu-stage focus-visible:border-jolu-accent data-[state=open]:border-jolu-accent",
             // 工具栏筛选条：34px 高、带边框、前置图标 + 文字 + 箭头（用量统计 / Skills 顶栏）
@@ -143,12 +148,12 @@ export function SelectField({ value, options, onValueChange, label, disabled,
             // 资源选择器：38px 高、176px 宽、font-medium（画板 76 的供应商下拉，原样沿用）
             variant === "picker" && "h-[38px] w-[176px] rounded-lg border bg-jolu-bg px-3 text-xs font-medium hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent data-[state=open]:bg-jolu-stage",
             // 宽度挡位：完整类名写在这里，Tailwind 才能扫到（查表在运行时才求值）。
-            // `picker` 变体自带 176px 固定宽度，跳过挡位以免互相覆盖。
-            variant !== "picker" && width === "xs" && "w-[120px]",
-            variant !== "picker" && width === "sm" && "w-[142px]",
-            variant !== "picker" && width === "md" && "w-[170px]",
-            variant !== "picker" && width === "lg" && "w-[280px]",
-            variant !== "picker" && width === "full" && "w-full",
+            // `picker` 自带 176px 固定宽度、`filter` 跟随外层容器，两者都跳过挡位。
+            variant !== "picker" && variant !== "filter" && width === "xs" && "w-[120px]",
+            variant !== "picker" && variant !== "filter" && width === "sm" && "w-[142px]",
+            variant !== "picker" && variant !== "filter" && width === "md" && "w-[170px]",
+            variant !== "picker" && variant !== "filter" && width === "lg" && "w-[280px]",
+            variant !== "picker" && variant !== "filter" && width === "full" && "w-full",
             className)}
       >
         {/* 图标尺寸完全交给调用方（ProviderMark 是 18px，筛选图标是 14–16px）。
@@ -175,14 +180,14 @@ export function SelectField({ value, options, onValueChange, label, disabled,
           )}
           style={{
             maxHeight: "min(248px, var(--radix-dropdown-menu-content-available-height))",
-            // 下拉与框等宽：Radix 已经把触发器宽度挂在这个元素的
-            // --radix-dropdown-menu-trigger-width 上（实测 543px / 120px 都准）。
-            // 用内联 style 而不是 Tailwind 任意值类 —— 后者没被生成到产物里。
+            // 下拉与框等宽：Radix 把触发器宽度挂在 --radix-dropdown-menu-trigger-width。
+            // filter 变体的触发器是 w-full（撑满外层 label），所以这里拿到的
+            // 就是外层视觉框的宽度 —— 日期、状态两个筛选条都因此对齐。
             width: "var(--radix-dropdown-menu-trigger-width)",
           }}
         >
           {glide ? (
-            <GlideGroup value={value} options={options} onValueChange={onValueChange} searchable={searchable} query={query} onQueryChange={setQuery} />
+            <GlideGroup uid={uid} value={value} options={options} onValueChange={onValueChange} searchable={searchable} query={query} onQueryChange={setQuery} />
           ) : (
             <Menu.RadioGroup value={value} onValueChange={onValueChange} className="p-1">
               {options.map((option) => (
@@ -211,7 +216,10 @@ export function SelectField({ value, options, onValueChange, label, disabled,
  * 翻译成一个 translateY。行高由 CSS 变量统一（--jolu-row-h），
  * 支持标签带 description 的双行项（用 getBoundingClientRect 实测，不依赖固定行高）。
  */
-function GlideGroup({ value, options, onValueChange, searchable, query, onQueryChange }: {
+function GlideGroup({ uid, value, options, onValueChange, searchable, query, onQueryChange }: {
+  /** 本实例的唯一标识：同页可能同时有多个 SelectField（模型路由页有日期 + 状态两个），
+      用 document.querySelector(".jolu-select-glide") 会操作到别人的滑块，位置与可见性全乱 */
+  uid: string
   value: string
   options: SelectOption[]
   onValueChange: (value: string) => void
@@ -225,9 +233,10 @@ function GlideGroup({ value, options, onValueChange, searchable, query, onQueryC
     ? options.filter((o) => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q))
     : options
   const place = useCallback((target: HTMLElement | null, jump: boolean) => {
-    // 不用 ref 也不用 wrapper：直接找当前可见的那个菜单容器。
-    // Radix 在 Portal 里渲染、开启动画期间还会重建子节点，ref 会失效。
-    const wrap = document.querySelector<HTMLElement>(".jolu-select-glide")
+    // 用自己的 uid 精确找本组件的菜单容器。
+    // 同页多个 SelectField 时，用 document.querySelector(".jolu-select-glide")
+    // 会拿到别人的滑块 —— 模型路由页（日期 + 状态两个筛选）就是这样坏的。
+    const wrap = document.querySelector<HTMLElement>(`[data-glide-owner="${uid}"]`)
     const pill = wrap?.querySelector<HTMLElement>(".jolu-select-glide__pill") ?? null
     if (!wrap || !pill) return
     /**
@@ -262,7 +271,7 @@ function GlideGroup({ value, options, onValueChange, searchable, query, onQueryC
    * 最多等 20 帧（≈330ms），直到找到行并量出非零高度为止。
    */
   useLayoutEffect(() => {
-    const wrap = document.querySelector<HTMLElement>(".jolu-select-glide")
+    const wrap = document.querySelector<HTMLElement>(`[data-glide-owner="${uid}"]`)
     if (!wrap) return
     let raf = 0
     let tries = 0
@@ -354,7 +363,7 @@ function GlideGroup({ value, options, onValueChange, searchable, query, onQueryC
   }, [place])
 
   return (
-    <div className="jolu-select-glide p-1">
+    <div className="jolu-select-glide p-1" data-glide-owner={uid}>
       {searchable ? (
         <label className="mb-1 flex h-8 shrink-0 items-center gap-2 rounded-[6px] bg-surface-3 px-2.5">
           <Search aria-hidden className="size-3.5 shrink-0 text-text-secondary" />

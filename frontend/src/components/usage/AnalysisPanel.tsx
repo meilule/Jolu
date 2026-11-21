@@ -5,7 +5,8 @@ import type { StatsActivityDto, StatsModelRowDto, StatsOverviewDto } from "@/lib
 import { PlatformLogo } from "@/components/brand/PlatformLogo"
 import type { PlatformId } from "@/types"
 import { ActivityCalendar } from "./ActivityCalendar"
-import { Card, CardTitle, MetricCard, providerName } from "./usageControls"
+import { providerName } from "@/lib/providerCatalog"
+import { Card, CardTitle, MetricCard } from "./usageControls"
 import { MetricGrid } from "../ui/MetricGrid"
 
 /** 用量分析（画板 32）：Token 四分项、全年活跃日历、模型消耗与费用、供应商费用 */
@@ -46,7 +47,7 @@ export function AnalysisPanel({ data, activity, activityError, fx, onDrillModel,
       </MetricGrid>
       {(t.total == null && data.requests > 0) && (
         <p className="text-[12px] text-jolu-muted">
-          {`当前范围内 ${data.requests} 次调用中，部分来源（如 ZCode）未提供完整分项，卡片显示的是已知部分小计；模型消耗表按各来源已知值汇总。`}
+          {`当前范围内 ${data.requests} 次调用中，部分来源未提供完整分项，卡片显示的是已知部分小计；模型消耗表按各来源已知值汇总。`}
         </p>
       )}
 
@@ -84,7 +85,7 @@ export function AnalysisPanel({ data, activity, activityError, fx, onDrillModel,
           ))}
           {!models.length && <span className="py-2 text-xs text-jolu-muted">范围内没有模型记录</span>}
           <span className="flex-1" />
-          <span className="text-[11px] text-jolu-muted">未计价显示 — · 平均响应只统计经本地代理的请求 · 点击模型查看明细</span>
+          <span className="text-[11px] text-jolu-muted">未计价显示 — · 平均响应只统计经本地代理的请求</span>
         </Card>
 
         <Card className="flex flex-col gap-2.5 p-4">
@@ -118,10 +119,9 @@ export function AnalysisPanel({ data, activity, activityError, fx, onDrillModel,
             {!priced.length && <span className="py-2 text-xs text-jolu-muted">范围内没有可计价的记录</span>}
           </div>
           <span className="flex-1" />
-          <span className="whitespace-pre-line text-[11px] text-jolu-muted">{"仅汇总已计价记录 · 不含订阅月费\n点击供应商查看对应调用明细"}</span>
+          <span className="text-[11px] text-jolu-muted">仅汇总已计价记录 · 不含订阅月费</span>
         </Card>
       </div>
-      <p className="text-[12px] text-jolu-muted">输入已扣除单独计量的缓存项，避免重复统计；若来源无法拆分，保留原口径并明确标注。</p>
     </>
   )
 }

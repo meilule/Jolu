@@ -29,7 +29,8 @@ const TABS: { value: UsageTab; label: string }[] = [
   { value: "calls", label: "调用明细" },
 ]
 
-type CallStatus = "success" | "error" | null
+/** 调用明细的状态筛选：成功、失败（上游错误）、已取消；三者互斥 */
+type CallStatus = "success" | "error" | "cancelled" | "unknown" | null
 
 /**
  * 用量统计（Jolu.pen 模块 C，画板 30–39）：概览、用量分析、调用明细三个页签。
@@ -228,7 +229,7 @@ export function UsageView({ active, request, onOpenSession }: {
               label="状态筛选"
               trailingChevron
               value={status ?? ALL}
-              options={[{ value: ALL, label: "全部状态" }, { value: "success", label: "成功" }, { value: "error", label: "失败" }]}
+              options={[{ value: ALL, label: "全部状态" }, { value: "success", label: "成功" }, { value: "error", label: "失败" }, { value: "cancelled", label: "已取消" }, { value: "unknown", label: "状态未知" }]}
               onChange={(v) => { setStatus(v === ALL ? null : (v as CallStatus)); setPage(1) }}
             />
             <span className="flex-1" />

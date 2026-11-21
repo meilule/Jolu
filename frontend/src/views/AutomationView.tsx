@@ -134,11 +134,10 @@ export function AutomationView({ active, prefill, target, onTargetHandled, onOpe
     refreshAll()
   }
 
-  const header = (title: string, note: string) => (
+  const header = (title: string) => (
     <div className="flex min-h-12 items-center gap-2.5">
-      <div className="flex min-w-0 flex-1 flex-col gap-[5px]">
+      <div className="flex min-w-0 flex-1">
         <h2 className="truncate text-[22px] font-semibold text-jolu-text">{title}</h2>
-        <span className="truncate text-[12px] text-jolu-muted">{note}</span>
       </div>
       <JoluButton size="sm" variant="primary" onClick={() => setDialog({ mode: "create", nonce: Date.now() })}><Plus aria-hidden />新建任务</JoluButton>
     </div>
@@ -186,8 +185,8 @@ export function AutomationView({ active, prefill, target, onTargetHandled, onOpe
     body = (
       <>
         {tab === "tasks"
-          ? header("把重复工作交给 AI", "任务按所选账号执行，额度不足时保留进度并等待。")
-          : header("每一次运行，都有记录", "等待额度和恢复执行归属同一次运行，展开详情查看全过程。")}
+          ? header("任务")
+          : header("运行记录")}
         <AutomationTabs value={tab} onChange={setTab} />
         {tab === "tasks" ? (
           <>
@@ -205,7 +204,7 @@ export function AutomationView({ active, prefill, target, onTargetHandled, onOpe
                 onDelete={setDeleting}
               />
             ) : !overview.error && <LoadingCard title="正在读取任务" layout="tasks" />}
-            <p className="text-[11px] text-jolu-muted">{isTauri ? "" : "示例数据 · "}本地任务需要 Jolu 后台运行；休眠与关机期间停止调度，重新打开后检查待执行任务。</p>
+            <p className="text-[11px] text-jolu-muted">{isTauri ? "" : "示例数据 · "}后台关闭或电脑休眠时暂停调度，重新打开后会继续检查。</p>
           </>
         ) : (
           <>

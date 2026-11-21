@@ -108,7 +108,7 @@ export function CustomAgentPanel({ drawer = false, agent, models, routing, previ
       {files.map((file) => <DiffView key={file.path} file={file} caption={preview?.mode === "wired" ? "断开时还原成左侧（-）的样子" : file.existed ? "写入预览 · 还没有改动" : "写入预览 · 会新建这个文件"} />)}
 
       <div className="flex items-center gap-2">
-        <span className="text-meta text-jolu-muted">通用接入（待确认：没有画板）</span>
+        <span className="text-meta text-jolu-muted">通用接入</span>
         <span className="flex-1" />
         {managed ? (
           <button type="button" disabled={busy} onClick={onUnwire}
@@ -166,7 +166,6 @@ export function CustomAgentDialog({ busy, onClose, onSave }: { busy: boolean; on
           model_key: form.model_key.trim() || null, base_suffix: form.base_suffix.trim() || null,
         }).then((ok) => { if (ok) onClose() })} />
       </>}>
-      <p className="text-meta text-jolu-muted">Jolu 没有专门适配的工具，可以照它的文档填写配置文件和键名。待确认：没有画板。</p>
       <label className="flex flex-col gap-1.5">
         <span className="text-meta font-medium text-jolu-text">从已支持的工具开始</span>
         <SelectField label="从已支持的工具开始" value={preset?.id ?? ""}

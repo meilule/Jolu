@@ -56,7 +56,7 @@ export function CallsPanel({ data, selectedId, fx, onSelect, onPage, onOpenSessi
         <Pagination page={data.page} pageCount={data.page_count} pageSize={data.page_size} onPage={onPage} />
       </Card>
       {selected && <CallDetail row={selected} fx={fx} onOpenSession={onOpenSession} />}
-      <p className="text-[11px] text-jolu-muted">— 表示未取得或未计价，失败请求不默认免费。导出遵循当前筛选，不包含 API Key 或对话正文。</p>
+      <p className="text-[11px] text-jolu-muted" title="导出遵循当前筛选，不包含 API Key 或对话正文。">— 表示未取得或未计价 · 失败请求不默认免费</p>
     </>
   )
 }
@@ -104,7 +104,10 @@ function CallRow({ row, active, fx, onSelect }: { row: StatsCallRowDto; active: 
       </span>
       <span className={cn("w-[72px] shrink-0 text-[12px]", row.effort ? "text-jolu-text" : "text-jolu-muted")}>{effortLabel(row.effort)}</span>
       <span className="w-[74px] shrink-0">
-        <span className={cn("inline-flex h-6 items-center rounded-full px-3 text-[12px] font-medium", status.ok ? "bg-jolu-status-success-bg text-jolu-on" : "bg-jolu-status-error-bg text-jolu-danger")}>
+        <span className={cn("inline-flex h-6 items-center rounded-full px-3 text-[12px] font-medium",
+          status.tone === "ok" ? "bg-jolu-status-success-bg text-jolu-on"
+            : status.tone === "error" ? "bg-jolu-status-error-bg text-jolu-danger"
+            : "bg-jolu-track text-jolu-muted")}>
           {status.label}
         </span>
       </span>

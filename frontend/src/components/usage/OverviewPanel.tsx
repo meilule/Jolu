@@ -1,11 +1,12 @@
 import { useState } from "react"
 import { ChevronRight, CircleDollarSign, Layers, Repeat2, Target } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { bucketLabel, changeText, formatMoney, formatPercent, formatTokens, modelDisplayName, share, unpricedModels, unpricedNote } from "@/lib/usageStats"
+import { bucketLabel, changeText, formatMoney, formatPercent, formatTokens, modelDisplayName, providerTokenCell, share, unpricedModels, unpricedNote } from "@/lib/usageStats"
 import { convertFromUsd, type FxState } from "@/lib/costCurrency"
 import { projectName } from "@/lib/sessionThreads"
 import type { StatsModelRowDto, StatsOverviewDto, StatsTrendBucketDto } from "@/lib/api"
-import { Card, CardTitle, MetricCard, providerName } from "./usageControls"
+import { providerName } from "@/lib/providerCatalog"
+import { Card, CardTitle, MetricCard } from "./usageControls"
 import { TrendChart, TrendLegend, type TrendMode } from "./TrendChart"
 import { MetricGrid } from "../ui/MetricGrid"
 
@@ -37,7 +38,10 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
   const cacheRate = data.cache_hit_rate ?? data.token_coverage.cache_hit_rate
   const partialCache = cacheRate !== null && data.token_coverage.cache_requests < data.requests
   const change = partial ? null : changeText(data.tokens.total, data.previous_total)
-  const success = data.requests ? (data.requests - data.failed) / data.requests : null
+  // 成功率分母为全部调用，状态未知的调用不计入成功。
+  const cancelled = data.cancelled ?? 0
+  const unknown = data.unknown ?? 0
+  const success = data.requests ? (data.requests - data.failed - cancelled - unknown) / data.requests : null
   /** 画板 30：模型分布显示前 5 个，不足时有几个显示几个，不补「其他」行 */
   // 真实为 0 Token 的行（如 Claude Code 的 <synthetic> 报错消息）对 Token 分布没有意义；未知值保留
   const topModels = data.models.filter((m) => m.tokens !== 0).slice(0, 5)
@@ -52,7 +56,13 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
           value={formatTokens(total)}
           note={partial ? `${data.token_coverage.known_requests} / ${data.requests} 次有 Token · ${data.requests-data.token_coverage.known_requests} 次未提供` : `本机记录${change ? ` · ${isToday ? "较昨天同时段" : "较上一周期"} ${change}` : ""}`}
         />
-        <MetricCard icon={<Repeat2 />} label="调用次数" value={String(data.requests)} note={`成功率 ${formatPercent(success)} · ${data.failed} 次失败`} />
+        <MetricCard
+          icon={<Repeat2 />}
+          label="调用次数"
+          value={String(data.requests)}
+          // 取消单独列，不并进失败：ZCode 的「5 次失败」实际是 2 次 error + 3 次取消。
+          note={`成功率 ${formatPercent(success)} · ${data.failed} 次失败${cancelled ? ` · ${cancelled} 次已取消` : ""}${unknown ? ` · ${unknown} 次状态未知` : ""}`}
+        />
         <MetricCard
           icon={<CircleDollarSign />}
           label={`估算费用 · ${fx.currency === "CNY" ? "CNY" : "USD"}`}
@@ -114,20 +124,32 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
               </button>
             )
           }) : <span className="text-xs text-jolu-muted">范围内没有带模型名的记录</span>}
-          <span className="mt-auto text-[11px] leading-3 text-jolu-muted">点击模型查看对应调用明细</span>
         </Card>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <Card className="flex min-h-[268px] flex-col gap-2.5 p-4">
           <CardTitle title="供应商用量" />
-          {data.providers.map((p) => (
-            <div key={p.platform} className="flex h-7 items-center gap-2.5 text-xs">
-              <span className="min-w-0 flex-1 truncate text-jolu-text">{providerName(p.platform)}</span>
-              <span className="tnum text-jolu-text">{formatTokens(p.tokens)}</span>
-              <span className="tnum w-16 text-right text-[12px] text-jolu-muted">{p.requests} 次</span>
-            </div>
-          ))}
+          {data.providers.map((p) => {
+            // 部分来源（如 ZCode）有请求缺 Token：主数字改为已知小计，覆盖数放在同一格的第二行。
+            // 画板 30 没有这个状态（待确认），按计划要求不扩展视觉，只沿用现有次要文字样式。
+            const cell = providerTokenCell(p)
+            return (
+              <div key={p.platform} className="flex h-7 items-center gap-2.5 text-xs">
+                <span className="min-w-0 flex-1 truncate text-jolu-text">{providerName(p.platform)}</span>
+                {cell.note ? (
+                  <span className="flex shrink-0 flex-col items-end">
+                    <span className="tnum leading-3 text-jolu-text">{cell.value}</span>
+                    <span className="tnum text-note leading-3 text-jolu-muted">{cell.note}</span>
+                  </span>
+                ) : (
+                  // 全覆盖保持原有单行紧凑展示，避免为了一个不显示的说明改变这一格的高度
+                  <span className="tnum text-jolu-text">{cell.value}</span>
+                )}
+                <span className="tnum w-16 text-right text-[12px] text-jolu-muted">{p.requests} 次</span>
+              </div>
+            )
+          })}
           <span className="flex-1" />
           <span className="text-[11px] text-jolu-muted">{data.attributed} / {data.requests} 次可归属账号 · {unattributed} 次未归属</span>
         </Card>
@@ -140,7 +162,6 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
               <ChevronRight aria-hidden className="size-3.5" />
             </button>
           </div>
-          <span className="text-[11px] text-jolu-muted">当前筛选范围 · 按 Token 排序</span>
           <div className="flex flex-col gap-0.5">
             {data.sessions.length ? data.sessions.map((s, index) => (
               <button
@@ -162,7 +183,7 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
           </div>
         </Card>
       </div>
-      <p className="text-[12px] text-jolu-muted">本机统计不等于服务方账单；费用仅汇总已计价记录；缓存四项按互斥口径统计。</p>
+      <p className="text-[12px] text-jolu-muted" title="缓存四项按互斥口径统计；费用仅汇总已计价记录。">本机统计，不等于服务方账单</p>
     </>
   )
 }

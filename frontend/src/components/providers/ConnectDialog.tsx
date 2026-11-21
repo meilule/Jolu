@@ -332,7 +332,7 @@ export function ConnectDialog({ platform: initialPlatform, actions, onClose: onD
               </Field>
             )}
 
-            {platform==="opencode" && <label className="text-xs text-jolu-text">模型服务<SelectField label="模型服务" className="mt-2 h-10 w-full" value={service} options={OPENCODE_SERVICES.map(s=>({value:s.id,label:s.label}))} onValueChange={value=>{const selected=OPENCODE_SERVICES.find(s=>s.id===value)!;setService(selected.id);setMode(selected.mode);setBaseUrl(selected.baseUrl);setSecret("");setDetection(null);invalidateModels()}} /></label>}
+            {platform==="opencode" && <label className="text-xs text-jolu-text">模型服务<SelectField width="full" label="模型服务" className="mt-2 h-10" value={service} options={OPENCODE_SERVICES.map(s=>({value:s.id,label:s.label}))} onValueChange={value=>{const selected=OPENCODE_SERVICES.find(s=>s.id===value)!;setService(selected.id);setMode(selected.mode);setBaseUrl(selected.baseUrl);setSecret("");setDetection(null);invalidateModels()}} /></label>}
             {mode === "subscription" ? (
               <>
               <SubscriptionSection
@@ -362,7 +362,7 @@ export function ConnectDialog({ platform: initialPlatform, actions, onClose: onD
                     }}
                   />
                 )}
-                {entry.baseUrlChoices && <label className="text-xs text-jolu-text">服务区域与协议<SelectField label="服务区域与协议" className="mt-2 h-10 w-full" value={baseUrl} options={entry.baseUrlChoices.map(c=>({value:c.value,label:c.label}))} onValueChange={value=>{const choice=entry.baseUrlChoices!.find(c=>c.value===value)!;setBaseUrl(choice.value);setProtocol(choice.protocol);invalidateModels()}} /></label>}
+                {entry.baseUrlChoices && <label className="text-xs text-jolu-text">服务区域与协议<SelectField width="full" label="服务区域与协议" className="mt-2 h-10" value={baseUrl} options={entry.baseUrlChoices.map(c=>({value:c.value,label:c.label}))} onValueChange={value=>{const choice=entry.baseUrlChoices!.find(c=>c.value===value)!;setBaseUrl(choice.value);setProtocol(choice.protocol);invalidateModels()}} /></label>}
                 <Field label="Base URL *" hint={entry.baseUrl?.locked ? "该服务限定官方地址，不开放编辑。" : undefined} error={urlError}>
                   {(id) => (
                     <TextInput
@@ -547,7 +547,7 @@ function SubscriptionSection({ providerName, detecting, detection, onDetect, tab
           {detectButton}
           {browserButton}
         </div>
-        {!tabs && <p className="text-xs text-jolu-muted">此状态只提供订阅连接。平台和账号支持 API Key 时才显示第二种方式。</p>}
+        {!tabs && <p className="text-xs text-jolu-muted">只提供订阅连接</p>}
       </>
     )
   }
@@ -570,7 +570,6 @@ function SubscriptionSection({ providerName, detecting, detection, onDetect, tab
           <span role="status" className="text-xs text-jolu-muted">{browserPending ? browserMessage ?? "请在系统默认浏览器完成官方登录，验证成功后会自动返回。" : detection?.message ?? "读取或授权成功后才能保存连接。"}</span>
         </div>
       </div>
-      <p className="text-[12px] text-jolu-muted">Jolu 不要求输入账号密码。账号与套餐信息以检测结果为准。</p>
     </>
   )
 }
@@ -598,7 +597,6 @@ function ProtocolPicker({ value, onChange }: { value: ApiProtocol; onChange: (pr
           </button>
         ))}
       </div>
-      <span className="text-[12px] text-jolu-muted">决定请求格式与鉴权方式：OpenAI 兼容使用 Bearer，Anthropic 兼容使用 x-api-key。</span>
     </div>
   )
 }

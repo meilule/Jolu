@@ -578,6 +578,10 @@ pub fn scan(db: &mut impl Store) -> ScanResult {
     // 这里补一次（只填空值）。失败不影响本次扫描结果。
     if let Some(home) = crate::creds::home() {
         let _ = crate::native_sources::backfill_zcode_cwd(db, &home);
+        // 状态回填：旧版本把 ZCode 的 cancelled 与 error 一起写成 failed，重扫不会修正
+        // （源库没变就跳过）。同样在心跳里做一次受控回填，只改状态、不删历史行；
+        // 带版本标记，跑成功后不再重复读源库。
+        let _ = crate::native_sources::backfill_zcode_cancelled(db, &home);
     }
     result
 }

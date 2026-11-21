@@ -21,7 +21,8 @@ import { useToast } from "@/components/ui/Toast"
 import { SessionDetail } from "@/components/sessions/SessionDetail"
 import { SessionTree } from "@/components/sessions/SessionTree"
 import { AutomationConfirmDialog, ContinueDialog } from "@/components/sessions/sessionDialogs"
-import { ALL, ErrorNotice, MenuFilter, ToolButton, providerName, providerOptions } from "@/components/usage/usageControls"
+import { providerName } from "@/lib/providerCatalog"
+import { ALL, ErrorNotice, MenuFilter, ToolButton, providerOptions } from "@/components/usage/usageControls"
 import type { PlatformId } from "@/types"
 
 export interface SessionTarget {
@@ -255,8 +256,6 @@ export function SessionsView({ active, target, onDrillUsage, onCreateAutomation 
           </>
         )}
       </div>
-      <p className="text-[11px] text-jolu-muted">顶部统计跟随当前筛选；消耗 = 输入 + 输出，缓存输入已计入输入；无法确认的账号仍标为“未归属账号”。</p>
-
       {compressing && <CompressDialog session={compressing} onClose={()=>setCompressing(null)} onResult={(result,name,target)=>{setHandoff({result,name,target,session:compressing});setCompressing(null);setHandoffState(null);if(isTauri)void handoffApi.state(compressing.platform,compressing.session_id).then(setHandoffState).catch(()=>{})}}/>}
       {handoff && <HandoffPreview {...handoff} fileName={handoff.name} state={handoffState} onClose={()=>setHandoff(null)} onUpdate={()=>{setCompressing(handoff.session);setHandoff(null)}}/>}
       {continuing && (

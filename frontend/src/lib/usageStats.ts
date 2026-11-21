@@ -181,6 +181,31 @@ export function formatTokens(n: number | null | undefined): string {
   return String(n)
 }
 
+/**
+ * 供应商行的 Token 单元格（画板 30）：三态展示，未知不当零。
+ *
+ * 后端在组内任意一条 Token 未知时把 `tokens` 置 null，但已知部分仍是真实数据。
+ * 全部未知时 `known_tokens` 也只是 0，所以必须看 `known_requests` 才知道该显示
+ * 「—」还是「0」——只有真正 0 条有 Token 才落回破折号。
+ */
+export function providerTokenCell(row: {
+  requests: number
+  tokens: number | null
+  known_tokens: number
+  known_requests: number
+}): { value: string; note: string | null } {
+  // 供应商分组来自至少一条请求，requests 为 0 只可能是坏数据；给破折号而不是「0 / 0」
+  if (row.requests <= 0) return { value: DASH, note: null }
+  // 全覆盖保留原有紧凑展示：主数字就是组内合计，不额外占一行说明。
+  // 理论上此时 `tokens` 一定有值；万一后端只给了覆盖数，退回已知小计也比显示破折号诚实。
+  if (row.known_requests >= row.requests) return { value: formatTokens(row.tokens ?? row.known_tokens), note: null }
+  // 部分覆盖：主数字换成已知小计，副标注说明它覆盖了多少条，避免被读成整组总量
+  if (row.known_requests > 0) {
+    return { value: formatTokens(row.known_tokens), note: `${row.known_requests} / ${row.requests} 条有 Token` }
+  }
+  return { value: DASH, note: `0 / ${row.requests} 条有 Token` }
+}
+
 /** 估算费用：≥1 美元两位小数，不足 1 美元三位小数（单次调用常见 $0.026） */
 export function formatUsd(n: number | null | undefined): string {
   if (n === null || n === undefined) return DASH
@@ -261,13 +286,24 @@ export function effortLabel(effort: string | null): string {
   return EFFORT_LABELS[effort.toLowerCase()] ?? effort
 }
 
-/** 状态胶囊：没有状态码的本机记录按成功（能写入用量即已返回） */
-export function callStatus(row: { failed: boolean; status_code: number | null }): { label: string; ok: boolean } {
-  if (!row.failed) return { label: "成功", ok: true }
-  if (row.status_code === 429) return { label: "429 限流", ok: false }
-  if (row.status_code === 408 || row.status_code === 504) return { label: "超时", ok: false }
-  if (row.status_code !== null) return { label: `失败 ${row.status_code}`, ok: false }
-  return { label: "失败", ok: false }
+/**
+ * 状态胶囊。三档互斥：成功、失败（上游错误）、已取消。
+ *
+ * 取消不算失败：取消是用户主动中止或客户端收尾，不是上游错误；把它画成失败会让
+ * 调用明细与概览的失败数互相矛盾（后端 `FAILED_SQL` 同样只认 failed）。
+ * 视觉上取消用中性色（`muted`），既不冒充成功的绿色，也不冒充失败的红色。
+ * 没有状态码、也没被取消的本机记录按成功（能写入用量即已返回）。
+ */
+export type CallStatusTone = "ok" | "error" | "muted"
+
+export function callStatus(row: { failed: boolean; cancelled?: boolean; unknown?: boolean; status_code: number | null }): { label: string; tone: CallStatusTone } {
+  if (row.cancelled) return { label: "已取消", tone: "muted" }
+  if (row.unknown && !row.failed) return { label: "状态未知", tone: "muted" }
+  if (!row.failed) return { label: "成功", tone: "ok" }
+  if (row.status_code === 429) return { label: "429 限流", tone: "error" }
+  if (row.status_code === 408 || row.status_code === 504) return { label: "超时", tone: "error" }
+  if (row.status_code !== null) return { label: `失败 ${row.status_code}`, tone: "error" }
+  return { label: "失败", tone: "error" }
 }
 
 /** 模型展示名：claude-sonnet-4-5 → Claude Sonnet 4.5，gpt-5-mini → GPT-5 mini；完整名放悬浮提示 */

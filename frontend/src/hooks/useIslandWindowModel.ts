@@ -223,12 +223,9 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
   // 会话状态展示仍按来源可信度收敛：采集源出错时状态不可判定，逐条标「未知」。
   // 本轮增量取后端 running_tokens（只含 running 会话），拿不到就是 null——胶囊显示未知，
   // 不补 0、不拿示例数字。
-  // 4.2b #5：本体岛可以只看某一家 ZCode provider（按会话行的来源名筛，只作显示筛选，不改额度查询）
-  const providerFilter = islandPlatform === "zcode" && !cloneId ? linkage.zcode_provider : null
-  const visibleSessions = providerFilter ? live.sessions.filter((session) => session.source?.name === providerFilter) : live.sessions
   const islandSessions = sourceFailed
-    ? visibleSessions.map((session) => ({ ...session, state: "unknown" as const }))
-    : visibleSessions
+    ? live.sessions.map((session) => ({ ...session, state: "unknown" as const }))
+    : live.sessions
   const liveDelta = sourceFailed ? null : live.runningDelta
   /* 胶囊收缩态尾部增量段的 A + B 组合（§5.7）：锁存值 ?? 今日累计。
      A 本轮终值锁存：进行中记下 running_tokens 的最新非零读数，结束后停在这个读数上，不跳变、
@@ -326,10 +323,9 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
         // 收缩态那一行按置信度渲染：`exact` / `mapped` 显示连接名（mapped 用弱化样式），
         // `platform` 或 null 保持现在的平台名。
         activeConnection,
-        // 4.2b：短时信号（免打扰或减少动效时只改颜色）、跟随主窗口、只看某家 provider
+        // 4.2b：短时信号（免打扰或减少动效时只改颜色）、跟随主窗口
         signal: signal ? { kind: signal.kind, label: SIGNAL_LABEL[signal.kind], at: signal.at, motion: !settings.dnd && !settings.reduce_motion } : null,
         following: followed ? { label: `跟随中：${mainContext?.page === "usage" ? "用量" : mainContext?.page === "providers" ? "供应商" : "主窗口"} · ${followed.name}`, onUnfollow: () => setUnfollowed(contextKey) } : null,
-        providerFilter,
         // 只有真正发起了额度查询、且结果是失败类状态时才算查询失败；不支持与加载中不算
         queryFailed: (localQuotaPlatform || Boolean(queries.quota)) && !displayQuota.loading
           && Boolean(displayQuota.state) && !["ok", "unsupported"].includes(displayQuota.state!.state),

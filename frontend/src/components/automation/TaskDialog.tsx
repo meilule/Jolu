@@ -77,6 +77,7 @@ function Field({ label, error, note, children }: { label: string; error?: string
 
 interface Option { value: string; label: string; note?: string; disabled?: boolean; tag?: string }
 
+/** [DROPDOWN-TODO] 自建单选下拉，待换成 SelectField（tag/note → description）。见 DROPDOWN-INVENTORY.md §3.2 */
 function FieldSelect({ value, options, onChange, placeholder, label, disabled, invalid }: {
   value: string
   options: Option[]
@@ -397,11 +398,10 @@ export function TaskDialog({ request, onClose: onDismiss, onSaved, onBackToSessi
                     <input type="time" value={form.time} onChange={(e) => set("time", e.target.value)} className={cn(INPUT, errors.time && "border-jolu-danger")} />
                   </Field>
                 </div>
-                <Field label="时区" note="其他时区待确认：目前按本机时区调度">
+                <Field label="时区" note="按本机时区调度">
                   <FieldSelect label="时区" value={form.timezone} placeholder="本机时区" onChange={(v) => set("timezone", v)} options={[{ value: localZone(), label: localZone(), note: "本机时区" }]} />
                 </Field>
                 {next && <span className="text-[12px] text-jolu-on">下次运行：{dayTime(next, now)}（{zoneName(form.timezone)}时间）</span>}
-                <span className="text-[11px] text-jolu-muted">支持单次 / 每天 / 每周；每周选择星期。当前仍在执行时跳过本次触发，不叠加新运行。</span>
               </div>
             )}
 
@@ -451,7 +451,7 @@ export function TaskDialog({ request, onClose: onDismiss, onSaved, onBackToSessi
                   title="同一账号按队列顺序执行"
                   note={form.serialQueue ? "默认开启，暂停当前任务后再处理后续任务。" : "同账号任务可能同时运行并争用额度；同一工作目录仍按顺序执行。"}
                 />
-                <span className="text-[11px] text-jolu-muted">到期仍不可用则标记「等待超时」，保留记录，由用户重新排队。恢复时间已知：到点检查；时间未知或检查失败：间隔重试，逐步延长。</span>
+                <span className="text-[11px] text-jolu-muted">到期仍不可用会标记「等待超时」并保留记录，等额度恢复。</span>
               </div>
             )}
 

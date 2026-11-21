@@ -3,7 +3,8 @@ import { ChevronDown, ChevronRight, Folder, FolderOpen, RotateCcw } from "lucide
 import { cn } from "@/lib/utils"
 import { listTime, sessionKey, sessionTitle, statusLabel, visibleRows, type ProjectGroup } from "@/lib/sessionThreads"
 import { PlatformLogo } from "@/components/brand/PlatformLogo"
-import { Card, ToolButton, providerName } from "@/components/usage/usageControls"
+import { providerName } from "@/lib/providerCatalog"
+import { Card, ToolButton } from "@/components/usage/usageControls"
 import type { PlatformId } from "@/types"
 
 /**

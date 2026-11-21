@@ -35,7 +35,7 @@ pub struct StatsFilter {
     pub connections: Vec<String>,
     #[serde(default)]
     pub model: Option<String>,
-    /// "success" | "error"；仅调用明细使用
+    /// success / error / cancelled / unknown；仅调用明细使用，各状态互斥。
     #[serde(default)]
     pub status: Option<String>,
     /// 调用 ID / 会话 ID 片段；仅调用明细使用
@@ -53,7 +53,7 @@ impl StatsFilter {
                 return Err("未知平台".into());
             }
         }
-        if self.status.as_deref().is_some_and(|s| !matches!(s, "success" | "error")) {
+        if self.status.as_deref().is_some_and(|s| !matches!(s, "success" | "error" | "cancelled" | "unknown")) {
             return Err("未知状态筛选".into());
         }
         Ok(())
@@ -90,8 +90,11 @@ fn where_clause(f: &StatsFilter, calls: bool) -> (String, Vec<Value>) {
     }
     if calls {
         match f.status.as_deref() {
-            Some("success") => sql.push_str(&format!(" AND NOT ({FAILED_SQL})")),
+            // 成功 = 既不是失败也不是取消。取消是独立一档，不能靠「不是失败」蒙进成功里。
+            Some("success") => sql.push_str(&format!(" AND NOT ({FAILED_SQL}) AND NOT ({CANCELLED_SQL}) AND NOT ({UNKNOWN_SQL})")),
             Some("error") => sql.push_str(&format!(" AND ({FAILED_SQL})")),
+            Some("cancelled") => sql.push_str(&format!(" AND ({CANCELLED_SQL})")),
+            Some("unknown") => sql.push_str(&format!(" AND ({UNKNOWN_SQL})")),
             _ => {}
         }
         if let Some(q) = f.search.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
@@ -105,8 +108,24 @@ fn where_clause(f: &StatsFilter, calls: bool) -> (String, Vec<Value>) {
     (sql, args)
 }
 
-/// 失败请求：上游返回非 2xx，或原生来源明确标记失败。没有状态码的本机记录按成功处理（能写入用量即已返回）。
-const FAILED_SQL: &str = "(r.status_code IS NOT NULL AND (r.status_code < 200 OR r.status_code >= 300)) OR COALESCE(r.native_outcome, '') = 'failed'";
+/// 失败请求：上游返回非 2xx，或原生来源明确标记为 `failed`。
+///
+/// 没有状态码的本机记录按成功处理（能写入用量即已返回）。
+///
+/// **取消不算失败（有意的口径）**：`native_outcome='cancelled'` 是用户主动中止
+/// 或客户端收尾，不是上游错误。ZCode 的 `error` 记 `failed`、`cancelled` 记
+/// `cancelled`（见 `native_sources::zcode_native_outcome`），所以这条 SQL 只认
+/// `failed`，取消的请求既不进「失败数」，也不进「成功」筛选（[`CANCELLED_SQL`] 单独筛）。
+/// 若将来把取消并进失败，`Overview.failed`、成功率与 CSV 的「状态」列都会同时变化，
+/// 届时必须同步修改 `usage_stats.test` 里的口径测试。
+const FAILED_SQL: &str = "(COALESCE(r.native_outcome, '') <> 'cancelled') AND ((r.status_code IS NOT NULL AND (r.status_code < 200 OR r.status_code >= 300)) OR COALESCE(r.native_outcome, '') = 'failed')";
+
+/// 被取消的请求：只有原生来源会明确给出这一档。
+/// 取优先级高于 [`FAILED_SQL`]：取消发生在客户端，上游可能还没给出状态码，
+/// 也可能留下一个非 2xx（例如中止导致连接断开被记为 5xx）。同一行的三档必须互斥，
+/// 否则「成功 + 失败 + 取消」会大于总调用数，成功率被扣两次。
+const CANCELLED_SQL: &str = "COALESCE(r.native_outcome, '') = 'cancelled'";
+const UNKNOWN_SQL: &str = "COALESCE(r.native_outcome, '') = 'unknown' AND (r.status_code IS NULL OR (r.status_code >= 200 AND r.status_code < 300))";
 
 /// 某次请求命中的单价快照（每百万 token，USD）。仅用于界面展示拆解，金额以 `cost` 为准。
 #[derive(Debug, Clone, Serialize)]
@@ -147,7 +166,11 @@ struct Req {
     duration_ms: Option<i64>,
     first_token_ms: Option<i64>,
     status_code: Option<i64>,
+    /// 上游错误（非 2xx）或原生来源给出 `failed`。**不包含**取消，见 [`FAILED_SQL`]。
     failed: bool,
+    /// 原生来源明确标记 `cancelled`。取消不计入失败，也不计入成功。
+    cancelled: bool,
+    unknown: bool,
     /// 网关 / 本地代理写入的精确归属；非代理路径为 None
     connection_id: Option<String>,
     /// ZCode 库的 `provider_id`（端点事实，归因层用）；其他来源为 None
@@ -219,7 +242,13 @@ fn load(conn: &Connection, f: &StatsFilter, calls: bool) -> rusqlite::Result<Vec
         Ok(Req {
             id: r.get(0)?,
             call_id: r.get(1)?,
-            failed: status_code.is_some_and(|c| !(200..300).contains(&c)) || outcome.as_deref() == Some("failed"),
+            // 三档互斥，与 [`FAILED_SQL`] / [`CANCELLED_SQL`] 完全一致：
+            // cancelled 优先（用户主动中止，上游可能还留了个非 2xx），
+            // 其余才按状态码与原生 failed 判失败。
+            cancelled: outcome.as_deref() == Some("cancelled"),
+            unknown: outcome.as_deref() == Some("unknown") && status_code.is_none_or(|c| (200..300).contains(&c)),
+            failed: outcome.as_deref() != Some("cancelled")
+                && (status_code.is_some_and(|c| !(200..300).contains(&c)) || outcome.as_deref() == Some("failed")),
             platform,
             model,
             ts,
@@ -411,7 +440,13 @@ pub struct ModelRow {
 pub struct ProviderRow {
     pub platform: String,
     pub requests: i64,
+    /// 组内**全部**记录都有 Token 时的合计；任何一条未知就是 None（未知不当零）
     pub tokens: Option<i64>,
+    /// 已知部分的合计：即使 `tokens` 为 None 也有值，供界面显示已知小计。
+    /// 全部未知时为 0，但配套的 `known_requests` 也是 0，界面必须据此显示「—」而不是 0。
+    pub known_tokens: i64,
+    /// 有 Token 的请求数（`known_tokens` 覆盖了多少条）
+    pub known_requests: i64,
     pub cost: CostSummary,
 }
 
@@ -486,7 +521,11 @@ pub struct Overview {
     pub tokens: TokenSplit,
     pub token_coverage: TokenCoverage,
     pub requests: i64,
+    /// 上游错误数。**不含取消**：取消单独计在 `cancelled`。
     pub failed: i64,
+    /// 原生来源明确标记的取消数。与 `failed` 互斥，两者都不算进成功率分子。
+    pub cancelled: i64,
+    pub unknown: i64,
     pub cache_hit_rate: Option<f64>,
     pub cost: CostSummary,
     /// 紧邻的上一段同长度区间的总 Token；没有记录或总量未知时为 None
@@ -607,11 +646,19 @@ fn providers(reqs: &[Req]) -> Vec<ProviderRow> {
     }
     let mut rows: Vec<ProviderRow> = groups
         .into_iter()
-        .map(|(platform, group)| ProviderRow {
-            platform: platform.to_string(),
-            requests: group.len() as i64,
-            tokens: sum_known(group.iter().copied(), |r| r.total, Some(0)),
-            cost: cost(group.iter().copied()),
+        .map(|(platform, group)| {
+            // 组里只要有任意一条 Token 未知，`sum_known` 就是 None（未知不能当零）。
+            // 但已知那部分仍然是真实的：`known_tokens` / `known_requests` 让界面显示
+            // 「已知 754,323,790，覆盖 1594 / 1599」，而不是只给一个破折号。
+            let (known_tokens, unknown) = known_subtotal(group.iter().copied(), |r| r.total);
+            ProviderRow {
+                platform: platform.to_string(),
+                requests: group.len() as i64,
+                tokens: sum_known(group.iter().copied(), |r| r.total, Some(0)),
+                known_tokens,
+                known_requests: group.len() as i64 - unknown,
+                cost: cost(group.iter().copied()),
+            }
         })
         .collect();
     rows.sort_by(|a, b| b.tokens.unwrap_or(0).cmp(&a.tokens.unwrap_or(0)).then(a.platform.cmp(&b.platform)));
@@ -670,6 +717,8 @@ pub fn overview(conn: &Connection, f: &StatsFilter) -> rusqlite::Result<Overview
         },
         requests: reqs.len() as i64,
         failed: reqs.iter().filter(|r| r.failed).count() as i64,
+        cancelled: reqs.iter().filter(|r| r.cancelled).count() as i64,
+        unknown: reqs.iter().filter(|r| r.unknown).count() as i64,
         cache_hit_rate: hit_rate(reqs.iter()),
         cost: cost(reqs.iter()),
         previous_total: if previous.is_empty() { None } else { sum_known(previous.iter(), |r| r.total, None) },
@@ -767,7 +816,11 @@ pub struct CallRow {
     pub duration_ms: Option<i64>,
     pub first_token_ms: Option<i64>,
     pub status_code: Option<i64>,
+    /// 上游错误或原生 `failed`；**不含取消**
     pub failed: bool,
+    /// 原生来源明确标记的取消；与 `failed` 互斥
+    pub cancelled: bool,
+    pub unknown: bool,
     /// 这条调用归到的已存连接（`exact` / `mapped`）；归不出唯一结论时是 `platform` 档。
     /// 归因只影响展示，不参与费用计算，也不改写 `requests.connection_id`。
     pub attribution: crate::attribution::AttributionView,
@@ -794,6 +847,8 @@ impl From<Req> for CallRow {
             first_token_ms: r.first_token_ms,
             status_code: r.status_code,
             failed: r.failed,
+            cancelled: r.cancelled,
+            unknown: r.unknown,
             // 归因需要连接清单与 provider 规则，由 calls() 统一解析后覆盖（见 calls）。
             attribution: crate::attribution::AttributionView::platform(),
         }
@@ -863,10 +918,13 @@ pub fn calls_csv(conn: &Connection, f: &StatsFilter) -> rusqlite::Result<(String
     let opt = |v: Option<i64>| v.map(|v| v.to_string()).unwrap_or_default();
     for r in &reqs {
         let time = Local.timestamp_millis_opt(r.ts).single().map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string()).unwrap_or_default();
-        let status = match (r.failed, r.status_code) {
-            (false, _) => "成功".to_string(),
-            (true, Some(code)) => format!("失败 {code}"),
-            (true, None) => "失败".to_string(),
+        // 状态列与界面胶囊同一口径：取消是独立一档，不能写成「失败」。
+        let status = match (r.cancelled, r.failed, r.unknown, r.status_code) {
+            (true, _, _, _) => "已取消".to_string(),
+            (false, true, _, Some(code)) => format!("失败 {code}"),
+            (false, true, _, None) => "失败".to_string(),
+            (false, false, true, _) => "状态未知".to_string(),
+            (false, false, false, _) => "成功".to_string(),
         };
         let cells = [
             time,
@@ -896,6 +954,28 @@ pub fn calls_csv(conn: &Connection, f: &StatsFilter) -> rusqlite::Result<(String
 mod tests {
     use super::*;
     use crate::db::{insert_records, RequestRecord};
+
+    #[test]
+    fn unknown_outcomes_are_separate_from_success_and_exported() {
+        let conn = crate::db::open(std::path::Path::new(":memory:")).unwrap();
+        for (key, outcome, status) in [("pending", Some("unknown"), None), ("old", None, None),
+            ("error", Some("unknown"), Some(500)), ("cancel", Some("cancelled"), Some(500))] {
+            conn.execute("INSERT INTO requests(platform,source,dedup_key,ts,total_tokens,total_known,native_outcome,status_code) VALUES('zcode','test',?1,10,5,1,?2,?3)",
+                rusqlite::params![key, outcome, status]).unwrap();
+        }
+        let mut f = StatsFilter { start: 0, end: 100, ..Default::default() };
+        let overview = overview(&conn, &f).unwrap();
+        assert_eq!((overview.requests, overview.failed, overview.cancelled, overview.unknown), (4, 1, 1, 1));
+        for (status, key) in [("success", "old"), ("error", "error"), ("cancelled", "cancel"), ("unknown", "pending")] {
+            f.status = Some(status.into());
+            assert!(f.validate().is_ok());
+            let page = calls(&conn, &f, 1).unwrap();
+            assert_eq!(page.rows.len(), 1);
+            assert_eq!(page.rows[0].call_id, key);
+        }
+        let (csv, _) = calls_csv(&conn, &f).unwrap();
+        assert!(csv.contains("状态未知"));
+    }
 
     #[test]
     fn model_rows_carry_price_source_and_check_date() {
@@ -1153,5 +1233,76 @@ mod tests {
         drop(conn);
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 失败口径：error 计失败，cancelled 不算失败也不算成功，三种状态筛选互斥且合起来
+    /// 覆盖全部有结论的行。这条测试锁定「取消不算失败」是有意为之，改动口径时必须同步改它。
+    #[test]
+    fn cancelled_is_neither_failure_nor_success() {
+        let base = local_ms(NaiveDate::from_ymd_opt(2026, 11, 21).unwrap());
+        let (conn, path) = seeded(&[
+            rec("zcode", "ok", base + 1_000, "glm-4.7", [Some(10), Some(5), Some(0), Some(0), Some(15)], None),
+            rec("zcode", "err", base + 2_000, "glm-4.7", [Some(10), Some(5), Some(0), Some(0), Some(15)], None),
+            rec("zcode", "cancel", base + 3_000, "glm-4.7", [Some(10), Some(5), Some(0), Some(0), Some(15)], None),
+            // 没有原生结论、也没有状态码的本机记录按成功处理
+            rec("claude", "native-ok", base + 4_000, "claude-sonnet-4-5", [Some(10), Some(5), Some(0), Some(0), Some(15)], None),
+            // 取消时上游可能留下非 2xx：cancelled 优先，不能既算取消又算失败
+            rec("zcode", "cancel-500", base + 5_000, "glm-4.7", [Some(10), Some(5), Some(0), Some(0), Some(15)], None),
+        ]);
+        for (key, outcome) in [("ok", "success"), ("err", "failed"), ("cancel", "cancelled"), ("cancel-500", "cancelled")] {
+            conn.execute(
+                "UPDATE requests SET native_outcome = ?2 WHERE platform = 'zcode' AND dedup_key = ?1",
+                rusqlite::params![key, outcome],
+            ).unwrap();
+        }
+        conn.execute(
+            "UPDATE requests SET status_code = 502 WHERE platform = 'zcode' AND dedup_key = 'cancel-500'",
+            [],
+        ).unwrap();
+
+        let range = filter(base, base + 86_400_000);
+        let o = overview(&conn, &range).unwrap();
+        assert_eq!((o.requests, o.failed, o.cancelled), (5, 1, 2), "取消不并进失败数（即便带了 502）");
+        assert_eq!(
+            (o.requests - o.failed - o.cancelled) as f64 / o.requests as f64, 0.4,
+            "成功率 = 成功 / 全部：2 条成功（含无状态码的本机记录）、1 失败、2 取消",
+        );
+
+        // 状态筛选：三档互斥，合起来正好是全部行
+        let keys = |status: &str| -> Vec<String> {
+            let mut f = filter(base, base + 86_400_000);
+            f.status = Some(status.into());
+            let mut ids: Vec<String> = calls(&conn, &f, 1).unwrap().rows.into_iter().map(|r| r.call_id).collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(keys("success"), vec!["native-ok", "ok"], "取消不能落进成功筛选");
+        assert_eq!(keys("error"), vec!["err"], "取消不能落进失败筛选");
+        assert_eq!(keys("cancelled"), vec!["cancel", "cancel-500"]);
+        assert_eq!(
+            keys("success").len() + keys("error").len() + keys("cancelled").len(), 5,
+            "三档必须正好划分全部行：重复会让成功率被扣两次，遗漏会让某行哪档都不在",
+        );
+
+        // 明细行与 CSV 也带出独立状态
+        let row = |key: &str| {
+            calls(&conn, &range, 1).unwrap().rows.into_iter().find(|r| r.call_id == key).unwrap()
+        };
+        assert_eq!((row("cancel").failed, row("cancel").cancelled), (false, true));
+        assert_eq!((row("err").failed, row("err").cancelled), (true, false));
+        assert_eq!((row("cancel-500").failed, row("cancel-500").cancelled), (false, true), "cancel 优先于 502");
+        let (csv, _) = calls_csv(&conn, &range).unwrap();
+        assert!(csv.contains("已取消"), "CSV 状态列不能把取消写成失败");
+        assert!(csv.contains("失败") && !csv.contains("失败 已取消"));
+
+        // 非法状态值仍要被校验拦住；cancelled 必须放行
+        let mut bad = filter(base, base + 1);
+        bad.status = Some("canceled".into());
+        assert!(bad.validate().is_err());
+        let mut good = filter(base, base + 1);
+        good.status = Some("cancelled".into());
+        assert!(good.validate().is_ok());
+        drop(conn);
+        let _ = std::fs::remove_file(path);
     }
 }

@@ -1,7 +1,7 @@
 import { ContentTransition, LoadingSurface } from "@/components/ui/LoadingSurface"
 import { useMainContextReport } from "@/hooks/useMainContextReport"
 import { useEffect, useState } from "react"
-import { Blocks, Code, FolderInput, Hexagon, Info, Plus, UsersRound } from "lucide-react"
+import { Blocks, Code, FolderInput, Hexagon, Plus, UsersRound } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { PanelPage } from "@/components/panel/PanelPage"
 import { isTauri } from "@/lib/api"
@@ -118,7 +118,6 @@ function ConnectGrid({ counts, loading, error, onConnect, onRetry }: {
     <>
       <div className="flex flex-col gap-2">
         <h2 className="text-2xl font-semibold text-jolu-text">连接你的 AI 工具</h2>
-        <p className="text-[13px] text-jolu-muted">选择已有供应商，或自定义服务地址，通过订阅账号或 API Key 建立连接。</p>
       </div>
       {error && (
         <div role="alert" className="flex items-center justify-between gap-3 rounded-[10px] bg-jolu-danger-soft px-4 py-2.5 text-xs text-jolu-danger">
@@ -137,10 +136,6 @@ function ConnectGrid({ counts, loading, error, onConnect, onRetry }: {
           })}
         </div>
       </div>
-      <p className="flex items-center gap-2.5 rounded-[10px] bg-jolu-side p-4 text-xs text-jolu-muted">
-        <Info aria-hidden className="size-[17px] shrink-0" />
-        支持的认证方式随供应商、账号权限与接入能力显示；仅支持订阅的账号不展示 API Key 入口。
-      </p>
     </>
   )
 }

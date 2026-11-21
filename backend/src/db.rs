@@ -976,10 +976,25 @@ fn request_problem(record: &RequestRecord) -> Option<String> {
     None
 }
 
+/// `requests.native_outcome` 的合法值域：原生来源对一次请求给出的最终结论。
+///
+/// - `success` / `failed` / `unknown` 是原有的三值，其他原生来源（Gemini、Qoder、
+///   OpenBuddy 等）只用这三个，含义未变。
+/// - `cancelled` 是 2026-11-21 为 ZCode 扩的一档：ZCode 的 `model_usage.status`
+///   原生区分 `completed` / `error` / `cancelled`，把取消并进失败会让「失败次数」
+///   和「成功率」虚高。新增这一档只增加可选值，不改任何已有值的含义，所以其他
+///   来源的既有记录与统计口径都不受影响。
+pub(crate) const NATIVE_OUTCOMES: [&str; 4] = ["success", "failed", "cancelled", "unknown"];
+
+/// `native_outcome` 是否属于当前值域；`None` 表示来源没有给结论，合法。
+pub(crate) fn native_outcome_valid(value: Option<&str>) -> bool {
+    value.is_none_or(|s| NATIVE_OUTCOMES.contains(&s))
+}
+
 fn metric_valid(m: &BackupMetric) -> bool {
     matches!(m.input_semantics.as_str(), "includes_cache" | "excludes_cache" | "unknown")
         && [m.credits, m.original_credits, m.context_ratio].into_iter().flatten().all(|n| n.is_finite() && n >= 0.0)
-        && !m.native_outcome.as_deref().is_some_and(|s| !matches!(s, "success" | "failed" | "unknown"))
+        && native_outcome_valid(m.native_outcome.as_deref())
         && !m.context_ratio.is_some_and(|n| n > 1.0) && !m.reasoning.is_some_and(|n| n < 0) && !m.tool.is_some_and(|n| n < 0)
 }
 
@@ -1396,6 +1411,7 @@ pub fn live_usage(
 
     // Zcode 的本机库给每条请求带状态，会话状态可信；其他原生来源仍只有「最近活跃」。
     let typed_states = platform == "zcode";
+    let now_ms = Local::now().timestamp_millis();
     let read_sessions = |sql: &str, a: i64| -> rusqlite::Result<Vec<ActiveSession>> {
         let mut stmt = conn.prepare(sql)?;
         let map = |r: &rusqlite::Row| -> rusqlite::Result<ActiveSession> {
@@ -1403,10 +1419,9 @@ pub fn live_usage(
             let sid = sid.unwrap_or_default();
             let title: Option<String> = r.get(1)?;
             let activity: Option<String> = r.get(4)?;
-            let state = match activity.as_deref() {
-                Some(s @ ("running" | "done" | "failed")) if typed_states => s,
-                _ => "recent",
-            };
+            let state = if typed_states {
+                crate::native_sources::zcode_observed_state(activity.as_deref(), r.get(5)?, now_ms)
+            } else { "recent" };
             Ok(ActiveSession {
                 title: title.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| {
                     "未命名会话".to_string()
@@ -1420,7 +1435,9 @@ pub fn live_usage(
                 attribution: crate::attribution::AttributionView::platform(),
             })
         };
-        let rows = if extra.is_empty() {
+        let rows = if typed_states {
+            stmt.query_map(params![a, extra[0], now_ms + 60_000], map)?.collect::<Result<_, _>>()?
+        } else if extra.is_empty() {
             stmt.query_map(params![a], map)?.collect::<Result<_, _>>()?
         } else {
             stmt.query_map(params![a, extra[0]], map)?.collect::<Result<_, _>>()?
@@ -1429,13 +1446,17 @@ pub fn live_usage(
     };
 
     let group_sql = |cond: &str| {
+        let recent_tokens = if typed_states { "SUM(CASE WHEN r.ts >= ?1 THEN r.total_tokens ELSE 0 END)" } else { "SUM(r.total_tokens)" };
+        let last_seen = if typed_states {
+            "MAX(MAX(r.ts), COALESCE(CASE WHEN s.activity_updated_ms <= ?3 THEN s.activity_updated_ms END, 0))"
+        } else { "MAX(r.ts)" };
         format!(
-            "SELECT r.session_id, s.title, SUM(r.total_tokens), MAX(r.ts), s.activity_state
+            "SELECT r.session_id, s.title, {recent_tokens}, {last_seen}, s.activity_state, s.activity_updated_ms
              FROM requests r
              LEFT JOIN sessions s
                ON s.platform = r.platform AND s.session_id = r.session_id
              WHERE {cond}{clause}
-             GROUP BY r.session_id ORDER BY MAX(r.ts) DESC"
+             GROUP BY r.session_id ORDER BY {last_seen} DESC"
         )
     };
 
@@ -1516,7 +1537,10 @@ pub fn live_usage(
         .collect::<Result<_, _>>()?;
         rows
     } else {
-        read_sessions(&group_sql("r.ts >= ?1"), active_from)?
+        let condition = if typed_states {
+            "(r.ts >= ?1 OR (s.activity_state IN ('running', 'done', 'failed') AND s.activity_updated_ms BETWEEN ?1 AND ?3))"
+        } else { "r.ts >= ?1" };
+        read_sessions(&group_sql(condition), active_from)?
     };
 
     for session in &mut active_sessions {
@@ -3171,6 +3195,48 @@ mod tests {
             assert!(!request_exists(&conn, "native:workbuddy:main", "broken").unwrap());
             assert!(request_exists(&conn, "native:workbuddy:main", "good").unwrap());
         }
+    }
+
+    /// `native_outcome` 的值域由 [`NATIVE_OUTCOMES`] 统一描述：四值放行，拼错的值拒绝，
+    /// 缺省（来源没给结论）合法。备份导入校验必须与 ZCode 的新映射同步，否则含
+    /// `cancelled` 的备份会被当成"损坏指标"整条丢掉。
+    #[test]
+    fn backup_metrics_accept_cancelled_and_reject_unknown_values() {
+        for value in ["success", "failed", "cancelled", "unknown"] {
+            assert!(native_outcome_valid(Some(value)), "{value} 应在值域内");
+        }
+        assert!(native_outcome_valid(None), "缺少结论是合法的");
+        for value in ["canceled", "cancel", "aborted", "CANCELLED", ""] {
+            assert!(!native_outcome_valid(Some(value)), "{value} 不在值域内");
+        }
+        assert_eq!(NATIVE_OUTCOMES, ["success", "failed", "cancelled", "unknown"]);
+    }
+
+    /// 端到端：含 cancelled 指标的备份能通过预览并原样导入（旧值域会把它整条判无效）。
+    #[test]
+    fn backup_round_trip_preserves_cancelled_outcome() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        init(&conn).unwrap();
+        let request = RequestRecord {
+            platform: "zcode".into(), source: "native:zcode:main".into(),
+            ..import_record("cancelled-1", 4_000, 7)
+        };
+        let json = serde_json::json!({
+            "schema_version": 2, "exported_at_ms": 9_000, "platform": null,
+            "requests": [request], "sessions": [],
+            "metrics": [{
+                "source": "native:zcode:main", "dedup_key": "cancelled-1",
+                "input_semantics": "unknown", "native_outcome": "cancelled",
+            }],
+        }).to_string();
+        let (preview, parsed) = preview_backup(&conn, &json).unwrap();
+        assert_eq!(preview.valid, 1, "{:?}", preview.invalid_reasons);
+        assert_eq!(parsed.metrics.len(), 1, "含 cancelled 的指标不能被判为无效");
+        import_parsed(&mut conn, &parsed).unwrap();
+        let outcome: Option<String> = conn
+            .query_row("SELECT native_outcome FROM requests WHERE dedup_key='cancelled-1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(outcome.as_deref(), Some("cancelled"));
     }
 
     #[test]

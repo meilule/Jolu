@@ -268,14 +268,11 @@ function ClaudeModelSettings(props: AgentDetailProps) {
       )}
 
       {/* 新会话默认模型 */}
-      <section className="flex items-start justify-between gap-6">
-        <div className="flex flex-col gap-1.5 pt-1">
-          <h3 className="text-[15px] font-semibold text-jolu-text">新会话默认模型</h3>
-          <p className="text-meta text-jolu-muted">更改后写入配置；已打开的会话保持原模型。</p>
-        </div>
+      <section className="flex items-center justify-between gap-6">
+        <h3 className="text-[15px] font-semibold text-jolu-text">新会话默认模型</h3>
         <div className="flex w-[420px] shrink-0 flex-col gap-1.5">
-          <SelectField label="新会话默认模型" value={mainModel} disabled={busy} onValueChange={props.onMainModel}
-            placeholder="未选（保留工具自己的选择）" className="h-10 w-full rounded-[10px] px-3 text-meta"
+          <SelectField width="full" label="新会话默认模型" value={mainModel} disabled={busy} onValueChange={props.onMainModel}
+            placeholder="未选（保留工具自己的选择）" className="h-10 rounded-[10px] px-3 text-meta"
             options={modelOptions(models, sourceNotes)} />
           <span className="truncate text-note text-jolu-muted">{props.sourceNotes[mainModel] ?? (mainModel ? "来源未知（模型不在当前模型池）" : "保留工具自己的选择")}</span>
         </div>
@@ -283,10 +280,7 @@ function ClaudeModelSettings(props: AgentDetailProps) {
 
       {/* Claude Code 档位 */}
       <section className="flex flex-col gap-3">
-        <div className="flex flex-col gap-1.5">
-          <h3 className="text-[15px] font-semibold text-jolu-text">Claude Code 档位</h3>
-          <p className="text-meta text-jolu-muted">在工具中选择 Opus、Sonnet 等档位时，使用下方对应的模型。</p>
-        </div>
+        <h3 className="text-[15px] font-semibold text-jolu-text">Claude Code 档位</h3>
         <div className="flex flex-col overflow-hidden rounded-xl border border-jolu-border">
           <div className="grid grid-cols-[160px_1fr_180px] items-center gap-4 px-5 py-2.5 text-note text-jolu-muted">
             <span>工具内档位</span><span>调用模型</span><span className="justify-self-end">思考强度</span>
@@ -301,8 +295,8 @@ function ClaudeModelSettings(props: AgentDetailProps) {
           <ListFilter aria-hidden className="size-4 text-jolu-muted" />
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="truncate text-[15px] font-semibold text-jolu-text">在工具里输入 /model 可切换 {models.length} 个模型</span>
-          <span className="truncate text-meta text-jolu-muted">模型列表来自当前启用的来源与路由分组</span>
+          <span className="truncate text-[15px] font-semibold text-jolu-text">/model 菜单有 {models.length} 个模型</span>
+          <span className="truncate text-meta text-jolu-muted">来自已启用来源与路由分组</span>
         </span>
         <button type="button" onClick={() => onLink("routes")}
           className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-jolu-border px-3.5 text-meta font-medium text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
@@ -350,11 +344,8 @@ function GenericModelSettings(props: AgentDetailProps) {
   const current = row.wiring?.current_resolved || row.wiring?.current_model
   return (
     <div className="flex flex-col gap-5">
-      <section className="flex items-start justify-between gap-6">
-        <div className="flex flex-col gap-1.5 pt-1">
-          <h3 className="text-[15px] font-semibold text-jolu-text">新会话从</h3>
-          <p className="text-meta text-jolu-muted">在 {row.name} 里选择模型；模型路由不替它写默认模型。</p>
-        </div>
+      <section className="flex items-center justify-between gap-6">
+        <h3 className="text-[15px] font-semibold text-jolu-text">当前模型</h3>
         <div className="flex w-[420px] shrink-0 flex-col gap-1.5">
           <div className="flex h-10 w-full items-center rounded-lg border border-jolu-border bg-jolu-side px-3 text-meta text-jolu-text">
             <span className="truncate" title={current || undefined}>{current || "工具自己上次的选择"}</span>
@@ -367,8 +358,8 @@ function GenericModelSettings(props: AgentDetailProps) {
           <ListFilter aria-hidden className="size-4 text-jolu-muted" />
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="truncate text-[15px] font-semibold text-jolu-text">它的模型列表里会出现 {models.length} 个模型</span>
-          <span className="truncate text-meta text-jolu-muted">来自当前启用的来源与路由分组</span>
+          <span className="truncate text-[15px] font-semibold text-jolu-text">模型列表有 {models.length} 个模型</span>
+          <span className="truncate text-meta text-jolu-muted">来自已启用来源与路由分组</span>
         </span>
         <button type="button" onClick={() => onLink("routes")}
           className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-jolu-border px-3.5 text-meta font-medium text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
@@ -423,22 +414,15 @@ function AdvancedBody(props: AgentDetailProps) {
   const line = "h-9 min-w-0 rounded-lg border border-jolu-border bg-jolu-bg px-2.5 text-meta text-jolu-text outline-none focus:border-jolu-accent disabled:opacity-50"
   return (
     <div className="flex flex-col gap-5" data-advanced>
-      <p className="text-note text-jolu-muted">高级设置直接写入 Claude Code 的配置；改动立即生效（待确认：无 V6 画板，沿用 V5 内容）。</p>
-      <section className="flex items-start justify-between gap-6">
-        <div className="flex flex-col gap-1.5 pt-1">
-          <h3 className="text-[15px] font-semibold text-jolu-text">子代理模型</h3>
-          <p className="text-meta text-jolu-muted">Explore 等子代理用的模型；不设就由 Claude Code 自己挑选。</p>
-        </div>
+      <section className="flex items-center justify-between gap-6">
+        <h3 className="text-[15px] font-semibold text-jolu-text">子代理模型</h3>
         <SelectField label="子代理模型" value={subagent} disabled={busy}
           onValueChange={(value) => onApplyTiers(draft, mainModel, value)}
           placeholder="由 Claude Code 自己挑选" className={cn(line, "w-[420px] shrink-0 rounded-[10px] px-3 text-meta")}
           options={modelOptions(models, sourceNotes)} />
       </section>
-      <section className="flex items-start justify-between gap-6">
-        <div className="flex flex-col gap-1.5 pt-1">
-          <h3 className="text-[15px] font-semibold text-jolu-text">自动模式</h3>
-          <p className="text-meta text-jolu-muted">自动模式下检查每个操作用的模型。</p>
-        </div>
+      <section className="flex items-center justify-between gap-6">
+        <h3 className="text-[15px] font-semibold text-jolu-text">自动模式模型</h3>
         <SelectField label="自动模式模型" value={autoValue} disabled={busy} onValueChange={setAuto}
           className={cn(line, "w-[420px] shrink-0 rounded-[10px] px-3 text-meta")}
           options={[
@@ -447,31 +431,22 @@ function AdvancedBody(props: AgentDetailProps) {
             ...models.map((model): SelectOption => ({ value: `model:${model}`, label: model, description: sourceNotes[model] })),
           ]} />
       </section>
-      <section className="flex items-start justify-between gap-6">
-        <div className="flex flex-col gap-1.5 pt-1">
-          <h3 className="text-[15px] font-semibold text-jolu-text">长对话</h3>
-          <p className="text-meta text-jolu-muted">到这个大小时压缩；只对窗口大于 200K 的模型生效，窗口未知的模型不写。</p>
-        </div>
-        <div className="flex w-[420px] shrink-0 flex-col gap-1.5">
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-0.5 rounded-lg bg-jolu-track p-0.5" role="group" aria-label="长对话压缩">
-              {segment("default", "272K 时压缩")}
-              {segment("full", "完整窗口")}
-            </div>
-            <form className="flex items-center gap-1.5" onSubmit={(event) => { event.preventDefault(); if (customValid) onLongContext(custom.trim()) }}>
-              <input value={custom} onChange={(event) => setCustom(event.target.value)} placeholder="自定义，如 400k" aria-label="自定义压缩大小"
-                className={cn("h-8 w-28 rounded-md border bg-jolu-bg px-2 text-meta text-jolu-text outline-none", mode === "custom" ? "border-jolu-accent" : "border-jolu-border", custom && !customValid && "border-jolu-danger")} />
-              <button type="submit" disabled={busy || !customValid} className="text-meta font-medium text-jolu-on disabled:opacity-40">应用</button>
-            </form>
+      <section className="flex items-center justify-between gap-6">
+        <h3 className="text-[15px] font-semibold text-jolu-text" title="只对窗口大于 200K 的模型生效，窗口未知的模型不写">长对话压缩</h3>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-0.5 rounded-lg bg-jolu-track p-0.5" role="group" aria-label="长对话压缩">
+            {segment("default", "272K 时压缩")}
+            {segment("full", "完整窗口")}
           </div>
-          <span className="text-note text-jolu-muted">完整窗口每轮更慢、更贵。</span>
+          <form className="flex items-center gap-1.5" onSubmit={(event) => { event.preventDefault(); if (customValid) onLongContext(custom.trim()) }}>
+            <input value={custom} onChange={(event) => setCustom(event.target.value)} placeholder="自定义，如 400k" aria-label="自定义压缩大小"
+              className={cn("h-8 w-28 rounded-md border bg-jolu-bg px-2 text-meta text-jolu-text outline-none", mode === "custom" ? "border-jolu-accent" : "border-jolu-border", custom && !customValid && "border-jolu-danger")} />
+            <button type="submit" disabled={busy || !customValid} className="text-meta font-medium text-jolu-on disabled:opacity-40">应用</button>
+          </form>
         </div>
       </section>
-      <section className="flex items-start justify-between gap-6">
-        <div className="flex flex-col gap-1.5 pt-1">
-          <h3 className="text-[15px] font-semibold text-jolu-text">新会话强度</h3>
-          <p className="text-meta text-jolu-muted">新会话默认的思考强度。</p>
-        </div>
+      <section className="flex items-center justify-between gap-6">
+        <h3 className="text-[15px] font-semibold text-jolu-text">新会话强度</h3>
         <span title="新会话默认强度（F4）待确认" className="w-[420px] shrink-0"><SelectField label="新会话强度" value="default" disabled onValueChange={() => undefined}
           className="w-full rounded-[10px] px-3 text-meta"
           options={[{ value: "default", label: "默认（待确认）" }]} /></span>
@@ -488,7 +463,7 @@ function DiffBody({ preview, previewError }: AgentDetailProps) {
   return (
     <div className="flex flex-col gap-4">
       <p className="text-note text-jolu-muted">
-        {files.length ? `改了 ${files.length} 个文件 · ${keys} 个键 · 断开时逐键还原（待确认：无 V6 画板，沿用 V5 内容）` : "没有检测到 Jolu 的改动（待确认：无 V6 画板）"}
+        {files.length ? `改了 ${files.length} 个文件 · ${keys} 个键 · 断开时逐键还原` : "没有检测到 Jolu 的改动"}
       </p>
       {previewError && <p className="text-meta text-jolu-danger">{previewError}</p>}
       {!preview && !previewError && <p className="text-meta text-jolu-muted">正在生成写入预览…</p>}
@@ -512,8 +487,7 @@ function PreviewBody({ row, models, sourceNotes, mainModel, onMainModel, routing
             <SelectField label="起点模型" value={mainModel} disabled={busy} onValueChange={onMainModel}
               placeholder="不选（保留工具自己的选择）" className="h-10 w-[300px] rounded-[10px] px-3 text-meta"
               options={modelOptions(models, sourceNotes)} />
-          )}
-          <button type="button" disabled={busy} onClick={onWire}
+          )}          <button type="button" disabled={busy} onClick={onWire}
             className="flex h-10 items-center gap-1.5 rounded-lg bg-jolu-accent px-4 text-meta font-semibold text-[#071B10] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent disabled:opacity-45">
             <Plug aria-hidden className="size-4" />
             接入 {row.name}
@@ -521,8 +495,8 @@ function PreviewBody({ row, models, sourceNotes, mainModel, onMainModel, routing
         </div>
         <span className="text-meta text-jolu-muted">
           {claude
-            ? `不选也能接入：${row.name} 会保持它自己上次的选择，模型路由里的 ${models.length} 个模型出现在它的模型列表里。`
-            : `接入后 ${row.name} 的请求经模型路由转发，可以用模型路由里的 ${models.length} 个模型。`}
+            ? `不选也可以接入；模型路由里的 ${models.length} 个模型会出现在它的模型列表里。`
+            : `接入后请求经模型路由转发，可用 ${models.length} 个模型。`}
         </span>
       </div>
 
@@ -557,10 +531,7 @@ function PreviewBody({ row, models, sourceNotes, mainModel, onMainModel, routing
 function UnsupportedBody({ row }: { row: AgentRow }) {
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-jolu-border p-4">
-      <span className="text-[15px] font-semibold text-jolu-text">等待接入适配</span>
-      <span className="text-meta text-jolu-muted">
-        Jolu 检测到了 {row.name}，还没有它的专用接入；模型来源与工具接入能力会分别确认。
-      </span>
+      <span className="text-[15px] font-semibold text-jolu-text">暂无专用接入</span>
       <span className="text-note text-jolu-muted">{row.wiring?.config_path ? <>配置位置：<code className="font-mono">{row.wiring.config_path}</code></> : row.subtitle}</span>
     </div>
   )

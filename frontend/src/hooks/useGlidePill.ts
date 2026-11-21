@@ -98,6 +98,7 @@ export function useGlidePill() {
        PlatformLogo（SVG），每一行都会被误判成选中行、滑块永远隐身。
        只认属性与类名，不猜结构。 */
     const isChecked = row.getAttribute("data-state") === "checked"
+      || row.getAttribute("aria-checked") === "true"   // 手写菜单（RangePicker）用这个
       || /bg-jolu-selected/.test(row.className)
     pill.style.opacity = isChecked ? "0" : "1"
   }, [])
@@ -157,6 +158,7 @@ export function useGlidePill() {
     let raf = requestAnimationFrame(() => {
       raf = 0
       const checked = node.querySelector<HTMLElement>(ROW_SELECTOR + '[data-state="checked"]')
+        ?? node.querySelector<HTMLElement>(ROW_SELECTOR + '[aria-checked="true"]')
       const first = node.querySelector<HTMLElement>(ROW_SELECTOR)
       place(checked ?? first, true)
       // 打开时滑块隐身：选中行自己有底色（ProviderMenu 用的是 bg-jolu-selected）

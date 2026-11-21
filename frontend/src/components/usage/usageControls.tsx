@@ -4,10 +4,10 @@ import { forwardRef, type ReactNode } from "react"
 import { Check, ChartNoAxesCombined, ChevronDown, LoaderCircle, RefreshCw, RotateCcw, Square, SquareCheck } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useGlidePill } from "@/hooks/useGlidePill"
-import { PROVIDERS, providerEntry } from "@/lib/providerCatalog"
+import { providerPlatformOptions } from "@/lib/providerCatalog"
 import { UNATTRIBUTED_ACCOUNT, accountLabel, accountsTriggerLabel } from "@/lib/usageFilters"
 import { JoluButton } from "@/components/ui/JoluButton"
-import type { Connection, PlatformId } from "@/types"
+import type { Connection } from "@/types"
 
 /** 统计卡片：12px 圆角、1px 描边（画板 30） */
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
@@ -124,8 +124,7 @@ export function MenuFilter({ value, options, onChange, label, trailingChevron }:
 export const ALL = "__all__"
 
 export function providerOptions(): MenuOption[] {
-  // 自定义供应商没有本机用量来源，不进用量筛选
-  return [{ value: ALL, label: "全部供应商" }, ...PROVIDERS.filter((p) => p.id !== "custom").map((p) => ({ value: p.id, label: p.name }))]
+  return [{ value: ALL, label: "全部供应商" }, ...providerPlatformOptions()]
 }
 
 /** 账号筛选：多选（画板 38「账号筛选」）；勾选「全部账号」即清空选择 */
@@ -165,9 +164,8 @@ export function AccountFilter({ accounts, value, onChange }: {
   )
 }
 
-export function providerName(platform: string): string {
-  return PROVIDERS.some((p) => p.id === platform) ? providerEntry(platform as PlatformId).name : platform
-}
+// providerName 已移到 `lib/providerCatalog.ts`：它是纯逻辑（平台 id → 显示名），
+// 放在组件目录里无法按项目规范配 .test.mjs；调用方一律从 lib 直接导入。
 
 /** 首次加载骨架（画板 38「正在读取本地用量」） */
 export function LoadingCard({ title = "正在读取本地用量", layout = "table" }: { title?: string; layout?: SkeletonLayout }) {

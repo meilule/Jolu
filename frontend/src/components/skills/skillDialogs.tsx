@@ -12,7 +12,7 @@ import { demoImportScan } from "@/mock/skills"
 import { JoluButton } from "@/components/ui/JoluButton"
 import { Tip } from "@/components/ui/Tip"
 import { useToast } from "@/components/ui/Toast"
-import { providerName } from "@/components/usage/usageControls"
+import { providerName } from "@/lib/providerCatalog"
 import { DialogShell, Field, FieldSelect, INPUT_CLASS, Tag } from "./skillParts"
 
 function errorText(reason: unknown): string {

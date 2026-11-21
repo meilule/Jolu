@@ -15,7 +15,9 @@ export function demoOverview(start: number): StatsOverviewDto {
     tokens: { fresh_input: 4_620_000, output: 2_240_000, cache_read: 4_940_000, cache_write: 680_000, total: 12_480_000 },
     token_coverage: { known_total: 12_480_000, known_requests: 846, cache_hit_rate: 0.482, cache_requests: 846 },
     requests: 846,
+    // 失败与取消分开计数：预览里也保持「取消不算失败」的口径
     failed: 12,
+    cancelled: 3,
     cache_hit_rate: 0.482,
     cost: { amount: 18.42, priced_requests: 810, requests: 846, unpriced_no_price: ["grok:grok-4-fast"], unpriced_no_usage: 12 },
     previous_total: 10_523_000,
@@ -39,11 +41,12 @@ export function demoOverview(start: number): StatsOverviewDto {
       { platform: "codex", model: "gpt-5-mini", requests: 40, tokens: 800_000, cache_hit_rate: 0.385, avg_duration_ms: null, cost: null },
     ],
     providers: [
-      { platform: "claude", requests: 420, tokens: 6_800_000, cost: { amount: 10, priced_requests: 410, requests: 420 } },
-      { platform: "codex", requests: 290, tokens: 3_760_000, cost: { amount: 4, priced_requests: 270, requests: 290 } },
-      { platform: "gemini", requests: 86, tokens: 1_120_000, cost: { amount: 2.72, priced_requests: 86, requests: 86 } },
-      { platform: "grok", requests: 30, tokens: 480_000, cost: { amount: 0, priced_requests: 0, requests: 30 } },
-      { platform: "opencode", requests: 20, tokens: 320_000, cost: { amount: 1.1, priced_requests: 14, requests: 20 } },
+      // 示例数据全量有 Token：known_* 与组内合计一致，浏览器预览仍走紧凑展示
+      { platform: "claude", requests: 420, tokens: 6_800_000, known_tokens: 6_800_000, known_requests: 420, cost: { amount: 10, priced_requests: 410, requests: 420 } },
+      { platform: "codex", requests: 290, tokens: 3_760_000, known_tokens: 3_760_000, known_requests: 290, cost: { amount: 4, priced_requests: 270, requests: 290 } },
+      { platform: "gemini", requests: 86, tokens: 1_120_000, known_tokens: 1_120_000, known_requests: 86, cost: { amount: 2.72, priced_requests: 86, requests: 86 } },
+      { platform: "grok", requests: 30, tokens: 480_000, known_tokens: 480_000, known_requests: 30, cost: { amount: 0, priced_requests: 0, requests: 30 } },
+      { platform: "opencode", requests: 20, tokens: 320_000, known_tokens: 320_000, known_requests: 20, cost: { amount: 1.1, priced_requests: 14, requests: 20 } },
     ],
     attributed: 778,
     sessions: [
@@ -100,6 +103,8 @@ const DEMO_CALLS: Omit<StatsCallRowDto, "id" | "ts">[] = [
   { call_id: "call_demo_0131", platform: "codex", model: "gpt-5-mini", session_id: "demo-4", fresh_input: 2_400, cache_read: 4_000, cache_write: null, output: 400, total: 6_800, price: demoPrice("gpt-5-mini"), cost: 0.008, effort: "low", duration_ms: 900, first_token_ms: 200, status_code: 200, failed: false },
   { call_id: "call_demo_0130", platform: "gemini", model: "gemini-2.5-flash", session_id: "demo-3", fresh_input: 4_000, cache_read: 5_400, cache_write: null, output: 800, total: 10_200, price: demoPrice("gemini-2.5-flash"), cost: 0.012, effort: null, duration_ms: 1100, first_token_ms: 300, status_code: null, failed: false },
   { call_id: "call_demo_0129", platform: "codex", model: "gpt-5", session_id: null, fresh_input: null, cache_read: null, cache_write: null, output: null, total: null, price: demoPrice("gpt-5"), cost: null, effort: null, duration_ms: 30_000, first_token_ms: null, status_code: 504, failed: true },
+  // ZCode 原生 cancelled：演示「已取消」胶囊，不能画成失败
+  { call_id: "call_demo_0128", platform: "zcode", model: "glm-4.7", session_id: "demo-6", fresh_input: 5_800, cache_read: 2_100, cache_write: 0, output: 0, total: 7_900, price: null, cost: null, effort: null, duration_ms: 6_400, first_token_ms: 900, status_code: null, failed: false, cancelled: true },
 ]
 
 export function demoCalls(end: number, page: number): StatsCallPageDto {

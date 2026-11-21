@@ -101,14 +101,14 @@ await import('/ctx-fixture');</script></body></html>` }))
     await page.goto(`${base}/ctx-check?theme=${theme}`)
     await page.getByText("活跃会话", { exact: true }).waitFor()
     const table = page.locator("#active-sessions")
-    await table.getByText("168K / 200K").waitFor()
+    // 表格与窄容器卡片两种形态同时存在（CSS 隐藏其一），取第一个可见的
+    await table.getByText("168K / 200K").first().waitFor()
     for (const text of [
-      "运行概览", "先看全局，再进入会话", "最近 12 小时", "需要关注", "Claude Code 上下文已用 84%", "最近一次请求 · 168K / 200K",
+      "运行概览", "最近 12 小时", "需要关注", "Claude Code 上下文已用 84%", "最近一次请求 · 168K / 200K",
       "1 个处理中", "接线修复", "84.0%", "162K · 96.4%", "正在生成",
       "74.2K / 400K", "18.6%", "60.3K · 81.3%",
       "631K / 容量未知", "未提供", "空闲",
       "路由实验", "暂无请求",
-      "缓存读取已包含在输入中；未采集与 0 分开显示。",
     ]) {
       // 同一文字可能也出现在隐藏的下拉选项里：任一处可见即可
       const matches = await page.getByText(text, { exact: true }).all()
@@ -127,13 +127,16 @@ await import('/ctx-fixture');</script></body></html>` }))
   // 搜索与状态筛选
   await page.getByLabel("搜索会话或项目").fill("文档")
   assert.equal(await page.locator("#active-sessions").getByText("接线修复").count(), 0)
-  assert.ok(await page.locator("#active-sessions").getByText("文档与验收").isVisible())
+  assert.ok(await page.locator("#active-sessions").getByText("文档与验收").first().isVisible())
   await page.getByLabel("搜索会话或项目").fill("")
-  await page.getByLabel("按状态筛选").selectOption("risk")
-  assert.ok(await page.locator("#active-sessions").getByText("接线修复").isVisible())
+  await page.getByLabel("按状态筛选").click()
+  await page.getByRole("menuitemradio", { name: "接近上限", exact: true }).click()
+  assert.ok(await page.locator("#active-sessions").getByText("接线修复").first().isVisible())
   assert.equal(await page.locator("#active-sessions").getByText("文档与验收").count(), 0)
-  await page.getByLabel("按状态筛选").selectOption("uncollected")
-  assert.ok(await page.locator("#active-sessions").getByText("路由实验").isVisible())
+  await page.waitForTimeout(300)
+  await page.getByLabel("按状态筛选").click()
+  await page.getByRole("menuitemradio", { name: "尚未采集", exact: true }).click()
+  assert.ok(await page.locator("#active-sessions").getByText("路由实验").first().isVisible())
 
   const unexpected = await page.evaluate(() => window.unexpectedNativeCalls)
   assert.deepEqual(unexpected, [], `合成环境出现未处理的原生调用：${unexpected.join(", ")}`)

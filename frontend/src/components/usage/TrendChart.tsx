@@ -159,7 +159,6 @@ export function TrendChart({ points, bucket, mode, onDrill }: {
               <span className="tnum text-base font-semibold text-jolu-on">{mode === "requests" ? `${point.requests} 次` : formatUsd(point.cost)}</span>
             </span>
           )}
-          <span className="text-[11px] text-jolu-muted">点击查看这段时间的调用明细</span>
         </div>
       )}
     </div>

@@ -108,11 +108,8 @@ export function GroupsPanel({ catalog, busy, run, onChanged }: {
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-4 px-8 pb-8 pt-2">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex flex-col gap-1.5">
-          <h2 className="text-[20px] font-semibold text-jolu-text">把模型组成可用的一组</h2>
-          <p className="text-meta text-jolu-muted">工具只选一个分组名，Jolu 按策略为每次请求选择成员。</p>
-        </div>
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-[20px] font-semibold text-jolu-text">路由分组</h2>
         <button type="button" disabled={busy} onClick={() => { setCreating(true); setSlug(null) }}
           className="flex h-10 shrink-0 items-center gap-1.5 rounded-lg bg-jolu-text px-4 text-meta font-semibold text-jolu-bg outline-none hover:opacity-90 focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
           <Plus aria-hidden className="size-4" />新建分组
@@ -128,7 +125,7 @@ export function GroupsPanel({ catalog, busy, run, onChanged }: {
       ) : groups.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded-xl border border-jolu-border px-5 py-10 text-center">
           <span className="text-meta text-jolu-text">还没有路由分组</span>
-          <span className="max-w-[480px] text-note text-jolu-muted">把多个「来源/模型」组成一个可调用的模型 id <code className="font-mono">group/分组</code>，工具选它就能按策略分摊与失败转移。</span>
+          <span className="max-w-[480px] text-note text-jolu-muted">把多个「来源/模型」组成 <code className="font-mono">group/分组</code>，工具选它就能按策略分摊与失败转移。</span>
           <button type="button" disabled={busy} onClick={() => setCreating(true)} className="text-meta font-medium text-jolu-on outline-none hover:underline">＋ 新建第一个分组</button>
         </div>
       ) : current ? (
@@ -165,7 +162,8 @@ export function GroupsPanel({ catalog, busy, run, onChanged }: {
                 <p className="text-meta text-jolu-muted">{strategyOrderNote(strategy) ?? "按策略决定这次请求用哪个成员。"}</p>
               </div>
               <SelectField label="选择策略" value={strategy} disabled={busy} onValueChange={setStrategy}
-                className="h-10 w-[280px] shrink-0 rounded-[10px] px-3 text-meta"
+                width="lg"
+                className="shrink-0"
                 options={strategyOptions.map((item) => ({ value: item.value, label: item.text, description: strategyOrderNote(item.value) || undefined }))} />
             </div>
             {strategy === "intent" && <IntentFields catalog={catalog} classifier={classifier} timeout={timeout} disabled={busy} onClassifier={setClassifier} onTimeout={setTimeoutMs} label={current.name} />}
@@ -353,7 +351,7 @@ function IntentFields({ catalog, classifier, timeout, disabled, onClassifier, on
       <label className="flex min-w-[200px] flex-1 flex-col gap-1">
         <span className="text-note text-jolu-muted">判意图用的模型（选便宜、快的）</span>
         <SelectField label={`「${label}」判意图用的模型`} value={classifier} disabled={disabled} onValueChange={onClassifier}
-          placeholder="选择模型…" className="rounded-[10px] px-3 text-meta"
+          placeholder="选择模型…" width="full"
           options={[{ value: "", label: "选择模型…" }, ...options.map((id) => ({ value: id, label: id + (ids.includes(id) ? "" : "（不在目录）") }))]} />
       </label>
       <label className="flex flex-col gap-1">
@@ -455,7 +453,7 @@ function CreateForm({ catalog, busy, groups, run, onCancel, onCreated }: {
         <label className="flex flex-col gap-1">
           <span className="text-note text-jolu-muted">策略</span>
           <SelectField label="新建分组的策略" value={strategy} disabled={busy} onValueChange={setStrategy}
-            className="h-9 rounded-[10px] px-3 text-meta"
+            width="full"
             options={ROUTING_STRATEGIES.map((item) => ({ value: item.value, label: item.text, description: strategyOrderNote(item.value) || undefined }))} />
         </label>
       </div>

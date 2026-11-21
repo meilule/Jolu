@@ -27,7 +27,7 @@ log("主面板已连接")
 // 进 Agent 页：侧栏按钮文本就是「Agent」
 await main.getByText("Agent", { exact: true }).first().click()
 process.stderr.write("[trace] 已点侧栏 Agent\n")
-await main.getByText("你的 AI 工具", { exact: true }).waitFor({ timeout: 30000 })
+await main.getByRole("heading", { name: "工具", exact: true }).waitFor({ timeout: 30000 })
 process.stderr.write("[trace] 栅格标题已出现\n")
 await sleep(800)
 log("Agent 页已打开")

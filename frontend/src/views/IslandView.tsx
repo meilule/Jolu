@@ -1,6 +1,6 @@
 import { JoluSwitch as Switch } from "@/components/ui/JoluSwitch"
 import { ContentTransition, LoadingSurface } from "@/components/ui/LoadingSurface"
-import { useMemo, useRef, useState, type ReactNode, useEffect } from "react"
+import { useMemo, useRef, useState, type ReactNode } from "react"
 import * as Menu from "@radix-ui/react-dropdown-menu"
 import { Check, CopyPlus, Ellipsis, LoaderCircle, PictureInPicture2, RefreshCw, Scan } from "lucide-react"
 import { api, DEFAULT_ISLAND_LINKAGE, isTauri, type AppSettings, type DockEdgeDto, type IslandStyle } from "@/lib/api"
@@ -35,20 +35,6 @@ export function IslandView() {
   const savePreferences = cfg.setDisplayPreferences
   const disabled = !cfg.ready
   const linkage = s.island_linkage ?? DEFAULT_ISLAND_LINKAGE
-  // 4.2b #5：可选的 ZCode 来源名取今日按来源里出现过的已存连接名；当前选的不在里面时也保留
-  const [providerNames, setProviderNames] = useState<string[]>([])
-  useEffect(() => {
-    if (!isTauri) return
-    let alive = true
-    void api.islandSourceBreakdown("zcode").then((value) => {
-      if (alive) setProviderNames([...new Set(value.rows.map((row) => row.name).filter((name): name is string => Boolean(name)))])
-    }).catch(() => {})
-    return () => { alive = false }
-  }, [])
-  const providerOptions = [
-    { value: "", label: "全部" },
-    ...[...new Set([...providerNames, ...(linkage.zcode_provider ? [linkage.zcode_provider] : [])])].map((name) => ({ value: name, label: name })),
-  ]
 
   return (
     <div className="flex w-full flex-col gap-3">
@@ -109,7 +95,6 @@ export function IslandView() {
           <Row title="严格模式" desc="「正在写」只认运行中的会话或网关在途；只有最近写入记录时显示「不知道」，宁可不亮" control={<Switch liquid on={linkage.strict_writing} disabled={disabled || cfg.isSaving("island_linkage")} label="严格模式" onChange={(on) => void cfg.setIslandLinkage({ strict_writing: on })} />} />
           <Row title="跟随主窗口" desc="主窗口在看某个连接的用量或供应商时，本体岛临时显示那个连接；分身不跟随" control={<Switch liquid on={linkage.follow_main} disabled={disabled || cfg.isSaving("island_linkage")} label="跟随主窗口" onChange={(on) => void cfg.setIslandLinkage({ follow_main: on })} />} />
           <Row title="按最近活跃自动选主" desc="某个分身所在的平台比本体明显更活跃（领先 1 分钟以上，且 2 分钟内有请求）时，自动与本体互换；同平台的分身不比较" control={<Switch liquid on={linkage.auto_focus} disabled={disabled || cfg.isSaving("island_linkage")} label="按最近活跃自动选主" onChange={(on) => void cfg.setIslandLinkage({ auto_focus: on })} />} />
-          <Row title="ZCode 只看这一家" desc="本体岛在 ZCode 时只列这一家的会话（按会话行的来源名）；只作显示筛选，不改额度查询" control={<SelectField className={cn(SELECT, "w-[170px]")} label="ZCode 只看这一家" disabled={disabled || cfg.isSaving("island_linkage")} value={linkage.zcode_provider ?? ""} options={providerOptions} onValueChange={(v) => void cfg.setIslandLinkage({ zcode_provider: v || null })} />} />
         </Group>
 
         <Row

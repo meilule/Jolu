@@ -94,10 +94,7 @@ export function AccessPanel({ port, shared, busy, onSharedChange, run, models }:
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-4 px-8 pb-8 pt-2">
-      <div className="flex flex-col gap-1.5">
-        <h2 className="text-[20px] font-semibold text-jolu-text">让其他设备使用你的模型</h2>
-        <p className="text-meta text-jolu-muted">独立管理每个客户端的访问权限和使用上限。</p>
-      </div>
+      <h2 className="text-[20px] font-semibold text-jolu-text">对外访问</h2>
 
       <section className={cn(
         "flex items-center gap-3.5 rounded-xl border px-5 py-4",
@@ -108,7 +105,7 @@ export function AccessPanel({ port, shared, busy, onSharedChange, run, models }:
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="text-[15px] font-semibold text-jolu-text">局域网共享</span>
-          <span className="text-meta text-jolu-muted">开关变更在下次启动中转时生效</span>
+          <span className="text-meta text-jolu-muted">下次启动中转时生效</span>
         </span>
         {shared && <span className="shrink-0 text-meta font-medium text-jolu-on">已开启</span>}
         <Switch on={shared} large disabled={busy} label={shared ? "关闭局域网共享" : "开启局域网共享"} onClick={() => onSharedChange(!shared)} />
@@ -157,7 +154,7 @@ export function AccessPanel({ port, shared, busy, onSharedChange, run, models }:
                 <button type="button" disabled={busy || form.name.trim() === ""} onClick={() => void issue()}
                   className="flex h-9 items-center rounded-lg bg-jolu-accent px-4 text-meta font-semibold text-[#071B10] outline-none disabled:opacity-45">签发</button>
                 <button type="button" disabled={busy} onClick={() => setIssuing(false)} className="text-meta text-jolu-muted outline-none hover:text-jolu-text">取消</button>
-                <span className="min-w-0 flex-1 truncate text-note text-jolu-muted">上限与白名单留空表示不限；只读 Key 只能查询（如读模型列表）。{TOKENS_LIMIT_NOTICE}</span>
+                <span className="min-w-0 flex-1 truncate text-note text-jolu-muted" title={`只读 Key 只能查询（如读模型列表）。${TOKENS_LIMIT_NOTICE}`}>留空即不限 · 只读只能查询</span>
               </div>
             </div>
           )}
@@ -230,7 +227,7 @@ export function AccessPanel({ port, shared, busy, onSharedChange, run, models }:
                   {editingRow && editing && (
                     <div className={cn(KEY_COLUMNS, "col-span-full flex flex-col gap-2.5 border-t border-jolu-table-divider bg-jolu-side px-4 py-3")} data-limits-editor>
                       <div className="col-span-full flex flex-col gap-1.5">
-                        <span className="text-note text-jolu-muted">每日上限（留空即不限；Token 上限请求前按估算预扣、结束后回冲）与同时请求数</span>
+                        <span className="text-note text-jolu-muted">每日上限与同时请求数 · 留空即不限</span>
                         <div className="grid grid-cols-3 gap-2">
                           {BUDGET_FIELDS.map((field) => (
                             <label key={field.key} className="flex flex-col gap-0.5">
@@ -352,7 +349,7 @@ function AddressChip({ port, shared, models, copy }: {
       <section className="flex flex-col overflow-hidden rounded-xl border border-jolu-border">
         <div className="flex items-baseline gap-2 bg-jolu-side px-4 py-2.5">
           <span className="text-[13px] font-semibold text-jolu-text">地址</span>
-          <span className="text-meta text-jolu-muted">本机回环不需要 Key；局域网请求必须带一个启用的客户端 Key</span>
+          <span className="text-meta text-jolu-muted">本机不需要 Key；局域网请求必须带启用的客户端 Key</span>
         </div>
         <AddressRow label="端口" value={String(port)} note="改端口还没有命令（待确认）" />
         <AddressRow label="本机" value={`http://127.0.0.1:${port}`} mono action={<CopyBtn label="复制本机地址" onClick={() => copy(`http://127.0.0.1:${port}`)} />} />
@@ -362,9 +359,9 @@ function AddressChip({ port, shared, models, copy }: {
       <section className="flex flex-col overflow-hidden rounded-xl border border-jolu-border">
         <div className="flex items-center gap-2 bg-jolu-side px-4 py-2.5">
           <span className="text-[13px] font-semibold text-jolu-text">接入示例</span>
-          <span className="min-w-0 flex-1 truncate text-meta text-jolu-muted">点一个模型，示例跟着变</span>
+          <span className="min-w-0 flex-1 truncate text-meta text-jolu-muted">按模型与协议生成</span>
           <SelectField label="示例模型" value={model} onValueChange={setModel}
-            className="h-8 max-w-[220px] rounded-[8px]"
+            className="max-w-[220px]"
             options={models.length === 0 ? [{ value: "", label: "（模型池为空）" }] : models.map((entry) => ({ value: entry, label: entry }))} />
         </div>
         <div className="flex flex-wrap items-center gap-3 px-4 pt-3">
@@ -459,7 +456,7 @@ function AllowIpsCard() {
   return (
     <section className="flex flex-col gap-1.5 rounded-xl border border-jolu-border px-4 py-3.5">
       <span className="text-[13px] font-semibold text-jolu-text">允许连入的来源地址</span>
-      <span className="text-note text-jolu-muted">每行一个 IP 或网段（如 192.168.1.20、192.168.1.0/24）；留空 = 局域网内都可连。不在列表里的地址在看 Key 之前就被拒绝，本机始终可连。（待确认：无 V6 画板）</span>
+      <span className="text-note text-jolu-muted">每行一个 IP 或网段 · 留空则局域网内都可连 · 本机始终可连</span>
       {fromEnv && <span className="text-note text-jolu-warn">已由环境变量 JOLU_ALLOW_IPS 指定，这里保存的不会生效。</span>}
       <textarea aria-label="允许连入的来源地址" rows={3} value={text} spellCheck={false}
         onChange={(event) => setDraft(event.target.value)}

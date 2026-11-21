@@ -13,7 +13,7 @@ import { PlatformLogo } from "@/components/brand/PlatformLogo"
 import { MessageMarkdown } from "./MessageMarkdown"
 import { Tip } from "@/components/ui/Tip"
 import { useToast } from "@/components/ui/Toast"
-import { providerName } from "@/components/usage/usageControls"
+import { providerName } from "@/lib/providerCatalog"
 import type { Connection, PlatformId } from "@/types"
 
 type DetailTab = "messages" | "info"
@@ -173,7 +173,7 @@ export function SessionDetail({ session, connections, onDrillUsage, onContinue, 
       {/* 操作行：容器窄时整体折行，单行内按钮不参与收缩。
           以前是 `flex h-[34px]` 且按钮没有 shrink-0 —— 窗口变窄时浏览器压缩按钮、
           按钮内文字折成两行，而高度锁死 34px 就把文字挤出按钮（实测 930px 宽内容区）。
-          「在 <工具名> 中继续」的文案长度随工具名变化（ZCode 国际版 / Claude Code），
+          「在 <工具名> 中继续」的文案长度随工具名变化（Claude Code / OpenCode），
           比其它按钮长，总是第一个被压坏。 */}
       <div className="flex min-h-[34px] shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
         <Eye aria-hidden className="size-[15px] shrink-0 text-jolu-muted" />

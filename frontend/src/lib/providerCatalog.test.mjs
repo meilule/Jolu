@@ -17,11 +17,20 @@ import {
   protocolBaseUrlHint,
   protocolLabel,
   providerEntry,
+  providerName,
   requestGate,
   showsModeTabs,
   singleModeReason,
   validateConnectionName,
 } from "./providerCatalog.ts"
+
+test("统计与会话筛选按平台去重，预设和地区版本不会传入无效 ID", () => {
+  const options = catalog.providerPlatformOptions()
+  assert.deepEqual(options.map((option) => option.value), [...new Set(PROVIDERS.map((entry) => entry.platformId))])
+  assert.equal(options.find((option) => option.value === "zcode").label, "ZCode")
+  assert.equal(options.find((option) => option.value === "custom").label, "自定义供应商")
+  assert.ok(!options.some((option) => option.value === "zcode-bigmodel" || option.value === "deepseek"))
+})
 
 test("供应商目录保留自定义与现有平台，地区版本独立展示", () => {
   // ZCode 拆成国内 / 国际两条（各有上游与账号家族），所以名称与 edition 清单都多一项。
@@ -214,4 +223,53 @@ test("ZCode 两个版本各有官方地址与鉴权协议",()=>{
   }
   assert.ok(intl.baseUrlChoices.every(c=>c.value.includes("z.ai")))
   assert.ok(cn.baseUrlChoices.every(c=>c.value.includes("bigmodel.cn")))
+})
+
+test("平台显示名：多版本平台只给平台名，单条目平台沿用条目名，未知原样返回", () => {
+  // 用量汇总行来自后端 `providers()`，它只按 requests.platform 分组：
+  // zcode 一行是国内版 + 国际版的混合总量，绝不能隐式标成其中某一个版本。
+  assert.equal(providerName("zcode"), "ZCode")
+  for (const version of ["国际版", "国内版"]) {
+    assert.ok(!providerName("zcode").includes(version), `平台总量不能带版本后缀 ${version}`)
+  }
+  // 同样共用 platformId 的其他平台：Qoder / WorkBuddy / Trae 各有两个地区或账号家族
+  assert.equal(providerName("qoder"), "Qoder")
+  assert.equal(providerName("workbuddy"), "WorkBuddy")
+  assert.equal(providerName("trae"), "Trae")
+  // 预设库全映射到 custom，汇总行只能是平台级名称
+  assert.equal(providerName("custom"), "自定义供应商")
+
+  // 单条目平台：条目即平台，必须仍然返回条目名（不能一刀切成裸平台名）
+  assert.equal(providerName("claude"), "Claude Code")
+  assert.equal(providerName("codex"), "Codex")
+  assert.equal(providerName("gemini"), "Gemini")
+  assert.equal(providerName("opencode"), "OpenCode")
+  for (const id of ["claude", "codex", "gemini", "grok", "opencode"]) {
+    assert.equal(PROVIDERS.filter((p) => p.platformId === id).length, 1, `${id} 应当只有一条条目`)
+    assert.equal(providerName(id), PROVIDERS.find((p) => p.platformId === id).name)
+  }
+
+  // 传条目 id（不是 platformId）时按条目查，连接页 / Skills 的选择器依赖这一点
+  assert.equal(providerName("zcode-bigmodel"), "ZCode 国内版")
+  assert.equal(providerName("qoder-cn"), "Qoder CN")
+  assert.equal(providerName("workbuddy-ai"), "WorkBuddy AI")
+  // 都不认识就原样返回，不臆测名称
+  assert.equal(providerName("unknown-platform"), "unknown-platform")
+})
+
+test("每个 platformId 都登记了平台级名称，不靠条目顺序猜版本", () => {
+  // 这条测试保护目录演进：新增一个共用 platformId 的多版本平台却忘了登记
+  // PLATFORM_NAMES 时，providerName 会退回裸 platformId——测试在这里失败，
+  // 提醒补上中文平台名，而不是默默把混合总量标成某一个版本。
+  const platforms = [...new Set(PROVIDERS.map((p) => p.platformId))]
+  const multi = platforms.filter((id) => PROVIDERS.filter((p) => p.platformId === id).length > 1)
+  assert.deepEqual(multi.sort(), ["custom", "qoder", "trae", "workbuddy", "zcode"].sort())
+  for (const id of multi) {
+    const name = providerName(id)
+    assert.notEqual(name, id, `${id} 是多条目平台，必须有平台级名称`)
+    // 平台级名称不能带版本 / 地区后缀，否则等于把混合总量标成单一版本。
+    // 注意 Qoder / Trae 的国际版条目名恰好就是裸平台名，所以这里只禁版本后缀，
+    // 不去断言「与所有条目名都不同」——那条会误伤合法命名。
+    assert.doesNotMatch(name, /国际版|国内版/, `${id} 的平台名不能带版本后缀`)
+  }
 })

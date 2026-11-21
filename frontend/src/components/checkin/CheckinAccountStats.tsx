@@ -98,10 +98,12 @@ export function CheckinAccountStats({ accountId, statistics, active, identityKey
         <div className="min-w-0"><dt className="text-[12px] text-jolu-muted">总额度</dt><dd className="mt-1 break-words text-[15px] font-medium leading-snug tabular-nums text-jolu-text">{summary.total}</dd></div>
         <div className="min-w-0"><dt className="text-[12px] text-jolu-muted">{summary.remainingLabel}</dt><dd className="mt-1 break-words text-[15px] font-medium leading-snug tabular-nums text-jolu-text">{summary.remaining}</dd></div>
       </dl>
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px] text-jolu-muted">
-        <span>{summary.scope === "账户额度" ? "统计范围见详情" : summary.scope}</span>
-        {summary.status && <span role="status" className={cn(quota.stale && "text-jolu-danger")}>{summary.status}</span>}
-      </div>
+      {(summary.status || summary.scope !== "账户额度") && (
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px] text-jolu-muted">
+          {summary.scope !== "账户额度" ? <span>额度 · {summary.scope}</span> : <span />}
+          {summary.status && <span role="status" className={cn(quota.stale && "text-jolu-danger")}>额度{summary.status}</span>}
+        </div>
+      )}
       <div data-checkin-actions={accountId} className="mt-auto flex items-center gap-1.5 pt-1.5">
         <Dialog.Trigger asChild><JoluButton size="sm" variant="outline" aria-label={`查看账号详情 ${accountLabel}`} className="shrink-0 px-2">详情</JoluButton></Dialog.Trigger>
         <div className="min-w-0 flex-1">{action}</div>

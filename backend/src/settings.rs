@@ -220,7 +220,7 @@ pub struct IslandLinkage {
     pub signals: bool,
     /// 跟随主窗口：主窗口在看某个连接的用量 / 供应商时，本体岛临时显示那个连接
     pub follow_main: bool,
-    /// 本体岛只看这一家 ZCode provider（名称）；None = 全部。只作显示筛选，不触发额度查询
+    /// 旧版筛选值，仅为兼容既有设置保留。
     pub zcode_provider: Option<String>,
     /// 按最近活跃自动选主：某个分身所在平台明显更活跃时，自动「以此分身为主」（默认关）
     pub auto_focus: bool,

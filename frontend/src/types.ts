@@ -113,7 +113,7 @@ export interface SessionActivity {
   startedAtMs?: number
   highlighted?: boolean
   /** 这条会话最近一次请求归到的已存连接（4.2）；归不出唯一连接时缺省，不拿岛的配置冒充 */
-  source?: { name: string; confidence: "exact" | "mapped" }
+  source?: { id: string; name: string; confidence: "exact" | "mapped" }
 }
 
 /** 灵动岛形态：自由态（收缩 / 展开）与停靠态是两个维度（§2.1.3） */

@@ -77,6 +77,53 @@ export function providerEntry(id: ProviderId): ProviderEntry {
   return PROVIDERS.find((entry) => entry.id === id) ?? PROVIDERS[0]
 }
 
+/**
+ * 一个平台对应多条供应商条目时使用的平台级名称。
+ *
+ * 这些平台的多个版本 / 地区 / 账号家族共用同一个 `platformId`：ZCode 国内版 + 国际版、
+ * Qoder 两个地区、WorkBuddy 两种账号、Trae 两个地区，以及映射到 `custom` 的预设库。
+ */
+const PLATFORM_NAMES: Record<string, string> = {
+  // ZCode 两个版本共用 platform "zcode"，用量汇总行是两者之和，只能显示平台名
+  // （画板无此状态，按计划文档 G4 标「待确认」）。产品名按 ZCode 书写。
+  zcode: "ZCode",
+  qoder: "Qoder",
+  workbuddy: "WorkBuddy",
+  trae: "Trae",
+  // 预设库（DeepSeek、Kimi…）都映射到 custom，汇总行只能给平台级名称
+  custom: "自定义供应商",
+}
+
+/**
+ * 平台显示名（用量汇总行、会话、Skills 等处共用）。
+ *
+ * 入参是「平台」，不是「供应商条目」：后端 `usage_stats::providers()` 只按
+ * `requests.platform` 分组，一个 platformId 可能对应多条供应商条目。旧实现按
+ * `id === platform` 查目录，`zcode` 恰好命中「ZCode 国际版」，把国内版 + 国际版的
+ * 混合总量隐式标成了单一版本。
+ *
+ * 规则：平台只有一条供应商条目时沿用条目名（Claude Code / Codex / Gemini …）；
+ * 有多条时只给平台级名称，因为版本拆分需要连接 edition 与 `provider_key` 这类
+ * 可验证的归因事实，本函数拿不到，不能猜。
+ */
+export function providerName(platform: string): string {
+  const entries = PROVIDERS.filter((entry) => entry.platformId === platform)
+  // 多条目平台：返回平台级名称。目录里新增多版本平台却漏登时退回平台 id，
+  // 宁可显示原始标识，也不把混合总量标成某一个版本。
+  if (entries.length > 1) return PLATFORM_NAMES[platform] ?? platform
+  // 单条目平台：条目即平台，沿用条目名
+  if (entries.length === 1) return entries[0].name
+  // 没有这个 platformId：调用方可能传的是条目 id（如 zcode-bigmodel），按条目再查一次；
+  // 都查不到就原样返回，不臆测名称
+  return PROVIDERS.find((entry) => entry.id === platform)?.name ?? platform
+}
+
+/** 统计和会话筛选使用平台 ID，同一平台的多个供应商条目合并。 */
+export function providerPlatformOptions(): { value: string; label: string }[] {
+  return [...new Set(PROVIDERS.map((entry) => entry.platformId))]
+    .map((value) => ({ value, label: providerName(value) }))
+}
+
 interface ProviderConnection {
   id?: string
   platformId: string

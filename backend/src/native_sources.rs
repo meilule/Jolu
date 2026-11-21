@@ -590,6 +590,16 @@ fn scan_files(
 /// 其余视为进行中，但只在宽限期内算运行中；CLI 异常退出留下的旧行不能长期显示运行。
 pub(crate) const ZCODE_RUNNING_GRACE_MS: i64 = 10 * 60 * 1_000;
 
+/// 展示已采集的状态时，旧的运行状态也会随时间过期。
+pub(crate) fn zcode_observed_state(state: Option<&str>, updated: Option<i64>, now_ms: i64) -> &'static str {
+    match (state, updated) {
+        (Some("running"), Some(ts)) if ts <= now_ms + 60_000 && now_ms.saturating_sub(ts) <= ZCODE_RUNNING_GRACE_MS => "running",
+        (Some("done"), Some(ts)) if ts <= now_ms + 60_000 => "done",
+        (Some("failed"), Some(ts)) if ts <= now_ms + 60_000 => "failed",
+        _ => "recent",
+    }
+}
+
 /// `session.time_updated` 比 `model_usage` 最新一行新出多少才算「有新活动」。
 ///
 /// ZCode 只在请求结束时写 model_usage，一轮对话进行中（下一个请求在流式跑）时，
@@ -605,6 +615,29 @@ pub(crate) fn zcode_session_state(status: &str, ts: i64, now_ms: i64) -> &'stati
         "completed" => "done",
         "error" | "cancelled" => "failed",
         _ if ts <= now_ms + 60_000 && now_ms - ts <= ZCODE_RUNNING_GRACE_MS => "running",
+        _ => "unknown",
+    }
+}
+
+/// ZCode `model_usage.status` → `requests.native_outcome`。
+///
+/// 值域是四值 `success` / `failed` / `cancelled` / `unknown`，与备份导入校验
+/// （`db::metric_valid`）和用量统计的失败口径保持一致。`cancelled` 单独成一档，
+/// 而不是并进 `failed`：
+///
+/// - 取消是用户主动中止（或客户端收尾），不是上游错误；并进失败会让「失败次数」
+///   和「成功率」同时失真（2026-11-21 本机 1599 条里只有 2 条 error，却因为 3 条
+///   cancelled 显示成 5 次失败）。
+/// - 也不并进 `success`：没有完成的请求不能算成功。
+/// - `running` / `pending` 等还没有结论的行保持 `unknown`，不猜成功。
+///
+/// 会话状态仍按 [`zcode_session_state`] 折叠成 done / failed / running：
+/// 会话卡片只说「这一轮结束得怎么样」，不区分取消与报错。
+pub(crate) fn zcode_native_outcome(status: &str) -> &'static str {
+    match status {
+        "completed" => "success",
+        "error" => "failed",
+        "cancelled" => "cancelled",
         _ => "unknown",
     }
 }
@@ -640,8 +673,13 @@ fn zcode_boost_running(
 
 fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
     let key = source.path.to_string_lossy().to_string();
+    let timestamp_migration = format!("{key}#zcode-started-at-v1");
+    // 升级后重扫一次旧库，补上会话级状态时间。
+    let activity_migration = format!("{key}#zcode-activity-time-v2");
     let stamps = db_stamps(&source.path)?;
-    if db.write(|conn| db_unchanged(conn, &key, stamps)) {
+    if db.write(|conn| db_unchanged(conn, &key, stamps)
+        && crate::db::get_scan_state(conn, &timestamp_migration) == Some((1, 1))
+        && crate::db::get_scan_state(conn, &activity_migration) == Some((1, 1))) {
         return Ok(0);
     }
     // 读取第三方库不占本应用写锁。
@@ -684,7 +722,23 @@ fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
             let id: String = row.get(0)?;
             let session: String = row.get(1)?;
             let status: String = row.get(3)?;
-            let ts = row.get::<_, Option<i64>>(5)?.unwrap_or(row.get(4)?);
+            // 归日时间取 started_at（第 4 列），缺失时才回退 completed_at（第 5 列）。
+            //
+            // 为什么不用 completed_at（改前的做法）：ZCode 自己按 started_at 归日、
+            // 也按它做 30 天清理（usage.ts 的保留期删除），用完成时间会让跨本地午夜的
+            // 请求落到不同日期——本机实测有 6 条，按日对账时两边分布对不上。
+            // ts 同时也是趋势桶、明细排序、价格时段估算与 CSV 导出的时间；
+            // 改归日会一并影响这些，所以是有意的口径统一：以「请求何时发出」为准。
+            let started_at = row.get::<_, Option<i64>>(4)?;
+            let completed_at = row.get::<_, Option<i64>>(5)?;
+            // 两列都为空说明这行的发生时间不可知：跳过而不是编一个当前时间冒充发生时刻
+            let Some(ts) = started_at.or(completed_at) else {
+                return Err(rusqlite::Error::InvalidColumnType(
+                    4,
+                    "started_at/completed_at 均为空，无法归日".into(),
+                    rusqlite::types::Type::Null,
+                ));
+            };
             let raw: Option<String> = row.get(13)?;
             let raw: Value = raw
                 .and_then(|s| serde_json::from_str(&s).ok())
@@ -752,6 +806,11 @@ fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
                     .map(|p| p.trim().to_string())
                     .filter(|p| !p.is_empty()),
                 row.get::<_, Option<i64>>(17)?,
+                // 第 7 个元素：completed_at，**只给会话活跃判定用**。
+                // 归日用 `ts`（started_at），但「这条会话最后一次真正写完是什么时候」必须是
+                // 完成时间——否则 23:59 开始、00:01 完成的那条会被当成「一小时前就没动静」，
+                // 活跃会话误判成空闲。两个时间各有用途，不能合并。
+                completed_at,
             ))
         })
         .map_err(|e| e.to_string())?
@@ -763,15 +822,19 @@ fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
     // 第四个元素是会话的项目目录（ZCode 的 session.directory）；
     // 库型来源没有源文件可读 cwd，只能在这一步带出去落库，否则全归「未识别项目」。
     // 第五个元素是 session.time_updated：会话级运行信号，同一会话的所有行共享同一个值。
+    // 第二个元素（entry.1）是**完成时间**：活跃判定要问「这条会话最后一次写完是什么时候」，
+    // 用开始时间会把长请求或跨午夜请求误判成空闲（见 ts 上面的注释）。
     let mut sessions: HashMap<String, (&'static str, i64, Option<String>, Option<String>, Option<i64>)> = HashMap::new();
     let now_ms = chrono::Utc::now().timestamp_millis();
-    for (r, status, title, directory, _, session_updated) in &rows {
+    for (r, status, title, directory, _, session_updated, finished_at) in &rows {
         let Some(id) = &r.request.session_id else { continue };
-        let state = zcode_session_state(status, r.request.ts, now_ms);
-        let entry = sessions.entry(id.clone()).or_insert((state, r.request.ts, None, None, None));
-        if r.request.ts >= entry.1 {
+        // 会话行状态也按完成时间算：一行刚写完才算 done，started_at 只说明它何时开始
+        let row_finished = finished_at.unwrap_or(r.request.ts);
+        let state = zcode_session_state(status, row_finished, now_ms);
+        let entry = sessions.entry(id.clone()).or_insert((state, row_finished, None, None, None));
+        if row_finished >= entry.1 {
             entry.0 = state;
-            entry.1 = r.request.ts;
+            entry.1 = row_finished;
         }
         if entry.2.is_none() {
             entry.2 = title.clone();
@@ -790,12 +853,12 @@ fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
     }
     db.write(|conn| -> Result<usize, String> {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let records: Vec<Record> = rows.iter().map(|(r, _, _, _, _, _)| r.clone()).collect();
+        let records: Vec<Record> = rows.iter().map(|(r, _, _, _, _, _, _)| r.clone()).collect();
         let changed = source_store::write(&tx, &records).map_err(|e| e.to_string())?;
         let mut outcome = tx.prepare_cached("UPDATE requests SET native_outcome=?1 WHERE source=?2 AND dedup_key=?3 AND native_outcome IS NOT ?1")
             .map_err(|e| e.to_string())?;
-        for (r, status, _, _, _, _) in &rows {
-            outcome.execute(params![match status.as_str() {"completed"=>"success","error"|"cancelled"=>"failed",_=>"unknown"},source.id,r.request.dedup_key])
+        for (r, status, _, _, _, _, _) in &rows {
+            outcome.execute(params![zcode_native_outcome(status),source.id,r.request.dedup_key])
                 .map_err(|e| e.to_string())?;
         }
         drop(outcome);
@@ -804,22 +867,29 @@ fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
         let mut provider = tx
             .prepare_cached("UPDATE requests SET provider_key=?3 WHERE source=?1 AND dedup_key=?2 AND provider_key IS NOT ?3")
             .map_err(|e| e.to_string())?;
-        for (r, _, _, _, provider_key, _) in &rows {
+        for (r, _, _, _, provider_key, _, _) in &rows {
             provider
                 .execute(params![source.id, r.request.dedup_key, provider_key])
                 .map_err(|e| e.to_string())?;
         }
         drop(provider);
-        for (id, (state, ts, title, cwd, _)) in &sessions {
+        for (id, (state, ts, title, cwd, session_updated)) in &sessions {
             if let Some(title) = title {
                 crate::db::upsert_session_title(&tx, "zcode", id, title).map_err(|e| e.to_string())?;
             }
             if let Some(cwd) = cwd {
                 crate::db::set_session_cwd(&tx, "zcode", id, cwd).map_err(|e| e.to_string())?;
             }
-            crate::db::set_session_activity(&tx, "zcode", id, state, *ts).map_err(|e| e.to_string())?;
+            // 会话活动可能发生在上一条用量记录完成之后，保存可信的最新时间。
+            // 后续状态过期时沿用这个时间，确保 set_session_activity 的时间顺序检查允许更新。
+            let activity_ts = session_updated
+                .filter(|updated| *updated <= now_ms + 60_000)
+                .map_or(*ts, |updated| (*ts).max(updated));
+            crate::db::set_session_activity(&tx, "zcode", id, state, activity_ts).map_err(|e| e.to_string())?;
         }
         save_db_stamps(&tx, &key, stamps).map_err(|e| e.to_string())?;
+        save_stamp(&tx, &timestamp_migration, 1, 1).map_err(|e| e.to_string())?;
+        save_stamp(&tx, &activity_migration, 1, 1).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(changed)
     })
@@ -990,6 +1060,109 @@ pub fn backfill_zcode_cwd(db: &mut impl Store, home: &Path) -> usize {
     .unwrap_or(0)
 }
 
+/// 受控回填 ZCode 的 `native_outcome='cancelled'`。
+///
+/// 旧版本的映射把 ZCode 的 `cancelled` 与 `error` 一起写成 `failed`（2026-11-21 之前），
+/// 而已入库的行不会再被扫描修正：`zcode()` 开头用 `db_unchanged` 比对主库与 WAL 的
+/// 大小 / mtime，源库没变化就整段跳过；即使重扫，`source_store::write` 也不碰
+/// `native_outcome` 这一列（它只写 Token / 时间等字段），状态单独靠后面的
+/// `UPDATE requests SET native_outcome=...` 补写——而那个 UPDATE 只在 zcode() 真正
+/// 跑起来时执行。
+///
+/// 这里读 ZCode 自己的 `model_usage` 拿原始状态，只把「原来存的是 failed、原始状态
+/// 明确是 cancelled」的行改成 cancelled：
+///
+/// - 只更新状态列，**不删任何行**：ZCode 按 30 天清理旧 `model_usage`，Jolu 必须继续
+///   保留这些历史账本（`docs/plans/2026-11-21-usage-data-accuracy-plan.md` 的 G5）。
+///   ZCode 库里已经没有的行自然查不到，也就不在回填范围内，历史记录原样留存。
+/// - 只动 `native_outcome='failed'` 的行：`success` / `unknown` 不动，避免把新扫描
+///   已经写对的行再改一次；也不把 `error` 行误改成 cancelled。
+/// - 只动 `source='native:zcode:main'` 且 `platform='zcode'`：账号来源
+///   （`native:zcode:account`）只有凭据文件，没有请求行。曾经以为历史上有
+///   `native:zcode:ai` 前缀，查证后那是 WorkBuddy AI 的实例名（`backfill_zcode_cwd`
+///   里那两行属于历史笔误），ZCode 请求只写过 `main`，这里不扩大到不存在的来源。
+/// - 幂等且只跑一次：成功后往 `migration_log` 写一条 `zcode_cancelled_backfill`，之后的
+///   心跳扫描直接返回 0，不必反复读源库。标记只在**源库读取成功**后写，源库临时
+///   打不开时留待下次心跳重试，不会因为一次失败永久放弃。
+///   用 `migration_log` 而不是 `scan_state`：后者是逐文件采集位点，`session_threads`
+///   与性能脚本会遍历它，塞一个非文件键没有意义。
+///
+/// 读取源库走只读连接，写本应用库走 `db.write` 事务；两步分开，源库打不开时直接返回 0，
+/// 不影响启动流程。返回实际改动的行数。
+pub fn backfill_zcode_cancelled(db: &mut impl Store, home: &Path) -> usize {
+    // 带版本号：将来若还要修别的历史口径，换一个 kind 即可再跑一次。
+    const KIND: &str = "zcode_cancelled_backfill";
+    let already: bool = db.write(|conn| conn
+        .query_row("SELECT EXISTS(SELECT 1 FROM migration_log WHERE kind=?1)", [KIND], |r| r.get::<_, bool>(0))
+        .unwrap_or(false));
+    if already {
+        return 0;
+    }
+    let path = home.join(".zcode/cli/db/db.sqlite");
+    if !path.exists() {
+        return 0;
+    }
+    let Ok(input) = readonly(&path) else { return 0 };
+    // 只有原始状态是 cancelled 的请求 id 才进入回填集合；表缺失或读取失败都当成
+    // 「没有」并保留标记未写状态，不能因为这一步失败去猜状态。
+    let Ok(mut stmt) = input.prepare("SELECT id FROM model_usage WHERE status = 'cancelled'") else {
+        return 0;
+    };
+    let cancelled: HashSet<String> = match stmt.query_map([], |r| r.get::<_, String>(0))
+        .and_then(|iter| iter.collect()) {
+        Ok(rows) => rows,
+        Err(_) => return 0,
+    };
+    drop(stmt);
+    drop(input);
+    db.write(|conn| -> usize {
+        let Ok(tx) = conn.transaction() else { return 0 };
+        let mut updated = 0;
+        if !cancelled.is_empty() {
+            // 先只取本库里仍是 failed 的 ZCode 行，逐条比对源库状态；命中才改。
+            let Ok(mut pending) = tx.prepare(
+                "SELECT id, dedup_key FROM requests
+                 WHERE platform = 'zcode' AND source = 'native:zcode:main' AND native_outcome = 'failed'",
+            ) else {
+                return 0;
+            };
+            let rows: Vec<(i64, String)> = match pending.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .and_then(|iter| iter.collect()) {
+                Ok(rows) => rows,
+                Err(_) => return 0,
+            };
+            drop(pending);
+            for (id, dedup_key) in rows {
+                if !cancelled.contains(&dedup_key) {
+                    continue;
+                }
+                // 再带一次 `native_outcome='failed'` 条件，避免与并发扫描抢写时把
+                // 刚写好的 success / cancelled 覆盖掉。
+                let Ok(count) = tx
+                    .execute(
+                        "UPDATE requests SET native_outcome = 'cancelled'
+                         WHERE id = ?1 AND native_outcome = 'failed'",
+                        params![id],
+                    ) else { return 0 };
+                updated += count;
+            }
+        }
+        // 标记与回填同事务：要么都生效，要么都不生效，下次心跳重新尝试。
+        let marked = tx.execute(
+            "INSERT INTO migration_log(at_ms, kind, detail) VALUES(?1, ?2, ?3)",
+            params![
+                chrono::Utc::now().timestamp_millis(),
+                KIND,
+                format!("ZCode 取消状态回填：{updated} 行从 failed 改为 cancelled（只改状态，未删行）"),
+            ],
+        ).is_ok();
+        if !marked || tx.commit().is_err() {
+            return 0;
+        }
+        updated
+    })
+}
+
 pub fn scan_at(db: &mut impl Store, home: &Path, app: &Path) -> ScanResult {
     scan_sources(db, home, app, None)
 }
@@ -1155,6 +1328,201 @@ mod tests {
         assert_eq!(zcode_session_state("running", now - ZCODE_RUNNING_GRACE_MS - 1, now), "unknown");
         assert_eq!(zcode_session_state("running", now + 120_000, now), "unknown", "未来时间戳不可信");
     }
+
+    /// 请求级状态：ZCode 原生的三种终态不能折叠成两档，其余状态保持 unknown。
+    /// 会话状态（`zcode_session_state`）仍然只分 done / failed，两者是不同层级的事实。
+    #[test]
+    fn zcode_native_outcome_keeps_cancelled_apart_from_error() {
+        assert_eq!(zcode_native_outcome("completed"), "success");
+        assert_eq!(zcode_native_outcome("error"), "failed");
+        assert_eq!(zcode_native_outcome("cancelled"), "cancelled", "取消不是错误");
+        // 未知 / 缺失状态不猜：running、pending 以及任何没见过的值都留在 unknown
+        for status in ["running", "pending", "", "aborted", "COMPLETED"] {
+            assert_eq!(zcode_native_outcome(status), "unknown", "{status} 不该被猜成终态");
+        }
+        // 会话状态维持原样：会话卡片只说这一轮结束得怎么样
+        let now = chrono::Utc::now().timestamp_millis();
+        assert_eq!(zcode_session_state("cancelled", now, now), "failed");
+    }
+
+    /// 旧库里的 cancelled 曾被写成 failed；回填只改状态列，不删行、不动其他状态，
+    /// 且写过标记后不再重复回填。
+    #[test]
+    fn backfill_turns_legacy_failed_cancellations_into_cancelled_without_deleting_rows() {
+        let root = fixture_dir("zcode-cancelled-backfill");
+        let folder = root.join(".zcode/cli/db");
+        std::fs::create_dir_all(&folder).unwrap();
+        {
+            let input = Connection::open(folder.join("db.sqlite")).unwrap();
+            input.execute_batch(
+                "CREATE TABLE model_usage(id TEXT PRIMARY KEY, status TEXT);
+                 INSERT INTO model_usage VALUES('u-cancel','cancelled'),('u-error','error');",
+            ).unwrap();
+        }
+        let mut conn = crate::db::open(Path::new(":memory:")).unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        // 模拟旧版本扫描的结果：cancelled 与 error 都写成 failed
+        for (key, outcome, ts) in [
+            ("u-cancel", "failed", now - 2_000),
+            ("u-error", "failed", now - 3_000),
+            // 已成功 / 未知的历史行不能被顺手改掉
+            ("u-cancel-done", "success", now - 4_000),
+            ("u-mystery", "unknown", now - 5_000),
+            // 源库已按 30 天清理、只剩在 Jolu 的历史行：必须原样保留
+            ("u-purged", "failed", now - 40 * 86_400_000),
+        ] {
+            conn.execute(
+                "INSERT INTO requests(platform,source,dedup_key,ts,native_outcome)
+                 VALUES('zcode','native:zcode:main',?1,?2,?3)",
+                params![key, ts, outcome],
+            ).unwrap();
+        }
+        let before: Vec<(String, String)> = conn
+            .prepare("SELECT dedup_key, native_outcome FROM requests ORDER BY dedup_key").unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
+            .flatten().collect();
+
+        assert_eq!(backfill_zcode_cancelled(&mut conn, &root), 1, "只改原始状态确为 cancelled 的那一行");
+
+        let outcome = |conn: &Connection, key: &str| -> Option<String> {
+            conn.query_row("SELECT native_outcome FROM requests WHERE dedup_key=?1", [key], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(outcome(&conn, "u-cancel").as_deref(), Some("cancelled"));
+        assert_eq!(outcome(&conn, "u-error").as_deref(), Some("failed"), "error 仍是失败");
+        assert_eq!(outcome(&conn, "u-cancel-done").as_deref(), Some("success"), "已正确的状态不动");
+        assert_eq!(outcome(&conn, "u-mystery").as_deref(), Some("unknown"));
+        assert_eq!(outcome(&conn, "u-purged").as_deref(), Some("failed"), "源库已清理的历史行原样保留");
+
+        // 行数与非状态字段都没变：回填只 UPDATE 状态列
+        let after: Vec<(String, String)> = conn
+            .prepare("SELECT dedup_key, native_outcome FROM requests ORDER BY dedup_key").unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
+            .flatten().collect();
+        assert_eq!(after.len(), before.len(), "不能删除任何历史记录");
+        let ts: i64 = conn.query_row("SELECT ts FROM requests WHERE dedup_key='u-cancel'", [], |r| r.get(0)).unwrap();
+        assert_eq!(ts, now - 2_000, "只改状态，不动时间等其他字段");
+
+        // 标记已写：第二次调用不再读源库、也不再产生改动
+        assert_eq!(backfill_zcode_cancelled(&mut conn, &root), 0, "带版本标记，跑过就不再重复");
+        assert_eq!(outcome(&conn, "u-cancel").as_deref(), Some("cancelled"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_backfill_retries_after_write_failure() {
+        let root = fixture_dir("zcode-cancelled-retry");
+        let folder = root.join(".zcode/cli/db");
+        std::fs::create_dir_all(&folder).unwrap();
+        let input = Connection::open(folder.join("db.sqlite")).unwrap();
+        input.execute_batch("CREATE TABLE model_usage(id TEXT, status TEXT); INSERT INTO model_usage VALUES('u-1','cancelled');").unwrap();
+        drop(input);
+        let mut conn = crate::db::open(Path::new(":memory:")).unwrap();
+        conn.execute("INSERT INTO requests(platform,source,dedup_key,ts,native_outcome) VALUES('zcode','native:zcode:main','u-1',1,'failed')", []).unwrap();
+        conn.execute_batch("CREATE TRIGGER reject_backfill BEFORE UPDATE OF native_outcome ON requests BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
+        assert_eq!(backfill_zcode_cancelled(&mut conn, &root), 0);
+        let marks: i64 = conn.query_row("SELECT COUNT(*) FROM migration_log WHERE kind='zcode_cancelled_backfill'", [], |r| r.get(0)).unwrap();
+        assert_eq!(marks, 0);
+        conn.execute_batch("DROP TRIGGER reject_backfill;").unwrap();
+        assert_eq!(backfill_zcode_cancelled(&mut conn, &root), 1);
+        let outcome: String = conn.query_row("SELECT native_outcome FROM requests WHERE dedup_key='u-1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(outcome, "cancelled");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// **真机回填**（`#[ignore]`，只在显式指定时跑）：对用户真实的 `usage.db` 执行一次
+    /// `backfill_zcode_cancelled`，把旧版本误写成 `failed` 的 ZCode 取消请求改成 `cancelled`。
+    ///
+    /// 为什么做成 ignored 测试而不是 CLI 子命令：它只跑一次、需要真实的源库与主库同时存在，
+    /// 不是用户会反复用的功能。放在这里能被编译与类型检查覆盖，又不会误触发。
+    ///
+    /// 安全护栏（测试自己断言，不靠调用方）：
+    /// - **行数不变**（只 UPDATE 状态，绝不删行）
+    /// - 只动 `native_outcome='failed'` 且**源库状态确为 cancelled** 的行
+    /// - `success` / `unknown` 一行不动
+    /// - 跑完写 `migration_log` 标记，重复调用返回 0
+    ///
+    /// 运行：`cargo test --manifest-path backend/Cargo.toml --lib real_zcode_cancelled_backfill -- --ignored --nocapture`
+    #[test]
+    #[ignore = "写用户真实数据库；只在明确要求时手动运行"]
+    fn real_zcode_cancelled_backfill() {
+        let home = crate::creds::home().expect("需要用户主目录");
+        // `locate()` 返回（数据目录, 配置目录）——数据目录里就是 usage.db
+        let (data_dir, _) = crate::service::paths::locate().expect("定位数据目录");
+        let db_path = data_dir.join("usage.db");
+        assert!(db_path.is_file(), "usage.db 不存在：{}", db_path.display());
+        let mut conn = crate::db::open(&db_path).expect("打开 usage.db");
+        let count = |conn: &Connection| -> i64 {
+            conn.query_row("SELECT COUNT(*) FROM requests WHERE platform='zcode'", [], |r| r.get(0)).unwrap()
+        };
+        let failed_before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM requests WHERE platform='zcode' AND native_outcome='failed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let rows_before = count(&conn);
+        eprintln!("回填前：zcode 行 {rows_before}，其中 failed {failed_before}");
+
+        let changed = backfill_zcode_cancelled(&mut conn, &home);
+        let rows_after = count(&conn);
+        let failed_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM requests WHERE platform='zcode' AND native_outcome='failed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let cancelled: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM requests WHERE platform='zcode' AND native_outcome='cancelled'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        eprintln!("回填后：改动 {changed} 行，failed {failed_after}，cancelled {cancelled}，总行数 {rows_after}");
+
+        assert_eq!(rows_after, rows_before, "回填绝不能删行");
+        assert_eq!(changed as i64, cancelled, "改动数应等于现在的 cancelled 总数");
+        assert_eq!(failed_after + cancelled, failed_before, "failed 减少的量全部变成了 cancelled");
+        // 幂等：标记已写，再跑一次没有任何改动
+        assert_eq!(backfill_zcode_cancelled(&mut conn, &home), 0, "带版本标记，跑过就不再重复");
+    }
+
+    /// 源库没有 cancelled 行时也要写标记：否则每次心跳都会重读一遍源库。
+    #[test]
+    fn backfill_marks_done_even_when_nothing_to_fix() {
+        let root = fixture_dir("zcode-cancelled-nothing");
+        let folder = root.join(".zcode/cli/db");
+        std::fs::create_dir_all(&folder).unwrap();
+        {
+            let input = Connection::open(folder.join("db.sqlite")).unwrap();
+            input.execute_batch("CREATE TABLE model_usage(id TEXT PRIMARY KEY, status TEXT);
+                INSERT INTO model_usage VALUES('u-1','completed');").unwrap();
+        }
+        let mut conn = crate::db::open(Path::new(":memory:")).unwrap();
+        assert_eq!(backfill_zcode_cancelled(&mut conn, &root), 0);
+        // 标记确实写了：这是「不必每次心跳重读源库」的依据，而不是「没东西可改就返回 0」
+        let marks: i64 = conn
+            .query_row("SELECT COUNT(*) FROM migration_log WHERE kind='zcode_cancelled_backfill'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(marks, 1, "没有 cancelled 行也要落标记，否则每个心跳都会重读源库");
+        // 标记存在后，即使源库出现可回填的行也不再处理：一次性迁移
+        let input = Connection::open(folder.join("db.sqlite")).unwrap();
+        input.execute("UPDATE model_usage SET status='cancelled' WHERE id='u-1'", []).unwrap();
+        drop(input);
+        conn.execute(
+            "INSERT INTO requests(platform,source,dedup_key,ts,native_outcome)
+             VALUES('zcode','native:zcode:main','u-1',1,'failed')",
+            [],
+        ).unwrap();
+        assert_eq!(backfill_zcode_cancelled(&mut conn, &root), 0, "带标记后不再重复回填");
+        let outcome: Option<String> = conn
+            .query_row("SELECT native_outcome FROM requests WHERE dedup_key='u-1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(outcome.as_deref(), Some("failed"), "标记后不再改，留给下一次换 kind 的迁移");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
     #[test]
     fn zcode_session_time_updated_boosts_recently_active_sessions_to_running() {
         let now = chrono::Utc::now().timestamp_millis();
@@ -1195,10 +1563,12 @@ mod tests {
                 input.execute("INSERT INTO session VALUES(?1,?2)", params![sid, title]).unwrap();
             }
             let raw = r#"{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}"#;
-            let rows: [(&str, &str, &str, i64, Option<i64>); 4] = [
+            let rows: [(&str, &str, &str, i64, Option<i64>); 5] = [
                 ("u-run", "s-run", "running", now - 2_000, None),
                 ("u-done", "s-done", "completed", now - 5_000, Some(now - 3_000)),
                 ("u-fail", "s-fail", "error", now - 5_000, Some(now - 4_000)),
+                // 用户取消：状态必须独立成 cancelled，不能并进 failed（2026-11-21）
+                ("u-cancel", "s-fail", "cancelled", now - 4_000, Some(now - 3_500)),
                 ("u-stale", "s-stale", "running", now - 30 * 60_000, None),
             ];
             for (id, sid, status, started, completed) in rows {
@@ -1209,6 +1579,23 @@ mod tests {
         let mut conn = crate::db::open(Path::new(":memory:")).unwrap();
         let result = scan_at(&mut conn, &root, &root);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
+        // 模拟升级前扫描戳未变化，但旧记录采用了完成时间。
+        let key = root.join(".zcode/cli/db/db.sqlite").to_string_lossy().to_string();
+        conn.execute("DELETE FROM scan_state WHERE path=?1", [format!("{key}#zcode-started-at-v1")]).unwrap();
+        conn.execute("UPDATE requests SET ts=?1 WHERE dedup_key='u-done'", [now - 3_000]).unwrap();
+        conn.execute("INSERT INTO requests(platform,source,dedup_key,ts) VALUES('zcode','native:zcode:main','already-cleaned',1)", []).unwrap();
+        conn.execute_batch("CREATE TRIGGER reject_timestamp BEFORE UPDATE OF ts ON requests WHEN NEW.dedup_key='u-done' BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
+        let result = scan_at(&mut conn, &root, &root);
+        assert!(!result.errors.is_empty());
+        assert_eq!(crate::db::get_scan_state(&conn, &format!("{key}#zcode-started-at-v1")), None);
+        conn.execute_batch("DROP TRIGGER reject_timestamp;").unwrap();
+        let result = scan_at(&mut conn, &root, &root);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let restored: i64 = conn.query_row("SELECT ts FROM requests WHERE dedup_key='u-done'", [], |r| r.get(0)).unwrap();
+        assert_eq!(restored, now - 5_000);
+        let retained: i64 = conn.query_row("SELECT COUNT(*) FROM requests WHERE dedup_key='already-cleaned'", [], |r| r.get(0)).unwrap();
+        assert_eq!(retained, 1);
+        assert_eq!(crate::db::get_scan_state(&conn, &format!("{key}#zcode-started-at-v1")), Some((1, 1)));
         let state_of = |sid: &str| -> String {
             conn.query_row("SELECT activity_state FROM sessions WHERE platform='zcode' AND session_id LIKE ?1",
                 [format!("%:{sid}")], |r| r.get(0)).unwrap()
@@ -1217,8 +1604,13 @@ mod tests {
         assert_eq!(state_of("s-done"), "done");
         assert_eq!(state_of("s-fail"), "failed");
         assert_eq!(state_of("s-stale"), "unknown", "超过宽限期的进行中行不算运行");
-        let outcome: String = conn.query_row("SELECT native_outcome FROM requests WHERE dedup_key='u-fail'", [], |r| r.get(0)).unwrap();
-        assert_eq!(outcome, "failed");
+        let outcome = |key: &str| -> String {
+            conn.query_row("SELECT native_outcome FROM requests WHERE dedup_key=?1", [key], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(outcome("u-done"), "success", "completed → success");
+        assert_eq!(outcome("u-fail"), "failed", "error → failed");
+        assert_eq!(outcome("u-cancel"), "cancelled", "cancelled 必须单独一档，不能折叠成 failed");
+        assert_eq!(outcome("u-run"), "unknown", "还没有结论的行不猜成功");
         let live = crate::db::live_usage(&conn, "zcode", None).unwrap();
         let mut states: Vec<(String, String)> = live.active_sessions.iter()
             .map(|s| (s.title.clone(), s.state.clone())).collect();
@@ -1252,6 +1644,14 @@ mod tests {
             input.execute("INSERT INTO session VALUES('s-live','学习中的会话',?1)", params![now - 2_000]).unwrap();
             input.execute("INSERT INTO model_usage VALUES('u-live','s-live','glm-4.7','completed',?1,?2,100,20,0,0,120,120,5,?3)",
                 params![now - 10_000, now - 9_000, raw]).unwrap();
+            // 上一条请求已经很久，新一轮仍在写。状态时间应采用会话更新时间。
+            input.execute("INSERT INTO session VALUES('s-long','长会话',?1)", params![now - 1_000]).unwrap();
+            input.execute("INSERT INTO model_usage VALUES('u-long','s-long','glm-4.7','completed',?1,?2,100,20,0,0,120,120,5,?3)",
+                params![now - 1_200_000, now - 1_199_000, raw]).unwrap();
+            // 请求开始已久，刚刚完成时仍应出现在最近活跃列表。
+            input.execute("INSERT INTO session VALUES('s-finished','刚完成的长请求',?1)", params![now - 500]).unwrap();
+            input.execute("INSERT INTO model_usage VALUES('u-finished','s-finished','glm-4.7','completed',?1,?2,100,20,0,0,120,120,5,?3)",
+                params![now - 1_200_000, now - 500, raw]).unwrap();
             // s-idle：time_updated 只比 usage 行新 33ms，就是刚收尾，不算运行
             input.execute("INSERT INTO session VALUES('s-idle','刚完成的会话',?1)", params![now - 3_000 + 33]).unwrap();
             input.execute("INSERT INTO model_usage VALUES('u-idle','s-idle','glm-4.7','completed',?1,?2,100,20,0,0,120,120,5,?3)",
@@ -1269,6 +1669,28 @@ mod tests {
                 [format!("%:{sid}")], |r| r.get(0)).unwrap()
         };
         assert_eq!(state_of("s-live"), "running", "行状态 completed 但会话仍在写：新一轮在跑");
+        assert_eq!(state_of("s-long"), "running");
+        let updated: i64 = conn.query_row(
+            "SELECT activity_updated_ms FROM sessions WHERE platform='zcode' AND session_id LIKE '%:s-long'",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(updated, now - 1_000);
+        let listed = crate::session_threads::list(&conn, &crate::session_threads::SessionFilter::default()).unwrap();
+        let long = listed.sessions.iter().find(|s| s.session_id.ends_with(":s-long")).unwrap();
+        assert_eq!(long.status, "running");
+        let live = crate::db::live_usage(&conn, "zcode", None).unwrap();
+        let long = live.active_sessions.iter().find(|s| s.session_id.ends_with(":s-long")).unwrap();
+        assert_eq!(long.state, "running");
+        assert_eq!(long.last_seen_ms, now - 1_000);
+        assert_eq!(long.delta_tokens, 0, "历史用量不能冒充最近增量");
+        let finished = live.active_sessions.iter().find(|s| s.session_id.ends_with(":s-finished")).unwrap();
+        assert_eq!(finished.state, "done");
+        assert_eq!(finished.last_seen_ms, now - 500);
+        assert_eq!(finished.delta_tokens, 0);
+        assert!(live.active_sessions.iter().position(|s| s.session_id.ends_with(":s-finished"))
+            < live.active_sessions.iter().position(|s| s.session_id.ends_with(":s-long")));
+        assert_eq!(zcode_observed_state(Some("done"), Some(now + 61_000), now), "recent");
+        assert_eq!(zcode_observed_state(Some("failed"), Some(now + 61_000), now), "recent");
         assert_eq!(state_of("s-idle"), "done", "收尾写库的几十毫秒差不是新一轮");
         assert_eq!(state_of("s-gone"), "done", "超宽限期的旧活动不假 running");
         std::fs::remove_dir_all(&root).unwrap();
@@ -1567,6 +1989,62 @@ mod tests {
             .query_row("SELECT cwd FROM sessions WHERE platform='zcode' AND session_id='native:zcode:main:s1'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(cwd.as_deref(), Some("D:/develop/Jolu"), "ZCode 的 directory 必须落库成会话 cwd");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// 跨本地午夜的请求必须按 **开始时间** 归日，不是按完成时间。
+    ///
+    /// 现场：ZCode 自己按 `started_at` 归日、也按它做 30 天清理；Jolu 曾经优先用
+    /// `completed_at`，于是 23:59 开始、00:01 完成的请求会被记到第二天——本机实测
+    /// 有 6 条这样的请求，按日对账时两边分布对不上。
+    ///
+    /// 这条测试用一条**固定**的跨午夜请求（本地时区 2026-03-10 23:59:30 开始、
+    /// 2026-03-11 00:00:30 完成），断言落库的 `ts` 落在 3 月 10 日。
+    #[test]
+    fn zcode_attributes_a_cross_midnight_request_to_its_start_day() {
+        use chrono::TimeZone;
+        let root = fixture_dir("zcode-midnight");
+        let folder = root.join(".zcode/cli/db");
+        std::fs::create_dir_all(&folder).unwrap();
+        // 本地时区的固定时刻（不是「现在」）：跨午夜测试必须可复现，不能依赖跑测试的钟点
+        let started = chrono::Local
+            .with_ymd_and_hms(2026, 3, 10, 23, 59, 30)
+            .single()
+            .expect("固定本地时刻")
+            .timestamp_millis();
+        let completed = started + 60_000; // 一分钟后：2026-03-11 00:00:30
+        {
+            let input = Connection::open(folder.join("db.sqlite")).unwrap();
+            input.execute_batch("CREATE TABLE session(id TEXT PRIMARY KEY, title TEXT, directory TEXT);
+                CREATE TABLE model_usage(id TEXT PRIMARY KEY, session_id TEXT, model_id TEXT,
+                  status TEXT, started_at INTEGER, completed_at INTEGER, input_tokens INTEGER,
+                  output_tokens INTEGER, cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER,
+                  provider_total_tokens INTEGER, computed_total_tokens INTEGER, reasoning_tokens INTEGER,
+                  raw_usage_json TEXT);").unwrap();
+            input.execute("INSERT INTO session(id,title) VALUES('s1','跨午夜')", []).unwrap();
+            input.execute(
+                "INSERT INTO model_usage(id,session_id,model_id,status,started_at,completed_at,input_tokens,output_tokens)
+                 VALUES('u1','s1','glm-4.6','completed',?1,?2,10,5)",
+                rusqlite::params![started, completed],
+            ).unwrap();
+        }
+        let mut store = crate::db::open(std::path::Path::new(":memory:")).unwrap();
+        let source = Source {
+            id: "native:zcode:main".into(),
+            platform: "zcode".into(),
+            name: "ZCode".into(),
+            available: true,
+            capabilities: vec![],
+            reason: None,
+            path: folder.join("db.sqlite"),
+        };
+        zcode(&mut store, &source).unwrap();
+        let ts: i64 = store
+            .query_row("SELECT ts FROM requests WHERE platform='zcode' AND dedup_key='u1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ts, started, "落库时间必须是开始时间（23:59:30），不是完成时间（次日 00:00:30）");
+        let day = chrono::Local.timestamp_millis_opt(ts).single().unwrap().format("%Y-%m-%d").to_string();
+        assert_eq!(day, "2026-03-10", "这条请求属于 3 月 10 日；按完成时间会错记到 3 月 11 日");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

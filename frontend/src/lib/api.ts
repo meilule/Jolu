@@ -370,7 +370,7 @@ export interface IslandLinkageDto {
   signals: boolean
   /** 跟随主窗口：主窗口在看某个连接时本体岛临时显示它 */
   follow_main: boolean
-  /** 本体岛只看这一家 ZCode provider；null = 全部 */
+  /** 旧版筛选值，仅为兼容既有设置保留。 */
   zcode_provider: string | null
   /** 按最近活跃自动选主：分身所在平台明显更活跃时自动与本体互换 */
   auto_focus: boolean
@@ -797,7 +797,8 @@ export interface StatsFilterDto {
   platform: string | null
   connections: string[]
   model?: string | null
-  status?: "success" | "error" | null
+  /** 三档互斥：success 不含失败与取消，error 只认失败，cancelled 只认取消 */
+  status?: "success" | "error" | "cancelled" | "unknown" | null
   search?: string | null
 }
 
@@ -856,7 +857,13 @@ export interface StatsModelRowDto {
 export interface StatsProviderRowDto {
   platform: string
   requests: number
+  /** 组内**全部**记录都有 Token 时才有的合计；任意一条未知就是 null（未知不当零） */
   tokens: number | null
+  /** 已知部分的合计：`tokens` 为 null 时这里仍有值，供界面显示已知小计。
+      全部未知时为 0，必须配合 `known_requests` 判断——0 条有 Token 才是真未知，不能直接显示成 0 */
+  known_tokens: number
+  /** 有 Token 的请求数，即 `known_tokens` 覆盖了多少条；等于 `requests` 表示全覆盖 */
+  known_requests: number
   cost: CostSummaryDto
 }
 
@@ -873,7 +880,11 @@ export interface StatsOverviewDto {
   tokens: TokenSplitDto
   token_coverage: { known_total: number | null; known_requests: number; cache_hit_rate: number | null; cache_requests: number }
   requests: number
+  /** 上游错误数；**不含取消** */
   failed: number
+  /** 原生来源明确标记的取消数；与 failed 互斥，也不算进成功率。可选：旧后端不返回 */
+  cancelled?: number
+  unknown?: number
   cache_hit_rate: number | null
   cost: CostSummaryDto
   previous_total: number | null
@@ -925,7 +936,11 @@ export interface StatsCallRowDto {
   duration_ms: number | null
   first_token_ms: number | null
   status_code: number | null
+  /** 上游错误或原生 failed；**不含取消** */
   failed: boolean
+  /** 原生来源明确标记的取消；与 failed 互斥。可选：旧后端不返回 */
+  cancelled?: boolean
+  unknown?: boolean
   /** 这条调用归到的已存连接（可选字段：旧后端不返回） */
   attribution?: AttributionDto
 }

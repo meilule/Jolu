@@ -106,11 +106,8 @@ export function MiddlewarePanel({ busy, run, onOpenPrivacy }: {
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-4 px-8 pb-8 pt-2">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex flex-col gap-1.5">
-          <h2 className="text-[20px] font-semibold text-jolu-text">按你的规则处理请求</h2>
-          <p className="text-meta text-jolu-muted">规则按顺序执行；每一项都可以独立启用、编辑和调整顺序。</p>
-        </div>
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-[20px] font-semibold text-jolu-text">中间件</h2>
         <button type="button" disabled={busy} onClick={startNew}
           className="flex h-10 shrink-0 items-center gap-1.5 rounded-lg bg-jolu-text px-4 text-meta font-semibold text-jolu-bg outline-none hover:opacity-90 focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
           <PlusIcon />添加规则
@@ -134,7 +131,7 @@ export function MiddlewarePanel({ busy, run, onOpenPrivacy }: {
       {error && <div className="rounded-xl bg-jolu-status-error-bg px-4 py-2.5 text-meta text-jolu-danger">读取失败：{error}</div>}
       {rows !== null && rows.length === 0 && !editing && (
         <div className="rounded-xl border border-dashed border-jolu-border px-4 py-8 text-center text-meta text-jolu-muted">
-          还没有规则。点「添加规则」后，下一个经过模型路由的请求即生效。
+          还没有规则。点「添加规则」后，下一个请求即生效。
         </div>
       )}
 
@@ -222,15 +219,10 @@ export function MiddlewarePanel({ busy, run, onOpenPrivacy }: {
         </div>
       )}
 
-      <section className="flex items-start gap-3 rounded-xl border border-jolu-border bg-jolu-side px-5 py-4">
-        <FlaskConical aria-hidden className="mt-0.5 size-4 shrink-0 text-jolu-muted" />
-        <span className="flex flex-col gap-1">
-          <span className="text-[15px] font-semibold text-jolu-text">保存前自动试跑</span>
-          <span className="text-meta text-jolu-muted">配置通过样例请求校验后才会保存。运行时某项出错会跳过该项；命中拦截规则则拒绝请求。</span>
-        </span>
+      <section className="flex items-center gap-3 rounded-xl border border-jolu-border bg-jolu-side px-5 py-3">
+        <FlaskConical aria-hidden className="size-4 shrink-0 text-jolu-muted" />
+        <span className="min-w-0 flex-1 text-meta text-jolu-muted">保存前用样例请求校验；运行时出错跳过该项，命中拦截规则则拒绝请求。</span>
       </section>
-
-      <p className="text-note text-jolu-muted">可添加：{MIDDLEWARE_KINDS.map((kind) => kind.label).join("、")}</p>
 
       {removing && (
         <ConfirmDialog title={`删除「${removing}」？`} description="删除后下一个请求起不再执行这个规则。" confirmLabel="删除" danger

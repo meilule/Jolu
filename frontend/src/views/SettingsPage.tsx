@@ -62,7 +62,6 @@ export function SettingsPage({ section, navigationRequest, onOpenSkills }: {
       <header className="flex min-h-14 items-center justify-between gap-4">
         <div className="flex flex-col gap-[7px]">
           <h1 className="text-2xl font-semibold text-jolu-text">设置</h1>
-          <p className="text-xs text-jolu-muted">让 Jolu 按你的习惯工作</p>
         </div>
         <SaveStatus state={state} />
       </header>
@@ -100,10 +99,7 @@ export function SettingsPage({ section, navigationRequest, onOpenSkills }: {
         </nav>
 
         <section aria-label={current.label} className="flex min-w-0 flex-1 flex-col gap-4">
-          <div className="flex flex-col gap-1.5">
-            <h2 className="text-[22px] font-semibold text-jolu-text">{current.label}</h2>
-            <p className="text-xs text-jolu-muted">{current.desc}</p>
-          </div>
+          <h2 className="text-[22px] font-semibold text-jolu-text">{current.label}</h2>
           <ContentTransition identity={`${tab}-${cfg.ready}`} className="flex flex-col gap-4">
           {cfg.loading && !cfg.ready ? <LoadingSurface layout="settings" label="正在读取设置" /> : <>
           {tab === "general" && <GeneralSection cfg={cfg} />}

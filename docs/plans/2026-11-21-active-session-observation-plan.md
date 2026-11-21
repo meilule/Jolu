@@ -1,0 +1,348 @@
+# 活跃会话观测：全量调查与优化方案
+
+日期：2026-11-21
+状态：**待鼠鼠确认**（本文只做调查与设计，业务代码未改）
+关联：`docs/plans/2026-11-20-agent-wiring-refactor-plan.md`（接线侧已完成同类改造）
+
+---
+
+## 1. 需求与目标
+
+### 1.1 需求原文
+
+> 在活跃会话中可以看到已接线的 agent 的会话。现在我在 ZCode 也进行了接线，但是在活跃会话中 ZCode 也没有出现在该会话中。
+
+### 1.2 目标
+
+| # | 目标 | 判定标准 |
+|---|---|---|
+| G1 | 已接线的 13 家都能被**正确识别** | `gateway_route_log.agent` 不再出现属于这些工具的 NULL 行 |
+| G2 | 已接线的工具都能在**活跃会话**里出现 | 用 ZCode / WorkBuddy 各发一条消息，概览页出现对应会话行 |
+| G3 | 认不出来时**不假装** | 认不出 → `agent` 为 NULL 并在诊断可见，不归到猜测的平台 |
+| G4 | **加一家工具只改一处** | 身份、会话来源、展示名都在同一张注册表 |
+| G5 | 结构不再继续堆 | 同类计算只有一份实现（见 §3） |
+
+### 1.3 已确证的复现证据（本机真实数据）
+
+| 数据表 | 实测结果 |
+|---|---|
+| `gateway_route_log` | `claude-code` 83 条、`zcode` 2 条、**`agent IS NULL` 103 条** |
+| `gateway_context_snapshot` | **只有 `claude` 一个平台，1 条** |
+| NULL 行的构成 | `zcode/GLM-5.3-Flash` 42 条、`workbuddy-16f911/*` 53 条、其它 8 条 |
+
+**结论：ZCode / WorkBuddy 的请求过了网关、记了流水，但（a）认不出是哪个工具，（b）建不了快照。**
+
+---
+
+## 2. 全量调查（事实，均标注文件:行号）
+
+### 2.1 身份识别：只认 4 家
+
+`backend/src/gateway/wire.rs:294` `agent_from_headers()` 的判定链：
+
+| 序 | 信号 | 产出 | 行号 |
+|---|---|---|---|
+| 1 | `x-codex-window-id` / `x-codex-turn-metadata` + UA/Originator 是 `claude code` | codex | 237-250 |
+| 2 | UA `vscode_agent_host` | codex | 257-265 |
+| 3 | 令牌前缀 `jolu-<agent>.`（在 `wiring::agents()` 名单内） | 令牌里的 agent | 303-314 |
+| 4 | `originator` contains codex / claude / gemini | 对应 agent | 315-326 |
+| 5 | UA `GeminiCLI` / `proxy_client=geminicli` | gemini | 327-331 |
+| 6 | UA `codex_cli_rs` | codex | 332-334 |
+| 7 | UA `claude-cli/` | claude-code | 335-337 |
+| 8 | UA `opencode/` 或 `x-opencode-*` 头 | opencode | 338-344 |
+| 9 | 兜底 | **None + unidentified_ua** | 345-346 |
+
+**13 家里有 9 家没有 UA 分支。** 它们只能靠第 3 条（令牌前缀）被认出——而实测 103 条 NULL 说明令牌路径对 ZCode / WorkBuddy 也没生效（原因待查，见 §6 待确认）。
+
+### 2.2 会话识别：只认 3 家
+
+`wire.rs:197` `session_identity()`：
+
+| agent | platform | 会话 ID 来源 |
+|---|---|---|
+| `claude-code` | claude | 头 `x-claude-code-session-id`，否则 body `metadata.user_id` |
+| `codex` | codex | 头 `session-id` / `session_id` |
+| `opencode` | opencode | 头 `x-opencode-parent-session-id` / `x-opencode-session-id`，拼 `opencode:` 前缀 |
+| 其余 10 家 | — | `return None`（`wire.rs:218`） |
+
+`None` → `wire.rs:559` 的 `session_ref.as_ref().map(...)` 不建 `Capture` → 快照表里一行都不写。
+
+### 2.3 活跃会话表实际是**两套数据合并**
+
+这是我之前判断错的地方。截图那张表不是单一数据源：
+
+```
+gateway_sessions_overview          gateway_context_sessions
+  (sessions.rs:75)                    (context/query.rs:128)
+  输入：route_log + requests/sessions   输入：gateway_context_snapshot
+        + 内存在途快照                        + route_log + connections
+        ↓                                    ↓
+   useGatewaySessions (15s)          GatewayView.refresh (5s)
+        ↓                                    ↓
+   sessions.views                    contexts: ContextSessionRowDto[]
+        └──────────────┬─────────────────────┘
+                       ▼
+        contextSessions.ts:134-160  activeSessionRows()
+                       ▼
+              OverviewPanel 活跃会话表
+```
+
+**每一列的来源**（`OverviewPanel.tsx:194-201`、`contextSessions.ts:143-153`）：
+
+| 列 | 来源 | 说明 |
+|---|---|---|
+| Agent / 会话 / 项目 | `sessions.views`（title、cwd）+ `contexts`（agent 回退） | 标题和项目**只有** `sessions.rs` 有 |
+| 实际模型 / 来源账号 | **优先 `contexts`**，回退 `links` | 账号名只有 `contexts` 有 `connection_name` |
+| 最近一次上下文 | **只有 `contexts`** | `input_tokens` / `estimated` / `window_tokens` |
+| 缓存读取 / 占输入 | **只有 `contexts`** | `cache_read` |
+| 状态 / 最近请求 | `sessions.views`（在途事件）+ `contexts.ts` | 时间取两者最大 |
+
+**所以「活跃会话看不到 ZCode」的真正原因是**：
+- 行本身由 `sessions.rs` 撑起（靠 `route_log`，ZCode 有记录）→ **行应该出现**
+- 但 `agent` 列是 NULL（身份识别失败）
+- 上下文 / 缓存 / 模型 / 账号四列全是空（没有快照）
+
+截图上那 8 行 Claude Code 是因为它有 `agent` + 有快照。
+
+### 2.4 本地会话文件读取：**三套实现，互不相通**
+
+| 模块 | 角色 | 行数 |
+|---|---|---|
+| `native_sources.rs` | **生产者**：读第三方文件 → 写 `requests` / `sessions` 表 | 1571 |
+| `session_threads.rs` | **消费者**：读 `requests` / `sessions` 表 + 重解析源文件拿正文 | 1630 |
+| `collector.rs` | **另一个生产者**：Claude / Codex 的 JSONL 用量采集 | — |
+
+**关键缺陷（真 bug，不是设计取舍）**：
+
+| # | 缺陷 | 位置 | 后果 |
+|---|---|---|---|
+| ① | `save_stamp` **不写** `parser_session_id` | `native_sources.rs:326-329` | `session_threads::source_files` 看不到 `native_sources` 采集的任何来源 → WorkBuddy / Qoder / Gemini / OpenCode 的会话在会话页永远没有正文 |
+| ② | `has_source` 只对 Claude / Codex 为真 | `session_threads.rs:88-99` | ZCode 的 `activity_state`（running/done/failed）**写了但永远不显示**，会话页恒为 `recent` |
+| ③ | ZCode 子会话过滤只在消费者侧 | `session_threads.rs:822-844` | 采集侧照常把子代理会话的 token 计入总量 |
+| ④ | 会话 ID 格式三套 | `native_sources.rs:730`（`{source}:{raw}`）、`opencode_usage.rs:26`（`opencode:{raw}`）、collector 用裸 `sessionId` | 同一会话在不同表里 id 不同，无法 join |
+
+### 2.5 重复实现清单（同类计算写了 2 份以上）
+
+| 能力 | 实现 A | 实现 B | 实现 C |
+|---|---|---|---|
+| JSONL 逐行读取 | `session_threads.rs:706-750` | `native_sources.rs:348-395` | `collector.rs:417-530` |
+| 文件戳（size/mtime） | `session_threads.rs:110-112` | `native_sources.rs:314-323` | `collector.rs:82-89` |
+| RFC3339 → 毫秒 | `session_threads.rs:374-376` | `native_parse.rs:15-21` | `collector.rs:56-58` |
+| 只读 sqlite 打开 | `session_threads.rs:802-807` | `native_sources.rs:286-296` | 另 6 处（attribution / session_presence / import_sources / opencode_usage / trae_browser_auth / adapter/workbuddy） |
+| `metadata.user_id` 解析 | `wire.rs:98-115`（`anthropic_user_session`） | `wire.rs:180-187`（`claude_session_from_user_id`） | — |
+| 会话身份（亲和 vs 严格） | `wire.rs:133-167`（`session_key`） | `wire.rs:197-221`（`session_identity`） | 前者读同一批头，但用途不同 |
+| 网关会话聚合 | `sessions.rs:81-103`（内存 HashSet 合并） | `context/query.rs:130-141`（SQL 窗口函数） | 前端 `contextSessions.ts:134` 第三次合并 |
+| 项目名（cwd 末段） | `contextSessions.ts:113-117` | `gatewaySessions.ts:261-265` | `sessionThreads.ts:19`、`automation.ts:378` |
+| Token 紧凑格式 | `gatewaySessions.ts:299-304` | `api.ts:944-949` | — |
+| `[1m]` 后缀剥离 | `route.rs` `canonical_model` | `escape.rs:181`、`commands/routing.rs:427`、`wiring.rs:123/129` | 至少 4 处 |
+
+### 2.6 加一个工具的完整成本：**28 处**
+
+（详细清单见调查附录，此处只列摘要）
+
+| 类别 | 处数 | 举例 |
+|---|---|---|
+| 后端身份 / 会话 | 3 | `agent_from_headers`、`session_identity`、`session_key` 头列表 |
+| 后端接线 | 2 | `wiring_specs.rs` 一行 + `adapters.rs` 两个函数 |
+| 后端平台能力 | 9 | `own_platforms`、`unsupported` 白名单、适配器分发、`server.rs` 模型清单 4 条分支、`access.rs` Codex 专属、`subscription.rs` 6 处 |
+| 后端探测 / 导入 | 3 | `agent_discovery.rs`（数组长度硬编码 `17`）、`import_sources.rs` 两处 |
+| **前端展示名** | **4** | `gatewayPage.ts:AGENT_LABELS`、`gatewaySessions.ts:TOOL_LABELS`、`agentPage.ts:wiringName`、`librarySharedView.ts:SHARED_AGENT_LABELS` —— **四份重复的展示名表** |
+| 前端图标 / 文案 | 4 | `agentPage.ts` 的 `AGENT_PLATFORM` / `AVAILABLE_SUBTITLES`、`AgentList.tsx` 的 `PLATFORM_OF` / `AGENT_IMAGES` |
+| 其它 | 3 | `connections.rs` 能力名单等 |
+
+**这就是「边改边堆屎」的具体形态：同一件事（这家工具叫什么、图标是什么、UA 是什么）写在 4-28 个地方。**
+
+---
+
+## 3. 根因归类（三个结构性问题是同一件事）
+
+不是「漏了 ZCode」，而是**「工具身份」这个概念从未被建模**：
+
+| 问题 | 本质 |
+|---|---|
+| UA / 令牌 / 会话头 散在 `wire.rs` 的 if 链里 | 身份识别没有注册表 |
+| 展示名 4 份、图标 2 份、文案 3 份 | 展示元数据没有单一来源 |
+| 会话数据有 3 个生产者、2 个聚合器 | 会话没有统一模型 |
+
+而**接线侧已经在 2026-11-20 做完了同类改造**（`wiring_specs.rs`：一张表声明 8 个字段，`AGENTS` / `config_path` / `restart_notice` / `ours_with` / db 种子全部派生）。
+
+**身份识别是同一个问题的另一半**：接线决定「写哪个文件」，身份决定「读哪个请求」。两者共用一张表最省。
+
+---
+
+## 4. 目标架构
+
+### 4.1 一张表，四个消费者
+
+```
+        ┌──────────────────────────────────────────┐
+        │  单一注册表（扩展 wiring_specs.rs）        │
+        │  AgentSpec {                             │
+        │    id, name,                              │
+        │    // 接线（已有）                         │
+        │    wire, unwire, path, base, token, …     │
+        │    // 身份（新增）                         │
+        │    ua: &[&str],          ← UA 前缀         │
+        │    session: SessionSource, ← 会话 ID 从哪来 │
+        │    // 展示（新增）                         │
+        │    platform_id, icon, subtitle,           │
+        │  }                                        │
+        └───────────────┬──────────────────────────┘
+                        │
+     ┌──────────────────┼──────────────────┬─────────────────┐
+     ▼                  ▼                  ▼                 ▼
+① agent_from_headers  ② session_identity  ③ 前端展示元数据   ④ db 种子
+   （查 ua 表）          （查 session 表）     （一个命令返回）    （已有，派生）
+```
+
+### 4.2 会话来源的两类（这是关键设计）
+
+```rust
+enum SessionSource {
+    /// 请求头里就带会话 ID（Claude Code / Codex / OpenCode 已验证）
+    Header { headers: &'static [&'static str] },
+    /// 请求体里带（Claude Code 的 metadata.user_id 是这种）
+    Body { pointer: &'static str },
+    /// 请求里没有，只能从本地会话文件反查（ZCode / WorkBuddy 等）
+    LocalFile { reader: fn(&Path) -> Vec<LocalSession> },
+}
+```
+
+**为什么必须显式区分**：`LocalFile` 类型**不能**在请求时建快照（那一刻还不知道属于哪个会话）。它的数据要等会话文件更新后才能关联。混在一起写会变成「用时间窗口猜」，那是错的。
+
+### 4.3 三层职责
+
+| 层 | 职责 | 文件 |
+|---|---|---|
+| **身份层** | agent 是谁、会话 ID 从哪来 | `wiring_specs.rs`（扩展）+ `wire.rs`（改为查表） |
+| **采集层** | 请求 → 快照 | `context/capture.rs`（不变，只依赖身份层） |
+| **聚合层** | 快照 + 本地会话文件 → 统一会话视图 | 合并 `gateway/sessions.rs` + `gateway/context/query.rs` |
+| **展示层** | 前端只调一个命令 + 一个元数据命令 | `OverviewPanel.tsx` |
+
+---
+
+## 5. 分阶段计划
+
+### 阶段 1：身份注册表（解决 G1 / G3 / G4 的一半）
+
+**范围**：只动身份识别与前端展示元数据，**不动数据流**。
+
+| 步骤 | 改动 | 风险 |
+|---|---|---|
+| 1.1 | 给 `AgentSpec` 加 `ua: &'static [&'static str]` | 低（纯新增字段） |
+| 1.2 | `agent_from_headers` 的 UA 部分改为查表；`codex_masquerading_as_claude` / `hosted_codex` 作为「反伪装」保留在前 | 低 |
+| 1.3 | 补 magpie 已确认的 UA：`zcode` / `workbuddy` / `qwencode` / `kimicli` / `deepseek-harness` | 低 |
+| 1.4 | 查 `pencil` / `pi` / `qoder` 的 UA（magpie 只确认 `pi-desktop`） | 低 |
+| 1.5 | 新增命令 `agent_meta()` 返回 `[{id, name, platform_id, subtitle}]`，前端 4 份展示名表合并成 1 份 | 中（动 4 个前端文件，但有守卫测试） |
+
+**验收**：
+- `gateway_route_log` 里不再出现属于 13 家的 NULL 行（用 ZCode / WorkBuddy 各发一条验证）
+- 前端展示名只有一个来源，加一家不用改前端
+
+**这一阶段单独可交付**，即使阶段 2 不做，也解决了「认不出是谁」。
+
+---
+
+### 阶段 2：探明会话来源（只调查，不改代码）
+
+**为什么单列**：阶段 1 之后，ZCode 会被认出，但会话 ID 仍需回答「从哪来」。magpie 的做法是从本地会话文件读，但**Jolu 的 ZCode 读取器已经存在**（`session_threads.rs`）。
+
+| 要查清 | 方法 |
+|---|---|
+| ZCode 请求头里有没有会话 ID | `JOLU_HEADER_PROBE=1`（已实现，见 §7）+ 实际发一条消息 |
+| WorkBuddy 同上 | 同上 |
+| 各家本地会话文件格式 | 只读检查（ZCode 已确认：`~/.zcode/cli/db/db.sqlite` 的 `session`/`message`/`part`） |
+
+**产出**：一份「13 家的会话来源对照表」，明确哪家是 `Header` / `Body` / `LocalFile`。
+
+---
+
+### 阶段 3：会话来源接线（解决 G2）
+
+按阶段 2 的结论，把 `SessionSource` 填进注册表。
+
+**对 `Header` / `Body` 类**（Claude Code / Codex / OpenCode / 可能有 ZCode）：
+
+- 只需在注册表声明头名或 body 路径
+- `session_identity` 改查表
+- 立刻出现在活跃会话里
+
+**对 `LocalFile` 类**（ZCode / WorkBuddy / …）：
+
+这是**新能力**，需要：
+
+1. 修复 §2.4 的缺陷 ①（`save_stamp` 不写 `parser_session_id`）
+2. 给 `session_threads` 加「按平台读本地会话」的统一入口（现在硬编码 claude/codex 两条路径）
+3. 聚合层把「本地会话」与「网关快照」按 `(platform, session_id)` 合并
+
+**⚠️ 工作量提示**：第 2 步是 `session_threads.rs` 的实质性改造（1630 行，平台白名单散在 5 处）。建议**先只接 ZCode 一家**验证，再推广。
+
+---
+
+### 阶段 4：聚合层合并（解决 G5 的一半，可延后）
+
+合并 `gateway/sessions.rs`（197 行）与 `gateway/context/query.rs`：
+
+- 现在两个模块都在算「网关会话」，只是字段不同
+- 前端在 `contextSessions.ts:134` 做第三次合并
+
+**建议延后**：这一层是 SQL 重写，风险中等，且不影响用户可见的功能。等阶段 3 跑通、数据模型稳定后再做。
+
+---
+
+### 阶段 5：消除重复实现（可选，按需）
+
+按 §2.5 的清单，逐项合并。优先级：
+
+1. **只读 sqlite 打开**（9 处 → 1 处）—— 影响面大且风险低
+2. **JSONL 逐行读取**（3 处 → 1 处）—— 需要统一「尾半行 / 坏 JSON」策略，中风险
+3. **RFC3339 解析**（3 处 → 1 处）—— 低风险
+4. **`metadata.user_id` 解析**（2 处 → 1 处）—— 低风险
+
+**不建议现在做**：`session_key` 与 `session_identity` 合并——两者语义不同（亲和键允许模糊匹配，会话身份必须严格），合并会破坏既有行为。
+
+---
+
+## 6. 待确认
+
+| # | 问题 | 我的建议 |
+|---|---|---|
+| 1 | 阶段 1 是否现在做？ | **建议做**。低风险、有 magpie 参考、立刻解决 103 条 NULL 行 |
+| 2 | `agent IS NULL` 的 103 条里，ZCode / WorkBuddy 的令牌为什么没被识别？ | 需要实测（`JOLU_HEADER_PROBE=1`）。可能是它们没带 `jolu-` 令牌，走了别的认证路径 |
+| 3 | 阶段 3 的 `LocalFile` 路线要不要做？ | 工作量最大。建议**先只做 ZCode**（读取器已有）验证可行性 |
+| 4 | 阶段 4 / 5 现在做还是延后？ | **建议延后**。不影响用户可见功能，先让功能跑通 |
+| 5 | `pencil` / `pi` / `qoder` 的 UA | 需要再查 magpie 或实测 |
+
+---
+
+## 7. 已完成的准备工作
+
+### 7.1 `backend/src/gateway/header_probe.rs`（新增，4 条测试通过）
+
+- 环境变量 `JOLU_HEADER_PROBE=1` 时开启
+- 记录：头的**名字**、`user-agent` 的值、请求体的**键路径**（只到第二层）、`agent_from_headers` 与 `session_identity` 的判定结果
+- **不记录**：任何头的值（密钥）、请求体的值（用户提示词）
+- 端到端测试锁住「头名在、值绝不在」
+
+**用途**：阶段 2 需要它拿事实。补完 UA 表后这个模块仍然保留——以后加新工具时用它验证会话来源。
+
+### 7.2 已确证的数据事实
+
+见 §1.3。所有数字来自本机 `usage.db` 的实际查询，不是估计。
+
+---
+
+## 8. 与已完成工作的关系
+
+接线侧（2026-11-20/21）已经把「按工具登记」这套做完了：
+
+| 已完成 | 位置 |
+|---|---|
+| 注册表驱动接线 | `gateway/wiring_specs.rs`（13 行 `AgentSpec`） |
+| 按工具拆分的写入适配 | `gateway/wiring/adapters.rs` |
+| 13 家全量往返测试 | `every_agent_round_trips_through_production_plan` |
+| 前后端清单守卫 | `agentPage.test.mjs` |
+
+**身份识别应该复用同一张表**，否则就是「接线一套、身份一套」——又是一国两制。
+
+本文的 §4 目标架构就是这个复用。

@@ -27,10 +27,10 @@ export function PoolPanel({ connections, catalog, defaultConnection, onOpenConne
   const [showAll, setShowAll] = useState<Record<string, boolean>>({})
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-4 px-8 pb-8 pt-2">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex flex-col gap-1.5">
-          <h2 className="text-[20px] font-semibold text-jolu-text">所有可调用的模型</h2>
-          <p className="text-meta text-jolu-muted">{serving.length} 个已启用来源 · {modelTotal} 个模型；来源与菜单前缀在供应商中管理。</p>
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-baseline gap-2.5">
+          <h2 className="text-[20px] font-semibold text-jolu-text">模型池</h2>
+          <span className="text-note text-jolu-muted">{serving.length} 个来源 · {modelTotal} 个模型</span>
         </div>
         <button type="button" onClick={onManage}
           className="flex h-10 shrink-0 items-center gap-1.5 rounded-lg bg-jolu-text px-4 text-meta font-semibold text-jolu-bg outline-none hover:opacity-90 focus-visible:outline-2 focus-visible:outline-jolu-accent">
@@ -38,20 +38,17 @@ export function PoolPanel({ connections, catalog, defaultConnection, onOpenConne
         </button>
       </div>
 
-      <div className="flex items-center justify-between">
-        <span className="text-meta text-jolu-muted">按来源查看</span>
-        <div className="flex items-center gap-2.5">
-          <button type="button" onClick={onManage} title="来源分组与排序沿用「管理来源」弹窗（待确认：V6 无单独画板）"
-            className="flex h-9 items-center gap-2 rounded-lg border border-jolu-border px-3.5 text-meta text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
-            <FolderOpen aria-hidden className="size-3.5 text-jolu-muted" />来源分组
-          </button>
-          <MetaRefreshButton />
-        </div>
+      <div className="flex items-center justify-end gap-2.5">
+        <button type="button" onClick={onManage} title="来源分组与排序沿用「管理来源」弹窗（待确认：V6 无单独画板）"
+          className="flex h-9 items-center gap-2 rounded-lg border border-jolu-border px-3.5 text-meta text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
+          <FolderOpen aria-hidden className="size-3.5 text-jolu-muted" />来源分组
+        </button>
+        <MetaRefreshButton />
       </div>
 
       <div className="flex flex-col overflow-hidden rounded-xl border border-jolu-border">
         {serving.length === 0 && (
-          <p className="px-5 py-8 text-center text-meta text-jolu-muted">还没有启用中的来源。先在供应商里添加账号或 API Key，并在账号卡打开「进入模型池」。</p>
+          <p className="px-5 py-8 text-center text-meta text-jolu-muted">还没有启用中的来源。先在供应商里添加账号或 API Key，并打开「进入模型池」。</p>
         )}
         {serving.map((connection) => {
           const models = catalog.filter((model) => model.slug && model.slug === connection.slug)
@@ -101,14 +98,6 @@ export function PoolPanel({ connections, catalog, defaultConnection, onOpenConne
             </div>
           )
         })}
-      </div>
-
-      <div className="flex items-start gap-3 rounded-xl border border-jolu-border bg-jolu-side px-5 py-4">
-        <Package aria-hidden className="mt-0.5 size-4 shrink-0 text-jolu-muted" />
-        <span className="flex flex-col gap-1">
-          <span className="text-[15px] font-semibold text-jolu-text">这里展示实际可用的模型目录</span>
-          <span className="text-meta text-jolu-muted">添加、停用来源或修改前缀，请前往对应供应商连接。模型元数据仅作参考。</span>
-        </span>
       </div>
     </div>
   )

@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils"
 import { api, isTauri, type ContinueCheckDto, type SessionItemDto } from "@/lib/api"
 import { middleEllipsis, projectName, sessionTitle } from "@/lib/sessionThreads"
 import { PlatformLogo } from "@/components/brand/PlatformLogo"
-import { providerName } from "@/components/usage/usageControls"
+import { providerName } from "@/lib/providerCatalog"
 import type { PlatformId } from "@/types"
 
 function Shell({ open = true, width, onClose, children, busy }: { open?: boolean; width: number; onClose: () => void; children: ReactNode; busy?: boolean }) {
@@ -84,7 +84,6 @@ export function ContinueDialog({ session, accountKnown, onClose: onDismiss, onDo
           <X aria-hidden className="size-4" />
         </Dialog.Close>
       </div>
-      <p className="text-xs text-jolu-muted">打开原工具并定位这条会话，后续消息仍由原工具处理。</p>
       <div className="flex flex-col gap-2.5 rounded-xl bg-jolu-side p-3.5">
         <span className="text-sm font-semibold text-jolu-text">{sessionTitle(session)}</span>
         {([["会话", middleEllipsis(session.session_id)], ["目录", check?.cwd ?? session.cwd ?? "未识别"], ["来源", `本机 ${name} 记录`]] as const).map(([label, value]) => (

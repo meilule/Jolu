@@ -6,13 +6,13 @@
 export type SettingsTab = "general" | "appearance" | "network" | "data" | "notifications" | "about"
 
 /** 左侧分类导航，顺序与文案取自画板 86 */
-export const SETTINGS_TABS: readonly { id: SettingsTab; label: string; desc: string }[] = [
-  { id: "general", label: "常规", desc: "从打开 Jolu，到随时唤回工作，按你的习惯设置。" },
-  { id: "appearance", label: "外观", desc: "调整主题与阅读密度，下面直接预览效果。" },
-  { id: "network", label: "网络与代理", desc: "分别管理 Jolu 联网方式与 CLI 本地转发。" },
-  { id: "data", label: "数据与存储", desc: "管理本地统计数据，导出与清理前可预览范围。" },
-  { id: "notifications", label: "通知", desc: "控制提示方式，保持采集与任务状态可见。" },
-  { id: "about", label: "关于与更新", desc: "了解当前版本，选择合适的时间更新。" },
+export const SETTINGS_TABS: readonly { id: SettingsTab; label: string }[] = [
+  { id: "general", label: "常规" },
+  { id: "appearance", label: "外观" },
+  { id: "network", label: "网络与代理" },
+  { id: "data", label: "数据与存储" },
+  { id: "notifications", label: "通知" },
+  { id: "about", label: "关于与更新" },
 ]
 
 /** 托盘 / 菜单发来的设置分区（旧设置页的分区 id）换算成新分类；认不出的分区回到「常规」 */

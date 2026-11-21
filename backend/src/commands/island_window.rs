@@ -177,14 +177,9 @@ pub(crate) fn main_context() -> Option<MainContext> {
     MAIN_CONTEXT.lock().ok().and_then(|slot| slot.clone())
 }
 
-/// 灵动岛联动开关（4.2b）：严格模式、信号动效、跟随主窗口、关注的 ZCode provider
+/// 灵动岛联动开关（4.2b）：严格模式、信号动效、跟随主窗口与自动选主
 #[tauri::command]
 pub(crate) fn set_island_linkage(app: tauri::AppHandle, linkage: settings::IslandLinkage) -> Result<settings::Settings, String> {
-    if let Some(name) = linkage.zcode_provider.as_deref() {
-        if name.trim().is_empty() || name.chars().count() > 120 {
-            return Err("provider 名称不合法".into());
-        }
-    }
     let next = app.state::<Cfg>().0.try_update(|settings| settings.island_linkage = linkage)?;
     crate::events::settings_changed(&app);
     Ok(next)
