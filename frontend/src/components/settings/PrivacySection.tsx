@@ -90,7 +90,7 @@ export function PrivacySection() {
         className="min-h-[76px]"
         title="启用隐私脱敏"
         desc="请求离开本机前，把密钥等隐私值换成稳定占位符，回复到达后自动还原；同一原值始终得到同一占位符，不影响 prompt cache。脱敏引擎不可用时请求会被拒绝（503），而不是原样发出。"
-        control={<Switch label="启用隐私脱敏" on={on} disabled={disabled} onChange={toggle} />}
+        control={<Switch liquid label="启用隐私脱敏" on={on} disabled={disabled} onChange={toggle} />}
       />
       <div className="flex flex-col gap-2 border-t border-jolu-border py-3.5">
         <div className="flex items-baseline gap-2.5">

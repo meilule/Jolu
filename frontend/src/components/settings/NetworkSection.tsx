@@ -257,13 +257,13 @@ function ProxyGroup({ cfg, setDirty }: { cfg: Cfg; setDirty: SetDirty }) {
   })()
 
   return (
-    <SettingsGroup icon={Network} title="CLI 本地代理" desc="转发适配的网关请求，用于采集首字与总耗时。">
+    <SettingsGroup icon={Network} title="CLI 本地代理" desc="转发适配的网关请求，采集首字与总耗时。">
       <SettingsRow
         className="min-h-[60px]"
         title="启用本地代理"
         desc={runningNote}
         descClassName={status?.fallback_reason && s.proxy_enabled ? "text-jolu-danger" : undefined}
-        control={<Switch label="启用本地代理" on={s.proxy_enabled} disabled={disabled} onChange={(on) => apply({ enabled: on })} />}
+        control={<Switch liquid label="启用本地代理" on={s.proxy_enabled} disabled={disabled} onChange={(on) => apply({ enabled: on })} />}
       />
       <div className="flex flex-col gap-1.5 border-t border-jolu-border py-3">
         <div className="flex items-center gap-5">
@@ -300,7 +300,7 @@ function ProxyGroup({ cfg, setDirty }: { cfg: Cfg; setDirty: SetDirty }) {
         className="min-h-[60px]"
         title="失败自动回退直连"
         desc="连续 3 次上游不可达后，还原配置并停止代理。"
-        control={<Switch label="失败自动回退直连" on={s.proxy_fallback_direct} disabled={disabled} onChange={(on) => apply({ fallback: on })} />}
+        control={<Switch liquid label="失败自动回退直连" on={s.proxy_fallback_direct} disabled={disabled} onChange={(on) => apply({ fallback: on })} />}
       />
       {s.proxy_enabled && status && (
         <div className="flex flex-col gap-1.5 border-t border-jolu-border py-3">

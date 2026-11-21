@@ -3,6 +3,7 @@ import { ChevronDown, EyeOff, Plus, RefreshCw, Search, ShieldCheck } from "lucid
 import { cn } from "@/lib/utils"
 import { AGENT_FILTERS, agentGridRows, type AgentFilter, type AgentRow } from "@/lib/agentPage"
 import { PlatformLogo } from "@/components/brand/PlatformLogo"
+import { JoluSwitch } from "@/components/ui/JoluSwitch"
 import opencodeLogo from "@/assets/platforms/opencode.svg"
 // 多色 / 位图类官方 logo（不适合内嵌单色 path，与 opencode 同走 img）
 import vscodeLogo from "@/assets/agents/vscode.svg"
@@ -42,11 +43,8 @@ export function AgentDirectory({ rows, selected, modelsCount, tierCount, busy, s
     // 子元素必须 shrink-0：flex-col 默认允许压缩，压缩后内容溢出被裁、滚动容器反而不触发滚动
     <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto px-8 pb-6 pt-6 [&>*]:shrink-0">
       {/* 窄窗口时按钮组折行（flex-wrap）：并排会把标题压到换行（2026-11-17 尺寸扫描） */}
-      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <h1 className="whitespace-nowrap text-[24px] font-semibold text-jolu-text">你的 AI 工具</h1>
-          <p className="text-meta text-jolu-muted">接入模型路由，为每个工具配置顺手的模型。</p>
-        </div>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+        <h1 className="whitespace-nowrap text-[24px] font-semibold text-jolu-text">工具</h1>
         <div className="flex shrink-0 items-center gap-2.5">
           <button type="button" disabled={busy} onClick={onRedetect}
             className="flex h-10 items-center gap-2 whitespace-nowrap rounded-lg border border-jolu-border bg-jolu-bg px-3.5 text-meta text-jolu-text outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
@@ -104,7 +102,7 @@ export function AgentDirectory({ rows, selected, modelsCount, tierCount, busy, s
         </div>
         {grid.rows.length === 0 && (
           <p className="rounded-xl border border-dashed border-jolu-border px-4 py-10 text-center text-meta text-jolu-muted">
-            {search ? "没有匹配的工具" : filter === "wired" ? "还没有已接入的工具，打开可接入卡上的开关即可接入" : "这个筛选下没有工具"}
+            {search ? "没有匹配的工具" : filter === "wired" ? "还没有已接入的工具" : "这个筛选下没有工具"}
           </p>
         )}
       </div>
@@ -118,7 +116,7 @@ export function AgentDirectory({ rows, selected, modelsCount, tierCount, busy, s
             <span className="text-[13px] font-semibold text-jolu-text">暂不能接入</span>
             <span className="rounded-md bg-jolu-bg px-1.5 py-0.5 text-note font-semibold tabular-nums text-jolu-muted">{grid.blocked.length}</span>
             <span className="flex-1" />
-            <span className="text-note text-jolu-muted">{blockedOpen ? "收起" : "查看原因与解决方式"}</span>
+            <span className="text-note text-jolu-muted">{blockedOpen ? "收起" : "原因"}</span>
           </button>
           {blockedOpen && (
       <div className="grid grid-cols-3 gap-3 bg-jolu-bg p-3">
@@ -167,9 +165,9 @@ function ToolCard({ row, selected, modelsCount, tierCount, busy, onSelect, onTog
           <button type="button" onClick={onSelect}
             className="flex min-w-0 flex-1 flex-col gap-0.5 text-left outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-jolu-accent">
             <span className="truncate text-[15px] font-semibold text-jolu-text">{row.name}</span>
-            <span className={cn("truncate text-[11px]", wired ? "text-jolu-on" : "text-jolu-muted")}>
-              {wired ? "已接入模型路由" : row.supported ? "已检测到 · 尚未接入" : "已检测到 · 暂无专用接入"}
-            </span>
+            {/* 只有需要处理时（漂移 / 配置文件被删等）才占第二行；CLI 不在 PATH 与「可以接入」并存，
+                说明已在摘要区给出，不在标题下重复一遍 */}
+            {row.tone === "danger" && <span className="truncate text-[11px] text-jolu-danger">{row.subtitle}</span>}
           </button>
           {/* 画板 V8：暂不支持的也有开关形状（track 底），只是禁用不可拨 */}
           <Switch on={row.toggle === "on"} disabled={busy || !row.toggle} label={row.toggle ? `${row.toggle === "on" ? "断开" : "接入"} ${row.name}` : `${row.name} 暂不支持接入`} onClick={onToggle} />
@@ -181,20 +179,20 @@ function ToolCard({ row, selected, modelsCount, tierCount, busy, onSelect, onTog
               <span className="text-[11px] text-jolu-muted">新会话默认</span>
               <span className="max-w-full truncate text-[14px] font-semibold text-jolu-text" title={model || undefined}>{model || "工具自己上次的选择"}</span>
               <span className="max-w-full truncate text-[11px] text-jolu-muted">
-                {claude ? `${tierCount} 个档位 · ${modelsCount} 个菜单模型` : row.wiring?.codex_mode === "oauth" ? "保留 ChatGPT 登录" : row.subtitle}
+                {claude ? `${tierCount} 个档位 · ${modelsCount} 个菜单模型` : row.wiring?.codex_mode === "oauth" ? "保留 ChatGPT 登录" : `${modelsCount} 个菜单模型`}
               </span>
             </>
           ) : row.supported ? (
             <>
-              <span className="text-[11px] text-jolu-muted">接入设置</span>
-              <span className="max-w-full truncate text-[14px] font-semibold text-jolu-text">选择模型与接入方式</span>
-              <span className="max-w-full truncate text-[11px] text-jolu-muted" title={`配置预览后再接入；模型路由里有 ${modelsCount} 个模型`}>配置预览后再接入；模型路由里有 {modelsCount} 个模型</span>
+              <span className="text-[11px] text-jolu-muted">现在</span>
+              <span className="max-w-full truncate text-[14px] font-semibold text-jolu-text" title={row.subtitle}>{row.subtitle}</span>
+              <span className="max-w-full truncate text-[11px] text-jolu-muted">接入后可用 {modelsCount} 个模型</span>
             </>
           ) : (
             <>
-              <span className="text-[11px] text-jolu-muted">接入设置</span>
-              <span className="max-w-full truncate text-[14px] font-semibold text-jolu-text">等待接入适配</span>
-              <span className="max-w-full truncate text-[11px] text-jolu-muted">模型来源与工具接入能力分别确认</span>
+              <span className="text-[11px] text-jolu-muted">暂无专用接入</span>
+              <span className="max-w-full truncate text-[14px] font-semibold text-jolu-text">按「添加工具」通用接入</span>
+              <span className="max-w-full truncate text-[11px] text-jolu-muted">{row.subtitle}</span>
             </>
           )}
         </button>
@@ -280,18 +278,28 @@ export function AgentBadge({ agent, name, size }: { agent: string; name: string;
   )
 }
 
-/** 胶囊开关：V8 卡上 36×22；详情页小号 28×16、对外访问大号 40×22。 */
-export function Switch({ on, small, large, disabled, label, onClick }: { on: boolean; small?: boolean; large?: boolean; disabled?: boolean; label: string; onClick: () => void }) {
+/**
+ * 胶囊开关 —— 现已统一到 JoluSwitch（含液态动效）。
+ *
+ * 保留原有的 `on / small / large / onClick` 签名，只是内部转发，
+ * 所以 Agent 列表、详情、模型路由的那些调用点一行都不用改。
+ *
+ * 尺寸映射：`small` → JoluSwitch 的 compact（30×18）；其余走默认（36×32 命中区 /
+ * 20px 轨道）。原来的 `large`（44×24）在 JoluSwitch 里没有对应档位 ——
+ * 统一成默认尺寸，宁可少一档，也不给一个只在这一处存在的尺寸。
+ *
+ * `onClick` 与 `onChange` 的差异：原实现是「点一下取反」，JoluSwitch 收的是
+ * 「新值」。这里把 onClick 包成 onChange = () => onClick()，语义完全一致。
+ */
+export function Switch({ on, small, disabled, label, onClick }: { on: boolean; small?: boolean; large?: boolean; disabled?: boolean; label: string; onClick: () => void }) {
   return (
-    <button type="button" role="switch" aria-checked={on} aria-label={label} disabled={disabled} onClick={onClick}
-      data-on={on}
-      className={cn(
-        "agent-switch relative shrink-0 rounded-full p-0.5 outline-none transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent disabled:opacity-45",
-        small ? "h-4 w-7" : large ? "h-6 w-11" : "h-[22px] w-9",
-        on ? "bg-jolu-accent" : "bg-jolu-track",
-      )}>
-      {/* 位移与垂直居中都由 .agent-switch-thumb 的 transform 负责（Tailwind 的 -translate-y 会覆盖它，别加） */}
-      <span className={cn("agent-switch-thumb absolute left-[2px] top-1/2 rounded-full bg-white shadow-sm", small ? "agent-switch-thumb-small size-3" : large ? "agent-switch-thumb-large size-5" : "agent-switch-thumb-default size-4")} />
-    </button>
+    <JoluSwitch
+      liquid
+      compact={small}
+      on={on}
+      disabled={disabled}
+      label={label}
+      onChange={() => onClick()}
+    />
   )
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { BellRing, ChevronRight, Info } from "lucide-react"
+import { BellRing, ChevronRight } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import { parseThreshold } from "@/lib/settingsPage"
@@ -55,27 +55,26 @@ export function NotificationSection({ cfg, setDirty }: { cfg: Cfg; setDirty: Set
 
   return (
     <>
-      <SettingsGroup title="免打扰" desc="只暂停提示与动效，不停止采集和自动化任务。">
+      <SettingsGroup title="免打扰">
         <SettingsRow
           className="min-h-[72px]"
           title="启用免打扰"
-          desc="与系统托盘菜单共用同一设置。"
-          control={<Switch label="启用免打扰" on={s.dnd} disabled={disabled || cfg.isSaving("dnd")} onChange={(on) => void cfg.setDnd(on)} />}
+          control={<Switch liquid label="启用免打扰" on={s.dnd} disabled={disabled || cfg.isSaving("dnd")} onChange={(on) => void cfg.setDnd(on)} />}
         />
       </SettingsGroup>
 
-      <SettingsGroup title="余额提醒" desc="API 余额低于阈值时提醒；未提供余额的供应商不触发。">
+      <SettingsGroup title="余额提醒">
         <SettingsRow
           className="min-h-[72px]"
           title="低余额提醒"
-          desc="仅适用于可以获取余额的 API 连接。"
-          control={<Switch label="低余额提醒" on={saved != null} disabled={disabled || busy} onChange={toggle} />}
+          desc="仅限能取到余额的 API 连接"
+          control={<Switch liquid label="低余额提醒" on={saved != null} disabled={disabled || busy} onChange={toggle} />}
         />
         <div className="flex min-h-[72px] flex-col justify-center gap-1.5 border-t border-jolu-border py-3">
           <div className="flex items-center gap-5">
             <div className="flex min-w-0 flex-1 flex-col gap-1.5">
               <span className="text-[13px] font-medium text-jolu-text">提醒阈值</span>
-              <span className="text-[12px] text-jolu-muted">按账户原币种比较，不自动换算汇率。</span>
+              <span className="text-[12px] text-jolu-muted">按原币种比较</span>
             </div>
             <span className={cn("inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-lg border bg-jolu-bg px-3 focus-within:border-jolu-accent", message ? "border-jolu-danger" : "border-jolu-border")}>
               <input aria-label="提醒阈值" inputMode="decimal" value={amount} disabled={disabled || busy}
@@ -91,25 +90,23 @@ export function NotificationSection({ cfg, setDirty }: { cfg: Cfg; setDirty: Set
         </div>
       </SettingsGroup>
 
-      <SettingsGroup title="任务提醒" desc="自动化相关通知偏好。">
+      <SettingsGroup title="任务提醒">
         <SettingsRow
           className="min-h-[72px]"
           title="额度恢复与任务继续"
-          desc="额度重新确认可用并恢复执行后提醒。"
-          control={<Switch label="额度恢复与任务继续" on={s.notify_task_resumed} disabled={disabled || cfg.isSaving("notify_task_resumed")} onChange={(on) => void cfg.setTaskNotify({ resumed: on })} />}
+          control={<Switch liquid label="额度恢复与任务继续" on={s.notify_task_resumed} disabled={disabled || cfg.isSaving("notify_task_resumed")} onChange={(on) => void cfg.setTaskNotify({ resumed: on })} />}
         />
         <SettingsRow
           className="min-h-[72px]"
           title="任务完成与失败"
-          desc="提供查看任务入口，失败显示简短原因。"
-          control={<Switch label="任务完成与失败" on={s.notify_task_finished} disabled={disabled || cfg.isSaving("notify_task_finished")} onChange={(on) => void cfg.setTaskNotify({ finished: on })} />}
+          control={<Switch liquid label="任务完成与失败" on={s.notify_task_finished} disabled={disabled || cfg.isSaving("notify_task_finished")} onChange={(on) => void cfg.setTaskNotify({ finished: on })} />}
         />
         {/* 待确认：Jolu.pen 画板 94 没有这一行（P2-2 管家主动提醒） */}
         <SettingsRow
           className="min-h-[72px]"
           title="额度将尽与失效（待确认）"
-          desc="任一额度窗口用到 80%、登录失效或连续两次查询失败时提醒；同一账号 24 小时内不重复。"
-          control={<Switch label="额度将尽与失效" on={s.notify_quota_alerts !== false} disabled={disabled || cfg.isSaving("notify_quota_alerts")} onChange={(on) => void cfg.setTaskNotify({ quota: on })} />}
+          desc="用到 80%、登录失效或连续两次查询失败；同账号 24 小时不重复"
+          control={<Switch liquid label="额度将尽与失效" on={s.notify_quota_alerts !== false} disabled={disabled || cfg.isSaving("notify_quota_alerts")} onChange={(on) => void cfg.setTaskNotify({ quota: on })} />}
         />
       </SettingsGroup>
 
@@ -125,10 +122,6 @@ export function NotificationSection({ cfg, setDirty }: { cfg: Cfg; setDirty: Set
         <span className="text-[11px] text-jolu-muted">通知样式预览 · 示例</span>
       </div>
 
-      <div className="flex items-start gap-2.5 rounded-[9px] bg-jolu-side p-3.5 text-[12px] text-jolu-muted">
-        <Info aria-hidden className="size-4 shrink-0" />
-        余额提醒仅比较相同币种；免打扰期间不弹出通知，结束后不补弹。
-      </div>
     </>
   )
 }

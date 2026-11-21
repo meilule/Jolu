@@ -55,21 +55,20 @@ export function GeneralSection({ cfg }: { cfg: Cfg }) {
 
   return (
     <>
-      <SettingsGroup icon={Power} title="启动偏好" desc="主窗口关闭后固定收起到系统托盘。">
+      <SettingsGroup icon={Power} title="启动偏好">
         <SettingsRow
           title="开机启动"
-          desc={autostartError ?? "登录系统后自动启动 Jolu。"}
+          desc={autostartError ?? undefined}
           descClassName={autostartError ? "text-jolu-danger" : undefined}
-          control={<Switch label="开机启动" on={autostart ?? false} disabled={autostartBusy || autostart === null} onChange={toggleAutostart} />}
+          control={<Switch liquid label="开机启动" on={autostart ?? false} disabled={autostartBusy || autostart === null} onChange={toggleAutostart} />}
         />
         <SettingsRow
           title="静默启动"
-          desc={autostart === false ? "开启开机启动后生效：开机时只在后台运行，灵动岛按原偏好显示。" : "开机时只在后台运行，灵动岛按原偏好显示。"}
-          control={<Switch label="静默启动" on={cfg.settings.silent_startup} disabled={disabled || cfg.isSaving("silent_startup") || autostart !== true} onChange={(on) => void cfg.setSilentStartup(on)} />}
+          desc={autostart === false ? "开启开机启动后生效" : undefined}
+          control={<Switch liquid label="静默启动" on={cfg.settings.silent_startup} disabled={disabled || cfg.isSaving("silent_startup") || autostart !== true} onChange={(on) => void cfg.setSilentStartup(on)} />}
         />
         <SettingsRow
           title="默认打开页面"
-          desc="手动启动或重新打开主窗口时使用。"
           control={
             <SelectButton
               label="默认打开页面"
@@ -82,10 +81,10 @@ export function GeneralSection({ cfg }: { cfg: Cfg }) {
         />
       </SettingsGroup>
 
-      <SettingsGroup icon={RefreshCw} title="数据刷新" desc="设置订阅额度与余额的自动刷新频率。">
+      <SettingsGroup icon={RefreshCw} title="数据刷新">
         <SettingsRow
           title="自动刷新间隔"
-          desc="本地 Token 采集独立运行，不受此间隔影响。"
+          desc="不影响本地 Token 采集"
           control={
             <SelectButton
               label="自动刷新间隔"
@@ -100,7 +99,7 @@ export function GeneralSection({ cfg }: { cfg: Cfg }) {
           title="立即刷新"
           desc={refreshedAt
             ? `已开始刷新：${refreshedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} · 重新扫描本机会话并读取额度与余额`
-            : "重新扫描本机会话，并读取额度与余额。"}
+            : undefined}
           control={<ActionButton icon={<RefreshCw aria-hidden className="size-3.5" />} busy={refreshing} disabled={!isTauri} onClick={refreshNow}>{refreshing ? "刷新中…" : "刷新数据"}</ActionButton>}
         />
       </SettingsGroup>

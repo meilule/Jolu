@@ -11,7 +11,7 @@ import { useGlidePill } from "@/hooks/useGlidePill"
 import { PENDING_SKILL_PROVIDERS, SKILL_PLATFORMS, inlineParts, markdownBlocks, splitFrontmatter } from "@/lib/skillsManager"
 import type { SkillItemDto, SkillPlatformDto } from "@/lib/skillsApi"
 import { PlatformLogo } from "@/components/brand/PlatformLogo"
-import { providerName } from "@/components/usage/usageControls"
+import { providerName } from "@/lib/providerCatalog"
 import type { PlatformId } from "@/types"
 
 /* ───────────── 小部件 ───────────── */
@@ -33,9 +33,9 @@ export function Tag({ tone = "muted", children, title }: { tone?: "muted" | "on"
   )
 }
 
-/** Skills 列表保留紧凑轨道，交互与主窗口共用。 */
+/** Skills 列表保留紧凑轨道，交互与主窗口共用；动效与主开关一致（液态）。 */
 export function SkillSwitch(props: Omit<JoluSwitchProps, "compact">) {
-  return <JoluSwitch {...props} compact />
+  return <JoluSwitch {...props} compact liquid />
 }
 
 const ICONS = [Palette, ScanText, FolderCode, FlaskConical, GitCommitHorizontal, FilePenLine, NotebookPen, LayoutDashboard]

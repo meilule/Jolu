@@ -151,7 +151,7 @@ export function OpsSection() {
           title="保持系统唤醒"
           desc="开启后 Jolu 在运行期间阻止系统睡眠（屏幕仍可关闭）。只影响本机电源策略，退出应用立刻恢复。非 Windows 系统不支持。"
           control={
-            <Switch
+            <Switch liquid
               label="保持系统唤醒"
               on={settings.keep_awake === true}
               disabled={disabled || busy === "keep-awake"}
@@ -171,7 +171,7 @@ export function OpsSection() {
           title="启用每日 warm-up"
           desc={`会真实消耗额度：每天到点通过已接线的 Claude Code 或 Codex 发一句「Reply with just: ok」，跑成功才记为已完成，失败会留到下一次检查重试。当前状态：${warmupStateText(settings.warmup_enabled === true, settings.warmup_last_date, today, lastWarmup)}。`}
           control={
-            <Switch
+            <Switch liquid
               label="启用每日 warm-up"
               on={settings.warmup_enabled === true}
               disabled={disabled || busy === "warmup"}

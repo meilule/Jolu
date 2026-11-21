@@ -25,7 +25,7 @@ export function AppearanceSection({ cfg }: { cfg: Cfg }) {
 
   return (
     <>
-      <SettingsGroup icon={Palette} title="界面主题" desc="与右上角主题切换同步。">
+      <SettingsGroup icon={Palette} title="界面主题">
         <div role="radiogroup" aria-label="界面主题" className="grid grid-cols-3 gap-3 pb-4">
           {THEMES.map((t) => {
             const active = theme === t.value
@@ -62,10 +62,10 @@ export function AppearanceSection({ cfg }: { cfg: Cfg }) {
         </div>
       </SettingsGroup>
 
-      <SettingsGroup icon={TextCursorInput} title="阅读与布局" desc="适配显示器和工作信息量。">
+      <SettingsGroup icon={TextCursorInput} title="阅读与布局">
         <SettingsRow
           title="界面缩放"
-          desc="仅影响主窗口，灵动岛保持独立大小。"
+          desc="灵动岛保持独立大小"
           control={
             <SelectButton
               label="界面缩放"
@@ -78,7 +78,7 @@ export function AppearanceSection({ cfg }: { cfg: Cfg }) {
         />
         <SettingsRow
           title="列表密度"
-          desc="应用于会话、用量记录与 Skills 列表。"
+          desc="会话、用量记录与 Skills 列表"
           control={
             <Segmented<Density>
               label="列表密度"
@@ -105,17 +105,12 @@ export function AppearanceSection({ cfg }: { cfg: Cfg }) {
         </div>
       </SettingsGroup>
 
-      <SettingsGroup icon={Sparkles} title="动效偏好" desc="减少移动和缩放，保留清晰的状态反馈。">
+      <SettingsGroup icon={Sparkles} title="动效偏好">
         <SettingsRow
           title="减少动效"
-          desc={
-            <>
-              减少过渡动画与图标动效。
-              {/* 待确认：画板 88 未画此状态。系统已开启减少动画时，开关为关也会生效（D-23） */}
-              {motionHint && <span className="mt-1 block">{motionHint}</span>}
-            </>
-          }
-          control={<Switch label="减少动效" on={cfg.settings.reduce_motion} disabled={disabled || cfg.isSaving("reduce_motion")} onChange={(on) => void cfg.setAppearance({ reduce_motion: on })} />}
+          /* 只在系统偏好生效时给提示（画板 88 未画此状态，D-23） */
+          desc={motionHint || undefined}
+          control={<Switch liquid label="减少动效" on={cfg.settings.reduce_motion} disabled={disabled || cfg.isSaving("reduce_motion")} onChange={(on) => void cfg.setAppearance({ reduce_motion: on })} />}
         />
       </SettingsGroup>
     </>

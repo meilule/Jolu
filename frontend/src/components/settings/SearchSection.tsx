@@ -83,7 +83,7 @@ export function SearchSection() {
       <SettingsGroup
         icon={Globe}
         title="联网搜索"
-        desc="给不带搜索能力的模型补 web_search / web_fetch；按顺序尝试，前一个失败自动换下一个。待确认：暂无设计稿。"
+        desc="给不带搜索能力的模型补 web_search / web_fetch；按顺序尝试。"
       >
         {vendorError && <Notice tone="danger" className="mb-3">{vendorError}</Notice>}
         {drafts.length === 0 && (
@@ -105,7 +105,7 @@ export function SearchSection() {
                 />
                 <span className="flex-1" />
                 <span className="text-[12px] text-jolu-muted">暂停</span>
-                <Switch label={`暂停 ${vendor?.name ?? draft.vendor}`} on={draft.off} disabled={disabled} onChange={(off) => update(index, { off })} />
+                <Switch liquid label={`暂停 ${vendor?.name ?? draft.vendor}`} on={draft.off} disabled={disabled} onChange={(off) => update(index, { off })} />
                 <ActionButton
                   tone="danger"
                   aria-label={`删除 ${vendor?.name ?? draft.vendor}`}
@@ -234,7 +234,7 @@ function SearchPluginGroup() {
   }
 
   return (
-    <SettingsGroup icon={Plug} title="搜索插件（MCP）" desc="把 Jolu 搜索装进各工具，工具自己就能联网搜索与读网页。同名的第三方条目不会被覆盖。待确认：暂无设计稿。">
+    <SettingsGroup icon={Plug} title="搜索插件（MCP）" desc="把 Jolu 搜索装进各工具；同名的第三方条目不会被覆盖。">
       {error && <Notice tone="danger" className="mb-3">{error}</Notice>}
       {!isTauri && <p className="border-t border-jolu-border py-3.5 text-xs text-jolu-muted">浏览器预览不读取本机工具配置。</p>}
       {rows?.map((row) => {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { ChevronRight, ExternalLink, Info, RefreshCw } from "lucide-react"
+import { ChevronRight, ExternalLink, RefreshCw } from "lucide-react"
 import { openUrl } from "@/lib/api"
 import { settingsApi } from "@/lib/settingsApi"
 import { UPDATES_ENABLED, progressPercent } from "@/lib/updateState"
@@ -39,7 +39,7 @@ export function AboutSection() {
         </div>
       </div>
 
-      <SettingsGroup title="应用更新" desc="检查完成后显示真实结果，网络失败可重试。">
+      <SettingsGroup title="应用更新">
         {UPDATES_ENABLED ? <UpdateRow versionText={versionText} /> : (
           <SettingsRow
             className="min-h-[72px]"
@@ -52,7 +52,7 @@ export function AboutSection() {
           className="min-h-[72px]"
           title="自动检查更新"
           desc={UPDATES_ENABLED ? "启动时检查一次，之后按下面的间隔复查；新版本自动在后台下载，安装由你确认。" : "当前发布通道尚未开放，偏好会保留；启用更新后生效。"}
-          control={<Switch label="自动检查更新" on={cfg.settings.auto_check_updates} disabled={!cfg.ready || cfg.isSaving("auto_check_updates")} onChange={(on) => void cfg.setAutoCheckUpdates(on)} />}
+          control={<Switch liquid label="自动检查更新" on={cfg.settings.auto_check_updates} disabled={!cfg.ready || cfg.isSaving("auto_check_updates")} onChange={(on) => void cfg.setAutoCheckUpdates(on)} />}
         />
         <SettingsRow
           className="min-h-[72px]"
@@ -70,33 +70,29 @@ export function AboutSection() {
 
       {cfg.error && <p role="alert" className="text-xs text-jolu-danger">{cfg.error}</p>}
 
-      <SettingsGroup title="帮助与项目" desc="反馈问题、查看更新记录与开源项目。">
+      <SettingsGroup title="帮助与项目">
         <SettingsRow
           className="min-h-[72px]"
           title="问题反馈"
-          desc="遇到问题或有功能建议？欢迎提交 Issue。"
+          desc="提交 Issue"
           control={<ActionButton tone="soft" onClick={() => void openUrl(`${REPO_URL}/issues`)}>提交 Issues<ExternalLink aria-hidden className="size-3.5" /></ActionButton>}
         />
         <SettingsRow
           className="min-h-[72px]"
           title="GitHub"
-          desc="查看源代码或反馈问题。"
+          desc="源代码与问题反馈"
           control={<ActionButton tone="soft" onClick={() => void openUrl(REPO_URL)}>访问项目<ChevronRight aria-hidden className="size-3.5" /></ActionButton>}
         />
         <SettingsRow
           className="min-h-[72px]"
           title="更新日志"
-          desc="了解版本变更与修复内容。"
+          desc="版本变更与修复记录"
           control={<ActionButton tone="soft" onClick={() => void openUrl(`${REPO_URL}/releases`)}>查看日志<ChevronRight aria-hidden className="size-3.5" /></ActionButton>}
         />
       </SettingsGroup>
 
       <CapabilitySection />
 
-      <div className="flex items-start gap-2.5 rounded-[9px] bg-jolu-side p-3.5 text-[12px] text-jolu-muted">
-        <Info aria-hidden className="size-4 shrink-0" />
-        下载完成后再选择安装。存在运行中的自动化任务时，会先提示处理任务再重启。
-      </div>
     </>
   )
 }
@@ -114,7 +110,7 @@ function UpdateRow({ versionText }: { versionText: string }) {
       .catch((reason) => toast.danger("检查更新失败", String(reason)))
   }
   const version = info ? `v${info.availableVersion}` : ""
-  const desc = !hasUpdate ? "启动时和每 30 分钟自动检查，新版本会在后台下载。"
+  const desc = !hasUpdate ? undefined
     : phase === "downloaded" ? `${version} 安装包已下载并校验，点击安装即进入安装界面，装完自动重启`
       : phase === "downloading" ? `正在后台下载 ${version}${percent === null ? "" : `（${percent}%）`}`
         : phase === "installing" ? `正在打开 ${version} 安装界面`
