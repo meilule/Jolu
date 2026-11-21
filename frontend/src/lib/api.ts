@@ -844,7 +844,14 @@ export interface StatsModelRowDto {
   platform: string
   model: string | null
   requests: number
+  /** 组内全部请求都有 Token 时的合计；任何一条未知就是 null（未知不当零） */
   tokens: number | null
+  /** 已知部分的合计：即使 tokens 为 null 也有值。取消/失败的请求常没有 Token，
+   *  一条未知就让整行变成破折号会把真实用量藏起来。
+   *  全部未知时为 0，须配合 known_requests 判断，不能直接当 0 显示。 */
+  known_tokens?: number
+  /** 有 Token 的请求数（known_tokens 覆盖了多少条） */
+  known_requests?: number
   cache_hit_rate: number | null
   avg_duration_ms: number | null
   /** 组内全部请求可计价时才有值 */

@@ -425,7 +425,14 @@ pub struct ModelRow {
     pub platform: String,
     pub model: Option<String>,
     pub requests: i64,
+    /// 组内**全部**记录都有 Token 时的合计；任何一条未知就是 None（未知不当零）
     pub tokens: Option<i64>,
+    /// 已知部分的合计：即使 `tokens` 为 None 也有值。取消/失败的请求常常没有 Token，
+    /// 一条未知就让整组变成破折号，会把这个模型的真实用量藏起来。
+    /// 全部未知时为 0，界面须配合 `known_requests` 判断，不能直接当 0 显示。
+    pub known_tokens: i64,
+    /// 有 Token 的请求数（`known_tokens` 覆盖了多少条）
+    pub known_requests: i64,
     pub cache_hit_rate: Option<f64>,
     /// 只统计带耗时的请求（经本地代理转发）；没有则为 None
     pub avg_duration_ms: Option<f64>,
@@ -622,6 +629,10 @@ fn models(reqs: &[Req]) -> Vec<ModelRow> {
             let durations: Vec<i64> = group.iter().filter_map(|r| r.duration_ms).collect();
             let priced = cost(group.iter().copied());
             let source = model.as_deref().and_then(|name| crate::pricing::price_source(Some(platform.as_str()), name));
+            // 取消与失败的请求通常没有 Token（total_known=0）。`sum_known` 遇到一条未知
+            // 就整组返回 None，那会让「4987 条里有 29 条没跑完」的模型整行变成破折号，
+            // 把真实的 23 亿 Token 藏起来。所以另给已知小计与覆盖条数。
+            let (known_tokens, unknown) = known_subtotal(group.iter().copied(), |r| r.total);
             ModelRow {
                 price_source: source.map(|(url, _)| url.to_string()),
                 price_checked: source.map(|(_, date)| date.to_string()),
@@ -629,13 +640,17 @@ fn models(reqs: &[Req]) -> Vec<ModelRow> {
                 model,
                 requests: group.len() as i64,
                 tokens: sum_known(group.iter().copied(), |r| r.total, Some(0)),
+                known_tokens,
+                known_requests: group.len() as i64 - unknown,
                 cache_hit_rate: hit_rate(group.iter().copied()),
                 avg_duration_ms: (!durations.is_empty()).then(|| durations.iter().sum::<i64>() as f64 / durations.len() as f64),
                 cost: (priced.priced_requests == priced.requests).then_some(priced.amount),
             }
         })
         .collect();
-    rows.sort_by(|a, b| b.tokens.unwrap_or(0).cmp(&a.tokens.unwrap_or(0)).then(b.requests.cmp(&a.requests)));
+    // 排序也用已知小计：否则部分未知的行（tokens=None）会全被排到最后，
+    // 即使它的真实用量比排在前面的大。
+    rows.sort_by(|a, b| b.known_tokens.cmp(&a.known_tokens).then(b.requests.cmp(&a.requests)));
     rows
 }
 
@@ -1072,6 +1087,50 @@ mod tests {
         assert_eq!(peak.price.as_ref().map(|p| p.off_peak), Some(false));
         let ratio = off.cost.unwrap() / peak.cost.unwrap();
         assert!((ratio - 0.5).abs() < 1e-9, "谷时应半价，实际比值 {ratio}");
+        drop(conn);
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// 模型行在部分请求没有 Token 时仍要给已知小计。
+    ///
+    /// 现场（2026-11-22 本机）：ZCode 的 `deepseek-v4.1-flash-1017` 有 4987 条记录，
+    /// 其中 29 条是取消/失败、没有 Token。`sum_known` 遇到一条未知就整组返回 None，
+    /// 于是整行显示破折号，真实的 23 亿 Token 完全看不见。
+    #[test]
+    fn a_model_row_keeps_its_known_subtotal_when_some_requests_have_none() {
+        let base = chrono::Utc.with_ymd_and_hms(2026, 11, 21, 12, 0, 0).unwrap().timestamp_millis();
+        let done = [Some(1_000), Some(500), Some(0), Some(0), Some(1_500)];
+        let unknown = [Some(0), Some(0), Some(0), Some(0), None];
+        let (conn, path) = seeded(&[
+            rec("zcode", "m-ok-1", base + 1_000, "deepseek-v4.1-flash-1017", done, None),
+            rec("zcode", "m-ok-2", base + 2_000, "deepseek-v4.1-flash-1017", done, None),
+            // 取消/失败：Token 全零且标记为未知，正是「没跑完所以没有用量」
+            rec("zcode", "m-cancel", base + 3_000, "deepseek-v4.1-flash-1017", unknown, None),
+            // 另一个 model id：两个中转商给同一个上游模型起了不同名字（:1017 vs -1017），
+            // 它们是真实的两个来源，不该被合并
+            rec("zcode", "m-colon", base + 4_000, "deepseek-v4.1-flash:1017", done, None),
+        ]);
+        let view = overview(&conn, &filter(base, base + 10_000)).unwrap();
+        let row = |model: &str| view.models.iter().find(|m| m.model.as_deref() == Some(model)).unwrap();
+
+        let dashed = row("deepseek-v4.1-flash-1017");
+        assert_eq!(dashed.requests, 3);
+        assert_eq!(dashed.tokens, None, "有一条未知，整组合计不能当成完整值");
+        assert_eq!(dashed.known_tokens, 3_000, "已知小计必须是真实值，不能因一条未知就归零");
+        assert_eq!(dashed.known_requests, 2, "覆盖 3 条里的 2 条");
+
+        let colon = row("deepseek-v4.1-flash:1017");
+        assert_eq!(colon.requests, 1);
+        assert_eq!(colon.tokens, Some(1_500), "全覆盖的家保持原有语义");
+        assert_eq!((colon.known_tokens, colon.known_requests), (1_500, 1));
+
+        // 排序按已知小计：部分未知的行（3000）不能因为 tokens 是 None 就落到全覆盖行（1500）后面
+        let order: Vec<_> = view.models.iter().map(|m| m.model.clone().unwrap()).collect();
+        assert_eq!(
+            order,
+            vec!["deepseek-v4.1-flash-1017", "deepseek-v4.1-flash:1017"],
+            "排序用已知小计，不是可能为 None 的合计：{order:?}"
+        );
         drop(conn);
         let _ = std::fs::remove_file(path);
     }

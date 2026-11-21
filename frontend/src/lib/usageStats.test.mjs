@@ -67,6 +67,12 @@ test("供应商行 Token 三态：全覆盖紧凑、部分覆盖给已知小计�
     providerTokenCell({ requests: 12, tokens: null, known_tokens: 0, known_requests: 0 }),
     { value: "—", note: "0 / 12 条有 Token" },
   )
+  // 模型行同样走这个函数：ZCode 的 deepseek-v4.1-flash-1017 有 4987 条，
+  // 其中 29 条是取消/失败（没有 Token）。改前整行显示破折号，真实 23 亿被藏起来。
+  assert.deepEqual(
+    providerTokenCell({ requests: 4987, tokens: null, known_tokens: 2_337_493_722, known_requests: 4958 }),
+    { value: "2.34 B", note: "4958 / 4987 条有 Token" },
+  )
 })
 
 test("调用状态、思考强度与 TPS", () => {

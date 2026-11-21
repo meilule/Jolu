@@ -44,7 +44,9 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
   const success = data.requests ? (data.requests - data.failed - cancelled - unknown) / data.requests : null
   /** 画板 30：模型分布显示前 5 个，不足时有几个显示几个，不补「其他」行 */
   // 真实为 0 Token 的行（如 Claude Code 的 <synthetic> 报错消息）对 Token 分布没有意义；未知值保留
-  const topModels = data.models.filter((m) => m.tokens !== 0).slice(0, 5)
+  // 真实为 0 Token 的行（如 Claude Code 的 <synthetic> 报错消息）对分布没有意义；
+  // 部分未知的行有已知小计，按它判断而不是按可能为 null 的 tokens
+  const topModels = data.models.filter((m) => (m.known_tokens ?? m.tokens) !== 0).slice(0, 5)
   const unattributed = data.requests - data.attributed
 
   return (
@@ -105,7 +107,16 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
         <Card className="flex flex-col gap-2.5 p-4">
           <CardTitle title="模型分布" note={partial ? "按已知 Token" : "按 Token"} />
           {topModels.length ? topModels.map((m) => {
-            const ratio = share(m.tokens, total)
+            // 部分未知时按已知小计算占比：分母是范围内的全部已知合计，
+            // 所以占比回答的是「这个模型占已知 Token 的多大比例」，不是它的全部用量
+            const known = m.known_tokens ?? m.tokens
+            const ratio = share(known, total)
+            const cell = providerTokenCell({
+              requests: m.requests,
+              tokens: m.tokens,
+              known_tokens: known ?? 0,
+              known_requests: m.known_requests ?? m.requests,
+            })
             return (
               <button
                 key={`${m.platform}-${m.model}`}
@@ -116,7 +127,10 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
               >
                 <span className="flex w-full justify-between gap-2 text-[12px] leading-[13px]">
                   <span className="truncate text-jolu-text">{modelDisplayName(m.model)}</span>
-                  <span className="tnum shrink-0 text-jolu-muted">{formatTokens(m.tokens)} · {formatPercent(ratio)}</span>
+                  <span className="tnum shrink-0 text-jolu-muted">
+                    {cell.value} · {formatPercent(ratio)}
+                    {cell.note && <span className="ml-1 text-note text-jolu-muted">（{cell.note}）</span>}
+                  </span>
                 </span>
                 <span className="h-1.5 w-full rounded-[3px] bg-jolu-track">
                   <span className="block h-full rounded-[3px] bg-jolu-accent" style={{ width: `${ratio === null ? 0 : Math.max(2, ratio * 100)}%` }} />
