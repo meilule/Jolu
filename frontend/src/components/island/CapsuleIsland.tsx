@@ -10,7 +10,7 @@ import { LazyConnectionSwitcher } from "./LazyConnectionSwitcher"
 import { AgentStack, GatewaySection, RelayRoute, wiredAgents } from "./CapsuleGateway"
 import { useBotShots } from "@/hooks/useBotShots"
 import type { GatewayActivity } from "@/hooks/useGatewayActivity"
-import { botExpression, BOT_NAMES } from "@/lib/botExpression"
+import { botExpression, BOT_NAMES, type BotExpr } from "@/lib/botExpression"
 import { carriedDeltaSegment, type CarriedDeltaSource } from "@/lib/carriedDelta"
 import { quotaRowsFor } from "@/lib/authQuotaRows"
 import { capsuleQuotaChips, CHIP_NAME_MAX_WIDTH, compactQuotaNumber, type CapsuleChipWindow } from "@/lib/capsuleQuotaChips"
@@ -104,7 +104,7 @@ function LiveTokens({ countKey, tokens, text, source, unknown = false }: {
 
 
 export function CapsuleIsland({
-  data, open, mini = false, onOpenChange, connectionSwitcher, connectionMenuOpen = false, dragging = false, refreshing = false, dockEdge = null, gateway = null, zoom = 1, onHoverChange,
+  data, open, mini = false, onOpenChange, connectionSwitcher, connectionMenuOpen = false, dragging = false, refreshing = false, dockEdge = null, gateway = null, zoom = 1, onHoverChange, previewExpr = null,
 }: {
   data: IslandData
   /** 模型入口：只有转发模式且监听已启动时才有值 */
@@ -123,6 +123,8 @@ export function CapsuleIsland({
   zoom?: number
   /** 指针进出外壳：胶囊自己决定 400ms 探出，停靠时机不受经典样式影响 */
   onHoverChange?: (over: boolean) => void
+  /** 表情库预览（只看浏览器）：非空时岛直接显示该表情，绕过真实状态推导 */
+  previewExpr?: BotExpr | null
 }) {
   // ---------- 由 IslandData 推出展示内容 ----------
   // 统一订阅条（批 6）：所有平台走同一条 quotas 渲染管道。
@@ -239,13 +241,22 @@ export function CapsuleIsland({
   const [hover, setHover] = useState(false)
   const [focusRing, setFocusRing] = useState<number | null>(null)
   const [pinRing, setPinRing] = useState<number | null>(null)
-  const { expr, reason } = botExpression({
+  const derived = botExpression({
     connected: data.connected ?? data.status?.tone === "success",
     queryFailed: showQuotas && Boolean(data.queryFailed),
     quotaUsed: quotaRows.map((q) => q.usedPercent),
-    dragging, waiting: Boolean(data.automationWaiting), refreshing, working: writing, shot, inactiveMs: relay ? 0 : inactiveMs, docked: Boolean(dockEdge), hover,
+    dragging, waiting: Boolean(data.automationWaiting), refreshing, working: writing, shot, inactiveMs: relay ? 0 : inactiveMs,
+    // 贴边偷看（peek）只属于收缩/迷你态：它带着「眼睛挤向屏幕内侧」的基准视线
+    // 和收缩的跟随幅度。展开成卡片后不再贴边偷看，否则无论鼠标在哪眼睛都会被
+    // 基准偏移压成往下看 —— 运行时由 work 的优先级覆盖，所以这个问题只在
+    // 待机 + 停靠 + 展开时暴露。
+    docked: Boolean(dockEdge) && !open, hover,
     relay: relay ? (relay.phase === "failed" ? "rejected" : relay.phase) : null,
   })
+  // 表情库预览（仅浏览器）：非空时直接覆盖，方便逐个验收表情
+  const expr = previewExpr ?? derived.expr
+  // 预览时没有真实推导理由，改写成明确标注，悬浮提示不会误导
+  const reason = previewExpr ? `表情库预览：${BOT_NAMES[previewExpr]}` : derived.reason
   // 逐帧数值来自追数存储；没有追数键（浏览器预览的示例数据）时不轮播，避免显示假的 0
   const ticker = writing && showDelta && data.deltaCountKey ? { countKey: data.deltaCountKey, label: "本段 Token", sub: `${running} 个会话写入中` } : null
 

@@ -3,7 +3,7 @@
  * 表情只由真实状态推出，不随机出现；同一时刻只显示优先级最高的一个。
  */
 export type BotExpr =
-  | "idle" | "blinkShot" | "look" | "work" | "refresh" | "happy" | "surprise" | "greet" | "drag"
+  | "idle" | "look" | "work" | "refresh" | "happy" | "surprise" | "greet" | "drag"
   | "peek" | "worry" | "sad" | "error" | "sleep" | "reset" | "wait" | "relay"
 
 /** 一次性表情：触发后短暂停留，不回放已经错过的 */
@@ -14,10 +14,34 @@ export const SLEEP_AFTER_MS = 30 * 60_000
 /** 单段新增达到这个数就惊讶 */
 export const SURPRISE_TOKENS = 50_000
 
+/**
+ * 表情的中文名与「怎么触发」的一句话说明。
+ * `trigger` 给表情库预览面板（IslandExprLab）直接显示，避免文档、面板、代码三处各写一份。
+ */
 export const BOT_NAMES: Record<BotExpr, string> = {
-  idle: "空闲", blinkShot: "眨眼", look: "看向指针", work: "工作中", refresh: "刷新中", happy: "完成",
+  idle: "空闲", look: "看向指针", work: "工作中", refresh: "刷新中", happy: "完成",
   surprise: "惊讶", greet: "打招呼", drag: "被拖动", peek: "贴边偷看", worry: "担心", sad: "沮丧",
   error: "出错", sleep: "睡着", reset: "额度重置", wait: "等待额度", relay: "转发中",
+}
+
+/** 每个表情的触发条件（表情库预览面板的说明文字） */
+export const BOT_TRIGGERS: Record<BotExpr, string> = {
+  idle: "没有会话写入 Token",
+  look: "指针悬停在胶囊上",
+  work: "有会话正在写入 Token",
+  refresh: "手动或定时刷新额度",
+  happy: "一段输出结束（增量提示收起）",
+  surprise: "单段新增 ≥ 50k Token",
+  greet: "双击展开胶囊",
+  drag: "拖动窗口中",
+  peek: "停靠在屏幕边缘且未展开",
+  worry: "任一额度窗口 ≥ 80%，或网关拒绝请求",
+  sad: "额度用尽（100%）",
+  error: "额度查询失败或连接过期",
+  sleep: "未连接，或 30 分钟内没有活动",
+  reset: "额度窗口刚重置",
+  wait: "自动化任务在等额度恢复",
+  relay: "请求正在经模型入口转发",
 }
 
 export interface BotInput {

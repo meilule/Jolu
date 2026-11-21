@@ -22,7 +22,6 @@ const W = "#FFFFFF"
 interface EyeStyle { k: string; c: string; g: string; R?: string; h?: number; s?: number; dy?: number; cls?: string }
 const EYES: Record<BotExpr, EyeStyle> = {
   idle: { k: "pill", c: W, g: "#FFFFFF66" },
-  blinkShot: { k: "line", c: W, g: "#FFFFFF66" },
   look: { k: "pill", c: W, g: "#FFFFFF66" },
   // 工作中的眼睛用主题绿：fill 由 capsule.css 的 `.cbot[data-expr="work"] .cbot-eyes-inner > *`
   // 覆盖成 --pn-capsule-green（浅深色各一套），这里的 c 只是 CSS 没命中时的兜底；

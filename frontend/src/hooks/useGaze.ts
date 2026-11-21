@@ -114,10 +114,18 @@ export function useGaze(
   useEffect(() => {
     install()
     let frame = 0
+    let retries = 0
     const step = () => {
       frame = 0
       const face = faceRef.current, eyes = eyesRef.current
-      if (!face || !eyes) return
+      // ref 还没挂上（首帧 / key 重建 / 表情切换中）时不能直接 return ——
+      // 那会让循环永久停机（frame 已置 0，没人再调度），眼睛再也不跟随。
+      // 重试上限 120 帧（≈2s）：超过说明组件已卸载或 DOM 结构异常，交给下次 kick。
+      if (!face || !eyes) {
+        if (retries++ < 120) frame = requestAnimationFrame(step)
+        return
+      }
+      retries = 0
       const rect = face.getBoundingClientRect()
       const reduced = reducedMotion()
       const target = gazeTarget(

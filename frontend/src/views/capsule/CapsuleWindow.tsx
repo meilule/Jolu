@@ -1,12 +1,14 @@
-import { useCallback, useRef } from "react"
+import { useCallback, useRef, useState } from "react"
 import { FollowingBar, SignalRing } from "@/components/island/IslandLinkageBits"
 import { CapsuleIsland } from "@/components/island/CapsuleIsland"
+import { IslandExprLab } from "@/components/island/IslandExprLab"
 import { LazyConnectionSwitcher } from "@/components/island/LazyConnectionSwitcher"
 import { DockControls, FreeControls } from "@/components/island/PreviewControls"
 import { useIslandWindowModel } from "@/hooks/useIslandWindowModel"
 import { useIslandWindowShell } from "@/hooks/useIslandWindowShell"
 import { useIslandWindowSize } from "@/hooks/useIslandWindowSize"
 import { api, isTauri } from "@/lib/api"
+import type { BotExpr } from "@/lib/botExpression"
 import { LiveCountsContext } from "@/lib/liveCounts"
 
 /**
@@ -55,6 +57,8 @@ export function CapsuleWindow() {
 
   // 形态是数据装配的入参：胶囊同样只在卡片可见时才查余额与用量
   const model = useIslandWindowModel({ capsule: true, mode, peek, dragging })
+  // 表情库预览（仅浏览器）：点面板里的表情时临时覆盖岛的 expr，null 表示跟随真实状态
+  const [previewExpr, setPreviewExpr] = useState<BotExpr | null>(null)
   const {
     data,
     settings,
@@ -149,6 +153,7 @@ export function CapsuleWindow() {
               dockEdge={dockEdge}
               gateway={gateway.relay ? gateway : null}
               zoom={scale}
+              previewExpr={previewExpr}
               onHoverChange={onCapsuleHover}
               connectionSwitcher={
                 <LazyConnectionSwitcher
@@ -170,6 +175,13 @@ export function CapsuleWindow() {
             {dockEdge
               ? <DockControls edge={edge} onEdge={(e) => { setEdge(e); setMode("docked") }} onUndock={undock} />
               : <FreeControls mode={mode} onMode={setMode} onDock={(e) => { setEdge(e); setMode("docked") }} />}
+          </div>
+        )}
+        {/* 表情库（仅浏览器）：点一格实时预览，方便逐个验收 17 个表情。
+            定位避开页面头部的主题/视图按钮（top-16 而非 top-4） */}
+        {!isTauri && (
+          <div className="fixed right-4 top-16 z-50 max-h-[calc(100vh-6rem)] w-[300px] overflow-y-auto rounded-[12px] border bg-surface p-3 shadow-lg">
+            <IslandExprLab onPreview={setPreviewExpr} />
           </div>
         )}
       </div>

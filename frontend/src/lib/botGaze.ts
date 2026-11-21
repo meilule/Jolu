@@ -10,21 +10,60 @@ export const GAZE_MAX_Y = 0.1
 /** 每帧向目标逼近的比例；减少动效时直接对准 */
 export const GAZE_SMOOTH = 0.22
 
-/** 睡着只轻微转动，贴边偷看与被拖动减弱 */
-const AMP: Partial<Record<BotExpr, number>> = { sleep: 0.3, peek: 0.4, drag: 0.6 }
+/**
+ * 小脸视线补偿的上限。1.35 的来历：1.9 会让眼睛中心跑到脸外（18px 脸实测
+ * 半径比 1.12，观感是「眼睛脱离身体」）。`sphereEyeTransform` 里另有一道硬边界
+ * 夹紧兜底，但这里先收敛，避免夹紧频繁触发导致跟随「贴住边缘不动」。
+ *
+ * 只此一份：`gazeTarget` 也引用它，不要再写第二个更大的数——那会是永不生效的死代码。
+ */
+export const GAZE_SIZE_GAIN_CAP = 1.35
+
+/**
+ * 小脸上的视线幅度补偿。
+ * GAZE_MAX 是「脸直径的比例」，同样的比例在小脸上只剩几像素 ——
+ * 收缩胶囊 F≈18 时最大位移只有 3.2px / 2.3px，等于看不出在跟随；
+ * 展开大脸 F≈84 有 14.9px / 10.9px，观感正常。
+ * 这里按脸的像素尺寸给一个温和的上浮：小脸放大到 `GAZE_SIZE_GAIN_CAP`，大脸保持 1×。
+ * 用 sqrt 而非线性，避免迷你态眼睛「抽搐」。
+ */
+export const gazeSizeGain = (faceSize: number): number => {
+  if (!(faceSize > 0)) return 1
+  const scaled = Math.sqrt(84 / faceSize)
+  return Math.max(1, Math.min(GAZE_SIZE_GAIN_CAP, scaled))
+}
+
+/**
+ * 睡着只轻微转动；贴边偷看与被拖动减弱。
+ * peek 从 0.4 提到 0.75：收缩/迷你态本来绝对位移就小（3px 上下），
+ * 再压到 0.4× 几乎看不出眼睛在跟随鼠标。
+ */
+const AMP: Partial<Record<BotExpr, number>> = { sleep: 0.3, peek: 0.75, drag: 0.6 }
 export const gazeAmp = (expr: BotExpr): number => AMP[expr] ?? 1
 
-/** 表情自带的视线偏移：贴边偷看时眼睛挤向朝屏幕内的一侧 */
-export function gazeBase(expr: BotExpr, edge: "top" | "bottom" | "left" | "right" | null): Vec {
-  if (expr !== "peek" || !edge) return { x: 0, y: 0 }
-  return edge === "left" ? { x: 0.2, y: 0 } : edge === "right" ? { x: -0.2, y: 0 }
-    : edge === "top" ? { x: 0, y: 0.15 } : { x: 0, y: -0.15 }
+/**
+ * 表情自带的视线偏移。
+ *
+ * peek（贴边偷看）曾经返回「眼睛挤向屏幕内侧」的固定偏移：顶部停靠 +0.15 向下。
+ * 这在展开大脸（F≈84）上是 6px 的方向提示，但在收缩胶囊的小脸（F≈18）上，
+ * 0.15 的比例 = 1.35px 的恒定下压 —— 鼠标移到最上方最多只能抵消约 1.3px，
+ * 眼睛永远朝下，跟随感被彻底压死。这就是「停靠待机时眼睛不跟鼠标」的根因。
+ *
+ * 现在 peek 只保留眼型差异（EYES.peek 的 h: 0.9，比 idle 略矮），不再压视线：
+ * 偷看的语义由「贴着屏幕边 + 略矮的眼型」表达，跟随完全交给指针。
+ * work 的 base 一直是 {0,0}，所以它在同一套管线里表现得正常。
+ */
+export function gazeBase(_expr: BotExpr, _edge: "top" | "bottom" | "left" | "right" | null): Vec {
+  return { x: 0, y: 0 }
 }
 
 /**
  * 视线目标 = 表情偏移 + 指向指针的偏移。
  * 指针离脸越远越接近最大偏移，达到最大值的距离为 max(80px, 脸宽 × 2.5)。
  * pointer 为 null（指针不在或位置未知）时只剩表情偏移。
+ *
+ * 指针分量按脸尺寸补偿（gazeSizeGain）：收缩胶囊的小脸按比例算出的绝对位移
+ * 只有 3px 上下，肉眼看不出跟随；大脸不做额外放大。
  */
 export function gazeTarget(
   face: { cx: number; cy: number; width: number },
@@ -37,8 +76,12 @@ export function gazeTarget(
     const distance = Math.hypot(dx, dy)
     if (distance > 0.5) {
       const reach = Math.min(1, distance / Math.max(80, face.width * 2.5))
-      x += (dx / distance) * GAZE_MAX_X * reach * options.amp
-      y += (dy / distance) * GAZE_MAX_Y * reach * options.amp
+      // 尺寸补偿：小脸放大比例，大脸保持 1×。上限直接取 gazeSizeGain 的封顶值——
+      // 那里已经限到 GAZE_SIZE_GAIN_CAP，这里再写一个更大的常数就是永不生效的死代码，
+      // 且两个数不一致时读代码的人会以为还有第二层放大。
+      const gain = Math.min(GAZE_SIZE_GAIN_CAP, gazeSizeGain(face.width) * options.amp)
+      x += (dx / distance) * GAZE_MAX_X * reach * gain
+      y += (dy / distance) * GAZE_MAX_Y * reach * gain
     }
   }
   return { x, y }
@@ -80,7 +123,22 @@ export function gazeSpringStep(
  * 单只眼的球面变换链（SVG transform 属性，绕静息中心旋转/缩放）。
  * index 0 = 左眼、1 = 右眼；gapPx/cyPx 是静息眼距与垂直偏移，sizePx 是脸的直径。
  * 返回值直接喂给 <g className="cbot-eye-p" transform=…>。
+ *
+ * ── 小脸为什么不能只靠球面投影 ────────────────────────────────
+ * 球面投影的横向位移来自「眼睛绕 y 轴转」，静息位 x0=±0.27 的眼睛转到
+ * 侧向时主要沿 z 移动，x 的净变化在中段（lookX≈0.5）几乎为零 ——
+ * 18px 小脸上横向只剩 0.2px，肉眼完全看不出跟随。
+ * 所以小脸混入一部分整组平移（贴纸式）：EyeTracker 反对它是因为大脸上
+ * 会「像贴纸贴在圆盘上」，但在 3px 量级的小脸上，平移恰恰是最有效的信号。
+ *
+ * ── 边界约束（关键）────────────────────────────────────────────
+ * 补偿叠加后眼睛中心会跑到脸外：18px 脸实测半径比 1.12（出界），
+ * 观感就是「眼睛脱离身体飘到脸边上」。这里在最后一步做圆形夹紧：
+ * 眼睛中心距脸心不超过 EYE_MAX_RADIUS_RATIO × 半径，超出的部分按方向缩回。
+ * 这是硬约束 —— 以后调 GAZE_MAX / gazeSizeGain / slide 都不会再越界。
  */
+export const EYE_MAX_RADIUS_RATIO = 0.72
+
 export function sphereEyeTransform(
   index: 0 | 1,
   cur: Vec,
@@ -103,7 +161,19 @@ export function sphereEyeTransform(
   const near = Math.max(0, Math.min(1, z2))
   const k = 0.45 + 0.55 * near
   const sw = k * (0.7 + 0.3 * near)
-  const px = R + x1 * R, py = R + y2 * R
+  // 小脸混合整组平移：脸越小权重越高（18px → 0.4，84px → 0）
+  const slide = Math.max(0, Math.min(0.4, (84 - face.sizePx) / 140))
+  // 先算相对脸心的偏移，再做圆形边界夹紧，最后转成元素坐标
+  let dx = x1 * R + cur.x * face.sizePx * slide
+  let dy = y2 * R + cur.y * face.sizePx * slide
+  const maxR = EYE_MAX_RADIUS_RATIO * R
+  const dist = Math.hypot(dx, dy)
+  if (dist > maxR) {
+    const scale = maxR / dist
+    dx *= scale
+    dy *= scale
+  }
+  const px = R + dx, py = R + dy
   const restX = R + (index === 0 ? -face.gapPx : face.gapPx)
   const f = (v: number) => Math.round(v * 100) / 100
   return `translate(${f(px)} ${f(py)}) rotate(${f(tilt)}) scale(${f(sw)}, ${f(k)}) translate(${f(-restX)} ${f(-face.cyPx)})`
