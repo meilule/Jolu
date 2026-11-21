@@ -34,7 +34,7 @@ pub fn status(settings: &Settings, conn: &Connection) -> GatewayStatus {
         circuit_threshold: settings.gateway_circuit_threshold,
         auto_escape: settings.gateway_auto_escape,
         default_connection: settings.gateway_default_connection.clone(),
-        wiring: wiring::AGENTS
+        wiring: wiring::agents()
             .iter()
             .map(|agent| {
                 let record = crate::gateway::wiring_store::load(conn, agent);
@@ -68,7 +68,7 @@ pub fn status_without_db(settings: &Settings) -> GatewayStatus {
         circuit_threshold: settings.gateway_circuit_threshold,
         auto_escape: settings.gateway_auto_escape,
         default_connection: settings.gateway_default_connection.clone(),
-        wiring: wiring::AGENTS
+        wiring: wiring::agents()
             .iter()
             .map(|agent| wiring::status_with(agent, settings.proxy_port, None))
             .collect(),
@@ -132,11 +132,11 @@ mod tests {
         let status = status(&Settings::default(), &conn);
         assert_eq!(
             status.wiring.len(),
-            crate::gateway::wiring::AGENTS.len(),
+            crate::gateway::wiring::agents().len(),
             "每个 agent 一条，不重不漏"
         );
         let agents: Vec<&str> = status.wiring.iter().map(|w| w.agent.as_str()).collect();
-        for agent in crate::gateway::wiring::AGENTS {
+        for agent in crate::gateway::wiring::agents() {
             assert!(agents.contains(&agent), "缺少 {agent}");
         }
         drop(conn);

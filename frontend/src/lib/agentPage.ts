@@ -6,10 +6,6 @@
  */
 import type { AgentDiscoveryDto, CustomAgentDto, WiringStatusDto } from "./gatewayApi.ts"
 
-/** Jolu 能接线的工具（与后端 `wiring::AGENTS` 一致） */
-/** 有专用接线的工具（后端 `gateway/wiring.rs` 的 AGENTS；后四家在 `wiring_extra.rs`，5.11） */
-export const WIRABLE_AGENTS = ["claude-code", "codex", "gemini", "opencode", "zcode", "kimi", "dsh", "pi", "pencil", "qoder", "qoder-cn"] as const
-
 /** 自定义工具（没有官方 logo）的首字母小方块；Jolu 支持的工具用官方 logo，见 `AgentBadge` */
 export function agentBadge(_agent: string, name: string): { bg: string; glyph: string } {
   return { bg: "#615CED", glyph: (name.trim()[0] ?? "?").toUpperCase() }
@@ -24,6 +20,12 @@ export const AGENT_PLATFORM: Readonly<Record<string, string>> = {
   zcode: "zcode",
   kimi: "kimi",
   dsh: "deepseek",
+  pi: "pi",
+  pencil: "pencil",
+  qoder: "qoder",
+  "qoder-cn": "qoder-cn",
+  qwen: "qwen",
+  workbuddy: "workbuddy",
 }
 
 export type AgentGroup = "wired" | "available" | "blocked"
@@ -64,7 +66,7 @@ export function driftText(drift: WiringStatusDto["drift"]): string | null {
  * - CLI 未找到 / 没检测到 / 配置文件还没生成 → 暂时不能接入。
  */
 
-export function agentRow(agent: string, wiring: WiringStatusDto | null, discovery: AgentDiscoveryDto | null, model?: string | null): AgentRow {
+export function agentRow(agent: string, wiring: WiringStatusDto | null, discovery: AgentDiscoveryDto | null, model: string | null | undefined, supported: boolean): AgentRow {
   const name = discovery?.name || wiringName(agent)
   const drift = driftText(wiring?.drift)
   const managed = Boolean(wiring && (wiring.wired || (wiring.state && wiring.state !== "idle" && wiring.drift)))
@@ -73,27 +75,38 @@ export function agentRow(agent: string, wiring: WiringStatusDto | null, discover
     // 画板 V5-1：「重开后生效」与主模型被换过用琥珀色，配置被改动用红色
     const tone = wiring.drift === "model_changed" || restart ? "warn" : wiring.drift ? "danger" : "normal"
     const subtitle = drift ?? (model || (restart ? "重开后生效" : "已接入"))
-    return { agent, name, group: "wired", supported: true, subtitle, tone, toggle: wiring.wired ? "on" : null, wiring, discovery }
+    return { agent, name, group: "wired", supported, subtitle, tone, toggle: wiring.wired ? "on" : null, wiring, discovery }
   }
   if (discovery && discovery.state === "not_found") {
-    return { agent, name, group: "blocked", supported: true, subtitle: "本机没有检测到", tone: "normal", toggle: null, wiring, discovery }
+    return { agent, name, group: "blocked", supported, subtitle: "本机没有检测到", tone: "normal", toggle: null, wiring, discovery }
   }
   // 对齐 magpie：配置在就算已装、可接入——Jolu 的接线只写配置文件，不调用 CLI。
   // CLI 不在 PATH 只作提示（OpenCode / Kimi / Continue 用 bun 或独立安装器装，命令不在
   // PATH 是常态）；真卸载的残留已由后端 agent_dir_has_content 过滤，不会走到这里。
   // 没有专用接线的仍标「暂不支持」，不给点了会失败的开关。
   if (discovery && discovery.state === "cli_missing") {
-    const wirable = (WIRABLE_AGENTS as readonly string[]).includes(agent)
-    return { agent, name, group: "available", supported: wirable, subtitle: "检测到配置 · CLI 未在 PATH（不影响接入）", tone: "warn", toggle: wirable ? "off" : null, wiring, discovery }
+    return { agent, name, group: "available", supported, subtitle: "检测到配置 · CLI 未在 PATH（不影响接入）", tone: "warn", toggle: supported ? "off" : null, wiring, discovery }
   }
   if (wiring?.reason) {
-    return { agent, name, group: "blocked", supported: true, subtitle: wiring.reason, tone: "normal", toggle: null, wiring, discovery }
+    return { agent, name, group: "blocked", supported, subtitle: wiring.reason, tone: "normal", toggle: null, wiring, discovery }
   }
   // V8：探测到但 Jolu 没有专用接线的（Qoder / Trae 等 8 家）＝「暂不支持」卡——
   // 在栅格里、开关禁用、详细可点（走通用接入），不算「暂不能接入」（那是没装 / 残留）。
-  const supported = (WIRABLE_AGENTS as readonly string[]).includes(agent)
   const subtitle = supported ? AVAILABLE_SUBTITLES[agent] ?? "可以接入" : "已检测到 · 暂无专用接入"
   return { agent, name, group: "available", supported, subtitle, tone: "normal", toggle: supported ? "off" : null, wiring, discovery }
+}
+
+/** 后端状态按注册表返回可接入工具，发现结果补充尚未支持的工具。 */
+export function buildAgentRows(wiring: WiringStatusDto[], discovery: AgentDiscoveryDto[], model: string | null): AgentRow[] {
+  const supported = new Set(wiring.map((entry) => entry.agent))
+  const rows = wiring.map((entry) => agentRow(
+    entry.agent, entry, discovery.find((item) => item.agent === entry.agent) ?? null,
+    entry.agent === "claude-code" ? model : null, true,
+  ))
+  for (const entry of discovery) {
+    if (!supported.has(entry.agent)) rows.push(agentRow(entry.agent, null, entry, null, false))
+  }
+  return rows
 }
 
 /** 可接入时的第二行：说明它现在用的是什么（画板 V5-1「用它自己的 …」） */
@@ -103,6 +116,14 @@ const AVAILABLE_SUBTITLES: Readonly<Record<string, string>> = {
   gemini: "用它自己的登录",
   opencode: "用它自己的 API Key",
   zcode: "用 ZCode 自己的账号",
+  kimi: "用它自己的账号",
+  dsh: "用它自己的配置",
+  pi: "用它自己的 provider",
+  pencil: "用它自己的模型",
+  qoder: "用 Qoder 自己的账号",
+  "qoder-cn": "用 Qoder 自己的账号",
+  qwen: "用它自己的登录",
+  workbuddy: "用它自己的模型",
 }
 
 function wiringName(agent: string): string {
@@ -202,9 +223,9 @@ export interface CustomAgentPreset {
 }
 
 export const CUSTOM_AGENT_PRESETS: readonly CustomAgentPreset[] = [
-  { id: "qwen", name: "Qwen Code", format: "json", configPath: "~/.qwen/settings.json", baseKey: "env.OPENAI_BASE_URL", authKey: "env.OPENAI_API_KEY", modelKey: "env.OPENAI_MODEL", suffix: "/v1", verified: false },
-  // 5.11 起 Kimi / Crush 有专用接线，不再给预设；Droid（customModels 是数组）与 Zed（密钥在系统凭据库）
-  // 按 magpie 核对后通用引擎写不了，已删掉，免得写出工具不认的配置
+  // 有专用接线的工具不再给预设：Kimi / Crush（5.11）、Pencil / Qoder / Qoder CN / qwen / workbuddy。
+  // Droid（customModels 是数组）与 Zed（密钥在系统凭据库）按 magpie 核对后通用引擎写不了，已删掉，
+  // 免得写出工具不认的配置。
   { id: "goose", name: "Goose", format: "env", configPath: "~/.config/goose/.env", baseKey: "OPENAI_BASE_URL", authKey: "OPENAI_API_KEY", modelKey: "OPENAI_MODEL", suffix: "/v1", verified: false },
   { id: "continue", name: "Continue", format: "json", configPath: "~/.continue/config.json", baseKey: "models.0.apiBase", authKey: "models.0.apiKey", modelKey: "models.0.model", suffix: "/v1", verified: false },
 ]
@@ -283,6 +304,18 @@ export function wireExplanation(agent: string): { icon: "file" | "shield" | "und
       return [
         { icon: "file", text: "在 crush.json 里新增 provider「jolu」，大小两个模型选择都指向网关模型" },
         { icon: "shield", text: "原来的大小模型选择存进快照，断开时放回；你在 Crush 里改选了别的就不动" },
+        undo,
+      ]
+    case "qwen":
+      return [
+        { icon: "file", text: "在 ~/.qwen/settings.json 的 modelProviders.openai 里追加网关模型，并把默认模型指向它" },
+        { icon: "shield", text: "你原有的 provider 与默认模型原样保留（你的条目留在前面）；密钥单独放在 env 里" },
+        undo,
+      ]
+    case "workbuddy":
+      return [
+        { icon: "file", text: "在 ~/.workbuddy/models.json 里追加网关模型（裸数组与 {models:[…]} 两种形状都支持）" },
+        { icon: "shield", text: "你原有的模型、你在 WorkBuddy 里关掉的开关、CodeBuddy 的展示列表都原样保留" },
         undo,
       ]
     default:

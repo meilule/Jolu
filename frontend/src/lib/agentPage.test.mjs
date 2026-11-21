@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { agentRow, agentRows, agentGridRows, customAgentRow, customPresetFor, isCustomAgent, CUSTOM_AGENT_PRESETS, longContextMode, longContextText, parseTokens, readHidden, writeHidden, wireExplanation } from "./agentPage.ts"
+import { agentRow as makeAgentRow, buildAgentRows, agentRows, agentGridRows, customAgentRow, customPresetFor, isCustomAgent, CUSTOM_AGENT_PRESETS, longContextMode, longContextText, parseTokens, readHidden, writeHidden, wireExplanation } from "./agentPage.ts"
+
+const agentRow = (agent, wiring, discovery, model = null, supported = true) => makeAgentRow(agent, wiring, discovery, model, supported)
 
 const wiring = (patch = {}) => ({ agent: "claude-code", wired: false, config_path: "~/.claude/settings.json", notice: null, reason: null, ...patch })
 const found = (state = "installed") => ({ agent: "claude-code", name: "Claude Code", installed: state === "installed", state, evidence: "bin", cli_found: state === "installed", cli_path: null })
@@ -36,8 +38,8 @@ test("工具按 已接入 / 可以接入 / 暂时不能接入 分组（画板 V5
   assert.equal(cliMissing.group, "available")
   assert.equal(cliMissing.toggle, "off", "有专用接线的给开关")
   assert.match(cliMissing.subtitle, /CLI 未在 PATH/)
-  // 无专用接线的（qwen）：可接入但「暂不支持」，不给会失败的开关
-  const noWiring = agentRow("qwen", wiring({ agent: "qwen" }), { ...found("cli_missing"), agent: "qwen", name: "Qwen Code" })
+  // 无专用接线的（cline）：可接入但「暂不支持」，不给会失败的开关
+  const noWiring = agentRow("cline", wiring({ agent: "cline" }), { ...found("cli_missing"), agent: "cline", name: "Cline" }, null, false)
   assert.equal(noWiring.group, "available")
   assert.equal(noWiring.supported, false)
   assert.equal(noWiring.toggle, null)
@@ -99,7 +101,9 @@ test("通用接入的自定义工具按接入状态分组（P1-1）", () => {
 
 test("自定义工具预设：每条键名完整，未验证的必须标出来", () => {
   const presets = CUSTOM_AGENT_PRESETS
-  assert.ok(presets.length >= 3, `预设应有至少 3 家，实际 ${presets.length}`)
+  // 预设随着「原生接线」增加而减少（qwen 2026-11-21 接了之后从 3 降到 2）。
+  // 断言只保「别被删光」；具体有哪几家由下面的 verified 检查与 customPresetFor 覆盖。
+  assert.ok(presets.length >= 2, `预设至少保留 2 家（goose / continue），实际 ${presets.length}`)
   for (const preset of presets) {
     assert.ok(preset.id && preset.name, "id 与名称必填")
     assert.ok(["json", "toml", "env"].includes(preset.format), `${preset.id} 格式合法`)
@@ -112,11 +116,11 @@ test("自定义工具预设：每条键名完整，未验证的必须标出来",
   const verified = presets.filter((p) => p.verified).map((p) => p.id)
   assert.deepEqual(verified, [], `剩下的预设都是推测的键名，实际 ${verified}`)
   // 有专用接线的工具不再出现在预设里
-  for (const id of ["kimi", "crush", "pencil", "qoder", "qoder-cn"]) assert.equal(customPresetFor(id), null, id)
+  for (const id of ["kimi", "crush", "pencil", "qoder", "qoder-cn", "qwen", "workbuddy"]) assert.equal(customPresetFor(id), null, id)
 })
 
 test("customPresetFor 只认已知 id", () => {
-  assert.equal(customPresetFor("qwen")?.name, "Qwen Code")
+  assert.equal(customPresetFor("continue")?.name, "Continue")
   assert.equal(customPresetFor("不存在的工具"), null)
 })
 
@@ -142,7 +146,8 @@ test("V8 栅格筛选：blocked 恒定折叠、顺序先已接入再可接入、
 })
 
 test("V8 暂不支持：非可接线且已检测的工具在栅格里、开关禁用", () => {
-  const workbuddy = agentRow("workbuddy", null, { agent: "workbuddy", name: "WorkBuddy", state: "installed" }, null)
+  // workbuddy 2026-11-21 起有原生接线，改用仍未接的 cline 做「暂不支持」示例
+  const workbuddy = agentRow("cline", null, { agent: "cline", name: "Cline", state: "installed" }, null, false)
   assert.equal(workbuddy.group, "available")
   assert.equal(workbuddy.supported, false)
   assert.equal(workbuddy.toggle, null)
@@ -154,6 +159,57 @@ test("V8 暂不支持：非可接线且已检测的工具在栅格里、开关�
   // 栅格包含暂不支持卡（不走折叠区）
   const grid = agentGridRows([workbuddy, zcode], "all", "", [], false)
   // 同组保持输入顺序（都是 available）
-  assert.deepEqual(grid.rows.map((r) => r.agent), ["workbuddy", "zcode"])
+  assert.deepEqual(grid.rows.map((r) => r.agent), ["cline", "zcode"])
   assert.deepEqual(grid.blocked, [])
+})
+
+test("工具卡片使用后端状态清单判断接入能力", () => {
+  const rows = buildAgentRows(
+    [wiring({ agent: "new-agent" })],
+    [{ ...found(), agent: "new-agent", name: "New Agent" }, { ...found(), agent: "other", name: "Other" }],
+    null,
+  )
+  assert.deepEqual(rows.map((row) => row.agent), ["new-agent", "other"])
+  assert.equal(rows[0].supported, true)
+  assert.equal(rows[0].toggle, "off")
+  assert.equal(rows[1].supported, false)
+  assert.equal(rows[1].toggle, null)
+})
+
+// 前端不再有硬编码清单（`buildAgentRows` 直接按后端 `status.wiring` 建行），
+// 所以「卡片与注册表脱节」的表现变成了另一头：**后端 status 漏了某家**——
+// 注册表里能接、`gateway_status` 却不返回它，卡片直接不出现，用户永远看不到。
+// 这里直接读后端源码比对：注册表的 id 集合必须与 status 的构造来源一致。
+test("后端 status.wiring 必须覆盖接线注册表的全部 id", async () => {
+  const { readFileSync } = await import("node:fs")
+  const { fileURLToPath } = await import("node:url")
+  const { dirname, resolve } = await import("node:path")
+  const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
+
+  // 注册表的 11 条 AgentSpec → id
+  const specs = readFileSync(resolve(repo, "backend/src/gateway/wiring_specs.rs"), "utf8")
+  const registered = [...specs.matchAll(/AgentSpec\s*\{([\s\S]*?)\n\s*\},/g)]
+    .map((block) => block[1].match(/id:\s*"([^"]+)"/)?.[1])
+    .filter((id) => typeof id === "string")
+  const declared = (specs.match(/(?<!struct )(?<!impl )AgentSpec\s*\{/g) ?? []).length
+  assert.equal(registered.length, declared, `只解析出 ${registered.length} 个 id，源码里有 ${declared} 条 AgentSpec——正则漏了排版`)
+  assert.ok(registered.length >= 10, `注册表解析异常（${registered.length} 个）`)
+
+  // status 的接线列表必须由 register 派生，不能另有一份手写清单：
+  // `service/gateway/status.rs` 里应调用 `wiring::agents()`。
+  const status = readFileSync(resolve(repo, "backend/src/service/gateway/status.rs"), "utf8")
+  assert.match(status, /wiring::agents\(\)/, "gateway_status 的接线列表必须从注册表派生，不能手写")
+  assert.doesNotMatch(
+    status,
+    /wiring:\s*vec!\[/,
+    "gateway_status 里出现了手写的接线清单——加一家会漏掉，卡片直接不出现",
+  )
+
+  // 前端不能重新长出一份硬编码清单
+  const page = readFileSync(resolve(repo, "frontend/src/lib/agentPage.ts"), "utf8")
+  assert.doesNotMatch(
+    page,
+    /WIRABLE_AGENTS\s*=/,
+    "前端又出现了 WIRABLE_AGENTS 硬编码清单：改由后端 status.wiring 派生，加一家不用改前端",
+  )
 })

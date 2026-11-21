@@ -308,7 +308,7 @@ pub(crate) fn agent_from_headers(headers: &HeaderMap) -> AgentIdentity {
     if let Some(agent) = token
         .and_then(|token| token.strip_prefix("jolu-"))
         .and_then(|rest| rest.split('.').next())
-        .filter(|agent| crate::gateway::wiring::AGENTS.contains(agent))
+        .filter(|agent| crate::gateway::wiring::agents().contains(agent))
     {
         return AgentIdentity::identified(agent, "token");
     }

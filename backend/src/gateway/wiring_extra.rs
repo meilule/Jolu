@@ -16,14 +16,8 @@ use serde_json::{json, Map, Value};
 
 use super::wiring::ZcodeModel;
 
-pub(crate) const AGENTS: [&str; 3] = ["pencil", "qoder", "qoder-cn"];
-
 /// Jolu 在这几家配置里的 provider 段名
 const SLOT: &str = "jolu";
-
-pub(crate) fn is_extra(agent: &str) -> bool {
-    AGENTS.contains(&agent)
-}
 
 fn env_dir(name: &str) -> Option<PathBuf> {
     std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from)
@@ -36,14 +30,6 @@ pub(crate) fn config_path(agent: &str, home: &Path) -> Option<PathBuf> {
         "qoder-cn" => env_dir("QODERCN_CONFIG_DIR").unwrap_or_else(|| home.join(".qoder-cn")).join("settings.json"),
         _ => return None,
     })
-}
-
-pub(crate) fn restart_notice(agent: &str) -> &'static str {
-    match agent {
-        "pencil" => "Pencil 启动时读自定义模型：重启 Pencil 后在模型选择器里选 Jolu 的模型",
-        "qoder" | "qoder-cn" => "新会话生效；已打开的会话保持原模型",
-        _ => "需重启后生效",
-    }
 }
 
 fn parse(text: &str) -> Result<Value, String> {

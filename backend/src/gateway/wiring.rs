@@ -11,6 +11,8 @@
 //! 文件读写拆成纯函数（`*_wire` / `*_read`），路径解析依赖真实用户目录、单独一层，
 //! 测试用临时文本验证保留性与边界（与 `proxy_config.rs` 同款做法）。
 
+pub(crate) mod adapters;
+
 use std::path::{Path, PathBuf};
 
 use crate::gateway::wiring_store::{Applied, TierModels, WiringRecord};
@@ -18,10 +20,14 @@ use crate::gateway::wiring_store::{Applied, TierModels, WiringRecord};
 /// 支持的 agent 标识（与 `providerCatalog` 的平台 id 对齐）。
 /// 后四家（Pencil / Qoder / Qoder CN / Crush）的适配在 `wiring_extra.rs`（5.11）
 // dsh 的适配在 `wiring_dsh.rs`（多 profile patch + .env + credentials，magpie dsh.go 裁剪版）
-pub const AGENTS: [&str; 11] = ["claude-code", "codex", "zcode", "gemini", "opencode", "kimi", "dsh", "pencil", "qoder", "qoder-cn", "pi"];
+/// 可接线工具清单。**从注册表派生**（`wiring_specs::SPECS`），不再手写——
+/// 加一家只需在注册表加一行，这里与 `db.rs` 种子（同样从注册表派生）自动跟上。
+pub fn agents() -> &'static [&'static str] {
+    super::wiring_specs::ids()
+}
 
 pub fn is_agent(agent: &str) -> bool {
-    AGENTS.contains(&agent)
+    super::wiring_specs::spec(agent).is_some()
 }
 
 /// 某 agent 的接入状态。
@@ -461,11 +467,11 @@ fn claude_env(text: &str, key: &str) -> Option<String> {
     root.get("env")?.get(key)?.as_str().map(str::to_string)
 }
 
-pub(super) fn claude_current_base(text: &str) -> Option<String> {
+pub(crate) fn claude_current_base(text: &str) -> Option<String> {
     claude_env(text, "ANTHROPIC_BASE_URL")
 }
 
-fn claude_current_token(text: &str) -> Option<String> {
+pub(crate) fn claude_current_token(text: &str) -> Option<String> {
     claude_env(text, "ANTHROPIC_AUTH_TOKEN")
 }
 
@@ -567,6 +573,9 @@ pub(super) fn codex_restore(text: &str, saved: Option<&serde_json::Value>, provi
     if let Some(providers) = document.get_mut("model_providers").and_then(|p| p.as_table_mut()) {
         providers.remove(provider);
     }
+    // 空表头要一起清掉：`codex_wire` 在文件原本没有 `model_providers` 时是新建的，
+    // 只删子项会留下一个空的 `[model_providers]`，用户断开后配置里凭空多一截。
+    prune_empty_table(&mut document, "model_providers");
     // openai_base_url：只有当前仍指向本机网关（或为空）时才还原
     if current_base.as_deref().is_none_or(is_gateway_value) {
         match saved.and_then(|s| s.get("openai_base_url")).and_then(|v| v.as_str()) {
@@ -593,7 +602,7 @@ pub(super) fn codex_restore(text: &str, saved: Option<&serde_json::Value>, provi
 }
 
 /// Codex 实际生效的 base：顶层 openai_base_url 优先，其次当前 provider 的 base_url。
-pub(super) fn codex_effective_base(text: &str) -> Option<String> {
+pub(crate) fn codex_effective_base(text: &str) -> Option<String> {
     let document = text.parse::<toml_edit::DocumentMut>().ok()?;
     if let Some(base) = document.get("openai_base_url").and_then(|v| v.as_str()) {
         let base = base.trim();
@@ -683,12 +692,12 @@ pub(super) fn opencode_restore(text: &str, _saved: Option<&serde_json::Value>) -
     serde_json::to_string_pretty(&root).map_err(|error| format!("opencode 配置序列化失败：{error}"))
 }
 
-pub(super) fn opencode_current_base(text: &str) -> Option<String> {
+pub(crate) fn opencode_current_base(text: &str) -> Option<String> {
     let root: serde_json::Value = serde_json::from_str(text).ok()?;
     root.get("provider")?.get("jolu")?.get("options")?.get("baseURL")?.as_str().map(str::to_string)
 }
 
-fn opencode_current_token(text: &str) -> Option<String> {
+pub(crate) fn opencode_current_token(text: &str) -> Option<String> {
     let root: serde_json::Value = serde_json::from_str(text).ok()?;
     root.get("provider")?.get("jolu")?.get("options")?.get("apiKey")?.as_str().map(str::to_string)
 }
@@ -708,7 +717,7 @@ fn gemini_settings_path() -> Option<PathBuf> {
     Some(crate::creds::home()?.join(".gemini").join("settings.json"))
 }
 
-fn gemini_selected_type(settings_text: &str) -> Option<String> {
+pub(crate) fn gemini_selected_type(settings_text: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(settings_text)
         .ok()?
         .pointer("/security/auth/selectedType")?
@@ -805,11 +814,11 @@ fn gemini_restore(env_text: &str, settings_text: &str, saved: Option<&serde_json
     (env, settings)
 }
 
-fn gemini_current_base(text: &str) -> Option<String> {
+pub(crate) fn gemini_current_base(text: &str) -> Option<String> {
     dotenv_get(text, "GOOGLE_GEMINI_BASE_URL")
 }
 
-fn gemini_current_token(text: &str) -> Option<String> {
+pub(crate) fn gemini_current_token(text: &str) -> Option<String> {
     dotenv_get(text, "GEMINI_API_KEY")
 }
 
@@ -838,6 +847,8 @@ const ZCODE_DEFAULT_CONTEXT: i64 = 200_000;
 
 /// ZCode 的数据目录：与 Agent 探测同源（`creds::zcode_data_dir`：`ZCODE_HOME` 覆盖 →
 /// ZCode 主目录 → 设置里改过的「数据存储路径」`dataBaseDir`），保证探测到的就是写的。
+pub(crate) fn zcode_dir_public(home: &Path) -> PathBuf { zcode_dir(home) }
+
 fn zcode_dir(home: &Path) -> PathBuf {
     crate::creds::zcode_data_dir(home)
 }
@@ -963,8 +974,25 @@ fn zcode_config_wire(text: &str, base: &str, token: &str, models: &[ZcodeModel])
     serde_json::to_string_pretty(&root).map_err(|error| format!("{what}序列化失败：{error}"))
 }
 
-fn zcode_rules_restore(text: &str) -> Result<String, String> {
+/// ZCode 规则文件的快照：记下接线前**哪几处结构本来就有**。
+///
+/// 不存整份原文是因为 restore 仍要在「用户后来自己改过」的文件上操作（外部意图优先），
+/// 只需要知道「这些壳是不是我们建的」——三处新建 + schemaVersion 一个布尔就够了。
+fn zcode_rules_snapshot(text: &str) -> Option<serde_json::Value> {
+    let root: serde_json::Value = serde_json::from_str(text).ok()?;
+    Some(serde_json::json!({
+        "schemaVersion": root.get("schemaVersion").is_some(),
+        "providerOrder": root.pointer("/config/providerOrder").is_some(),
+        "providerRules": root.pointer("/config/providerConfigRules/providerRules").is_some(),
+        "modelConfigRules": root.pointer("/config/modelConfigRules").is_some(),
+    }))
+}
+
+fn zcode_rules_restore(text: &str, saved: Option<&serde_json::Value>) -> Result<String, String> {
     let mut root = parse_object(text, "ZCode 的 provider_config.json ")?;
+    // `saved` 里是接线前「这几处是否存在」的布尔；没有快照（旧版本接的线）时按
+    // 「都存在」处理——宁可留着空壳，也不擅自删用户的键。
+    let had = |key: &str| saved.and_then(|saved| saved.get(key)).and_then(|v| v.as_bool()).unwrap_or(true);
     if let Some(order) = root.pointer_mut("/config/providerOrder").and_then(|o| o.as_array_mut()) {
         order.retain(|v| v.as_str() != Some(ZCODE_PROVIDER));
     }
@@ -974,19 +1002,63 @@ fn zcode_rules_restore(text: &str) -> Result<String, String> {
     if let Some(list) = root.pointer_mut("/config/modelConfigRules/providerModelRules").and_then(|l| l.as_array_mut()) {
         list.retain(|rule| !is_ours(rule));
     }
+    // 接线时新建的空壳要收掉，理由见 `zcode_rules_snapshot`。
+    if !had("providerOrder") {
+        prune_empty_json_at(&mut root, &["config", "providerOrder"]);
+    }
+    if !had("providerRules") {
+        prune_empty_json_at(&mut root, &["config", "providerConfigRules", "providerRules"]);
+    }
+    if !had("modelConfigRules") {
+        prune_empty_json_at(&mut root, &["config", "modelConfigRules", "manualProviderModelRules"]);
+        prune_empty_json_at(&mut root, &["config", "modelConfigRules", "providerModelRules"]);
+        prune_empty_json_object(&mut root, &["config", "modelConfigRules"]);
+    }
+    if !had("schemaVersion") && root.get("schemaVersion").and_then(|v| v.as_i64()) == Some(1) {
+        if let Some(object) = root.as_object_mut() {
+            object.remove("schemaVersion");
+        }
+    }
     serde_json::to_string_pretty(&root).map_err(|error| format!("ZCode 配置序列化失败：{error}"))
 }
 
-fn zcode_config_restore(text: &str) -> Result<String, String> {
+/// 删掉一个空数组键（路径不存在或不是空数组则不动）。
+fn prune_empty_json_at(root: &mut serde_json::Value, path: &[&str]) {
+    let Some((last, parents)) = path.split_last() else { return };
+    let Some(parent) = parents.iter().try_fold(root, |node, key| node.get_mut(*key)) else { return };
+    let empty = parent.get(*last).and_then(|v| v.as_array()).is_some_and(|a| a.is_empty());
+    if empty {
+        if let Some(object) = parent.as_object_mut() {
+            object.remove(*last);
+        }
+    }
+}
+
+/// 删掉一个空对象键（路径不存在或不是空对象则不动）。
+fn prune_empty_json_object(root: &mut serde_json::Value, path: &[&str]) {
+    let Some((last, parents)) = path.split_last() else { return };
+    let Some(parent) = parents.iter().try_fold(root, |node, key| node.get_mut(*key)) else { return };
+    let empty = parent.get(*last).and_then(|v| v.as_object()).is_some_and(|o| o.is_empty());
+    if empty {
+        if let Some(object) = parent.as_object_mut() {
+            object.remove(*last);
+        }
+    }
+}
+
+fn zcode_config_restore(text: &str, saved: Option<&serde_json::Value>) -> Result<String, String> {
     let mut root = parse_object(text, "ZCode 的 config.json ")?;
     if let Some(providers) = root.get_mut("provider").and_then(|p| p.as_object_mut()) {
         providers.remove(ZCODE_PROVIDER);
+    }
+    if saved.and_then(|value| value.get("configProvider")).and_then(|value| value.as_bool()) == Some(false) {
+        prune_empty_json_object(&mut root, &["provider"]);
     }
     serde_json::to_string_pretty(&root).map_err(|error| format!("ZCode 配置序列化失败：{error}"))
 }
 
 /// 旧版 Jolu 在 `~/.zcode/provider.json` 顶层写过 `jolu` 键（ZCode 从不读这个文件）：断开时顺带删掉。
-fn zcode_clean_legacy(home: &Path) {
+pub(crate) fn zcode_clean_legacy(home: &Path) {
     // 旧版 Jolu 写在原位置（`ZCODE_HOME` 或 `~/.zcode`），不随 dataBaseDir 找
     let legacy = std::env::var_os("ZCODE_HOME").filter(|value| !value.is_empty()).map(PathBuf::from).unwrap_or_else(|| home.join(".zcode")).join("provider.json");
     let Ok(Some(text)) = crate::steady::read_optional(&legacy) else { return };
@@ -1011,11 +1083,11 @@ fn zcode_rule(text: &str) -> Option<serde_json::Value> {
         .cloned()
 }
 
-fn zcode_current_base(text: &str) -> Option<String> {
+pub(crate) fn zcode_current_base(text: &str) -> Option<String> {
     zcode_rule(text)?.pointer("/config/api/baseUrl")?.as_str().map(str::to_string)
 }
 
-fn zcode_current_token(text: &str) -> Option<String> {
+pub(crate) fn zcode_current_token(text: &str) -> Option<String> {
     zcode_rule(text)?.pointer("/config/access/apiKey")?.as_str().map(str::to_string)
 }
 
@@ -1040,6 +1112,8 @@ const KIMI_DEFAULT_CONTEXT: i64 = 128_000;
 /// （首次接线时代码会建目录）；探测侧 [`crate::agent_discovery`] 的同名逻辑保持一致。
 /// 与 [`zcode_dir`] 同理：接线需要「legacy」这个探测规格表没有的信息（旧版 kimi-cli
 /// 不认 `capabilities` 里的 `tool_use`，写了会拒绝启动），所以单独再算一遍目录。
+pub(crate) fn kimi_dir_public(home: &Path) -> (PathBuf, bool) { kimi_dir(home) }
+
 fn kimi_dir(home: &Path) -> (PathBuf, bool) {
     if let Some(dir) = std::env::var_os("KIMI_CODE_HOME").filter(|value| !value.is_empty()) {
         return (PathBuf::from(dir), false);
@@ -1059,20 +1133,25 @@ fn kimi_provider_read<'a>(document: &'a toml_edit::DocumentMut) -> Option<&'a to
     document.get("providers")?.as_table()?.get(KIMI_PROVIDER)?.as_table()
 }
 
-fn kimi_current_base(text: &str) -> Option<String> {
+pub(crate) fn kimi_current_base(text: &str) -> Option<String> {
     let document = text.parse::<toml_edit::DocumentMut>().ok()?;
     let base = kimi_provider_read(&document)?.get("base_url")?.as_str()?.trim().to_string();
     (!base.is_empty()).then_some(base)
 }
 
-fn kimi_current_token(text: &str) -> Option<String> {
+pub(crate) fn kimi_current_token(text: &str) -> Option<String> {
     let document = text.parse::<toml_edit::DocumentMut>().ok()?;
     let token = kimi_provider_read(&document)?.get("api_key")?.as_str()?.trim().to_string();
     (!token.is_empty()).then_some(token)
 }
 
 /// 顶层 default_model 是否指向我们的模型表（`jolu/` 前缀）。
-fn kimi_default_ours(document: &toml_edit::DocumentMut) -> bool {
+/// 文本版的「默认模型指向我们的表」判定（注册表用，避免调用方各自解析 TOML）。
+pub(crate) fn kimi_default_model_ours(text: &str) -> bool {
+    text.parse::<toml_edit::DocumentMut>().map(|document| kimi_default_ours(&document)).unwrap_or(false)
+}
+
+pub(crate) fn kimi_default_ours(document: &toml_edit::DocumentMut) -> bool {
     document
         .get("default_model")
         .and_then(|value| value.as_str())
@@ -1233,6 +1312,9 @@ fn kimi_restore(text: &str, saved: Option<&serde_json::Value>) -> Result<String,
             }
         }
     }
+    // 空表头一起清掉，理由同 `codex_restore`：kimi_wire 在文件原本没有这两张表时会新建。
+    prune_empty_table(&mut document, "models");
+    prune_empty_table(&mut document, "providers");
     Ok(document.to_string())
 }
 
@@ -1252,6 +1334,22 @@ fn parse_toml_document(text: &str, what: &str) -> Result<toml_edit::DocumentMut,
         return Ok(toml_edit::DocumentMut::new());
     }
     text.parse::<toml_edit::DocumentMut>().map_err(|error| format!("{what} 格式无效：{error}"))
+}
+
+/// 删掉一个已经空掉的顶层表（只删表头本身，不留 `[name]` 空壳）。
+///
+/// 为什么需要：`codex_wire` / `kimi_wire` 在文件原本没有目标表时会**新建**一张，
+/// 断开时只删我们写进去的子项，表就空着了。用户看到的是一段凭空多出来的
+/// `[model_providers]` / `[models]`——语义无害但明显是「没还原干净」。
+/// 只处理顶层表：子表（`[a.b]`）由它自己的写入方负责。
+fn prune_empty_table(document: &mut toml_edit::DocumentMut, key: &str) {
+    let empty = document
+        .get(key)
+        .and_then(|item| item.as_table())
+        .is_some_and(|table| table.is_empty());
+    if empty {
+        document.remove(key);
+    }
 }
 
 /// dotenv 键值写入：保留其它行与注释，只替换目标键（不存在则追加）。
@@ -1315,26 +1413,10 @@ pub fn write_json_atomic_public(path: &Path, bytes: Vec<u8>) -> Result<(), Strin
     write_atomic(path, bytes)
 }
 
+/// 配置路径：查注册表（一家一行声明在 `wiring_specs::SPECS`）。
 fn config_path(agent: &str) -> Option<PathBuf> {
     let home = crate::creds::home()?;
-    Some(match agent {
-        "claude-code" => crate::creds::claude_dir()?.join("settings.json"),
-        "codex" => crate::creds::codex_dir()?.join("config.toml"),
-        // ZCode 3.14 起从 v2/provider_config.json 的规则读 provider（2.9；此前写的 ~/.zcode/provider.json ZCode 不读）
-        "zcode" => zcode_dir(&home).join("v2").join("provider_config.json"),
-        "gemini" => home.join(".gemini").join(".env"),
-        "opencode" => std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".config"))
-            .join("opencode")
-            .join("opencode.json"),
-        // Kimi CLI / Kimi Code（magpie kimi.go kimiDir：新版 `~/.kimi-code`，旧版 `~/.kimi`）
-        "kimi" => kimi_dir(&home).0.join("config.toml"),
-        "dsh" => super::wiring_dsh::config_path(&home),
-        "pi" => super::wiring_pi::config_path(&home),
-        other if super::wiring_extra::is_extra(other) => super::wiring_extra::config_path(other, &home)?,
-        _ => return None,
-    })
+    (super::wiring_specs::spec(agent)?.path)(&home)
 }
 
 fn write_atomic(path: &Path, bytes: Vec<u8>) -> Result<(), String> {
@@ -1408,28 +1490,9 @@ pub(super) fn backup(path: &Path, backup_dir: &Path) -> Result<(), String> {
 
 /// 别的 Jolu 实例写下的标记：token 的实例后缀与当前实例不同。
 fn foreign_marker(agent: &str, text: &str, instance_short: &str) -> Option<String> {
-    let token = match agent {
-        "claude-code" => claude_current_token(text),
-        "codex" => text
-            .parse::<toml_edit::DocumentMut>()
-            .ok()
-            .and_then(|doc| {
-                doc.get("model_providers")?
-                    .get(CODEX_PROVIDER)?
-                    .get("experimental_bearer_token")?
-                    .as_str()
-                    .map(str::to_string)
-            }),
-        "gemini" => gemini_current_token(text),
-        "opencode" => opencode_current_token(text),
-        "zcode" => zcode_current_token(text),
-        "kimi" => kimi_current_token(text),
-        // dsh 的令牌在 .env 不在 patch 里，读文件（其余 agent 的令牌都在 text 里）
-        "dsh" => crate::creds::home().and_then(|home| super::wiring_dsh::current_token(&home)),
-        "pi" => super::wiring_pi::current_token(text),
-        other if super::wiring_extra::is_extra(other) => super::wiring_extra::current_token(other, text),
-        _ => None,
-    }?;
+    let spec = super::wiring_specs::spec(agent)?;
+    let home = crate::creds::home()?;
+    let token = (spec.token)(&home, text)?;
     if !token.starts_with("jolu-") {
         return None;
     }
@@ -1447,59 +1510,9 @@ fn ours(agent: &str, text: &str, port: u16, instance_short: &str) -> bool {
 
 /// `kept` 是接线时保留下来的调用方 Key（keyHolds）：文件里是它也算我们的接线。
 fn ours_with(agent: &str, text: &str, port: u16, instance_short: &str, kept: Option<&str>) -> bool {
-    match agent {
-        "claude-code" => {
-            let base = claude_current_base(text).unwrap_or_default();
-            let token = claude_current_token(text).unwrap_or_default();
-            points_at_gateway(&base, port)
-                && (token == format!("jolu-claude-code")
-                    || token == token_for("claude-code", instance_short)
-                    || kept.is_some_and(|kept| !kept.is_empty() && token == kept))
-        }
-        "codex" => codex_effective_base(text).is_some_and(|base| points_at_gateway(&base, port)),
-        "gemini" => {
-            let base_ok = gemini_current_base(text).is_some_and(|base| points_at_gateway(&base, port));
-            let selected = gemini_settings_text()
-                .as_deref()
-                .and_then(gemini_selected_type);
-            base_ok && selected.as_deref() == Some("gemini-api-key")
-        }
-        "opencode" => opencode_current_base(text).is_some_and(|base| points_at_gateway(&base, port)),
-        "zcode" => zcode_current_base(text).is_some_and(|base| points_at_gateway(&base, port)),
-        // Kimi：provider 指到网关还不够——default_model 还得是我们的模型表（`jolu/` 前缀），
-        // 否则流量根本不经过我们（magpie Check：models 表或 provider 表不在都算「不再走网关」）
-        "kimi" => {
-            let base = kimi_current_base(text).unwrap_or_default();
-            let token = kimi_current_token(text).unwrap_or_default();
-            points_at_gateway(&base, port)
-                && (token == token_for("kimi", instance_short)
-                    || kept.is_some_and(|kept| !kept.is_empty() && token == kept))
-                && text.parse::<toml_edit::DocumentMut>().map(|document| kimi_default_ours(&document)).unwrap_or(false)
-        }
-        "dsh" => crate::creds::home().is_some_and(|home| super::wiring_dsh::wired(&home, text, port, instance_short, kept)),
-        // Pi：provider 指向网关 + 默认 provider 是 jolu（settings.json 另读）
-        "pi" => {
-            let base = super::wiring_pi::current_base(text).unwrap_or_default();
-            let token = super::wiring_pi::current_token(text).unwrap_or_default();
-            let settings = crate::creds::home()
-                .map(|home| crate::steady::read_optional(&super::wiring_pi::settings_path(&home)).ok().flatten().unwrap_or_default())
-                .unwrap_or_default();
-            points_at_gateway(&base, port)
-                && (token == token_for("pi", instance_short)
-                    || token.starts_with("jolu-")
-                    || kept.is_some_and(|kept| !kept.is_empty() && token == kept))
-                && super::wiring_pi::selected_ours(&settings)
-        }
-        // 5.11 四家 JSON：provider 段指到网关、令牌是我们的，且工具当前选的是 Jolu 的模型
-        other if super::wiring_extra::is_extra(other) => {
-            let base = super::wiring_extra::current_base(other, text).unwrap_or_default();
-            let token = super::wiring_extra::current_token(other, text).unwrap_or_default();
-            points_at_gateway(&base, port)
-                && (token == token_for(other, instance_short) || kept.is_some_and(|kept| !kept.is_empty() && token == kept))
-                && super::wiring_extra::selected_ours(other, text)
-        }
-        _ => false,
-    }
+    let Some(spec) = super::wiring_specs::spec(agent) else { return false };
+    let Some(home) = crate::creds::home() else { return false };
+    spec.is_wired(&home, text, port, instance_short, kept)
 }
 
 /// 探测某 agent 的当前接入状态（只看文件）。
@@ -1541,7 +1554,7 @@ pub fn status_with(agent: &str, port: u16, record: Option<&WiringRecord>) -> Wir
         };
     };
     let display = path.display().to_string();
-    let installed = path.exists() || (agent == "gemini" && gemini_settings_path().is_some_and(|p| p.exists()));
+    let installed = path.exists() || (super::wiring_specs::spec(agent).is_some_and(|spec| spec.extra == super::wiring_specs::WiredExtra::GeminiApiKey) && gemini_settings_path().is_some_and(|p| p.exists()));
     if !installed {
         return WiringStatus {
             agent: agent.into(),
@@ -1648,20 +1661,15 @@ pub(crate) fn claude_read_model(text: &str) -> Option<(String, Option<String>)> 
     Some((raw, resolved))
 }
 
+/// 重启提示：全部可从注册表读（`wiring_specs::AgentSpec.notice`），未注册的 id 给通用兜底。
+///
+/// 这里原来还有一段手写 `match`（claude / gemini / codex / opencode / zcode / kimi 各一条
+/// 文案 + dsh / pi / extra 三个转发）。注册表接管后它已成**不可达死代码**——各家在注册表
+/// 里都有非空 notice，短路永远先命中。2026-11-20 删除，文案只维护注册表那一份。
 fn restart_notice(agent: &str) -> &'static str {
-    match agent {
-        "claude-code" => "新会话生效；已在运行的会话需重开",
-        // 这句话必须让用户知道登录方式被临时切走了
-        "gemini" => "接线期间改用网关 Key，断开时恢复原登录；需重启 Gemini 后生效",
-        "codex" => "保留 ChatGPT 登录时只改请求地址；需重启 Codex 后生效",
-        "opencode" => "需重启该工具后生效",
-        "zcode" => "需重启 ZCode 后生效",
-        "kimi" => "需重启 Kimi 后生效",
-        "dsh" => super::wiring_dsh::restart_notice(),
-        "pi" => super::wiring_pi::restart_notice(),
-        other if super::wiring_extra::is_extra(other) => super::wiring_extra::restart_notice(other),
-        _ => "需重启后生效",
-    }
+    super::wiring_specs::spec(agent)
+        .map(|spec| spec.notice)
+        .unwrap_or("需重启后生效")
 }
 
 /// 重新应用时优先沿用旧快照；只有第一次接线才使用当前文件算出的值。
@@ -1690,140 +1698,75 @@ pub(crate) struct WirePlan {
     pub applied: Applied,
 }
 
+/// 一次接线请求的全部输入。字段按「谁用」分组，每家工具只读自己需要的：
+/// 通用字段在 `WireContext` 本身，选模型相关在 [`ModelChoice`]，Claude Code 专属在
+/// [`ClaudeInput`]。
+///
+/// 为什么不再用位置参数：原来 16 个参数里每家只用到 3-4 个，而第 9 与第 12 格都是
+/// `Option<&str>`——填错位置编译器不报错，运行时才发现「Claude 的档位写进了 Kimi」。
+/// 详情见 `docs/plans/2026-11-20-agent-wiring-refactor-plan.md`。
+pub(crate) struct WireContext<'a> {
+    pub agent: &'a str,
+    /// 网关根地址（`http://127.0.0.1:<port>`）。**拥有所有权**而不是 `&str`：
+    /// 调用方原本写 `base: &format!(...)`，靠临时值生命周期延长才能编译，
+    /// 一旦 ctx 需要跨语句存活就失效——这类脆弱性不值得省一次分配。
+    pub base: String,
+    /// 归属令牌（`jolu-<agent>.<实例8位>`）。同样拥有所有权（理由同 `base`）。
+    /// Claude Code 的 keyHolds 会在 `plan_wire` 里把它换成保留的命名 Key。
+    pub token: String,
+    pub instance_short: &'a str,
+    /// 网关模型目录：写进对方配置的模型清单来自这里（zcode / kimi / dsh / pi / extra 用）
+    pub catalog: &'a [ZcodeModel],
+    /// 上一次接线保存的原值：重新应用时用它，不能拿当前文件重新快照——
+    /// 当前文件里可能已经是我们写进去的网关地址，重算会把用户的真实上游弄丢
+    pub prior_snapshot: Option<&'a str>,
+    pub chosen: ModelChoice<'a>,
+    /// 只有 Claude Code 会读；其它家传 `None`
+    pub claude: Option<ClaudeInput<'a>>,
+}
+
+/// 「选哪个模型」相关的输入。
+/// `model` 只对 Claude Code 生效：网关按 `<来源>/<模型>` 选路，不写模型映射工具就会发自带别名；
+/// 其它家用 `catalog` 的第一个或工具自己上次的选择。
+pub(crate) struct ModelChoice<'a> {
+    pub model: Option<&'a str>,
+    pub label: Option<&'a str>,
+    pub description: Option<&'a str>,
+    /// 上一次接线写下的模型映射（取自接线记录的 applied），重新接线时用来把它
+    /// 从「用户原值」里排除——否则断开接线会把用户的模型名还原成网关来源名
+    pub prior_model: Option<&'a str>,
+    pub prior_label: Option<&'a str>,
+    pub prior_values: &'a [String],
+    pub subagent_model: Option<&'a str>,
+    pub tiers: Option<&'a TierModels>,
+}
+
+/// Claude Code 专属输入。
+pub(crate) struct ClaudeInput<'a> {
+    /// 档位「关于」：按写入值查 models.dev，给 /model 菜单用
+    pub tier_about: &'a dyn Fn(&str) -> (Option<String>, Option<String>),
+    pub extras: &'a ClaudeExtras,
+    /// keyHolds：Claude Code 里已是网关认的命名客户端 Key 时保留它——那把 Key
+    /// 带着用户设的每日上限与并发，换成 Jolu 的令牌就把这些约束丢了
+    pub holds: &'a dyn Fn(&str) -> bool,
+}
+
 /// 接入的计划：读原值 → 拒绝别的实例 → 算出要写的文件与记账（只算不写；落盘见 [`commit_plan`]）。
-/// `prior_snapshot` 是上一次接线保存的原值：重新应用时用它，不能拿当前文件重新快照——
-/// 当前文件里可能已经是我们写进去的网关地址，重算会把用户的真实上游弄丢。
-/// `model` 只对 Claude Code 生效：网关按 `<来源>/<模型>` 选路，不写模型映射工具就会发自带别名。
-/// `prior_model` 是上一次接线写下的模型映射（取自接线记录的 applied），重新接线时用来把它
-/// 从「用户原值」里排除——否则断开接线会把用户的模型名还原成网关来源名。
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn plan_wire(
-    agent: &str,
-    port: u16,
-    instance_short: &str,
-    prior_snapshot: Option<&str>,
-    model: Option<&str>,
-    label: Option<&str>,
-    description: Option<&str>,
-    prior_model: Option<&str>,
-    prior_label: Option<&str>,
-    subagent_model: Option<&str>,
-    prior_values: &[String],
-    tiers: Option<&TierModels>,
-    tier_about: &dyn Fn(&str) -> (Option<String>, Option<String>),
-    extras: &ClaudeExtras,
-    holds: &dyn Fn(&str) -> bool,
-    // 网关模型目录（zcode / kimi 用）：写进对方配置的模型清单来自这里
-    catalog_models: &[ZcodeModel],
-) -> Result<WirePlan, String> {
-    let path = config_path(agent).ok_or("未找到用户目录")?;
-    let base = format!("http://127.0.0.1:{port}");
-    let mut token = token_for(agent, instance_short);
+pub(crate) fn plan_wire(ctx: &WireContext) -> Result<WirePlan, String> {
+    let spec = super::wiring_specs::spec(ctx.agent).ok_or("该工具不在接线范围")?;
+    let path = config_path(ctx.agent).ok_or("未找到用户目录")?;
     let original = if crate::steady::exists(&path) {
         crate::steady::read_to_string(&path).map_err(|error| format!("读取 {} 失败：{error}", path.display()))?
     } else {
         String::new()
     };
-    if let Some(suffix) = foreign_marker(agent, &original, instance_short) {
-        return Err(format!(
-            "该工具已被另一个 Jolu 实例接管（尾号 {suffix}）；请先在那个实例里断开，或手动改回直连"
-        ));
+    if let Some(suffix) = foreign_marker(ctx.agent, &original, ctx.instance_short) {
+        return Err(format!("该工具已被另一个 Jolu 实例接管（尾号 {suffix}）；请先在那个实例里断开，或手动改回直连"));
     }
-    // keyHolds（magpie 同款）：Claude Code 里已经是网关认的命名客户端 Key 时保留它——那把 Key
-    // 带着用户设的每日上限与并发，换成 Jolu 的令牌就把这些约束丢了
-    if agent == "claude-code" {
-        if let Some(existing) = claude_current_token(&original).filter(|t| !t.starts_with("jolu-") && holds(t)) {
-            token = existing;
-        }
-    }
-    // Codex 已登录 ChatGPT 时保留 OAuth；否则才写自定义 provider + 静态令牌。
-    let codex_oauth = agent == "codex" && codex_oauth_logged_in();
-    let mut extra_files: Vec<(PathBuf, Vec<u8>)> = Vec::new();
-    let (next, snapshot) = match agent {
-        "claude-code" => {
-            let snapshot = claude_snapshot(&original, prior_model, prior_label, prior_values)
-                .and_then(|saved| drop_our_extras(saved, &extras.previous));
-            let text = if original.trim().is_empty() { "{}" } else { original.as_str() };
-            (claude_wire(text, &base, &token, model, label, description, subagent_model, tiers, tier_about, extras)?, snapshot)
-        }
-        "codex" => {
-            let snapshot = codex_snapshot(&original);
-            let token = (!codex_oauth).then_some(token.as_str());
-            (codex_wire(&original, &base, CODEX_PROVIDER, codex_oauth, token)?, snapshot)
-        }
-        "gemini" => {
-            let settings_path = gemini_settings_path().ok_or("未找到用户目录")?;
-            let settings_text = gemini_settings_text().unwrap_or_default();
-            let plan = gemini_plan(&original, &settings_text, &base, &token)?;
-            extra_files.push((settings_path, plan.settings.into_bytes()));
-            (plan.env, Some(plan.snapshot))
-        }
-        "opencode" => (opencode_wire(&original, &base, &token)?, None),
-        "zcode" => {
-            // 两份都写：新版 ZCode 读规则文件，旧版读 config.json（magpie 同款）
-            let home = crate::creds::home().ok_or("未找到用户目录")?;
-            let config_path = zcode_dir(&home).join("v2").join("config.json");
-            let config_text = crate::steady::read_optional(&config_path).map_err(|error| format!("读取 {} 失败：{error}", config_path.display()))?.unwrap_or_default();
-            extra_files.push((config_path, zcode_config_wire(&config_text, &base, &token, catalog_models)?.into_bytes()));
-            (zcode_rules_wire(&original, &base, &token, catalog_models)?, None)
-        }
-        "kimi" => {
-            // 旧版 kimi-cli（~/.kimi）不认 tool_use 等新键；写哪个目录按 kimi_dir 的判定
-            let home = crate::creds::home().ok_or("未找到用户目录")?;
-            let legacy = kimi_dir(&home).1;
-            (kimi_wire(&original, &base, &token, model, catalog_models, legacy)?, kimi_snapshot(&original))
-        }
-        "pi" => {
-            // 双文件：models.json（provider + 模型清单）+ settings.json（默认 provider/model）
-            let home = crate::creds::home().ok_or("未找到用户目录")?;
-            let settings_path = super::wiring_pi::settings_path(&home);
-            let settings_text = crate::steady::read_optional(&settings_path).map_err(|e| format!("读取 {} 失败：{e}", settings_path.display()))?.unwrap_or_default();
-            let (models_next, settings_next, snapshot) = super::wiring_pi::wire(&original, &settings_text, &base, &token, model, catalog_models)?;
-            extra_files.push((settings_path, settings_next.into_bytes()));
-            (models_next, snapshot)
-        }
-        "dsh" => {
-            // 多文件：每个 profile 的 patch + .env + credentials refs（wiring_dsh 组装）
-            let home = crate::creds::home().ok_or("未找到用户目录")?;
-            let plan = super::wiring_dsh::plan_wire_files(&home, &base, &token, model, catalog_models)?;
-            for (path, text) in plan.extra {
-                extra_files.push((path, text.into_bytes()));
-            }
-            (plan.main_text, plan.snapshot)
-        }
-        other if super::wiring_extra::is_extra(other) => (
-            super::wiring_extra::wire(other, &original, &base, &token, model, catalog_models)?,
-            super::wiring_extra::snapshot(other, &original),
-        ),
-        _ => return Err("该工具不在接线范围".into()),
-    };
-    let mut files = extra_files;
-    files.push((path, next.into_bytes()));
-    let applied = Applied {
-        base: if codex_oauth { format!("{base}/backend-api/codex") } else { base.clone() },
-        token: if agent == "codex" {
-            (!codex_oauth).then(|| token.clone())
-        } else {
-            (matches!(agent, "claude-code" | "gemini" | "opencode" | "zcode" | "kimi" | "dsh" | "pi") || super::wiring_extra::is_extra(agent)).then(|| token.clone())
-        },
-        provider: (agent == "codex" && !codex_oauth).then(|| CODEX_PROVIDER.to_string()),
-        mode: (agent == "codex").then(|| if codex_oauth { "oauth" } else { "provider" }.to_string()),
-        model: (agent == "claude-code")
-            .then(|| model.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string))
-            .flatten(),
-        label: (agent == "claude-code")
-            .then(|| label.map(str::trim).filter(|l| !l.is_empty()).map(str::to_string))
-            .flatten(),
-        subagent_model: (agent == "claude-code")
-            .then(|| subagent_model.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string))
-            .flatten(),
-        tiers: (agent == "claude-code").then(|| tiers.cloned()).flatten(),
-        extra_env: match model.map(str::trim).filter(|m| !m.is_empty()) {
-            Some(model) if agent == "claude-code" => claude_extra_env(model, extras),
-            _ => Default::default(),
-        },
-    };
-    Ok(WirePlan { files, snapshot: effective_snapshot(prior_snapshot, snapshot), applied })
+    let edits = (spec.wire)(ctx, &original)?;
+    let mut files = edits.extra_files;
+    files.push((path, edits.next.into_bytes()));
+    Ok(WirePlan { files, snapshot: effective_snapshot(ctx.prior_snapshot, edits.snapshot), applied: edits.applied })
 }
 
 /// 接线前要让用户知道的事（只读，不改文件）。目前：Claude Code 的顶层 `model` 与
@@ -1873,10 +1816,8 @@ fn write_all_with_rollback(files: &[(PathBuf, Vec<u8>)]) -> Result<(), String> {
 pub(crate) fn unwire(agent: &str, port: u16, record: Option<&WiringRecord>) -> Result<bool, String> {
     let Some(files) = plan_unwire(agent, port, record)? else { return Ok(false) };
     write_all_with_rollback(&files)?;
-    if agent == "zcode" {
-        if let Some(home) = crate::creds::home() {
-            zcode_clean_legacy(&home);
-        }
+    if let (Some(cleanup), Some(home)) = (super::wiring_specs::spec(agent).and_then(|spec| spec.after_unwire), crate::creds::home()) {
+        cleanup(&home);
     }
     Ok(true)
 }
@@ -1885,8 +1826,8 @@ pub(crate) fn unwire(agent: &str, port: u16, record: Option<&WiringRecord>) -> R
 /// 已接入时的「写入的改动」预览用它：还原后的内容 → 现在的内容 = Jolu 改了什么。
 pub(crate) fn plan_unwire(agent: &str, port: u16, record: Option<&WiringRecord>) -> Result<Option<Vec<(PathBuf, Vec<u8>)>>, String> {
     let path = config_path(agent).ok_or("未找到用户目录")?;
-    // Gemini 可能只剩 settings.json 被改过（.env 被外部删了），仍然要还原 auth。
-    if !crate::steady::exists(&path) && agent != "gemini" {
+    let spec = super::wiring_specs::spec(agent).ok_or("该工具不在接线范围")?;
+    if !crate::steady::exists(&path) && !spec.unwire_without_main {
         return Ok(None);
     }
     let original = if crate::steady::exists(&path) {
@@ -1903,131 +1844,8 @@ pub(crate) fn plan_unwire(agent: &str, port: u16, record: Option<&WiringRecord>)
     let saved: Option<serde_json::Value> = record
         .and_then(|r| r.original_json.as_deref())
         .and_then(|s| serde_json::from_str(s).ok());
-    // ZCode 要同时还原规则文件与 config.json，并清掉旧版 Jolu 写在 provider.json 里的键
-    if agent == "zcode" {
-        let base_ours = zcode_current_base(&original).is_some_and(|base| is_gateway_value(&base));
-        let token_ours = zcode_current_token(&original).is_some_and(|token| token.starts_with("jolu-"));
-        if !base_ours && !token_ours {
-            return Ok(None);
-        }
-        let home = crate::creds::home().ok_or("未找到用户目录")?;
-        let config_path = zcode_dir(&home).join("v2").join("config.json");
-        let mut files = vec![(path.clone(), zcode_rules_restore(&original)?.into_bytes())];
-        if let Ok(Some(config_text)) = crate::steady::read_optional(&config_path) {
-            files.push((config_path, zcode_config_restore(&config_text)?.into_bytes()));
-        }
-        return Ok(Some(files));
-    }
-    // Gemini 要同时还原 `.env` 与 settings.json，单独走多文件路径。
-    if agent == "gemini" {
-        let base_ours = gemini_current_base(&original).is_some_and(|base| is_gateway_value(&base));
-        let token_ours = gemini_current_token(&original).is_some_and(|token| token.starts_with("jolu-"));
-        let settings_ours = record.is_some()
-            && gemini_settings_text()
-                .as_deref()
-                .and_then(gemini_selected_type)
-                .as_deref()
-                == Some("gemini-api-key");
-        if !base_ours && !token_ours && !settings_ours {
-            return Ok(None);
-        }
-        let settings_path = gemini_settings_path().ok_or("未找到用户目录")?;
-        let settings_text = gemini_settings_text().unwrap_or_default();
-        let (env, settings) = gemini_restore(&original, &settings_text, saved.as_ref());
-        return Ok(Some(vec![
-            (settings_path, settings.into_bytes()),
-            (path, env.into_bytes()),
-        ]));
-    }
-    let next = match agent {
-        "claude-code" => {
-            // 外部意图优先：当前 base 已不是网关地址、且 token 不是 Jolu 写的，就不动
-            let base = claude_current_base(&original).unwrap_or_default();
-            let token = claude_current_token(&original).unwrap_or_default();
-            if !points_at_gateway(&base, port) && !is_gateway_value(&base) && !token.starts_with("jolu-") {
-                return Ok(None);
-            }
-            // 上次接线写下的主模型与显示名：没有快照时靠它们识别「哪些键是我们写的」
-            let applied = record.and_then(|r| r.applied());
-            let prior_model = applied.as_ref().and_then(|a| a.model.clone());
-            let prior_label = applied.as_ref().and_then(|a| a.label.clone());
-            let prior_values = applied.as_ref().map(Applied::written_values).unwrap_or_default();
-            claude_restore(
-                &original,
-                saved.as_ref(),
-                prior_model.as_deref(),
-                prior_label.as_deref(),
-                &prior_values,
-            )?
-        }
-        "codex" => {
-            let points_at_us = codex_effective_base(&original).is_some_and(|base| is_gateway_value(&base))
-                || codex_provider_base(&original, CODEX_PROVIDER).is_some_and(|base| is_gateway_value(&base));
-            if !points_at_us {
-                return Ok(None);
-            }
-            codex_restore(&original, saved.as_ref(), CODEX_PROVIDER)?
-        }
-        "opencode" => {
-            let base_ours = opencode_current_base(&original).is_some_and(|base| is_gateway_value(&base));
-            let token_ours = opencode_current_token(&original).is_some_and(|token| token.starts_with("jolu-"));
-            if !base_ours && !token_ours {
-                return Ok(None);
-            }
-            opencode_restore(&original, saved.as_ref())?
-        }
-        "kimi" => {
-            let base_ours = kimi_current_base(&original).is_some_and(|base| is_gateway_value(&base));
-            let token_ours = kimi_current_token(&original).is_some_and(|token| token.starts_with("jolu-"));
-            if !base_ours && !token_ours {
-                return Ok(None);
-            }
-            kimi_restore(&original, saved.as_ref())?
-        }
-        "pi" => {
-            // 双文件还原：models.json 删 provider；settings.json 还原默认（用户改过就不动）
-            let home = crate::creds::home().ok_or("未找到用户目录")?;
-            let settings_path = super::wiring_pi::settings_path(&home);
-            let settings_text = crate::steady::read_optional(&settings_path).map_err(|e| format!("读取 {} 失败：{e}", settings_path.display()))?.unwrap_or_default();
-            let base_ours = super::wiring_pi::current_base(&original).is_some_and(|base| is_gateway_value(&base));
-            let token_ours = super::wiring_pi::current_token(&original).is_some_and(|token| token.starts_with("jolu-"));
-            if !base_ours && !token_ours {
-                return Ok(None);
-            }
-            let (models_next, settings_next) = super::wiring_pi::restore(&original, &settings_text, saved.as_ref())?;
-            let mut files = vec![(path.clone(), models_next.into_bytes())];
-            if settings_next != settings_text {
-                files.push((settings_path, settings_next.into_bytes()));
-            }
-            return Ok(Some(files));
-        }
-        "dsh" => {
-            // 多文件还原：每个 profile 的 patch + .env + credentials（快照按文件分组）。
-            // 主文件（第一个 profile）放列表末尾，与 plan_wire 的主文件保持同路径。
-            let home = crate::creds::home().ok_or("未找到用户目录")?;
-            let base_ours = super::wiring_dsh::current_base(&original).is_some_and(|base| is_gateway_value(&base));
-            let token_ours = crate::creds::home().and_then(|home| super::wiring_dsh::current_token(&home)).is_some_and(|token| token.starts_with("jolu-"));
-            if !base_ours && !token_ours {
-                return Ok(None);
-            }
-            let mut files = super::wiring_dsh::plan_unwire_files(&home, saved.as_ref())?;
-            if let Some(at) = files.iter().position(|(p, _)| *p == path) {
-                let (main_path, main_text) = files.remove(at);
-                files.push((main_path, main_text));
-            }
-            return Ok(Some(files.into_iter().map(|(p, t)| (p, t.into_bytes())).collect()));
-        }
-        other if super::wiring_extra::is_extra(other) => {
-            let base_ours = super::wiring_extra::current_base(other, &original).is_some_and(|base| is_gateway_value(&base));
-            let token_ours = super::wiring_extra::current_token(other, &original).is_some_and(|token| token.starts_with("jolu-"));
-            if !base_ours && !token_ours {
-                return Ok(None);
-            }
-            super::wiring_extra::restore(other, &original, saved.as_ref())?
-        }
-        _ => return Err("该工具不在接线范围".into()),
-    };
-    Ok(Some(vec![(path, next.into_bytes())]))
+    let input = adapters::UnwireInput { path, original, saved, port, record };
+    (spec.unwire)(agent, &input)
 }
 
 /// 已接入时「写入的改动」：每个文件按「断开会还原成的内容 → 现在的内容」对比，即 Jolu 改了什么。
@@ -2578,7 +2396,7 @@ mod tests {
         let wired = zcode_rules_wire("{}", "http://127.0.0.1:12731", "jolu-zcode", &[]).unwrap();
         assert!(wired.contains("127.0.0.1:12731"));
         assert_eq!(zcode_current_base(&wired).as_deref(), Some("http://127.0.0.1:12731"));
-        let restored = zcode_rules_restore(&wired).unwrap();
+        let restored = zcode_rules_restore(&wired, None).unwrap();
         assert!(!restored.contains("jolu"));
     }
 
@@ -2612,7 +2430,7 @@ mod tests {
         assert_eq!(again["config"]["providerConfigRules"]["providerRules"].as_array().unwrap().len(), 2);
         assert_eq!(again["config"]["providerOrder"].as_array().unwrap().len(), 2);
         // 断开：只去掉自己的
-        let restored: serde_json::Value = serde_json::from_str(&zcode_rules_restore(&wired).unwrap()).unwrap();
+        let restored: serde_json::Value = serde_json::from_str(&zcode_rules_restore(&wired, None).unwrap()).unwrap();
         assert_eq!(restored["config"]["providerOrder"], serde_json::json!(["builtin:bigmodel"]));
         assert_eq!(restored["config"]["providerConfigRules"]["providerRules"].as_array().unwrap().len(), 1);
         assert_eq!(restored["config"]["modelConfigRules"]["providerModelRules"].as_array().unwrap().len(), 1);
@@ -2627,7 +2445,7 @@ mod tests {
         assert_eq!(wired["provider"]["jolu"]["enabled"], false);
         assert_eq!(wired["provider"]["jolu"]["models"]["kimi/k2"]["limit"]["output"], 8_192);
         assert!(wired["provider"].get("builtin:zai").is_some());
-        let restored: serde_json::Value = serde_json::from_str(&zcode_config_restore(&wired.to_string()).unwrap()).unwrap();
+        let restored: serde_json::Value = serde_json::from_str(&zcode_config_restore(&wired.to_string(), None).unwrap()).unwrap();
         assert!(restored["provider"].get("jolu").is_none() && restored["provider"].get("builtin:zai").is_some());
     }
 
@@ -2866,12 +2684,17 @@ mod tests {
 
     #[test]
     fn agent_whitelist_covers_catalog_platforms() {
-        for agent in ["claude-code", "codex", "zcode", "gemini", "opencode", "kimi", "pencil", "qoder", "qoder-cn", "pi"] {
-            assert!(is_agent(agent), "{agent}");
+        // 全部 13 家（11 + 2026-11-21 新增的 qwen / workbuddy），一家都不能漏
+        for agent in [
+            "claude-code", "codex", "zcode", "gemini", "opencode", "kimi", "dsh", "pi",
+            "pencil", "qoder", "qoder-cn", "qwen", "workbuddy",
+        ] {
+            assert!(is_agent(agent), "{agent} 应可接线");
         }
-        // 5.11：Qoder CLI 接入的是 Jolu 网关令牌（写进它的 settings.json），不代管 Qoder 账号的密钥；
-        // WorkBuddy 的 models.json 是顶层数组，要逐项插入，仍不接
-        assert!(!is_agent("workbuddy"));
+        // 5.11：Qoder CLI 接入的是 Jolu 网关令牌（写进它的 settings.json），不代管 Qoder 账号的密钥。
+        // 2026-11-21：WorkBuddy 的 models.json 是顶层数组，已按 magpie `buddyWrite` 实现逐项插入
+        // 与 disabled 状态保留（见 `wiring_workbuddy.rs`），它现在可接线；改用 Cline 锁「不接」。
+        assert!(!is_agent("cline"), "Cline 要写系统凭据库，仍不接");
     }
 
     /// 文件级链路：接线 → 状态探测为已接线 → 还原 → 状态回到未接线。
@@ -2921,4 +2744,320 @@ mod tests {
         let ours_text = r#"{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:12731","ANTHROPIC_AUTH_TOKEN":"jolu-claude-code.abcd1234"}}"#;
         assert!(ours("claude-code", ours_text, 12731, "abcd1234"));
     }
+
+    // ─────────────────── 全部可接线工具的全量往返（子进程 + 临时 home） ───────────────────
+    //
+    // 为什么必须是子进程：`plan_wire` / `plan_unwire` 走 `creds::home()`（读 `USERPROFILE`
+    // / `HOME`），直接在本进程里改这些环境变量会污染并行运行的其他测试（进程级状态，
+    // 且 `set_var` 在多线程下未定义行为）。所以父测试只负责起子进程，子进程把 home 指到
+    // 临时目录后再跑生产函数，桌面入口和真实工具仍需另行验证。
+    //
+    // 为什么只读真机、不点桌面：真机桌面实例没有重定向 home，点接入会写用户的真实配置。
+    // 现有 `agent-icons-kimi-preview.e2e.mjs` 因此只做「写入预览」不做往返。这里补的正是
+    // 那条缺口：覆盖注册表里**每一家**的写入 → 状态 → 还原闭环（家数由 `agents()` 决定，
+    // 新增一家自动纳入——没有 `seed_original` 样本时测试会 panic 提示补上）。
+
+    /// 父：给每家起一个干净的子进程（各自临时 home），子进程失败时把 stderr 带出来。
+    #[test]
+    fn every_agent_round_trips_through_production_plan() {
+        if std::env::var_os("JOLU_WIRING_ROUNDTRIP_CHILD").is_some() {
+            return;
+        }
+        let mut failed = Vec::new();
+        for agent in agents() {
+            let root = std::env::temp_dir().join(format!(
+                "jolu-roundtrip-{}-{}",
+                agent,
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            let home = root.join("home");
+            std::fs::create_dir_all(&home).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "gateway::wiring::tests::round_trip_one_agent_child",
+                    "--nocapture",
+                ])
+                .env("JOLU_WIRING_ROUNDTRIP_CHILD", "1")
+                .env("JOLU_ROUNDTRIP_AGENT", agent)
+                .env("JOLU_ROUNDTRIP_HOME", &home)
+                // 把 home 与所有能改配置落点的变量一起指进临时目录，避免任何一家
+                // 顺着真实环境变量写出去（各家覆盖变量见 `wiring_specs` 的 path_* 与各 dir 函数）
+                .env("USERPROFILE", &home)
+                .env("HOME", &home)
+                .env("CLAUDE_CONFIG_DIR", home.join(".claude"))
+                .env("CODEX_HOME", home.join(".codex"))
+                .env("XDG_CONFIG_HOME", home.join(".config"))
+                .env("KIMI_CODE_HOME", home.join(".kimi-code"))
+                .env("KIMI_SHARE_DIR", home.join(".kimi-share"))
+                .env("ZCODE_HOME", home.join(".zcode"))
+                .env("DSH_HOME", home.join(".dsh"))
+                .env("PI_CODING_AGENT_DIR", home.join(".pi/agent"))
+                .env("QODER_CONFIG_DIR", home.join(".qoder"))
+                .env("QODERCN_CONFIG_DIR", home.join(".qoder-cn"))
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            if !output.status.success() {
+                failed.push(format!("{agent}：\n{stderr}"));
+            }
+            let _ = std::fs::remove_dir_all(&root);
+        }
+        assert!(failed.is_empty(), "以下工具的往返失败：\n{}", failed.join("\n\n"));
+    }
+
+    /// 子进程：对一家工具跑接线、状态检查和配置还原。
+    ///
+    /// 使用实际保存的接线记录，并检查计划涉及的所有文件。
+    #[test]
+    fn round_trip_one_agent_child() {
+        let Ok(agent) = std::env::var("JOLU_ROUNDTRIP_AGENT") else { return };
+        let Ok(home) = std::env::var("JOLU_ROUNDTRIP_HOME").map(std::path::PathBuf::from) else { return };
+        let agent = agent.as_str();
+        let port = 12731u16;
+        let instance = "abcd1234";
+        let base = format!("http://127.0.0.1:{port}");
+
+        // 1. 造一份包含用户原有配置的样本。
+        let path = config_path(agent).unwrap_or_else(|| panic!("{agent} 算不出配置路径"));
+        seed_original(agent, &home, &path);
+        // dsh 的主文件会随已有 profile 改变，准备样本后重新取得。
+        let path = config_path(agent).unwrap();
+
+        // 2. 走生产 plan_wire
+        let catalog = vec![
+            ZcodeModel { id: "zcode/glm-5.3".into(), name: "GLM-5.3".into(), context: 200_000, output: 32_768, image: true },
+            ZcodeModel { id: "kimi/k2".into(), name: "Kimi K2".into(), context: 256_000, output: 32_768, image: false },
+        ];
+        let chosen = ModelChoice {
+            model: Some("zcode/glm-5.3"),
+            label: Some("GLM-5.3"),
+            description: None,
+            prior_model: None,
+            prior_label: None,
+            prior_values: &[],
+            subagent_model: None,
+            tiers: None,
+        };
+        let ctx = WireContext {
+            agent,
+            base: base.clone(),
+            token: token_for(agent, instance),
+            instance_short: instance,
+            catalog: &catalog,
+            prior_snapshot: None,
+            chosen,
+            claude: None,
+        };
+        let plan = plan_wire(&ctx).unwrap_or_else(|error| panic!("{agent} 生成接线计划失败：{error}"));
+        assert!(!plan.files.is_empty(), "{agent} 的计划里没有文件");
+        let originals: Vec<_> = plan.files.iter().map(|(file, _)| (file.clone(), std::fs::read(file).ok())).collect();
+
+        // 3. 落盘（与 wire_agents 同一条 commit_plan）
+        let backup_dir = home.join("gateway-backups");
+        let conn = crate::db::open(Path::new(":memory:")).unwrap();
+        commit_plan(plan, &backup_dir, |snapshot, applied| {
+            super::super::wiring_store::mark_pending(&conn, agent, instance, "relay", snapshot, applied, applied.token.as_deref())
+                .map_err(|error| error.to_string())
+        }).unwrap_or_else(|error| panic!("{agent} 写盘失败：{error}"));
+        super::super::wiring_store::mark_wired(&conn, agent, 42).unwrap();
+
+        // 4. 状态必须是「已接线」（走注册表的 is_wired，这条同时验 token_match / extra）
+        let recorded = super::super::wiring_store::load(&conn, agent).unwrap();
+        let status = status_with(agent, port, Some(&recorded));
+        assert!(status.wired, "{agent} 写完配置文件后 status 仍报未接线：{:?}", status.reason);
+        let wired_text = std::fs::read_to_string(&path).unwrap();
+        if (super::super::wiring_specs::spec(agent).unwrap().token)(&home, &wired_text).is_some() {
+            assert_eq!(foreign_marker(agent, &wired_text, "ffffffff").as_deref(), Some(instance));
+            assert_eq!(foreign_marker(agent, &wired_text, instance), None);
+        }
+
+        // 5. 断开：用真实记录（含快照）走 plan_unwire，再逐文件应用
+        assert!(unwire(agent, port, Some(&recorded)).unwrap_or_else(|error| panic!("{agent} 还原失败：{error}")));
+        super::super::wiring_store::mark_idle(&conn, agent).unwrap();
+
+        // 6. 还原后必须把用户的配置还回来
+        //
+        // 判据是**语义等价**，不是字节相等：生产实现走 `serde_json::Value` / `toml_edit`
+        // 解析后重新序列化，键序与缩进会规范化（原始 `{"a":1,"b":2}` 会变成 pretty 排版
+        // 且按字母序）。这是既有行为、不是本次重构引入，也不影响任何工具读取。
+        // 所以这里比「解析后的值相等」+「用户原始键都在」+「我们的痕迹走干净」三件事。
+        for (file, original) in originals {
+            let restored = std::fs::read(&file).ok();
+            match (original, restored) {
+                (Some(before), Some(after)) => {
+                    let before_text = String::from_utf8_lossy(&before).to_string();
+                    let after_text = String::from_utf8_lossy(&after).to_string();
+                    if file.extension().is_some_and(|ext| ext == "yml" || ext == "yaml") {
+                        assert_eq!(before_text, after_text, "{agent} 文件 {} 未还原", file.display());
+                    } else {
+                        assert_semantically_restored(agent, &before_text, &after_text);
+                    }
+                }
+                (None, after) => {
+                    // 原本没有这个文件：还原后也不该留下我们的东西
+                    if let Some(after) = after {
+                        let text = String::from_utf8_lossy(&after);
+                        assert!(
+                            !text.contains("12731") && !text.contains("jolu-"),
+                            "{agent} 原本没有配置文件，还原后却残留了网关内容：{text}"
+                        );
+                    }
+                }
+                (Some(_), None) => panic!("{agent} 原本有配置文件，还原后文件被删了"),
+            }
+        }
+
+        // 7. 还原后状态回到未接线
+        let after_status = status_with(agent, port, None);
+        assert!(!after_status.wired, "{agent} 还原后 status 仍报已接线");
+        if agent == "dsh" {
+            let plan = plan_wire(&ctx).unwrap();
+            commit_plan(plan, &backup_dir, |snapshot, applied| {
+                super::super::wiring_store::mark_pending(&conn, agent, instance, "relay", snapshot, applied, applied.token.as_deref())
+                    .map_err(|error| error.to_string())
+            }).unwrap();
+            let dsh_home = super::super::wiring_dsh::dsh_dir_public(&home);
+            std::fs::write(dsh_home.join(".env"), "JOLU_API_KEY=changed-env\n").unwrap();
+            std::fs::write(dsh_home.join(".credentials.yaml"), "version: 1\nrefs:\n  JOLU_API_KEY: changed-creds\n").unwrap();
+            let record = super::super::wiring_store::load(&conn, agent).unwrap();
+            assert!(unwire(agent, port, Some(&record)).unwrap());
+            assert!(std::fs::read_to_string(dsh_home.join(".env")).unwrap().contains("JOLU_API_KEY=changed-env"));
+            assert!(std::fs::read_to_string(dsh_home.join(".credentials.yaml")).unwrap().contains("JOLU_API_KEY: changed-creds"));
+        }
+    }
+
+    /// 还原是否「把用户的东西还回来了」：按格式解析后比较值，并额外确认
+    /// 网关地址 / Jolu 令牌 / 我们建的 provider 段都不在了。
+    ///
+    /// 为什么分格式：JSON 与 TOML 的解析器都在生产依赖里（`serde_json` / `toml_edit`），
+    /// 直接用它们比较就等价于「工具读到的内容一致」，比字符串比对更贴近真实语义。
+    /// `.env` 没有解析库也不需要：按行取键值比就行（注释行与空行不参与比较）。
+    fn assert_semantically_restored(agent: &str, before: &str, after: &str) {
+        let trimmed = before.trim_start();
+        // 判格式：以 { / [ 开头是 JSON；否则看是不是「每行 KEY=VALUE」的 dotenv
+        // （gemini 的 .env）；剩下按 TOML 处理。
+        let format = if trimmed.starts_with('{') || trimmed.starts_with('[') {
+            "json"
+        } else if is_dotenv(before) {
+            "dotenv"
+        } else {
+            "toml"
+        };
+        match format {
+            "json" => {
+                let expected: serde_json::Value = serde_json::from_str(before)
+                    .unwrap_or_else(|error| panic!("{agent} 原始配置不是有效 JSON：{error}"));
+                let actual: serde_json::Value = serde_json::from_str(after)
+                    .unwrap_or_else(|error| panic!("{agent} 还原结果不是有效 JSON：{error}\n{after}"));
+                assert_eq!(expected, actual, "{agent} 还原后的值与原始配置不一致\n原始：{before}\n还原：{after}");
+            }
+            "dotenv" => {
+                // .env 按行取键值比较：注释与空行不参与（生产写入只动目标键，注释原样保留）
+                let parse = |text: &str| -> std::collections::BTreeMap<String, String> {
+                    text.lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                        .filter_map(|line| line.split_once('=').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))
+                        .collect()
+                };
+                assert_eq!(parse(before), parse(after), "{agent} 还原后 .env 键值不一致\n原始：{before}\n还原：{after}");
+            }
+            _ => {
+                let expected: toml_edit::DocumentMut = before
+                    .parse()
+                    .unwrap_or_else(|error| panic!("{agent} 原始配置不是有效 TOML：{error}"));
+                let actual: toml_edit::DocumentMut = after
+                    .parse()
+                    .unwrap_or_else(|error| panic!("{agent} 还原结果不是有效 TOML：{error}\n{after}"));
+                assert_eq!(
+                    expected.to_string().trim(),
+                    actual.to_string().trim(),
+                    "{agent} 还原后的值与原始配置不一致\n原始：{before}\n还原：{after}"
+                );
+            }
+        }
+        // 不管哪种格式，网关痕迹都必须走干净
+        assert!(!after.contains("127.0.0.1:12731"), "{agent} 还原后仍指向网关：{after}");
+        assert!(!after.contains("jolu-"), "{agent} 还原后仍留着 Jolu 令牌：{after}");
+    }
+
+    /// 子进程用：判断一段文本是不是 dotenv（每行 `KEY=VALUE` 或注释）。
+    ///
+    /// 只看第一行有效内容：TOML 的键值行不会出现「裸 `=` 而无引号且键名是大写常量」的形态，
+    /// 而 `.env` 全是这个形态，足够区分。
+    fn is_dotenv(text: &str) -> bool {
+        let Some(first) = text.lines().map(str::trim).find(|line| !line.is_empty() && !line.starts_with('#')) else {
+            return false;
+        };
+        let Some((key, _)) = first.split_once('=') else { return false };
+        !key.is_empty()
+            && key.chars().all(|c| c.is_ascii_uppercase() || c == '_')
+            && !first.contains('"')
+            && !first.contains('\'')
+    }
+
+    /// 子进程用：给一家工具写一份「用户原有配置」（含干扰项），让还原有东西可还。
+    fn seed_original(agent: &str, home: &Path, path: &Path) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let text = match agent {
+            "claude-code" => r#"{"env":{"ANTHROPIC_BASE_URL":"https://api.anthropic.com","ANTHROPIC_AUTH_TOKEN":"sk-mine"},"theme":"dark"}"#,
+            "codex" => "model = \"gpt-5\"\nmodel_provider = \"openai\"\n",
+            "zcode" => {
+                std::fs::write(path.parent().unwrap().join("config.json"), r#"{"keep":1}"#).unwrap();
+                r#"{"config":{"providerConfigRules":{"providerRules":[]}},"keep":1}"#
+            }
+            "gemini" => {
+                std::fs::write(path.parent().unwrap().join("settings.json"), r#"{"security":{"auth":{"selectedType":"oauth-personal"}},"keep":true}"#).unwrap();
+                "GOOGLE_GEMINI_BASE_URL=https://generativelanguage.googleapis.com\nGEMINI_API_KEY=my-own-key\n"
+            }
+            "opencode" => r#"{"theme":"x","provider":{"mine":{"options":{"baseURL":"https://a"}}}}"#,
+            "kimi" => {
+                // default_model 必须指向一个**存在**的表：生产语义是「原表还在才还原默认」，
+                // 指向不存在的表时它会按兜底删掉 default_model（那是另一个分支，另有用例覆盖）。
+                "default_model = \"moonshot/kimi-k2\"\n[providers.moonshot]\nbase_url = \"https://api.moonshot.cn/v1\"\napi_key = \"sk-mine\"\n[models.\"moonshot/kimi-k2\"]\nmodel = \"kimi-k2\"\nmax_context_size = 256000\n"
+            }
+            "pi" => {
+                // 双文件：models.json 与 settings.json 都要有原值
+                std::fs::write(
+                    crate::gateway::wiring_pi::settings_path(home),
+                    r#"{"defaultProvider":"anthropic","defaultModel":"claude-sonnet-4"}"#,
+                ).unwrap();
+                r#"{"providers":{"anthropic":{"baseUrl":"https://api.anthropic.com/v1","apiKey":"sk-mine"}}}"#
+            }
+            "pencil" | "qoder" | "qoder-cn" => r#"{"providers":{"mine":{"baseUrl":"https://a"}},"model":{"name":"qwen3-coder","reasoningEffort":"high"}}"#,
+            "dsh" => {
+                // 多文件：一个 profile 的 patch（带注释，验行级编辑不丢注释）
+                let dsh_home = crate::gateway::wiring_dsh::dsh_dir_public(home);
+                let patch_dir = dsh_home.join("profiles").join("web");
+                std::fs::create_dir_all(&patch_dir).unwrap();
+                std::fs::write(
+                    patch_dir.join("cordis.patch.yml"),
+                    "# 用户自己的注释要保住\n- id: my-own-entry\n  name: \"@x/y\"\n  config:\n    foo: 1\n",
+                ).unwrap();
+                // .env 也放一个用户自己的变量
+                std::fs::write(dsh_home.join(".env"), "MY_OWN_KEY=abc\nJOLU_API_KEY=my-env-key\n").unwrap();
+                std::fs::write(dsh_home.join(".credentials.yaml"), "version: 1\nrefs:\n  JOLU_API_KEY: \"my: creds key\"\n  OTHER: keep\nrecords:\n  - id: 1\n").unwrap();
+                let second = dsh_home.join("profiles").join("other");
+                std::fs::create_dir_all(&second).unwrap();
+                std::fs::write(second.join("cordis.patch.yml"), "# 另一个 profile\n- id: keep\n  name: user\n").unwrap();
+                return;
+            }
+            "qwen" => {
+                // 用户自己的一条 provider + 自己的 env 键 + 自己的默认模型
+                r#"{"modelProviders":{"openai":[{"baseUrl":"https://my-own","envKey":"MY_KEY","id":"my-model","name":"My Model"}]},"env":{"MY_KEY":"sk-mine"},"model":{"name":"my-model","baseUrl":"https://my-own"},"keep":1}"#
+            }
+            "workbuddy" => {
+                // 顶层数组：用户自己的一条 + 一个关掉的开关
+                r#"[{"id":"my-own","name":"My Own","vendor":"Custom","apiKey":"sk-mine","url":"https://my-own/v1/chat/completions"},{"id":"off-one","name":"Off","vendor":"Custom","apiKey":"sk-2","url":"https://off","disabled":true}]"#
+            }
+            _ => panic!("{agent} 没有原始配置样本：给 `seed_original` 补一份"),
+        };
+        std::fs::write(path, text).unwrap();
+    }
+
 }

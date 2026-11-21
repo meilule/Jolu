@@ -55,6 +55,11 @@ const GO_BUILD_INFO_MAGIC: &[u8] = b"\xff Go buildinf:";
 /// 用 256 KB 缓冲顺序找魔数（magpie `hasGoMagic`：Block 的 goose 有 260 MB，整个解析符号表要分配
 /// 200 MB），结果按「路径 + 大小 + 修改时间」缓存。magpie 找到魔数后还会用 `debug/buildinfo`
 /// 再解析确认，Rust 没有对应的库，这里只认魔数；读不了的文件不算 Go 程序。
+///
+/// 2026-11-20 Goose 从探测表移除后没有工具用它了，但 `Spec.bin_not` 这个能力要留着
+/// （下一个需要甄别同名程序的工具直接用），且 `a_bin_not_hook_rejects_a_named_lookalike`
+/// 仍在测它。
+#[allow(dead_code)]
 fn go_program(bin: &Path) -> bool {
     type Key = (PathBuf, u64, Option<std::time::SystemTime>);
     static SEEN: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<Key, bool>>> = std::sync::LazyLock::new(Default::default);
@@ -194,8 +199,10 @@ fn dir_opencode(home: &Path) -> Option<PathBuf> {
 // 只写能从源码确认的；不确定的不加（AGENTS.md：未知值不冒充）。
 
 fn dir_qwen(home: &Path) -> Option<PathBuf> {
-    // magpie qwen.go: `at.join(".qwen")`
-    Some(home.join(".qwen"))
+    // magpie qwen.go `qwenIn`：`QWEN_HOME` 覆盖，否则 `~/.qwen`。
+    // 必须与 `wiring_qwen::qwen_dir` 同源——两边不一致会让「探测到的」和「接线写的」
+    // 不是同一个目录，表现是接入成功但工具里看不到模型。
+    env_or_home("QWEN_HOME", home, ".qwen")
 }
 
 fn dir_kimi(home: &Path) -> Option<PathBuf> {
@@ -317,6 +324,12 @@ fn dir_workbuddy(home: &Path) -> Option<PathBuf> { env_or_home("WORKBUDDY_CONFIG
 ///   - Zed（编辑器，榜单无，接线要写 Windows 凭据库）
 ///   - Goose（Block 内部工具，榜单无）
 /// 新增 Pi（榜单第 12 名，4.4%）：本机已装（~/.pi/agent），配置是标准 JSON。
+/// 探测表里的全部 agent id（给接线注册表交叉校验用；不暴露 `Spec` 本身）。
+#[cfg(test)]
+pub(crate) fn spec_ids() -> Vec<&'static str> {
+    SPECS.iter().map(|spec| spec.agent).collect()
+}
+
 const SPECS: [Spec; 17] = [
     Spec { agent: "claude-code", name: "Claude Code", bin: "claude", dir: dir_claude, file: "settings.json", sign_in: ".credentials.json", detect: Detect::Standard, bin_not: None },
     Spec { agent: "codex", name: "Codex", bin: "codex", dir: dir_codex, file: "config.toml", sign_in: "auth.json", detect: Detect::Standard, bin_not: None },

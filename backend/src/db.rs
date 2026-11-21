@@ -194,9 +194,9 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
         CREATE TABLE IF NOT EXISTS agents (
             id TEXT PRIMARY KEY
         );
-        -- 接线记录（agent_wiring）外键指向这张表；INSERT OR IGNORE 每次开库都会跑，
-        -- 新加的 agent 补一行即可让老库也能接（wiring.rs 的 AGENTS 是真正的开关清单）
-        INSERT OR IGNORE INTO agents(id) VALUES ('claude-code'),('codex'),('zcode'),('gemini'),('opencode'),('kimi'),('dsh'),('pencil'),('qoder'),('qoder-cn'),('pi');
+        -- 接线记录（agent_wiring）外键指向这张表。种子行完全由 `wiring_specs::SPECS`
+        -- 派生：建表这里不写死任何一家，init 末尾的 `sync_agent_seeds` 按注册表补齐。
+        -- 2026-11-17 Kimi 接入报 `FOREIGN KEY constraint failed`，就是补种子的地方漏了它。
         CREATE TABLE IF NOT EXISTS agent_wiring (
             agent_id      TEXT PRIMARY KEY REFERENCES agents(id),
             instance_id   TEXT NOT NULL,
@@ -439,6 +439,22 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
         eprintln!("[模型入口] 连接身份迁移失败，本次按降级状态启动：{error}");
     }
     crate::daily_checkin::init(conn)?;
+    // 接线记录的外键目标（agents 表）从注册表补全：加一家工具只需在
+    // `wiring_specs::SPECS` 加一行，这里自动跟上。`INSERT OR IGNORE` 让老库也能补。
+    // 2026-11-17 Kimi 就是漏了这一步，真机点接入报 FOREIGN KEY constraint failed。
+    sync_agent_seeds(conn)?;
+    Ok(())
+}
+
+/// 按 `wiring_specs::SPECS` 补全 `agents` 表的 id。
+///
+/// 这条与 `every_wirable_agent_has_a_seed_row_for_the_wiring_foreign_key` 测试配对：
+/// 测试保证「注册表里的每家都能写接线记录」，这里保证真机上确实写了。
+fn sync_agent_seeds(conn: &Connection) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare("INSERT OR IGNORE INTO agents(id) VALUES(?1)")?;
+    for agent in crate::gateway::wiring::agents() {
+        stmt.execute([agent])?;
+    }
     Ok(())
 }
 
@@ -2404,7 +2420,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         init(&conn).unwrap();
-        for agent in crate::gateway::wiring::AGENTS {
+        for agent in crate::gateway::wiring::agents() {
             conn.execute(
                 "INSERT INTO agent_wiring(agent_id, instance_id, owner, state) VALUES(?1, 'test', 'none', 'idle')",
                 [agent],

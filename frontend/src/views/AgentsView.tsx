@@ -7,7 +7,7 @@ import type { RoutingGroupDto } from "@/components/gateway/routingGroups"
 import { settingsApi, type AgentVersionRow } from "@/lib/settingsApi"
 import { skillsApi } from "@/lib/skillsApi"
 import { automationApi } from "@/lib/automationApi"
-import { AGENT_PLATFORM, WIRABLE_AGENTS, agentRow, customAgentRow, isCustomAgent, readHidden, writeHidden, type AgentRow } from "@/lib/agentPage"
+import { AGENT_PLATFORM, buildAgentRows, customAgentRow, isCustomAgent, readHidden, writeHidden, type AgentRow } from "@/lib/agentPage"
 import { emptyTierDraft, tierDraftFrom, tierModelsFrom, type TierDraft } from "@/lib/tierModels"
 import type { MainPage } from "@/lib/mainNavigation"
 import { useToast } from "@/components/ui/Toast"
@@ -36,12 +36,13 @@ const EMPTY_COUNTS: AgentCounts = { skills: null, sessions: null, automation: nu
  * 再在后台刷新一次（后端命令查找按目录戳缓存，单次约几毫秒），不节流——别处刚装好的工具
  * 切回来就能看到。查询失败时清掉，不拿过期结果冒充当前状态。
  */
+let lastStatus: GatewayStatusDto | null = null
 let lastDiscovery: AgentDiscoveryDto[] | null = null
 let lastVersions: AgentVersionRow[] = []
 
 export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => void }) {
   const toast = useToast()
-  const [status, setStatus] = useState<GatewayStatusDto | null>(null)
+  const [status, setStatus] = useState<GatewayStatusDto | null>(() => lastStatus)
   const [discovery, setDiscovery] = useState<AgentDiscoveryDto[] | null>(() => lastDiscovery)
   const [versions, setVersions] = useState<AgentVersionRow[]>(() => lastVersions)
   const [catalog, setCatalog] = useState<CatalogModelDto[]>([])
@@ -76,12 +77,18 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
     const isLatest = coreGate.begin()
     try {
       void gatewayApi.customAgents().then((next) => { if (isLatest()) setCustoms(next) }).catch(() => { if (isLatest()) setCustoms([]) })
-      const [nextStatus, nextCatalog, nextGroups, nextProfiles, overview, settings] = await Promise.all([
-        gatewayApi.status(), gatewayApi.catalog(), gatewayApi.groupList().catch(() => [] as RoutingGroupDto[]), gatewayApi.profilesList().catch(() => []),
+      const [, nextCatalog, nextGroups, nextProfiles, overview, settings] = await Promise.all([
+        gatewayApi.status().then((next) => {
+          if (isLatest()) {
+            lastStatus = next
+            setStatus(next)
+          }
+          return next
+        }),
+        gatewayApi.catalog(), gatewayApi.groupList().catch(() => [] as RoutingGroupDto[]), gatewayApi.profilesList().catch(() => []),
         gatewayApi.dayOverview().catch(() => null), invoke<{ claude_long_context?: string }>("get_settings").catch(() => null),
       ])
       if (!isLatest()) return
-      setStatus(nextStatus)
       setCatalog(nextCatalog)
       setGroups(nextGroups)
       setProfiles(nextProfiles)
@@ -125,24 +132,8 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
   }, [loadCore, detect])
 
   const rows: AgentRow[] = useMemo(() => {
-    // 列表按「后端探测到谁」来建，而不是硬编码白名单：
-    // 只遍历 WIRABLE_AGENTS 时，agent_discovery 新增的工具永远不显示。
-    // 顺序：先已接线能力的 5 家（有专门接线），再其余探测到的（只能走通用接入）。
-    const seen = new Set<string>()
-    const built: AgentRow[] = []
-    const push = (agent: string) => {
-      if (seen.has(agent)) return
-      seen.add(agent)
-      built.push(agentRow(
-        agent,
-        status?.wiring.find((entry) => entry.agent === agent) ?? null,
-        discovery?.find((entry) => entry.agent === agent) ?? null,
-        agent === "claude-code" ? (applied?.model ?? null) : null,
-      ))
-    }
-    WIRABLE_AGENTS.forEach(push)
-    ;(discovery ?? []).forEach((entry) => push(entry.agent))
-    return [...built, ...customs.map(customAgentRow)]
+    if (!status) return [...customs.map(customAgentRow)]
+    return [...buildAgentRows(status.wiring, discovery ?? [], applied?.model ?? null), ...customs.map(customAgentRow)]
   }, [status, discovery, applied, customs])
   const row = rows.find((entry) => entry.agent === selected) ?? null
   const wiredState = row?.group === "wired"

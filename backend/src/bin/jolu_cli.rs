@@ -246,7 +246,7 @@ async fn library(args: &[String]) -> Result<(), String> {
     match action.as_str() {
         "list" => {
             let conn = open_database()?;
-            for agent in jolu_lib::gateway::wiring::AGENTS {
+            for agent in jolu_lib::gateway::wiring::agents() {
                 let names = jolu_lib::library::applied_names(&conn, agent);
                 if names.is_empty() { continue; }
                 println!("{agent}: {}", names.join("、"));

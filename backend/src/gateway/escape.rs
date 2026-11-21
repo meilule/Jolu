@@ -187,30 +187,45 @@ fn plan_agent(
     } else {
         Default::default()
     };
-    crate::gateway::wiring::plan_wire(
+    // 哪些工具要写模型清单：查注册表的 `uses_catalog` 声明（加一家不用改这里）。
+    // magpie 按工具过滤清单（magpieModels("kimi")），Jolu 目录暂无按工具的能力标记，先全量给；
+    // 不写清单的家传空（它们的配置里没有模型表）。
+    let catalog = if crate::gateway::wiring_specs::spec(agent).is_some_and(|spec| spec.uses_catalog) {
+        zcode_models(app)
+    } else {
+        Vec::new()
+    };
+    let holds = |token: &str| {
+        let state = app.state::<crate::Db>();
+        let Ok(conn) = state.0.lock() else { return false };
+        crate::gateway::access::is_client_key(&conn, token)
+    };
+    // Claude Code 专属输入只有它会读；其它家传 None，plan_wire 内部用默认桩
+    let claude = (agent == "claude-code").then(|| crate::gateway::wiring::ClaudeInput {
+        tier_about: &tier_about,
+        extras: &extras,
+        holds: &holds,
+    });
+    let ctx = crate::gateway::wiring::WireContext {
         agent,
-        port,
+        base: format!("http://127.0.0.1:{port}"),
+        token: crate::gateway::wiring::token_for(agent, instance_short),
         instance_short,
-        prior_snapshot.as_deref(),
-        model,
-        label.as_deref(),
-        description.as_deref(),
-        prior_model.as_deref(),
-        prior_label.as_deref(),
-        subagent_model,
-        &prior_values,
-        tiers,
-        &tier_about,
-        &extras,
-        &|token: &str| {
-            let state = app.state::<crate::Db>();
-            let Ok(conn) = state.0.lock() else { return false };
-            crate::gateway::access::is_client_key(&conn, token)
+        catalog: &catalog,
+        prior_snapshot: prior_snapshot.as_deref(),
+        chosen: crate::gateway::wiring::ModelChoice {
+            model,
+            label: label.as_deref(),
+            description: description.as_deref(),
+            prior_model: prior_model.as_deref(),
+            prior_label: prior_label.as_deref(),
+            prior_values: &prior_values,
+            subagent_model,
+            tiers,
         },
-        // Kimi 与 ZCode 共用网关模型目录（serve 中启用的全部 `来源/模型`）；magpie 按工具
-        // 过滤清单（magpieModels("kimi")），Jolu 目录暂无按工具的能力标记，先全量给
-        &if matches!(agent, "zcode" | "kimi" | "dsh" | "pi") || crate::gateway::wiring_extra::is_extra(agent) { zcode_models(app) } else { Vec::new() },
-    )
+        claude,
+    };
+    crate::gateway::wiring::plan_wire(&ctx)
 }
 
 /// 改动预览（F6，画板 V5-1「写入的改动」/ V5-2「写入预览」）。
@@ -321,7 +336,7 @@ pub(crate) fn restore_all(app: &tauri::AppHandle) -> EscapeOutcome {
     let settings = app.state::<crate::Cfg>().0.get();
     let port = settings.proxy_port;
     let mut outcome = empty_outcome();
-    for agent in crate::gateway::wiring::AGENTS {
+    for agent in crate::gateway::wiring::agents() {
         let record = record_for(app, agent);
         let status = crate::gateway::wiring::status_with(agent, port, record.as_ref());
         let pending = record.as_ref().is_some_and(|r| r.state == "pending");
@@ -412,7 +427,7 @@ pub fn startup(app: &tauri::AppHandle) {
     let port = settings.proxy_port;
     let mut wired_any = false;
     let mut drifted: Vec<String> = Vec::new();
-    for agent in crate::gateway::wiring::AGENTS {
+    for agent in crate::gateway::wiring::agents() {
         let record = record_for(app, agent);
         let status = crate::gateway::wiring::status_with(agent, port, record.as_ref());
         if status.wired {

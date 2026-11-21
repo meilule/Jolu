@@ -30,10 +30,6 @@ use super::wiring::ZcodeModel;
 /// Pi 里的 provider 名（magpie 用 magpieID）。
 const PI_PROVIDER: &str = "jolu";
 
-pub(crate) fn is_pi(agent: &str) -> bool {
-    agent == "pi"
-}
-
 /// Pi 的 agent 目录：`PI_CODING_AGENT_DIR`（`~` 展开）覆盖，缺省 `~/.pi/agent`。
 /// 与探测 `agent_discovery::dir_pi` 同一套判定。
 pub(crate) fn pi_dir(home: &Path) -> PathBuf {
@@ -61,11 +57,6 @@ pub(crate) fn config_path(home: &Path) -> PathBuf {
 /// 设置文件：`defaultProvider` / `defaultModel` 在这里。
 pub(crate) fn settings_path(home: &Path) -> PathBuf {
     pi_dir(home).join("settings.json")
-}
-
-pub(crate) fn restart_notice() -> &'static str {
-    // Pi 每次启动读 models.json；已开的会话保持原模型
-    "新会话生效；已打开的会话保持原模型"
 }
 
 fn parse_object(text: &str, what: &str) -> Result<Value, String> {

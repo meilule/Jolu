@@ -181,7 +181,7 @@ pub(crate) fn get(conn: &Connection, name: &str) -> Result<Option<Profile>, Stri
 /// 「保存当前」的附加部分：各已接线 agent 的子代理与档位、默认来源、近 7 天最常用的 5 个模型。
 pub(crate) fn capture_extras(conn: &Connection, default_connection: Option<String>, now_ms: i64) -> ProfileExtras {
     let mut agents = BTreeMap::new();
-    for agent in crate::gateway::wiring::AGENTS {
+    for agent in crate::gateway::wiring::agents() {
         let Some(applied) = crate::gateway::wiring_store::load(conn, agent).filter(|r| r.state == "wired").and_then(|r| r.applied()) else { continue };
         let extras = AgentExtras { subagent_model: applied.subagent_model, tiers: applied.tiers };
         if extras != AgentExtras::default() {

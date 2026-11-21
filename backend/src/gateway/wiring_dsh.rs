@@ -44,11 +44,17 @@ pub(crate) const DSH_PROVIDER: &str = "jolu";
 pub(crate) const DSH_KEY_ENV: &str = "JOLU_API_KEY";
 
 /// dsh 配置根目录：`DSH_HOME` 覆盖 → `~/.dsh`（与探测 dir_dsh 同源）。
-pub(crate) fn dsh_dir(home: &Path) -> PathBuf {
+fn dsh_dir(home: &Path) -> PathBuf {
     std::env::var_os("DSH_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".dsh"))
+}
+
+/// `dsh_dir` 的测试公开包装（`wiring_specs` 的回归测试要造临时 home）。
+#[cfg(test)]
+pub(crate) fn dsh_dir_public(home: &Path) -> PathBuf {
+    dsh_dir(home)
 }
 
 /// 各 profile 的 patch 文件（web 优先，magpie dshProfiles 同款排序：files[0] 是读默认模型的地方）。
@@ -85,79 +91,15 @@ pub(crate) fn dsh_main_file(dir: &Path) -> PathBuf {
 }
 
 /** patch 条目：`- id: <目标>` 起头的一行块。id 从首行正则取，行块原样保留。 */
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct DshItem {
-    id: String,
-    lines: Vec<String>,
-}
+/// dsh 的条目就是「行级 YAML 条目」（实现见 `yaml_lines`：这套逻辑 2026-11-20 抽出，
+/// 供后续 qwen / droid / workbuddy 这类「数组插项」接线复用）。
+pub(crate) type DshItem = super::yaml_lines::Item;
 
-/// 顶层条目首行：`- id: xxx` 或缩进两格的 `  - id: xxx`（magpie dshIDLine 同款）。
-pub(crate) fn dsh_id_of(line: &str) -> Option<String> {
-    let rest = line.strip_prefix("- ").or_else(|| line.strip_prefix("  - "))?;
-    let rest = rest.trim_start();
-    let rest = rest.strip_prefix("id:")?;
-    let value = rest.trim().trim_start_matches(['\'', '"']);
-    let value = value.split(['"', '#']).next()?.trim();
-    (!value.is_empty()).then(|| value.to_string())
-}
-
-/// 把 patch 文本切成（首个条目前的行, 条目数组）。用户条目与注释原样保留。
-/// 条目起头 = `- ` 或缩进两格的 `  - `（magpie dshParse 同款：不管带不带 id，
-/// `- insert:` 这类也是条目，id 取不到就记空串）；空文件或纯注释返回空 items，
-/// 写入方据此不动它。
-pub(crate) fn dsh_parse(text: &str) -> (Vec<String>, Vec<DshItem>) {
-    let mut head: Vec<String> = Vec::new();
-    let mut items: Vec<DshItem> = Vec::new();
-    for line in text.lines() {
-        let starts_item = line.starts_with("- ") || line == "-" || line.starts_with("  - ");
-        match starts_item {
-            true => items.push(DshItem { id: dsh_id_of(line).unwrap_or_default(), lines: vec![line.to_string()] }),
-            false if items.is_empty() => head.push(line.to_string()),
-            false => {
-                if let Some(last) = items.last_mut() {
-                    last.lines.push(line.to_string());
-                }
-            }
-        }
-    }
-    (head, items)
-}
-
-pub(crate) fn dsh_join(head: &[String], items: &[DshItem]) -> String {
-    let mut out = head.join("\n");
-    if !out.is_empty() {
-        out.push('\n');
-    }
-    for item in items {
-        out.push_str(&item.lines.join("\n"));
-        out.push('\n');
-    }
-    out
-}
-
-pub(crate) fn dsh_find(items: &[DshItem], id: &str) -> Option<usize> {
-    items.iter().position(|item| item.id == id)
-}
-
-/// 条目内取某缩进层级的键块范围（起止行下标，含）。`indent` 是键行的空格数。
-/// 子块结束于下一个缩进 ≤ 本层的非空行。
-pub(crate) fn dsh_block_range(lines: &[String], indent: usize, key: &str) -> Option<(usize, usize)> {
-    let prefix = " ".repeat(indent) + key;
-    let start = lines.iter().position(|line| line.starts_with(&prefix) && line.as_bytes().get(indent + key.len()) == Some(&b':'))?;
-    let mut end = start;
-    for (at, line) in lines.iter().enumerate().skip(start + 1) {
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue; // 空行与注释行不结束块，归入当前块尾巴
-        }
-        let depth = line.len() - line.trim_start().len();
-        if depth <= indent {
-            break;
-        }
-        end = at;
-    }
-    Some((start, end))
-}
+// 薄转发：本文件 30+ 处调用点沿用原名字，实现都在 `yaml_lines`（抽出来给后续工具复用）。
+fn dsh_parse(text: &str) -> (Vec<String>, Vec<DshItem>) { super::yaml_lines::parse(text) }
+fn dsh_join(head: &[String], items: &[DshItem]) -> String { super::yaml_lines::join(head, items) }
+fn dsh_find(items: &[DshItem], id: &str) -> Option<usize> { super::yaml_lines::find(items, id) }
+fn dsh_block_range(lines: &[String], indent: usize, key: &str) -> Option<(usize, usize)> { super::yaml_lines::block_range(lines, indent, key) }
 
 /// 条目的 config 里是否指向我们的路由（provider == jolu）。条目被 dsh 重写去掉标记时，
 /// 这是最可靠的「是我们写的」判定（magpie dshOurs 的 provider 分支）。
@@ -594,7 +536,7 @@ pub(crate) fn dsh_creds_restore(text: &str) -> String {
     let mut out: Vec<String> = Vec::new();
     for line in text.lines() {
         if let Some(value) = line.strip_prefix(&prefix) {
-            if value.trim().starts_with("jolu-") {
+            if value.trim().trim_matches(['\'', '"']).starts_with("jolu-") {
                 continue;
             }
         }
@@ -610,15 +552,9 @@ pub(crate) fn dsh_creds_restore(text: &str) -> String {
 
 /* ─────────────────────────── 对外接口（wiring.rs 的分发点调用） ─────────────────────────── */
 
-
 /// 主配置文件 = 第一个 profile 的 patch（探测与接线同源，files[0] 必须与它一致）。
 pub(crate) fn config_path(home: &Path) -> PathBuf {
     dsh_main_file(&dsh_dir(home))
-}
-
-pub(crate) fn restart_notice() -> &'static str {
-    // agent-default-model 只影响新会话（magpie #2359），已开的会话保持原模型
-    "新会话生效；已打开的会话保持原模型"
 }
 
 /// patch 里我们路由的 baseURL（状态判定与「外部已改就不覆盖」共用）。
@@ -683,9 +619,8 @@ pub(crate) fn plan_wire_files(
     // credentials 只认 version: 1 布局；用户原有的 refs.JOLU_API_KEY（非我们的）也存
     let creds_path = dir.join(".credentials.yaml");
     let creds_text = crate::steady::read_optional(&creds_path).ok().flatten().unwrap_or_default();
-    let creds_saved = dotenv_get(&format!("refs:\n{creds_text}"), DSH_KEY_ENV)
-        .or_else(|| creds_refs_value(&creds_text, DSH_KEY_ENV))
-        .filter(|value| !value.starts_with("jolu-"));
+    let creds_saved = creds_refs_value(&creds_text, DSH_KEY_ENV)
+        .filter(|value| !value.trim_matches(['\'', '"']).starts_with("jolu-"));
     let snapshot = (!snapshots.is_empty() || env_saved.is_some() || creds_saved.is_some()).then(|| {
         json!({ "files": snapshots, "env": env_saved, "creds": creds_saved })
     });
@@ -731,21 +666,30 @@ pub(crate) fn plan_unwire_files(home: &Path, saved: Option<&Value>) -> Result<Ve
     let env_path = dir.join(".env");
     if let Ok(Some(env_text)) = crate::steady::read_optional(&env_path) {
         let saved_env = saved.and_then(|saved| saved.get("env")).and_then(Value::as_str).map(str::to_string);
-        let next = match saved_env {
-            Some(value) => wire_dotenv(&env_text, DSH_KEY_ENV, Some(&value)),
-            None => {
-                let ours = dsh_current_token(&env_text).is_some_and(|value| value.starts_with("jolu-"));
-                if ours { wire_dotenv(&env_text, DSH_KEY_ENV, None) } else { env_text.clone() }
-            }
+        let ours = dsh_current_token(&env_text).is_some_and(|value| value.starts_with("jolu-"));
+        let next = if ours {
+            wire_dotenv(&env_text, DSH_KEY_ENV, saved_env.as_deref())
+        } else {
+            env_text.clone()
         };
         if next != env_text {
             out.push((env_path, next));
         }
     }
-    // credentials：删我们的键（jolu- 前缀才删，用户键与 records 不动）
+    // credentials：只在当前仍是我们的键时恢复快照，保留接线后用户自行修改的值。
     let creds_path = dir.join(".credentials.yaml");
     if let Ok(Some(creds_text)) = crate::steady::read_optional(&creds_path) {
-        let next = dsh_creds_restore(&creds_text);
+        let ours = creds_refs_value(&creds_text, DSH_KEY_ENV)
+            .is_some_and(|value| value.trim_matches(['\'', '"']).starts_with("jolu-"));
+        let saved_creds = saved.and_then(|saved| saved.get("creds")).and_then(Value::as_str);
+        let next = if ours {
+            match saved_creds {
+                Some(value) => dsh_creds_wire(&creds_text, value)?,
+                None => dsh_creds_restore(&creds_text),
+            }
+        } else {
+            creds_text.clone()
+        };
         if next != creds_text {
             out.push((creds_path, next));
         }
@@ -771,7 +715,7 @@ fn creds_refs_value(text: &str, key: &str) -> Option<String> {
         }
         if in_refs {
             if let Some(value) = line.strip_prefix(&prefix) {
-                return Some(value.trim().trim_matches(['\'', '"']).to_string());
+                return Some(value.trim().to_string());
             }
         }
     }
