@@ -1,7 +1,7 @@
 # 活跃会话观测：全量调查与优化方案
 
 日期：2026-11-21
-状态：**阶段 1 已实施并提交；阶段 2 调查已完成（ZCode 源码核实）；阶段 3 按方案 C 已实施**
+状态：**阶段 1 / 2 / 3 已实施；Kimi 本地会话读取已接入**
 关联：`docs/plans/2026-11-20-agent-wiring-refactor-plan.md`（接线侧已完成同类改造）
 
 ---
@@ -445,3 +445,81 @@ ZCode 的 13 个会话里 11 个是子代理会话，被 `session_threads` 的 `
 | 2 | 其余 5 家（Kimi / Qwen / dsh / Pi / Pencil） | 同上，各家要单独的本地会话读取器 |
 | 3 | 上下文列对纯本机会话为空 | 它们没有快照，这是诚实的缺失。要填需要另外的方案 |
 | 4 | 历史 `agent = NULL` 流水 | 103 条是改 UA 表之前记的，UA 没存进库，无法回填；只对新请求生效 |
+
+
+---
+
+## 10. Kimi 本地会话读取（2026-11-22）
+
+### 10.1 为什么单独一个模块
+
+Kimi 的会话**不在 `requests` 表里** —— `native_sources` 从未采集它（那套采集器只覆盖 ZCode / Qoder / WorkBuddy / Gemini / OpenCode）。所以 `session_threads::list` 的主查询看不到它，只能直接从 Kimi 自己的目录读。新增 `backend/src/kimi_sessions.rs`。
+
+### 10.2 实测格式（本机核实，非推测）
+
+```text
+~/.kimi-code/
+  session_index.jsonl          每行 { sessionId, sessionDir, workDir }
+  sessions/<wd_xxx>/<sessionId>/
+    state.json                 { createdAt, updatedAt, title, workDir, agents{main{homedir}} }
+    agents/main/wire.jsonl     事件流，每行一个 JSON
+```
+
+`wire.jsonl` 里用得上的两类事件：
+
+```json
+{"type":"llm.request","modelAlias":"moonshot-cn/kimi-k3","time":1785308428008}
+{"type":"usage.record","usage":{"inputOther":1994,"output":197,"inputCacheRead":19200,"inputCreation":0},"time":1785308451368}
+```
+
+- 请求数按 `llm.request` 计
+- 用量按 `usage.record` 累加；`inputOther` **不含缓存读取**，可直接当「新输入」
+- 一次调用对应一条 request + 一条 usage（usage 时间略晚）
+
+### 10.3 真实数据发现的一个坑
+
+本机 14 个会话里，**13 个的 `updatedAt` 是 RFC3339 字符串，1 个是整数毫秒**（`1784281243255`）。只认字符串会把那条会话当成「时间未知」，在「最近 24 小时」筛选里被错误排除。`ts_of()` 现在两种都认，断言并在 `since_filters_old_sessions_and_missing_dirs_are_skipped` 里。
+
+### 10.4 不做什么
+
+| 项 | 原因 |
+|---|---|
+| 不解析对话正文 | `context.append_message` 里有内容，但本模块只要求列出会话。`has_source` 给 false，正文页如实显示「不可读」，不假装能打开 |
+| 不猜缺失值 | 没有 `usage.record` 的请求 Token 记 None 而不是 0 |
+| 不读子代理 wire | 只读 `agents/main/`，子代理有自己的 wire 文件但不算用户会话 |
+| 隔离验收不读 | `validation::isolated()` 时直接返回空 |
+
+### 10.5 效果验证（真实数据）
+
+本机 14 个 Kimi 会话，10 个有实际内容，全部能正确读出：
+
+| 会话 | 请求 | 输入 | 输出 | 缓存读 |
+|---|---:|---:|---:|---:|
+| session_59be0369 | 26 | 78,151 | 32,102 | 1,234,536 |
+| session_2a50b546 | 36 | 48,821 | 23,337 | 1,362,657 |
+| session_0813b14f | 26 | 54,044 | 29,514 | 1,188,720 |
+| …（其余 7 个） | 1–6 | | | |
+
+它们都是「旧」的（最近 24h 内无活动），所以**不会**出现在活跃会话里 —— 这是正确行为。用 Kimi 发一条消息就会出现。
+
+### 10.6 验证结果
+
+| 项 | 结果 |
+|---|---|
+| `cargo test --lib` | **1591 通过 / 0 失败 / 53 忽略** |
+| 编译警告 | **0** |
+| 前端 `node --test` | **506 通过** |
+| `tsc --noEmit` | 通过 |
+
+测试从 4 条合并为 3 条（把时间格式的 4 行断言并进筛选测试，删掉独立的那条）。
+
+### 10.7 下一步：Pi 与 dsh
+
+两家都有本地会话文件，格式已探明方向：
+
+| 工具 | 目录 | 状态 |
+|---|---|---|
+| Pi | `~/.pi/agent/sessions/<项目>/<时间戳>_<uuid>.jsonl` | 有 `message` 事件与 `usage` 字段，格式接近 Codex rollout |
+| dsh | `~/.dsh/storages/` + `session_projcache.json` | 需进一步确认会话正文位置 |
+
+按 Kimi 这套模式（独立模块 + `session_threads::list` 末尾追加）可以直接扩展。

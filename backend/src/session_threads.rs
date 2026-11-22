@@ -262,6 +262,26 @@ pub fn list(conn: &Connection, f: &SessionFilter) -> rusqlite::Result<SessionLis
         }
         sessions.push(item);
     }
+    // Kimi 的会话不在 `requests` 表里（`native_sources` 从未采集它），只能从它自己的
+    // 目录读。放在主查询之后追加，不参与上面的 SQL 与过滤——它是另一套数据源，
+    // 混进同一个 WHERE 里只会让那条已经够复杂的查询更难读。
+    //
+    // 只在这个筛选不针对特定平台时才加：调用方要 `platform=claude` 时不该混进 Kimi。
+    let kimis = if f.platform.as_deref().is_none_or(|p| p == "kimi") && f.connection.is_none() {
+        crate::creds::home()
+            .map(|home| crate::kimi_sessions::sessions(&home, f.since))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    for item in kimis {
+        if let Some(ids) = &f.session_ids {
+            if !ids.contains(&item.session_id) {
+                continue;
+            }
+        }
+        sessions.push(item);
+    }
     sessions.sort_by(|a, b| b.last_ts.cmp(&a.last_ts));
     Ok(SessionList { files: used.len() as i64, sessions })
 }
