@@ -1,7 +1,7 @@
 # 活跃会话观测：全量调查与优化方案
 
 日期：2026-11-21
-状态：**待鼠鼠确认**（本文只做调查与设计，业务代码未改）
+状态：**阶段 1 已实施并提交；阶段 2 调查已完成（ZCode 源码核实）；阶段 3 按方案 C 已实施**
 关联：`docs/plans/2026-11-20-agent-wiring-refactor-plan.md`（接线侧已完成同类改造）
 
 ---
@@ -346,3 +346,102 @@ enum SessionSource {
 **身份识别应该复用同一张表**，否则就是「接线一套、身份一套」——又是一国两制。
 
 本文的 §4 目标架构就是这个复用。
+
+
+---
+
+## 9. 执行记录（2026-11-22）
+
+### 9.1 阶段 1：UA 表（已提交 `6258f95`）
+
+`AgentSpec` 新增 `ua: &'static [&'static str]`，13 家全部填值，`agent_from_headers` 改为查表：
+
+| 工具 | UA 前缀 |
+|---|---|
+| claude-code | `claude-cli` / `claude-code` |
+| codex | `codex` / `codex_cli_rs` / `acp-extension-codex` |
+| gemini | `geminicli` / `gemini-cli` |
+| opencode | `opencode` |
+| zcode | `zcode` |
+| kimi | `kimicli` |
+| dsh | `deepseek-harness` |
+| qwen | `qwencode` |
+| workbuddy | `workbuddy` |
+| pi / pencil / qoder / qoder-cn | 空（magpie 也未声明，只能靠令牌前缀） |
+
+两个关键设计：
+- **只在产品名上精确匹配**（`zcode/1.2.3` → `zcode`），不做子串匹配 —— 否则 `my-zcode-fork` 会被误认成 ZCode
+- **`proxy_client=geminicli` 单独用 contains 判断**，它在中段不在开头
+
+### 9.2 阶段 2：ZCode 会话来源调查（查源码完成，无需抓包）
+
+**结论：ZCode 的模型请求完全不带会话标识。**
+
+证据 `apps/zcode-cli/packages/bootstrap/src/model-config.ts` 的 `buildCliZCodeSourceHeaders()`：
+
+```ts
+return {
+  "HTTP-Referer": ...,
+  "User-Agent": `ZCode/${appVersion}`,
+  "X-ZCode-App-Version": appVersion,
+  "X-Title": `Z Code@${sourceTitle}`,
+  "X-Release-Channel": ...,
+  "X-Client-Language": locale,
+  "X-Client-Timezone": timezone,
+  "X-ZCode-Agent": "glm",
+  ...createRuntimePlatformHeaders(),   // X-Platform / X-Os-Category / X-Os-Version
+}
+```
+
+没有 session / conversation / thread 任何字段。请求体里也搜过 `prompt_cache_key` / `conversation_id`，全仓 **0 处**。
+
+**所以 ZCode 只能走 `LocalFile` 路线**，不可能从请求推出会话。
+
+### 9.3 阶段 3：方案 C（并列而非合并，已实施）
+
+原方案有两种：A（按时间+model+token 事后关联）/ C（并列显示本机会话）。
+
+**选了 C**，理由：
+
+- ZCode 的会话数据**已经在 Jolu 里**（`native_sources` 采集了 `model_usage`，`session_threads` 能读 `message`/`part`）
+- 事后关联（方案 A）在并发请求上会关联错——ZCode 本机实测有子代理会话与主会话时间重叠
+- 并列不会编造任何对应关系，两套数据各自真实
+
+**实现**（`gateway/sessions.rs`）：
+
+1. `overview()` 的会话来源从「route_log 链接 + 在途请求」扩成**三路**，第三路是
+   `session_threads::list(conn, { since: 24h前 })` —— 本机会话文件里最近活跃的会话
+2. 新增 `agent_of_platform()`：平台名 → agent id 的显式映射（`claude` → `claude-code`）。
+   只在本地会话文件里的会话没有 route_log 链接，若不反查，Agent 列会空着
+3. 同一平台同一会话两边都有时按 `(platform, session_id)` 自然合并成一行
+
+**效果**（本机真实数据，最近 24h）：
+
+| | 改前 | 改后 |
+|---|---|---|
+| 活跃会话 | 1 条（只有 `claude`） | **4 个**（2 个 ZCode + 2 个 Codex） |
+
+ZCode 的 13 个会话里 11 个是子代理会话，被 `session_threads` 的 `zcode_child_session` 过滤，只留 2 个根会话——这是既有行为，不是本次引入。
+
+### 9.4 验证
+
+| 项 | 结果 |
+|---|---|
+| `cargo test --lib` | **1588 通过 / 0 失败 / 53 忽略** |
+| 编译警告 | **0** |
+| 前端 `node --test` | **506 通过 / 0 失败** |
+| `tsc --noEmit` | 通过 |
+| 本机会话数模拟 | 24h 内 4 个根会话（2 ZCode + 2 Codex） |
+
+新增测试：`local_only_sessions_appear_with_their_agent`（本机会话会进来 + Agent 反查得到 + 没有链接是对的）
+
+按鼠鼠要求「减少多余的测试」，本次只补这 1 条覆盖新行为，没有为 UA 表之外的细节再写测试。
+
+### 9.5 遗留
+
+| # | 项 | 说明 |
+|---|---|---|
+| 1 | WorkBuddy 的本地会话读取 | `native_sources` 只采集了用量，不采正文；要在活跃会话里看到它需要给 `session_threads` 加 WorkBuddy 分支（工作量：5 处模块内改动 + 1 个解析函数） |
+| 2 | 其余 5 家（Kimi / Qwen / dsh / Pi / Pencil） | 同上，各家要单独的本地会话读取器 |
+| 3 | 上下文列对纯本机会话为空 | 它们没有快照，这是诚实的缺失。要填需要另外的方案 |
+| 4 | 历史 `agent = NULL` 流水 | 103 条是改 UA 表之前记的，UA 没存进库，无法回填；只对新请求生效 |
