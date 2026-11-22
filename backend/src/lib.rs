@@ -94,6 +94,7 @@ mod claude_auth;
 mod current_connection;
 mod login_detect;
 mod usage_stats;
+mod dsh_sessions;
 mod kimi_sessions;
 mod pi_sessions;
 mod session_threads;

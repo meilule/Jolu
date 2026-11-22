@@ -254,7 +254,7 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", opencode: "OpenCode", zcode: "ZCode",
   qoder: "Qoder", trae: "Trae", workbuddy: "WorkBuddy", grok: "Grok",
   // 这两家的会话来自本地会话文件（kimi_sessions / pi_sessions），不是网关流水
-  kimi: "Kimi CLI", pi: "Pi",
+  kimi: "Kimi CLI", pi: "Pi", dsh: "DeepSeek Harness",
 }
 
 export const toolLabel = (platform: string) => TOOL_LABELS[platform] ?? platform

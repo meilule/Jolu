@@ -274,11 +274,13 @@ pub fn list(conn: &Connection, f: &SessionFilter) -> rusqlite::Result<SessionLis
                 .map(|home| {
                     let mut all = crate::kimi_sessions::sessions(&home, f.since);
                     all.extend(crate::pi_sessions::sessions(&home, f.since));
+                    all.extend(crate::dsh_sessions::sessions(&home, f.since));
                     all
                 })
                 .unwrap_or_default(),
             Some("kimi") => crate::creds::home().map(|h| crate::kimi_sessions::sessions(&h, f.since)).unwrap_or_default(),
             Some("pi") => crate::creds::home().map(|h| crate::pi_sessions::sessions(&h, f.since)).unwrap_or_default(),
+            Some("dsh") => crate::creds::home().map(|h| crate::dsh_sessions::sessions(&h, f.since)).unwrap_or_default(),
             Some(_) => Vec::new(),
         }
     } else {

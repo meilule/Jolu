@@ -1,7 +1,7 @@
 # 活跃会话观测：全量调查与优化方案
 
 日期：2026-11-21
-状态：**阶段 1 / 2 / 3 已实施；Kimi 与 Pi 的本地会话读取已接入**
+状态：**阶段 1 / 2 / 3 已实施；Kimi / Pi / dsh 的本地会话读取已接入**
 关联：`docs/plans/2026-11-20-agent-wiring-refactor-plan.md`（接线侧已完成同类改造）
 
 ---
@@ -543,13 +543,46 @@ Kimi 的会话**不在 `requests` 表里** —— `native_sources` 从未采集�
 
 前端 `TOOL_LABELS` 同时补上 `kimi` / `pi`，否则活跃会话里会显示原始平台名。
 
-### 10.8 剩余（本机无法验证或无会话文件）
+### 10.8 dsh 本地会话读取（同日完成）
+
+`backend/src/dsh_sessions.rs`。与 Kimi / Pi 同一个模式，但多了一个坑。
+
+**实测格式**：`~/.dsh/sessions/<项目路径转义>/<sessionId>/session.v4.jsonl.zstd`
+
+```json
+{"type":"session","version":4,"id":"0135f942-…","createdAt":1793859630498,"cwd":"D:\develop\Jolu",
+ "origin":"subagent","parentSession":"session-…"}
+{"type":"assistant/message","time":…,"data":{"usage":{"inputTokens":7666,"outputTokens":196,
+ "totalTokens":24246,"cacheReadTokens":16384}}}
+```
+
+**三个必须处理的点**：
+
+1. **多帧 zstd**（最坑的一个）：dsh 是每次追加写一个**独立的 zstd frame**。本机一个
+   233KB 的会话文件里有 **122 个 frame 起始标记**。`ruzstd` 的 `StreamingDecoder` 只解
+   第一帧就 `Ok(0)` 结束——直接 `read_to_end` 只能拿到 **270 字节**，整个会话看起来是空的。
+   改成按 zstd magic 逐帧循环解压后，同一文件解出 **791,982 字节**，与 Python
+   `zstandard` 完全一致。
+2. **子代理会话要过滤**：`origin == "subagent"` 或 `parentSession` 非空的是子代理自己开的。
+   实测 `--D-develop-Jolu--` 项目里 **4 个根会话 + 39 个子代理会话**，不过滤的话一个任务
+   会冒出十几条「会话」。
+3. **`inputTokens` 扣掉 `cacheReadTokens`**：样本 `7666 + 196 + 16384 = 24246`，说明
+   `inputTokens` 本就不含缓存；仍按「扣掉并钳到 0」处理，防止换版本后重复计数。
+
+**依赖**：新增 `ruzstd = "0.9"`（纯 Rust 解码器）。选它而不是绑 C 库的 `zstd`：这里只解压
+不压缩，没必要引入 native 构建依赖。
+
+**测试**：内嵌由 Python `zstandard` 生成的真实压缩字节，不调外部 `zstd` 命令——靠外部命令
+会让测试在 CI 上静默跳过，等于没测。
+
+### 10.9 剩余（本机无样本或无会话文件）
 
 | 工具 | 情况 |
 |---|---|
-| **dsh** | 有 `~/.dsh/storages/`，但会话正文与用量的位置尚未确认，需进一步调查 |
-| **WorkBuddy** | 本机未安装；且 `native_sources` 只采了用量不采正文 |
+| **WorkBuddy** | 本机未安装；且 `native_sources` 只采用量不采正文 |
 | **Qwen** | 本机未安装（`~/.qwen` 不存在），无样本 |
 | **Pencil** | 本机 `~/.pencil` 存在但**没有会话文件**，它是模型配置目录不是会话存储 |
 
-已能出现在活跃会话的：Claude Code、Codex、ZCode、OpenCode、Qoder（走 `requests` 表）+ Kimi、Pi（走本地会话文件）。
+**能出现在活跃会话的 8 家**：Claude Code、Codex、ZCode、OpenCode、Qoder（走 `requests` 表）
++ Kimi、Pi、dsh（走本地会话文件）。剩下 5 家里 3 家本机无样本、Pencil 无会话文件、
+WorkBuddy 需先补用量采集。
