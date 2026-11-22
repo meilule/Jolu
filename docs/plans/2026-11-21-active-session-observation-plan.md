@@ -1,7 +1,7 @@
 # 活跃会话观测：全量调查与优化方案
 
 日期：2026-11-21
-状态：**阶段 1 / 2 / 3 已实施；Kimi 本地会话读取已接入**
+状态：**阶段 1 / 2 / 3 已实施；Kimi 与 Pi 的本地会话读取已接入**
 关联：`docs/plans/2026-11-20-agent-wiring-refactor-plan.md`（接线侧已完成同类改造）
 
 ---
@@ -513,13 +513,43 @@ Kimi 的会话**不在 `requests` 表里** —— `native_sources` 从未采集�
 
 测试从 4 条合并为 3 条（把时间格式的 4 行断言并进筛选测试，删掉独立的那条）。
 
-### 10.7 下一步：Pi 与 dsh
+### 10.7 Pi 本地会话读取（同日完成）
 
-两家都有本地会话文件，格式已探明方向：
+`backend/src/pi_sessions.rs`，同一个模式：独立模块 + `session_threads::list` 末尾追加。
 
-| 工具 | 目录 | 状态 |
-|---|---|---|
-| Pi | `~/.pi/agent/sessions/<项目>/<时间戳>_<uuid>.jsonl` | 有 `message` 事件与 `usage` 字段，格式接近 Codex rollout |
-| dsh | `~/.dsh/storages/` + `session_projcache.json` | 需进一步确认会话正文位置 |
+**实测格式**：`~/.pi/agent/sessions/<项目>/<时间戳>_<uuid>.jsonl`，一个文件一个会话。
 
-按 Kimi 这套模式（独立模块 + `session_threads::list` 末尾追加）可以直接扩展。
+```json
+{"type":"session","version":3,"id":"01a05200-…","timestamp":"…","cwd":"D:\develop\shushu"}
+{"type":"message","timestamp":"…","message":{"role":"assistant","model":"deepseek-v4-flash",
+ "usage":{"input":5828,"output":152,"cacheRead":0,"cacheWrite":0,"reasoning":42,"totalTokens":5980}}}
+```
+
+**与 Kimi 的两处差异**：
+
+1. **`usage.input` 要扣掉 `cacheRead`**：Pi 的 `input` 可能已含缓存读取，直接相加会重复计数。
+   本机样本 `input=5828, cacheRead=0`，但为安全起见统一按「新输入 = input − cacheRead」处理。
+2. **没有 `title` 字段**：用首个 user 消息的第一行前 60 字作标题（与 Codex 同做法）。
+
+会话身份取 `session` 事件的 `id`（官方字段），不从文件名解析。
+
+**真实数据验证**：本机 17 个 Pi 会话全部有 `session` 事件，读取正确：
+
+| 会话 | 请求 | 新输入 | 输出 | 缓存读 |
+|---|---:|---:|---:|---:|
+| 01a0aab6 | 75 | 0 | 38,473 | 2,768,619 |
+| 01a0966b | 77 | 529,098 | 137,999 | 14,758,400 |
+| 01a0a0c4 | 22 | 1,256 | 52,697 | 1,686,839 |
+
+前端 `TOOL_LABELS` 同时补上 `kimi` / `pi`，否则活跃会话里会显示原始平台名。
+
+### 10.8 剩余（本机无法验证或无会话文件）
+
+| 工具 | 情况 |
+|---|---|
+| **dsh** | 有 `~/.dsh/storages/`，但会话正文与用量的位置尚未确认，需进一步调查 |
+| **WorkBuddy** | 本机未安装；且 `native_sources` 只采了用量不采正文 |
+| **Qwen** | 本机未安装（`~/.qwen` 不存在），无样本 |
+| **Pencil** | 本机 `~/.pencil` 存在但**没有会话文件**，它是模型配置目录不是会话存储 |
+
+已能出现在活跃会话的：Claude Code、Codex、ZCode、OpenCode、Qoder（走 `requests` 表）+ Kimi、Pi（走本地会话文件）。

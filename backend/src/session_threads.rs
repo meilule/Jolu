@@ -267,14 +267,24 @@ pub fn list(conn: &Connection, f: &SessionFilter) -> rusqlite::Result<SessionLis
     // 混进同一个 WHERE 里只会让那条已经够复杂的查询更难读。
     //
     // 只在这个筛选不针对特定平台时才加：调用方要 `platform=claude` 时不该混进 Kimi。
-    let kimis = if f.platform.as_deref().is_none_or(|p| p == "kimi") && f.connection.is_none() {
-        crate::creds::home()
-            .map(|home| crate::kimi_sessions::sessions(&home, f.since))
-            .unwrap_or_default()
+    // 只在这个筛选不针对特定平台时才加：调用方要 `platform=claude` 时不该混进外部来源。
+    let external: Vec<SessionItem> = if f.connection.is_none() {
+        match f.platform.as_deref() {
+            None => crate::creds::home()
+                .map(|home| {
+                    let mut all = crate::kimi_sessions::sessions(&home, f.since);
+                    all.extend(crate::pi_sessions::sessions(&home, f.since));
+                    all
+                })
+                .unwrap_or_default(),
+            Some("kimi") => crate::creds::home().map(|h| crate::kimi_sessions::sessions(&h, f.since)).unwrap_or_default(),
+            Some("pi") => crate::creds::home().map(|h| crate::pi_sessions::sessions(&h, f.since)).unwrap_or_default(),
+            Some(_) => Vec::new(),
+        }
     } else {
         Vec::new()
     };
-    for item in kimis {
+    for item in external {
         if let Some(ids) = &f.session_ids {
             if !ids.contains(&item.session_id) {
                 continue;
