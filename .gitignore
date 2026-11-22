@@ -4,6 +4,7 @@ node_modules/
 
 # 前端构建产物与缓存
 dist/
+snapshot-dist/
 build/
 .vite/
 .cache/

@@ -1,0 +1,36 @@
+/* 静态快照外壳的少量样式：只负责「看板底」与灵动岛透明窗口的展示环境，不覆盖任何设计变量。 */
+
+/* 灵动岛窗口在桌面上是无边框透明窗：这里给一块中性底，避免白底上白卡片看不出边界 */
+.island-stage {
+  position: relative;
+  width: 720px;
+  max-width: 100%;
+  min-height: 420px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 56px 24px 40px;
+  border-radius: 16px;
+  border: 1px solid rgb(0 0 0 / 0.08);
+  background-color: #e8eaee;
+  background-image:
+    radial-gradient(circle at 18% 12%, #fdfdff 0, transparent 46%),
+    radial-gradient(circle at 82% 88%, #dfe6f2 0, transparent 52%),
+    linear-gradient(135deg, #eef1f5, #dfe3ea);
+  overflow: hidden;
+}
+html.dark .island-stage {
+  border-color: rgb(255 255 255 / 0.1);
+  background-color: #17181c;
+  background-image:
+    radial-gradient(circle at 18% 12%, #2a2d35 0, transparent 46%),
+    radial-gradient(circle at 82% 88%, #1b2430 0, transparent 52%),
+    linear-gradient(135deg, #1c1e24, #121317);
+}
+/* 岛容器本身保持透明，让岛自己画圆角与阴影 */
+.island-stage-shell {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  background: transparent;
+}

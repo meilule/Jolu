@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
-    "tauri": "pnpm --dir .. tauri"
+    "tauri": "pnpm --dir .. tauri",
+    "snapshot": "vite build --config vite.snapshot.config.ts && node ../scripts/dev/build-snapshot.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.6",
