@@ -63,7 +63,7 @@ export type SelectVariant = "default" | "filter" | "form" | "toolbar" | "picker"
 
 export function SelectField({ value, options, onValueChange, label, disabled,
   className, triggerLabel, onOpenChange, readOnlySingle = false, placeholder = "请选择", glide = true,
-  width = "sm", variant = "default", triggerIcon, searchable = false,
+  width = "sm", menuWidth, variant = "default", triggerIcon, searchable = false,
 }: {
   value: string
   options: SelectOption[]
@@ -83,6 +83,15 @@ export function SelectField({ value, options, onValueChange, label, disabled,
   glide?: boolean
   /** 宽度挡位，见 SelectWidth。默认 sm（142px，设置页标准） */
   width?: SelectWidth
+  /**
+   * 下拉面板宽度（px）。不给就与触发器等宽。
+   *
+   * 什么时候需要：**触发器在窄容器里、选项文字又长**。灵动岛的「切换连接」按钮
+   * 只有 142px（受窗口宽度限制），而选项是「Claude · API Key（未配置）」这种长文案，
+   * 等宽面板会把每项折成三行（现场截图）。这时给面板一个更宽的值，
+   * 既不动触发器的占位，也不让文字折行。
+   */
+  menuWidth?: number
   /** 触发器外观，见 SelectVariant。默认 default */
   variant?: SelectVariant
   /**
@@ -183,7 +192,7 @@ export function SelectField({ value, options, onValueChange, label, disabled,
             // 下拉与框等宽：Radix 把触发器宽度挂在 --radix-dropdown-menu-trigger-width。
             // filter 变体的触发器是 w-full（撑满外层 label），所以这里拿到的
             // 就是外层视觉框的宽度 —— 日期、状态两个筛选条都因此对齐。
-            width: "var(--radix-dropdown-menu-trigger-width)",
+            width: menuWidth ? `${menuWidth}px` : "var(--radix-dropdown-menu-trigger-width)",
           }}
         >
           {glide ? (

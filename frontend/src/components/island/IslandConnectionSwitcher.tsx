@@ -32,6 +32,10 @@ export function IslandConnectionSwitcher({
         disabled={disabled}
         onOpenChange={onOpenChange}
         className="h-7 bg-surface-3 text-[11px] font-medium"
+        // 灵动岛的窗口很窄，触发器只有 142px；而最长选项「Claude · API Key（未配置）」
+        // 在 11px 字号下约 182px（含 14px 图标与间距），200px 减去面板内边距只剩 176px，
+        // 会压线折行。取 220px 留出余量。
+        menuWidth={220}
         triggerLabel={<span className="inline-flex items-center gap-1"><Repeat2 aria-hidden className="size-3" />{pending ? "切换中…" : loading ? "读取连接…" : "切换连接"}</span>}
         options={[
           ...(!selectedId ? [{ value: "", label: "选择连接", disabled: true }] : []),
