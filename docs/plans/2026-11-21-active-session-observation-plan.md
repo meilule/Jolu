@@ -615,3 +615,63 @@ Qoder 有），但**本机从未用过它们**——`~/.gemini` 只有接线写�
 会以为是坏了。明确说明比静默消失诚实（AGENTS.md：能力不支持要明确表达）。
 
 判据来自实测：Pencil 的 `~/.pencil` 只有 `models.json`；Qwen 与 WorkBuddy 本机未安装。
+
+
+---
+
+## 11. 测试冗余核查（2026-11-22）
+
+鼠鼠要求「减少多余的测试」。核查过程与结论如下，供交接者复核。
+
+### 11.1 规模基线
+
+`cargo test --lib -- --list` 报 **1,648 个测试**（含 22 个 `#[ignore]`）。
+先前的正则统计给过 1,544，是**漏算**——正则解析源码时把字符串字面量里的括号当成了代码块边界。
+凡涉及测试结构统计，以 `cargo --list` 为准。
+
+### 11.2 核查方法（两个维度）
+
+**维度一：不同测试的断言骨架是否相同**
+
+抽出每个测试体内所有 `assert*!(...)` 的规范化文本作为指纹，找指纹完全相同的测试组。
+结果 5 组，逐条查看后**全部不是重复**：
+
+| 组 | 涉及测试 | 为什么不是冗余 |
+|---|---|---|
+| 1 | `current_connection.rs` 的 `anonymous_custom_provider_never_claims_saved_oauth` / `default_profile_selects_its_provider_before_global_provider` | 断言恰好相同，但输入是**两种配置形态**（自定义 provider 匿名 vs profile 覆盖 provider） |
+| 2 | `gateway_balance.rs` 的 `refused_connection_…` / `read_timeout_…` | 测**两种错误类型**（ConnectionRefused vs TimedOut），都要证明「不退化成缺少网关」 |
+| 3 | `handoff_facts.rs` 的 `redact_is_linear_…` / `redact_skips_values_…` | 共用 `assert_linear` 辅助函数，测试目标不同（性能线性 vs 不误脱敏） |
+| 4 | `qoder_desktop.rs` / `qoder_quota.rs` 的同名 `partial_total_keeps_explicit_total_without_inventing_used` | 两个文件各有**独立的 `parse_usage`**（桌面版读 `qoderUsage`、账号版读 `usage`），输入形状不同 |
+| 5 | `quota.rs::local_auth_read_only_smoke` / `trae_quota.rs::local_variants_read_only_smoke` | **不同平台**的只读真机冒烟 |
+
+**维度二：同一测试体内是否重复断言**
+
+扫出 101 处「同一测试里出现相同断言文本」。逐类看下来绝大多数是
+「**状态 A → 执行操作 → 再断言回到 A**」——这是**真验证**（证明操作没有破坏原有状态），
+不是重复。例如 `skills.rs` 里「保存失败后配置保持原样」「恢复后停用登记不变」都属于这类。
+
+### 11.3 一次误判的更正
+
+核查中我曾报告「`skills.rs::broken_config_is_backed_up_and_never_overwritten` 是 736 行的巨型测试」，
+**这是错的**。该测试实际 **40 行**（文件第 2508–2543 行），覆盖 4 个小场景，结构清晰。
+
+误判原因：用 `s[i] == '{'` 数括号深度时，没跳过字符串字面量——
+`let broken = "{ \"disabled\": [ 损坏";` 里的 `{` 让深度永久 +1，扫描一路跑到文件末尾。
+**教训**：解析源码结构必须先处理字符串与注释，否则括号计数不可信（这也是 §11.1 数字前后不一致的同一个原因）。
+
+### 11.4 本次唯一的精简
+
+`backend/src/kimi_sessions.rs` 的测试从 **4 条合并为 3 条**：
+把「两种时间格式都能识别」的 4 行断言并进 `since_filters_old_sessions_and_missing_dirs_are_skipped`，
+删掉独立的那条测试。覆盖不变，测试数减 1。
+
+### 11.5 结论
+
+**没有找到可以无损失删除的既有测试。** 5 组骨架相同的候选都在测不同输入，
+101 处重复断言基本都是「改动后回归原状态」的真验证。
+
+如果鼠鼠的原意是「**别为每个改动都堆测试**」（过程要求），本次已满足：
+dsh 读取器只写 2 条、能力标注只写 1 条、Kimi 3 条、Pi 2 条。
+
+如果原意是「**删掉仓库里现有的某些测试**」（结果要求），需要具体线索
+（哪个模块、哪几条），因为机械比对的结果是「无纯重复」。
