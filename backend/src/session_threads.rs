@@ -45,6 +45,13 @@ pub struct SessionFilter {
     /// 只查这些原始会话 ID（统一网关页定向取数用；前端筛选不会传）
     #[serde(skip)]
     pub session_ids: Option<Vec<String>>,
+    /// 跳过 Kimi / Pi / dsh 这类「直接读本地会话文件」的来源。
+    ///
+    /// 为什么需要：那几个读取器要遍历磁盘（dsh 还要 zstd 解压，本机实测 61 个会话
+    /// 约 1 秒）。调用方如果只是拿**已知的**一批会话补标题与 Token（`session_ids` 已给），
+    /// 再跑一遍全量扫描纯属白烧——`gateway/sessions.rs` 就因此每次多花约 1 秒。
+    #[serde(skip)]
+    pub skip_external: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -268,7 +275,7 @@ pub fn list(conn: &Connection, f: &SessionFilter) -> rusqlite::Result<SessionLis
     //
     // 只在这个筛选不针对特定平台时才加：调用方要 `platform=claude` 时不该混进 Kimi。
     // 只在这个筛选不针对特定平台时才加：调用方要 `platform=claude` 时不该混进外部来源。
-    let external: Vec<SessionItem> = if f.connection.is_none() {
+    let external: Vec<SessionItem> = if f.connection.is_none() && !f.skip_external {
         match f.platform.as_deref() {
             None => crate::creds::home()
                 .map(|home| {

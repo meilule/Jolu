@@ -203,7 +203,21 @@ pub(crate) fn sessions(home: &Path, since: Option<i64>) -> Vec<SessionItem> {
         if !dir.is_absolute() {
             continue;
         }
-        let state_text = crate::steady::read_to_string(&dir.join("state.json")).unwrap_or_default();
+        let state_path = dir.join("state.json");
+        // 先看 mtime 再读：`since` 只要最近活跃的，用最后修改时间先筛掉历史会话。
+        // 留 1 小时余量，理由同 `dsh_sessions`（窗口前创建、窗口内仍在追加的会话不能漏）。
+        if let Some(since) = since {
+            let fresh = std::fs::metadata(&state_path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+                .is_some_and(|mtime| mtime >= since - 60 * 60 * 1000);
+            if !fresh {
+                continue;
+            }
+        }
+        let state_text = crate::steady::read_to_string(&state_path).unwrap_or_default();
         let state: State = serde_json::from_str(&state_text).unwrap_or_default();
         let last_ts = ts_of(state.updated_at.as_ref()).or_else(|| ts_of(state.created_at.as_ref()));
         if let (Some(since), Some(ts)) = (since, last_ts) {

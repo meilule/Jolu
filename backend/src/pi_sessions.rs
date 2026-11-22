@@ -211,6 +211,20 @@ pub(crate) fn sessions(home: &Path, since: Option<i64>) -> Vec<SessionItem> {
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
+            // 先看 mtime 再解析：一个会话文件可能几 MB，`since` 只要最近活跃的，
+            // 用最后修改时间先筛掉历史会话能省掉绝大部分 IO。留 1 小时余量防止漏掉
+            // 「窗口前创建、窗口内还在追加」的会话。
+            if let Some(since) = since {
+                let fresh = std::fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as i64)
+                    .is_some_and(|mtime| mtime >= since - 60 * 60 * 1000);
+                if !fresh {
+                    continue;
+                }
+            }
             let Some((id, cwd, totals)) = scan(&path) else { continue };
             let last_ts = totals.last_ts.unwrap_or(0);
             if let Some(since) = since {

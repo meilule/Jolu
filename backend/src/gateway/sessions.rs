@@ -163,7 +163,14 @@ pub fn overview(conn: &Connection) -> rusqlite::Result<SessionsOverview> {
     }
 
     let ids: Vec<String> = order.iter().map(|(_, id)| id.clone()).collect::<HashSet<_>>().into_iter().collect();
-    let filter = crate::session_threads::SessionFilter { session_ids: Some(ids), ..Default::default() };
+    // 第二次查询只为「已知的这批会话」补标题与 Token。它带着 `session_ids`，
+    // 而 Kimi / Pi / dsh 的读取器要遍历磁盘（dsh 还要 zstd 解压，本机实测约 1 秒），
+    // 且它们不按 `session_ids` 过滤——所以必须显式跳过，否则整个 overview 白跑两遍扫描。
+    let filter = crate::session_threads::SessionFilter {
+        session_ids: Some(ids),
+        skip_external: true,
+        ..Default::default()
+    };
     let threads: HashMap<(String, String), crate::session_threads::SessionItem> = crate::session_threads::list(conn, &filter)?
         .sessions
         .into_iter()

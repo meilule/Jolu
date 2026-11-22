@@ -230,6 +230,24 @@ pub(crate) fn sessions(home: &Path, since: Option<i64>) -> Vec<SessionItem> {
             if !dir.is_dir() {
                 continue;
             }
+            // **先看修改时间再解压**：dsh 的会话是 zstd 压缩的，解压一个文件要十几毫秒，
+            // 本机 61 个会话全解约 1 秒。而 `since` 只是想要最近活跃的——会话文件最后
+            // 修改时间就是它最后一次写入的时刻，用它先筛一遍能省掉绝大部分解压。
+            //
+            // 留 1 小时余量：文件系统的 mtime 精度、以及「会话在 since 之前创建但在
+            // 窗口内仍在追加」这两种情况都需要放宽，宁可多解几个也不要漏掉活跃会话。
+            if let Some(since) = since {
+                let file = dir.join("session.v4.jsonl.zstd");
+                let fresh = std::fs::metadata(&file)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as i64)
+                    .is_some_and(|mtime| mtime >= since - 60 * 60 * 1000);
+                if !fresh {
+                    continue;
+                }
+            }
             let Some((id, cwd, totals)) = scan(&dir) else { continue };
             let last_ts = totals.last_ts.unwrap_or(0);
             if let Some(since) = since {
@@ -300,6 +318,44 @@ mod tests {
         assert_eq!(item.cache_read, Some(300));
         assert!(item.title.is_none(), "没有标题字段就不编");
         assert!(!item.has_source, "正文不解析就不能说能打开");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// mtime 预筛只是省解压，**不能替代内容时间判断**。
+    ///
+    /// 优化前每次 overview 都解压全部会话（本机 61 个约 1 秒，模型路由页每 5 秒轮询一次），
+    /// 所以加了「先看文件修改时间、太旧就不解压」。这条锁住它的语义边界：
+    /// 文件刚写过（mtime 新）但内容里的时间在窗口外的会话，会被 prefilter 放进来、
+    /// 再被 `scan` 里的内容时间筛掉——两者是「先粗筛再精筛」，不是替换关系。
+    ///
+    /// 反过来若只信 mtime，一个被外部工具 touch 过的旧会话会永久留在活跃列表里。
+    #[test]
+    fn mtime_prefilter_only_gates_decompression_not_activity() {
+        let root = std::env::temp_dir().join(format!("jolu-dsh-mtime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let sessions_root = root.join(".dsh").join("sessions").join("--proj--");
+        write(&sessions_root.join("root-1"), ROOT_ZSTD);
+
+        let now = chrono::Local::now().timestamp_millis();
+        let cutoff = now - 24 * 60 * 60 * 1000;
+
+        // fixture 的内容时间是 1970（1000/3000ms），刚写过的文件也进不了 24 小时窗口：
+        // prefilter 放行了解压，但内容时间说了不算
+        assert!(
+            sessions(&root, Some(cutoff)).is_empty(),
+            "内容时间在窗口外的会话不该因为文件被 touch 过就算活跃"
+        );
+
+        // 不设 since 时照常返回：证明上面是「被筛选」不是「读不出来」
+        assert_eq!(sessions(&root, None).len(), 1, "不筛时间时应能正常读出");
+
+        // 文件 mtime 在窗口外时根本不解压（这条测的是性能路径，结果等价）
+        let file = sessions_root.join("root-1").join("session.v4.jsonl.zstd");
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7 * 24 * 3600);
+        let f = std::fs::OpenOptions::new().write(true).open(&file).unwrap();
+        f.set_modified(old).unwrap();
+        drop(f);
+        assert!(sessions(&root, Some(cutoff)).is_empty());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
