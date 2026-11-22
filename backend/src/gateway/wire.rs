@@ -325,22 +325,30 @@ pub(crate) fn agent_from_headers(headers: &HeaderMap) -> AgentIdentity {
         }
     }
     let ua = headers.get("user-agent").and_then(|v| v.to_str().ok()).unwrap_or_default();
-    // Gemini CLI 旧版 UA 以 GeminiCLI 开头；0.65 起改为 CloudCodeVSCode/…（…proxy_client=geminicli）
-    if ua.starts_with("GeminiCLI") || ua.to_ascii_lowercase().contains("proxy_client=geminicli") {
+    // Gemini CLI 旧版 UA 以 GeminiCLI 开头；0.65 起改为 CloudCodeVSCode/…（…proxy_client=geminicli）。
+    // 这条要在通用 UA 表之前：它查的是「包含」（proxy_client 在 UA 中段），不是前缀。
+    if ua.to_ascii_lowercase().contains("proxy_client=geminicli") {
         return AgentIdentity::identified("gemini", "ua");
     }
-    if ua.starts_with("codex_cli_rs") {
-        return AgentIdentity::identified("codex", "ua");
-    }
-    if ua.starts_with("claude-cli/") {
-        return AgentIdentity::identified("claude-code", "ua");
-    }
-    // OpenCode 每个模型请求都带 x-opencode-client / x-opencode-session-id
-    if ua.to_ascii_lowercase().starts_with("opencode/")
-        || headers.contains_key("x-opencode-client")
-        || headers.contains_key("x-opencode-session-id")
-    {
+    // OpenCode 每个模型请求都带 x-opencode-client / x-opencode-session-id（比 UA 更可靠）
+    if headers.contains_key("x-opencode-client") || headers.contains_key("x-opencode-session-id") {
         return AgentIdentity::identified("opencode", "ua");
+    }
+    // 通用 UA 前缀表：查接线注册表的 `ua` 字段。
+    //
+    // 为什么改成查表：原来这里是 4 条写死的 if，13 家里有 9 家认不出来。本机实测
+    // `gateway_route_log` 有 103 条 agent 为 NULL（ZCode 42、WorkBuddy 53）——接线明明
+    // 成功了，流水却不知道是谁发的。前缀取自 magpie 各家 `UA:` 声明。
+    //
+    // 只在**整个产品名**上做前缀匹配（`zcode/1.2` → `zcode`），不在完整 UA 上做子串匹配：
+    // 子串会把 `my-zcode-fork` 也认成 ZCode。
+    let product = ua.split(['/', ' ']).next().unwrap_or("").trim().to_ascii_lowercase();
+    if !product.is_empty() {
+        for spec in crate::gateway::wiring_specs::SPECS {
+            if spec.ua.iter().any(|prefix| product == *prefix) {
+                return AgentIdentity::identified(spec.id, "ua");
+            }
+        }
     }
     // 识别不出：给 UA 首段，让用户报问题时能直接看出是哪个工具漏了
     AgentIdentity::unknown(ua)
@@ -1607,6 +1615,47 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("user-agent", "codex_cli_rs/0.1".parse().unwrap());
         assert_eq!(agent_from_headers(&headers).identified_by, Some("ua"));
+    }
+
+    /// 通用 UA 表：13 家里 magpie 声明过 UA 的 9 家都要认出来。
+    ///
+    /// 这条锁住的是「接线成功但流水认不出是谁」——本机实测有 103 条 agent 为 NULL，
+    /// 其中 ZCode 42 条、WorkBuddy 53 条。
+    #[test]
+    fn every_declared_ua_prefix_names_its_agent() {
+        for (ua, want) in [
+            ("claude-cli/2.1.114 (external, cli)", "claude-code"),
+            ("claude-code/1.0", "claude-code"),
+            ("codex_cli_rs/0.1", "codex"),
+            ("codex/1.0", "codex"),
+            ("acp-extension-codex/0.1", "codex"),
+            ("GeminiCLI/0.34.0", "gemini"),
+            ("gemini-cli/0.1", "gemini"),
+            ("opencode/1.0", "opencode"),
+            ("zcode/1.2.3", "zcode"),
+            // 大小写不敏感：真实 UA 有写 ZCode 的
+            ("ZCode/1.2.3", "zcode"),
+            ("workbuddy/1.0", "workbuddy"),
+            ("qwencode/1.0", "qwen"),
+            ("kimicli/1.0", "kimi"),
+            ("deepseek-harness/1.0", "dsh"),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert("user-agent", ua.parse().unwrap());
+            assert_eq!(
+                agent_from_headers(&headers).agent.as_deref(),
+                Some(want),
+                "UA {ua} 应认成 {want}"
+            );
+        }
+        // 子串不该误匹配：`my-zcode-fork` 不是 ZCode
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", "my-zcode-fork/1.0".parse().unwrap());
+        assert_eq!(agent_from_headers(&headers).agent, None, "只在产品名上精确匹配，不做子串");
+        // Gemini 的 proxy_client 在中段，要单独匹配
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", "CloudCodeVSCode/1.0 (proxy_client=geminicli)".parse().unwrap());
+        assert_eq!(agent_from_headers(&headers).agent.as_deref(), Some("gemini"));
     }
 
     #[test]

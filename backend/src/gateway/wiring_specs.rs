@@ -68,6 +68,16 @@ pub(crate) struct AgentSpec {
     pub notice: &'static str,
     /// 该工具写进配置的模型清单是否来自网关目录（zcode / kimi / dsh / pi / extra 五组）
     pub uses_catalog: bool,
+    /// User-Agent 前缀（小写比较），用来在**没带 Jolu 令牌**时认出请求来自哪个工具。
+    ///
+    /// 为什么需要：接线写进对方配置的是 `jolu-<agent>.<实例>`，但工具不一定把它放在
+    /// `Authorization`/`x-api-key` 里（有的走自己的登录态、有的改写头）。本机实测
+    /// `gateway_route_log` 里有 103 条 `agent` 为 NULL，其中 ZCode 42 条、WorkBuddy 53 条
+    /// —— 全是「接线成功了但流水认不出是谁」。UA 是不需要配置就会带的信号。
+    ///
+    /// 取值来自 magpie 各家的 `UA:` 声明（`internal/agent/*.go`）。空数组表示 magpie
+    /// 也没给这家声明 UA（Pi、Qoder），那它只能靠令牌前缀识别，这里不猜。
+    pub ua: &'static [&'static str],
 }
 
 impl AgentSpec {
@@ -203,6 +213,7 @@ pub(crate) const SPECS: &[AgentSpec] = &[
         extra: WiredExtra::None,
         notice: "新会话生效；已在运行的会话需重开",
         uses_catalog: false,
+        ua: &["claude-cli", "claude-code"],
     },
     AgentSpec {
         id: "codex",
@@ -219,6 +230,9 @@ pub(crate) const SPECS: &[AgentSpec] = &[
         extra: WiredExtra::None,
         notice: "保留 ChatGPT 登录时只改请求地址；需重启 Codex 后生效",
         uses_catalog: false,
+        // codex_cli_rs 是 Codex CLI 实际发的产品名（实测 UA `codex_cli_rs/0.1`）；
+        // magpie 声明的是 codex / acp-extension-codex（ACP 适配器与桌面版）。三套都要认。
+        ua: &["codex", "codex_cli_rs", "acp-extension-codex"],
     },
     AgentSpec {
         id: "gemini",
@@ -233,6 +247,7 @@ pub(crate) const SPECS: &[AgentSpec] = &[
         extra: WiredExtra::GeminiApiKey,
         notice: "接线期间改用网关 Key，断开时恢复原登录；需重启 Gemini 后生效",
         uses_catalog: false,
+        ua: &["geminicli", "gemini-cli"],
     },
     AgentSpec {
         id: "opencode",
@@ -247,6 +262,7 @@ pub(crate) const SPECS: &[AgentSpec] = &[
         extra: WiredExtra::None,
         notice: "需重启该工具后生效",
         uses_catalog: false,
+        ua: &["opencode"],
     },
     AgentSpec {
         id: "zcode",
@@ -261,6 +277,7 @@ pub(crate) const SPECS: &[AgentSpec] = &[
         extra: WiredExtra::None,
         notice: "需重启 ZCode 后生效",
         uses_catalog: true,
+        ua: &["zcode"],
     },
     AgentSpec {
         id: "kimi",
@@ -275,6 +292,7 @@ pub(crate) const SPECS: &[AgentSpec] = &[
         extra: WiredExtra::KimiDefaultModel,
         notice: "需重启 Kimi 后生效",
         uses_catalog: true,
+        ua: &["kimicli"],
     },
     AgentSpec {
         id: "dsh",
@@ -289,6 +307,7 @@ pub(crate) const SPECS: &[AgentSpec] = &[
         extra: WiredExtra::Adapter,
         notice: "新会话生效；已打开的会话保持原模型",
         uses_catalog: true,
+        ua: &["deepseek-harness"],
     },
     AgentSpec {
         id: "pi",
@@ -303,6 +322,7 @@ pub(crate) const SPECS: &[AgentSpec] = &[
         extra: WiredExtra::PiDefaultProvider,
         notice: "新会话生效；已打开的会话保持原模型",
         uses_catalog: true,
+        ua: &[],
     },
     AgentSpec {
         id: "pencil",
@@ -317,6 +337,7 @@ pub(crate) const SPECS: &[AgentSpec] = &[
         extra: WiredExtra::SelectionOurs,
         notice: "Pencil 启动时读自定义模型：重启 Pencil 后在模型选择器里选 Jolu 的模型",
         uses_catalog: true,
+        ua: &[],
     },
     AgentSpec {
         id: "qoder",
@@ -331,6 +352,7 @@ pub(crate) const SPECS: &[AgentSpec] = &[
         extra: WiredExtra::SelectionOurs,
         notice: "新会话生效；已打开的会话保持原模型",
         uses_catalog: true,
+        ua: &[],
     },
     AgentSpec {
         id: "qoder-cn",
@@ -345,6 +367,7 @@ pub(crate) const SPECS: &[AgentSpec] = &[
         extra: WiredExtra::SelectionOurs,
         notice: "新会话生效；已打开的会话保持原模型",
         uses_catalog: true,
+        ua: &[],
     },
     AgentSpec {
         id: "qwen",
@@ -361,6 +384,7 @@ pub(crate) const SPECS: &[AgentSpec] = &[
         extra: WiredExtra::None,
         notice: "新会话生效；已打开的会话保持原模型",
         uses_catalog: true,
+        ua: &["qwencode"],
     },
     AgentSpec {
         id: "workbuddy",
@@ -377,6 +401,7 @@ pub(crate) const SPECS: &[AgentSpec] = &[
         // 5.6 的 app.asar 只在启动时监视 models.json，重写后要重启才认
         notice: "重启 WorkBuddy 后生效（它只在启动时读这个文件）",
         uses_catalog: true,
+        ua: &["workbuddy"],
     },
 ];
 
