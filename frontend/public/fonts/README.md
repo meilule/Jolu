@@ -5,6 +5,20 @@
 - Inter：<https://github.com/google/fonts/tree/main/ofl/inter>；许可证 `Inter-LICENSE.txt`。
 - JetBrains Mono：<https://github.com/google/fonts/tree/main/ofl/jetbrainsmono>；许可证 `JetBrainsMono-LICENSE.txt`。
 
+## 启动页的 welcome 字形
+
+启动页 `welcome` 的手写字形取自 **Kalam Bold**（Indian Type Foundry，SIL OFL，许可证 `Kalam-LICENSE.txt`）。
+只提取了 `welcome` 七个字母的轮廓，转成一条内联 SVG 路径写在 `frontend/startup.html` 里，
+**没有随应用分发字体文件**——启动页不加载 Kalam，也不需要它。
+
+若之后要改文案或字号，重新生成路径：
+
+```bash
+npm i -D opentype.js @fontsource/kalam
+# 取 kalam-latin-700-normal.woff，用 opentype.js 的 glyph.getPath(penX, 0, 1000)
+# 注意 opentype.js 输出的 y 已经是屏幕方向（向下为负），不要再取反
+```
+
 字体仅在本地加载，不向外部字体服务发送请求。中文沿用系统字体回退。
 
 随应用分发的是 woff2 子集（拉丁、拉丁扩展 A、常用标点、上下标、货币、箭头、数学符号、制表符与几何图形），保留可变字重轴与全部 OpenType 特性。

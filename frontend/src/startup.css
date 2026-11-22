@@ -1,6 +1,11 @@
-/* 启动页（Jolu.pen 画板 109 / 110）：1280×720 无边框透明窗口，页面自绘 12 圆角底色；
-   正中 104×104 桌面图标，下方 20px 为 108×44 的 Jolu 艺术字（线宽 3.4，o 为强调色）。
-   颜色取自设计稿变量 jolu-text / jolu-accent 与画板底色；主题由后端经地址参数传入，
+/* 启动页（Jolu.pen 画板 109 / 110）：1280×720 无边框透明窗口，页面自绘 12 圆角底色。
+   居中一行：welcome → Jolu 艺术字 → 应用图标。
+
+   welcome 用 Kalam 700 的手写字形轮廓，遮罩从左往右擦除揭示（观感是「一笔写出来」）；
+   Jolu 艺术字是手绘中心线路径，四笔依次写出；图标最后浮现。
+   整组约 1.3s 走完——启动页在 main_panel_ready 时立即 close()，不能再长。
+
+   颜色取自设计稿变量 jolu-text / jolu-accent；主题由后端经地址参数传入，
    设好之前页面保持透明，避免深色主题先闪浅色。 */
 :root {
   --bg: #ffffff;
@@ -10,6 +15,11 @@
   --border: #e4e4e7;
   --hover: #f1f1f2;
   --danger: #d66455;
+  /* 手写描边的品牌渐变：深绿 → 品牌绿 → 青 → 蓝 */
+  --grad-a: #067a3d;
+  --grad-b: #06c167;
+  --grad-c: #22d3c5;
+  --grad-d: #2563eb;
 }
 
 :root[data-theme="dark"] {
@@ -20,6 +30,11 @@
   --border: #2a2a2d;
   --hover: #1c1e1d;
   --danger: #f26d6d;
+  /* 深色底提亮一档，保持同样的色相顺序 */
+  --grad-a: #3ddc97;
+  --grad-b: #34e0bf;
+  --grad-c: #5ad4f0;
+  --grad-d: #7aa7ff;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -31,6 +46,10 @@
     --border: #2a2a2d;
     --hover: #1c1e1d;
     --danger: #f26d6d;
+    --grad-a: #3ddc97;
+    --grad-b: #34e0bf;
+    --grad-c: #5ad4f0;
+    --grad-d: #7aa7ff;
   }
 }
 
@@ -49,7 +68,7 @@ body {
   align-items: center;
   justify-content: center;
   height: 100%;
-  /* 画板中图标顶边在 274（720 高），比几何居中高 2px */
+  /* 画板中品牌组比几何居中高 2px */
   padding-bottom: 4px;
   border-radius: 12px;
   isolation: isolate;
@@ -67,12 +86,76 @@ body {
 .ready .startup { visibility: visible; }
 .ready .startup::before { animation: background-enter 0.32s ease-out both; }
 
-.brand { display: flex; flex-direction: column; align-items: center; gap: 20px; }
-.icon { display: block; width: 104px; height: 104px; object-fit: contain; }
-.wordmark { display: block; stroke-width: 3.4px; stroke-linecap: round; stroke-linejoin: round; }
-.wordmark path { vector-effect: non-scaling-stroke; }
-.wordmark .ink { stroke: var(--text); }
-.wordmark .loop { stroke: var(--accent); }
+/* 一行横排。手写字的笔画外沿比字形框宽，gap 要比常规排版略大 */
+.brand {
+  display: flex;
+  /* 三者都是图形（welcome / Jolu 是 SVG，图标是 img），按盒子居中即可 */
+  align-items: center;
+  gap: 24px;
+}
+
+/* ── welcome：Kalam 700 轮廓，200×46，遮罩从左往右擦除 ──
+   为什么擦除而不是描边：TrueType 只给字形轮廓（外框 + 内孔），
+   沿轮廓描边会同时画出内外两条边、变成空心字；擦除保持填充字形，
+   观感才是「字被一笔笔推出来」。 */
+.welcome {
+  display: block;
+  width: 200px;
+  height: 46px;
+  overflow: visible;
+}
+.welcome-ink {
+  fill: url(#welcome-gradient);
+  /* 起笔那一刻才显示，避免遮罩边缘一开始就有一条竖线 */
+  opacity: 0;
+  animation: welcome-fade 100ms ease-out 30ms both;
+}
+/* rect 的宽度无法用 CSS 动画推进（几何属性不在可动画列表里），改用 scaleX。
+   基准点必须钉在字形左缘（28 是 viewBox 左边界），否则会被用户坐标系原点带跑。 */
+.welcome .wipe {
+  transform-box: view-box;
+  transform-origin: 28px 0;
+  animation: welcome-wipe 820ms cubic-bezier(0.42, 0, 0.22, 1) 50ms both;
+}
+
+/* ── Jolu 艺术字：74×30，四笔依次写出 ── */
+.wordmark {
+  display: block;
+  width: 96px;
+  height: 39px;
+  overflow: visible;
+}
+
+/* 描边显现的公共部分（只用于 Jolu 的手绘中心线） */
+.stroke {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  opacity: 0;
+}
+.wordmark .stroke {
+  stroke: url(#wordmark-gradient);
+  stroke-width: 3.4;
+  animation: ink-draw 300ms cubic-bezier(0.42, 0, 0.22, 1) both;
+}
+/* 四笔的起笔间隔：写在 welcome 收尾之后，接得上一笔的气口 */
+.wordmark .p1 { animation-delay: 880ms; }
+.wordmark .p2 { animation-delay: 950ms; }
+.wordmark .p3 { animation-delay: 1020ms; }
+.wordmark .p4 { animation-delay: 1090ms; }
+
+/* 图标最后浮现：略微放大到位，不做弹跳（启动页要克制） */
+.icon {
+  display: block;
+  width: 88px;
+  height: 88px;
+  object-fit: contain;
+  opacity: 0;
+  transform: scale(0.9);
+  animation: icon-pop 340ms cubic-bezier(0.22, 1.14, 0.36, 1) 1320ms both;
+}
 
 .sr-only {
   position: absolute;
@@ -86,7 +169,7 @@ body {
 /* 失败态放在品牌组下方，品牌组保持居中不跳动 */
 .failure {
   position: absolute;
-  top: calc(50% + 112px);
+  top: calc(50% + 96px);
   left: 50%;
   display: flex;
   flex-direction: column;
@@ -117,9 +200,52 @@ button.primary { border-color: var(--accent); background: var(--accent); color: 
 button.primary:hover { filter: brightness(0.95); }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* 仅背景从半透明变为不透明，品牌图标与文字始终保持原有透明度。 */
+/* 仅背景从半透明变为不透明，品牌组始终保持原有透明度。 */
 @keyframes background-enter { from { opacity: 0.5; } to { opacity: 1; } }
 
+/* 擦除揭示：scaleX 从 0 推到 1（基准点钉在字形左缘，见 .wipe） */
+@keyframes welcome-wipe {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+/* 起笔那一刻才显示，避免遮罩边缘一开始就有一条竖线 */
+@keyframes welcome-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 起笔那一刻才显示，避免 round 线帽在 dashoffset=1 时留下一个小圆点 */
+@keyframes ink-draw {
+  0%   { stroke-dashoffset: 1; opacity: 0; }
+  0.6% { opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 1; }
+}
+@keyframes icon-pop {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* 减少动效：直接停在终态，不做逐笔书写。启动页是等窗口用的，
+   让需要减少动效的人多等 1.4 秒没有意义。
+   选择器要带上 .welcome / .wordmark 前缀：基础规则是按这两个父级写的，
+   只写 `.stroke` 会被更具体的那条盖住，动画照旧跑。 */
 @media (prefers-reduced-motion: reduce) {
   .ready .startup::before { animation: none; }
+  .welcome-ink { animation: none; opacity: 1; }
+  .welcome .wipe { animation: none; transform: none; }
+  .wordmark .stroke {
+    animation: none;
+    /* 必须显式写：基础规则的 dashoffset: 1 会把字藏起来，animation: none 不会覆盖它 */
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  .wordmark .p1,
+  .wordmark .p2,
+  .wordmark .p3,
+  .wordmark .p4 { animation-delay: 0s; }
+  .brand .icon {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
 }
