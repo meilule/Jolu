@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { agentRow as makeAgentRow, buildAgentRows, agentRows, agentGridRows, customAgentRow, customPresetFor, isCustomAgent, CUSTOM_AGENT_PRESETS, longContextMode, longContextText, parseTokens, readHidden, writeHidden, wireExplanation } from "./agentPage.ts"
+import { agentRow as makeAgentRow, buildAgentRows, agentRows, agentGridRows, customAgentRow, customPresetFor, isCustomAgent, CUSTOM_AGENT_PRESETS, longContextMode, longContextText, parseTokens, readHidden, sessionRecordCapability, sessionRecordNote, writeHidden, wireExplanation } from "./agentPage.ts"
 
 const agentRow = (agent, wiring, discovery, model = null, supported = true) => makeAgentRow(agent, wiring, discovery, model, supported)
 
@@ -212,4 +212,20 @@ test("后端 status.wiring 必须覆盖接线注册表的全部 id", async () =>
     /WIRABLE_AGENTS\s*=/,
     "前端又出现了 WIRABLE_AGENTS 硬编码清单：改由后端 status.wiring 派生，加一家不用改前端",
   )
+})
+
+// 活跃会话只列真的读到会话的平台。接了一家却永远看不到它，用户会以为坏了。
+// 这三家要明确说明，其余默认能观测。
+test("会话记录能力：不支持的要明说，能观测的不占位置", () => {
+  assert.equal(sessionRecordCapability("pencil"), "no-record", "Pencil 只有模型配置，没有会话存储")
+  assert.equal(sessionRecordCapability("qwen"), "not-yet")
+  assert.equal(sessionRecordCapability("workbuddy"), "not-yet")
+  // 能读到会话的 8 家都不该有说明（不占位置）
+  for (const agent of ["claude-code", "codex", "zcode", "gemini", "opencode", "kimi", "pi", "dsh", "qoder"]) {
+    assert.equal(sessionRecordCapability(agent), "observable", agent)
+    assert.equal(sessionRecordNote(agent), null, `${agent} 不该有说明`)
+  }
+  // 说明文案要能区分「本来就没有」与「还没接」
+  assert.match(sessionRecordNote("pencil"), /不产生会话记录/)
+  assert.match(sessionRecordNote("qwen"), /还没接入/)
 })

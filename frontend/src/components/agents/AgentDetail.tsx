@@ -6,7 +6,7 @@ import {
 import { cn } from "@/lib/utils"
 import type { ProfileDto, WiringPreviewDto } from "@/lib/gatewayApi"
 import type { AgentVersionRow } from "@/lib/settingsApi"
-import { driftText, longContextMode, parseTokens, wireExplanation, type AgentRow } from "@/lib/agentPage"
+import { driftText, longContextMode, parseTokens, sessionRecordNote, wireExplanation, type AgentRow } from "@/lib/agentPage"
 import { EFFORT_LABELS, TIERS, tierEfforts, type AutoChoice, type Tier, type TierDraft } from "@/lib/tierModels"
 import { SelectField, type SelectOption } from "@/components/ui/SelectField"
 import { JoluButton } from "@/components/ui/JoluButton"
@@ -511,6 +511,13 @@ function PreviewBody({ row, models, sourceNotes, mainModel, onMainModel, routing
             </div>
           )
         })}
+        {/* 会话记录能力：不支持的就说清楚，别让用户在活跃会话里找不到它却不知道为什么 */}
+        {sessionRecordNote(row.agent) && (
+          <div className="flex items-center gap-2.5 rounded-[10px] bg-jolu-side px-3.5 py-2.5">
+            <Info aria-hidden className="size-3.5 shrink-0 text-jolu-muted" />
+            <span className="text-meta text-jolu-muted">{sessionRecordNote(row.agent)}</span>
+          </div>
+        )}
       </div>
 
       {previewError && <p className="text-meta text-jolu-danger">写入预览读取失败：{previewError}</p>}

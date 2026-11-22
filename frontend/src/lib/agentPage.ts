@@ -235,6 +235,47 @@ export function customPresetFor(agent: string): CustomAgentPreset | null {
   return CUSTOM_AGENT_PRESETS.find((preset) => preset.id === agent) ?? null
 }
 
+/**
+ * 这家工具能不能在「活跃会话」里留下记录。
+ *
+ * 为什么要单独声明而不是「没数据就不显示」：`活跃会话` 只列真的读到会话的平台，
+ * 用户接了一家工具却发现那里永远没有它，会以为是坏了。把「不支持」明确说出来，
+ * 比让它静默消失诚实（AGENTS.md：能力不支持要明确表达）。
+ *
+ * 三档：
+ * - `observable`：有会话标识或用本地会话文件读到了（Claude Code / Codex / OpenCode /
+ *   ZCode / Kimi / Pi / dsh / Qoder）。默认就是这档，不需要列出。
+ * - `no-record`：**这个工具本身不产生会话记录**。Pencil 只有模型配置文件，没有会话存储。
+ * - `not-yet`：理论上能读，但 Jolu 还没接（Qwen / WorkBuddy）。
+ *
+ * 判据来自实测（2026-11-22）：Pencil 的 `~/.pencil` 只有 `models.json`；
+ * Qwen 与 WorkBuddy 本机未安装、无样本。
+ */
+export type SessionRecordCapability = "observable" | "no-record" | "not-yet"
+
+const SESSION_RECORD: Readonly<Record<string, SessionRecordCapability>> = {
+  pencil: "no-record",
+  qwen: "not-yet",
+  workbuddy: "not-yet",
+}
+
+/** 查一家工具的会话记录能力；没列出的都是 `observable`。 */
+export function sessionRecordCapability(agent: string): SessionRecordCapability {
+  return SESSION_RECORD[agent] ?? "observable"
+}
+
+/** 详情页那句说明；`observable` 返回 null（不占位置）。 */
+export function sessionRecordNote(agent: string): string | null {
+  switch (sessionRecordCapability(agent)) {
+    case "no-record":
+      return "这个工具只保存模型配置，不产生会话记录，所以它不会出现在模型路由的活跃会话里。"
+    case "not-yet":
+      return "它自己的会话记录格式还没接入 Jolu，所以暂时不会出现在活跃会话里；这不影响模型路由转发。"
+    default:
+      return null
+  }
+}
+
 /** 「接入会做什么」三条说明（画板 V5-2）：写哪里、原有的怎么保留、断开时怎么还原。 */
 export function wireExplanation(agent: string): { icon: "file" | "shield" | "undo"; text: string }[] {
   const undo = { icon: "undo" as const, text: "断开时只删除 Jolu 写入的键；接入后你自己改过的值不会被还原" }

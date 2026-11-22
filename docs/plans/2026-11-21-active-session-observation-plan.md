@@ -575,14 +575,43 @@ Kimi 的会话**不在 `requests` 表里** —— `native_sources` 从未采集�
 **测试**：内嵌由 Python `zstandard` 生成的真实压缩字节，不调外部 `zstd` 命令——靠外部命令
 会让测试在 CI 上静默跳过，等于没测。
 
-### 10.9 剩余（本机无样本或无会话文件）
+### 10.9 13 家的完整核对（2026-11-22 只读实测）
 
-| 工具 | 情况 |
-|---|---|
-| **WorkBuddy** | 本机未安装；且 `native_sources` 只采用量不采正文 |
-| **Qwen** | 本机未安装（`~/.qwen` 不存在），无样本 |
-| **Pencil** | 本机 `~/.pencil` 存在但**没有会话文件**，它是模型配置目录不是会话存储 |
+逐家查了本地目录与 `requests` / `gateway_route_log` 两张表：
 
-**能出现在活跃会话的 8 家**：Claude Code、Codex、ZCode、OpenCode、Qoder（走 `requests` 表）
-+ Kimi、Pi、dsh（走本地会话文件）。剩下 5 家里 3 家本机无样本、Pencil 无会话文件、
-WorkBuddy 需先补用量采集。
+| 工具 | 本地目录 | requests 条数 | 活跃会话可见 |
+|---|---|---:|---|
+| claude-code | ✅ | 3,987 | ✅ |
+| codex | ✅ | 3,916 | ✅ |
+| zcode | ✅ | 23,648 | ✅ |
+| opencode | ✅ | 132 | ✅ |
+| **gemini** | ✅ `~/.gemini`（**只有配置**） | **0** | ⚠️ 见下 |
+| **qoder** | ✅ | 2 | ✅ |
+| **qoder-cn** | ❌ 目录不存在 | **0** | ⚠️ 见下 |
+| kimi | ✅ | 0（走本地会话文件） | ✅ |
+| pi | ✅ | 0（走本地会话文件） | ✅ |
+| dsh | ✅ | 0（走本地会话文件） | ✅ |
+| pencil | ✅（**只有 models.json**） | 0 | ❌ 无会话概念 |
+| qwen | ❌ 未安装 | 0 | ❌ 未接入 |
+| workbuddy | ❌ 未安装 | 10（只有用量） | ❌ 未接入 |
+
+**gemini 与 qoder-cn 的情况与 Pencil 不同**：它们**本该有会话**（Gemini CLI 有会话文件、
+Qoder 有），但**本机从未用过它们**——`~/.gemini` 只有接线写进去的 `settings.json` 与 `.env`，
+没有任何会话文件；`gateway_route_log` 里也是 0 条。所以它们不是「不支持」，而是
+**本机没有数据**，等用户真用了就会出现在本地会话里（Gemini 走 `native_sources` 既有采集）。
+
+### 10.10 不支持的工具要明确标注
+
+`frontend/src/lib/agentPage.ts` 新增 `sessionRecordCapability()` / `sessionRecordNote()`，
+在 Agent 详情页「接入会做什么」下方给一句说明：
+
+| 档次 | 工具 | 说明文案 |
+|---|---|---|
+| `observable` | 其余 10 家 | 不显示（不占位置） |
+| `no-record` | **Pencil** | 「这个工具只保存模型配置，不产生会话记录…」 |
+| `not-yet` | **Qwen / WorkBuddy** | 「它自己的会话记录格式还没接入 Jolu…这不影响模型路由转发」 |
+
+**为什么必须标**：活跃会话只列真的读到会话的平台。用户接了一家工具却发现那里永远没有它，
+会以为是坏了。明确说明比静默消失诚实（AGENTS.md：能力不支持要明确表达）。
+
+判据来自实测：Pencil 的 `~/.pencil` 只有 `models.json`；Qwen 与 WorkBuddy 本机未安装。
