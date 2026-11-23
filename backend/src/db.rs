@@ -398,6 +398,9 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN resolved_from TEXT", []);
     // 请求时生效的 Profile 名（流水标「来自 Profile」）
     let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN profile TEXT", []);
+    // P2-4：路由决策的一句话解释（分组策略 / 选中成员 / 降级原因）。
+    // 纯增列、可空：旧流水为 NULL，界面按「没有解释」处理，行为与升级前一致。
+    let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN decision TEXT", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN activity_state TEXT NOT NULL DEFAULT 'done'", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN activity_updated_ms INTEGER", []);
     let _ = conn.execute(

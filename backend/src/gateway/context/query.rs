@@ -281,6 +281,7 @@ mod tests {
                 request_uid: Some(request_id),
                 resolved_from: None,
                 profile: None,
+                decision: None,
             },
         );
     }

@@ -191,16 +191,57 @@ P0-3 的 8 个场景（多账号、源端删除历史、Token 未提供、跨午
 
 ### P2 账号池与可解释路由
 
+**当前状态：🟡 P2 部分完成（2026-11-23）。** P2-1 三能力矩阵已产出、P2-2 的 `pace` 语义错误已修、P2-3 的失败转移关联已有固定样本、P2-4 的决策解释已入流水。缺的是**真实转发的端到端记录**——除 WorkBuddy CN 窄场景外，其余平台的「连接 → 选路 → 生成」都没有真实账号样本。
+
 **需求与任务**
 
 - P2-1 核实每类连接是否同时具备额度查询、模型发现和实际转发能力，识别授权过期、地区、协议和模型限制。
+  - **状态：✅ 代码事实核查完成（2026-11-23）。** 产出 [连接能力矩阵](../specs/2026-11-23-connection-capability-matrix.md)：12 类连接 × 三列（额度查询 / 模型发现 / 实际转发），逐条带代码出处。
+    - **额度查询 11/12**（custom 无官方额度概念）
+    - **模型发现 7**（zcode / grok / gemini / qoder / trae / workbuddy 实时拉取 + custom 上游 `/models`；其余用内置清单——Claude Code / Codex 的模型由 CLI 决定，不是账号决定的）
+    - **实际转发 10/11**（custom 走 api 分支）
+    - **三个不对称点**（均属有意设计）：claude / codex / opencode 的协议限制在 `wire.rs` 直接拒绝而非悄悄转错；qoder / trae / workbuddy 的模型清单是「富缓存」（含 display_name + 凭证指纹），`providers.rs:127` 特意不覆盖
+    - **真实链路验证只覆盖 WorkBuddy CN 窄场景**，这是验收缺口而非实现缺口
 - P2-2 评估并完善分组策略，明确余额、单位、重置时间、快照过期、账号健康、限流及并发的含义。数据不足时采用明确的回退规则，并提供原因。
+  - **状态：✅ 已修一处真缺陷（2026-11-23）。**
+    - **问题**：`quota_snapshot::Snapshot` 只存 `resets_at_ms` + `exhausted` 布尔，没有剩余量。于是 `pace`（语义是「剩余最多先用」）只能退化成「重置时间最晚先用」——代码注释自己写着「magpie pace 的近似」。A 刚重置但已烧掉 90%、B 两天前重置但只用 30% 时，按重置时间会先选 A，正好选错。
+    - **修复**：`Snapshot` 增加 `remaining_percent`，取**所有窗口里最紧的那个**的 `100 - used_percent`（木桶效应：5h 用到 95% 而周窗口只用 10% 时，这个账号实际快不能用了，取平均会误判成宽裕）。同时增加 15 分钟有效期——过期快照返回 None，`pace` 如实降级为 order 并说明，不拿旧数据假装知道剩余量。
+    - **接口**：`ordered_members` 新增 `remaining_of` 参数；`QuotaWindow.used_percent` 一直是有的，只是以前没往快照里存。
+    - **测试**（6 条）：`pace_orders_by_remaining_headroom_not_reset_time`、`pace_does_not_fall_back_to_reset_order_when_headroom_disagrees`（反向锁住「不偷偷退回按重置时间排序」）、`pace_puts_members_without_headroom_last_and_says_so`、`remaining_takes_the_tightest_window_not_the_average`、`remaining_is_none_when_no_window_reports_usage`、`a_stale_snapshot_stops_reporting_remaining`。
+    - **已验证有效性**：把 `pace` 改回 `sort_by_key(Reverse(resets_of(...)))`，后两条 pace 测试立刻失败（`剩余 60% 的 a 先用` 左 b 右 a）。
+    - **仍未明确**：`smart` 与 `pace` 的差别现在只剩「重置最近 vs 剩余最多」；两者的快照过期策略一致（都是 15 分钟）。「账号健康」与「并发」只在 `rest_member` / `key_slots` 层处理，没进分组策略。
 - P2-3 复核会话亲和、失败转移、重试和流式中断。记录原始请求及各次尝试的关联，避免将一次请求当作多次成功或重复消耗。
+  - **状态：✅ 已补固定样本（2026-11-23）。**
+    - **已有**：亲和只在成功时绑定（`wire.rs:1071` / `1183` 的 `if response.status().is_success() { bind(entry) }`）；`request_uid` 在重试循环里随 `meta` clone 传递，多次尝试共享身份。
+    - **本轮补**：`one_request_failing_over_many_members_counts_once_but_records_every_attempt`（三成员 a→b→c，`request_uid=7` 全部共享；统计 `today=1 / reroutes=1 / errors=0`；流水保留 3 行可解释）与 `attempts_are_grouped_by_request_and_keep_per_attempt_source`（两次请求三条尝试，能看出每组成员各自试过几次）。
+    - **区分**：流水一行一次**尝试**，统计一次**请求**，靠 `request_uid` 而非「时间相近」推断。
+    - **仍未做**：流式中断下的失败转移（第一次尝试已开始流式输出后断，是否该换下一个成员）没有固定样本，也没有代码处理——当前只在**响应头**阶段判断 `is_retryable_status`。
 - P2-4 让已有路由查询能解释选中的来源、账号、模型、策略及结果。缺数据时保留未知。涉及新界面遵循画板约束。
+  - **状态：✅ 已补决策解释（2026-11-23）。**
+    - **缺口**：流水已有来源（`source`）、连接（`connection_id`）、模型（`requested_model` / `upstream_model`）、结果（`result` / `status_code`）、解析方式（`resolved_from`）、Profile，**唯独没有「策略」**——分组策略与选它的原因只在失败时用作错误文案（`wire.rs:791`），成功时丢弃。
+    - **修复**：`gateway_route_log` 新增 `decision TEXT` 列（纯增列、可空，旧流水为 NULL）。分组选路后写入 `分组 {slug} · 策略 {strategy} · {降级原因}`。普通单来源请求保持 NULL——不为它编一句话。
+    - **前端**：`RouteLogPanel` 把决策解释挂到请求模型那一列的 tooltip（与「裸名」说明合并），并加一个「分组」小标记提示有解释可看。**没有新增列**，不改布局。
+    - **测试**：`a_group_decision_explanation_round_trips_through_the_log`、`a_plain_request_has_no_decision_explanation`。
+    - **待确认**：「分组」标记与 tooltip 是路由流水页的新界面元素，该页签本身没有 V6 画板。按 AGENTS.md 标「待确认」。
 
 **交付与验收**
 
 对相同条件使用固定场景验证选路、额度过期、限流、失败转移、并发与账号切换；重试记录和统计能正确对应；至少对有授权样本的来源执行端到端请求并记录实际模型、账号、计费及结果。未提供用量时明确标记。
+
+**当前验收结论：🟡 P2 部分完成（2026-11-23）。** 逐项对照：
+
+| 验收项 | 状态 |
+|---|---|
+| 固定场景验证选路 | ✅ `pace` / `smart` / `usage` / `rotate` / `order` 均有测试 |
+| 额度过期 | ✅ 快照 15 分钟过期返回 None，`pace` 如实降级 |
+| 限流 | ✅ `rest_member` 休置 + `Cooldowns`，测试 `affinity_rejects_instead_of_switching_when_account_rate_limited` |
+| 失败转移 | ✅ 本轮 2 条固定样本 |
+| 并发 | 🟡 `key_slots` 在途并发限制有实现，未补固定样本 |
+| 账号切换 | ✅ P1-3 已覆盖 |
+| 重试记录与统计正确对应 | ✅ `request_uid` 分组，本轮 2 条样本 |
+| **端到端真实生成** | ⚠️ **只有 WorkBuddy CN 窄场景**，其余来源无真实账号样本 |
+
+最后一项是本阶段的主要缺口，且需要真实账号才能补。按计划 §3「真实账号调用应使用明确授权的账号和环境」——没有样本时记录缺口，不伪造通过。
 
 ### P3 Agent 工具调用和 MCP
 

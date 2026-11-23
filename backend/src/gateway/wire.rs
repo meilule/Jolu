@@ -414,6 +414,7 @@ pub(crate) fn record_route(
             // 不带来源前缀、也不是分组的模型 id 走的是裸名解析（目录里第一个暴露它的来源 / 默认来源）
             resolved_from: (!meta.requested_model.contains('/')).then_some("bare"),
             profile: crate::gateway::profiles::active(),
+            decision: meta.decision.clone(),
         },
     )
 }
@@ -586,7 +587,7 @@ pub(crate) async fn handle(
     // 以下选路与转发包在一个 async 块里：块内的 `return` 只结束这个块，
     // 返回的响应统一在块外套上 Token 计量。
     let response = async {
-    let meta = RouteMeta {
+    let mut meta = RouteMeta {
         request_uid,
         session: session_ref.clone(),
         agent: agent.clone(),
@@ -595,6 +596,8 @@ pub(crate) async fn handle(
         requested_model: model.clone(),
         connection_id: None,
         client_key,
+        // 决策解释在候选列表排定后才知道（分组策略、降级原因），稍后填入。
+        decision: None,
     };
 
     // 模型池快照：拿不到数据库锁时沿用旧索引（与观测模式 KeyIndex 同策略）
@@ -688,10 +691,16 @@ pub(crate) async fn handle(
                 .unwrap_or(0)
         };
         let (mut ordered, note) = {
-            // smart / pace 的额度快照：成员 slug → 连接 id → 下一次重置时间
+            // 分组策略的额度快照：成员 slug → 连接 id
             let resets_of = |slug: &str| -> Option<i64> {
                 let connection_id = pool.iter().find(|e| e.slug == slug)?.connection_id.clone();
                 crate::gateway::quota_snapshot::resets_of(&connection_id)
+            };
+            // `pace` 的排序依据：真实剩余百分比。快照过期时 `remaining_percent` 返回 None，
+            // 该成员会被 `ordered_members` 如实排到有数据的成员之后。
+            let remaining_of = |slug: &str| -> Option<f64> {
+                let connection_id = pool.iter().find(|e| e.slug == slug)?.connection_id.clone();
+                crate::gateway::quota_snapshot::remaining_percent(&connection_id)
             };
             let mut rotate = crate::gateway::routing_groups::rotate_state();
             // Cap hold：额度快照显示已用满（有窗口到 100% 且重置时间还没到）的成员降到末尾。
@@ -708,6 +717,7 @@ pub(crate) async fn handle(
                 &mut rotate,
                 &usage_of,
                 &resets_of,
+                &remaining_of,
                 &exhausted_of,
                 now_ms,
                 bound.as_deref(),
@@ -721,6 +731,12 @@ pub(crate) async fn handle(
             (Some(note), Some(intent)) => Some(format!("{intent}；{note}")),
             (note, intent) => note.or(intent),
         };
+        // P2-4：把「为什么这样排」写进流水。策略名 + 降级原因合成一句话，
+        // 事后查证时不用再猜是哪个策略、有没有降级。
+        meta.decision = Some(match group_note.as_deref() {
+            Some(note) => format!("分组 {} · 策略 {} · {note}", group.slug, group.strategy),
+            None => format!("分组 {} · 策略 {}", group.slug, group.strategy),
+        });
         let (expanded, skipped) = crate::gateway::routing_groups::expand(&ordered, 0, &|slug| {
             deps.db
                 .lock()

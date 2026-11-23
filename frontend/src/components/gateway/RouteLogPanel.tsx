@@ -123,14 +123,23 @@ function duration(ms: number | null): string {
 function RouteRow({ row, connection, attempt }: { row: RouteLogDto; connection: Connection | undefined; attempt?: string }) {
   const model = row.upstream_model ?? (row.source ? modelPart(row.requested_model, row.source) : null)
   const name = connection?.baseName ?? row.source
+  // P2-4：把「模型名怎么解析的」与「为什么选这个成员」合成一个 tooltip
+  const modelTitle = [
+    row.resolved_from === "bare"
+      ? `${row.requested_model}（裸名：按模型目录第一个来源或默认来源解析）`
+      : row.requested_model,
+    row.decision ? `路由决策：${row.decision}` : null,
+  ].filter(Boolean).join("\n")
   return (
     <div className={cn(COLUMNS, "h-9 items-center border-t border-jolu-table-divider px-4")}>
       <span className="tabular-nums text-[11px] text-jolu-muted">{new Date(row.ts).toLocaleTimeString("zh-CN", { hour12: false })}</span>
       <span className="truncate text-[11.5px] text-jolu-text">{row.agent ? agentLabel(row.agent) : "—"}</span>
-      <span className="flex min-w-0 items-center gap-1" title={row.resolved_from === "bare" ? `${row.requested_model}（裸名：按模型目录第一个来源或默认来源解析）` : row.requested_model}>
+      <span className="flex min-w-0 items-center gap-1" title={modelTitle}>
         <span className="truncate text-[11px] text-jolu-muted">{row.requested_model}</span>
         {row.resolved_from === "bare" && <span className="shrink-0 rounded bg-jolu-track px-[5px] text-[8.5px] leading-3 text-jolu-muted">裸名</span>}
         {row.profile && <span className="shrink-0 rounded bg-jolu-track px-[5px] text-[8.5px] leading-3 text-jolu-muted" title={`请求时生效的 Profile：${row.profile}`}>来自 Profile</span>}
+        {/* 经过分组选路的请求带一个小标记：让人知道这一列的 title 里有决策解释可看 */}
+        {row.decision && <span className="shrink-0 rounded bg-jolu-track px-[5px] text-[8.5px] leading-3 text-jolu-muted">分组</span>}
       </span>
       <span className="flex min-w-0 items-center gap-1.5">
         <span className="truncate text-[11.5px] text-jolu-text">{name ? `${name}${model ? ` · ${model}` : ""}` : "—"}</span>

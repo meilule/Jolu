@@ -237,7 +237,7 @@ mod tests {
         NewEntry {
             agent: Some("codex"), requested_model: "kimi/k2", source: Some("kimi"), upstream_model: Some("k2"),
             status_code: Some(200), result: "ok", duration_ms: Some(10), connection_id: Some(conn_id),
-            session_platform: Some(platform), session_id: Some(session), client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None }
+            session_platform: Some(platform), session_id: Some(session), client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None, decision: None }
     }
 
     /// 方案 C：只在本地会话文件里、从未经过网关的会话也要出现在活跃会话里。

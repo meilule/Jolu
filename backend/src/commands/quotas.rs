@@ -252,13 +252,15 @@ pub(crate) async fn finish_quota_query(
     let outcome = (success || unauthorized).then_some(success);
     let changed = with_database(pool, move |conn| connections::record_query_result(conn, &update_id, &expected, outcome)).await?;
     if changed { let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ()); }
-    // 额度快照（路由分组 smart / pace / cap hold 的数据源）：成功查询把最早的重置时间
-    // 与「是否已用满」记入注册表。重置时间缺省的来源两样都不写，路由层如实降权/不降权。
+    // 额度快照（路由分组 smart / pace / cap hold 的数据源）：成功查询把最早的重置时间、
+    // 剩余百分比与「是否已用满」记入注册表。重置时间缺省的来源不写快照，路由层如实降级；
+    // 剩余百分比缺省时只影响 `pace`（退回按 order），不影响 smart 与 cap hold。
     if let quota::QuotaState::Ok { windows, .. } = &state {
         if let Some(resets) = crate::gateway::quota_snapshot::earliest_reset_from_windows(windows) {
             let now_ms = chrono::Utc::now().timestamp_millis();
             let exhausted = crate::gateway::quota_snapshot::exhausted_from_windows(windows, now_ms);
-            crate::gateway::quota_snapshot::record(&id, resets, exhausted);
+            let remaining = crate::gateway::quota_snapshot::remaining_from_windows(windows);
+            crate::gateway::quota_snapshot::record(&id, resets, remaining, exhausted);
         }
     }
     if app.state::<Cfg>().0.get().island_connection_id.as_deref() == Some(id.as_str()) {

@@ -40,6 +40,12 @@ pub struct RouteLogEntry {
     pub resolved_from: Option<String>,
     /// 请求发生时生效的 Profile（应用 Profile 后、手动改接线前）
     pub profile: Option<String>,
+    /// 路由决策的一句话解释（P2-4）：分组策略、选中的成员、降级原因。
+    ///
+    /// 只在该请求确实经过分组 / 有需要说明的降级时才有值；普通单来源请求为 None。
+    /// 与 `resolved_from` 互补：后者说「模型名怎么解析到来源」，这一列说
+    /// 「为什么是这个成员」。两者合起来才是完整的可解释路由。
+    pub decision: Option<String>,
 }
 
 pub struct NewEntry<'a> {
@@ -62,6 +68,8 @@ pub struct NewEntry<'a> {
     pub resolved_from: Option<&'a str>,
     /// 见 [`RouteLogEntry::profile`]
     pub profile: Option<&'a str>,
+    /// 见 [`RouteLogEntry::decision`]
+    pub decision: Option<&'a str>,
 }
 
 /// 写入一条流水（时间取现在），返回新行 id（写入失败为 None）。
@@ -78,8 +86,8 @@ pub fn record(conn: &Connection, entry: NewEntry<'_>) -> Option<i64> {
 pub fn record_at(conn: &Connection, ts: i64, entry: NewEntry<'_>) -> Option<i64> {
     let result = conn.execute(
         "INSERT INTO gateway_route_log(ts, agent, requested_model, source, upstream_model, status_code, result, duration_ms,
-                                       connection_id, session_platform, session_id, client_key, request_id, resolved_from, profile, request_uid)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                                       connection_id, session_platform, session_id, client_key, request_id, resolved_from, profile, request_uid, decision)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             ts,
             entry.agent,
@@ -97,6 +105,7 @@ pub fn record_at(conn: &Connection, ts: i64, entry: NewEntry<'_>) -> Option<i64>
             entry.resolved_from,
             entry.profile,
             entry.request_uid,
+            entry.decision,
         ],
     );
     let row_id = match result {
@@ -228,6 +237,7 @@ pub(crate) struct OwnedEntry {
     pub request_uid: Option<i64>,
     pub resolved_from: Option<&'static str>,
     pub profile: Option<String>,
+    pub decision: Option<String>,
 }
 
 impl OwnedEntry {
@@ -248,6 +258,7 @@ impl OwnedEntry {
             request_uid: self.request_uid,
             resolved_from: self.resolved_from,
             profile: self.profile.as_deref(),
+            decision: self.decision.as_deref(),
         }
     }
 }
@@ -381,7 +392,7 @@ pub fn mark_unfinished(conn: &Connection, id: i64, end: StreamEnd) -> rusqlite::
 }
 
 const COLUMNS: &str = "id, ts, agent, requested_model, source, upstream_model, status_code, result, duration_ms,
-                       connection_id, session_platform, session_id, client_key, request_id, resolved_from, profile, request_uid";
+                       connection_id, session_platform, session_id, client_key, request_id, resolved_from, profile, request_uid, decision";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RouteLogEntry> {
     Ok(RouteLogEntry {
@@ -402,6 +413,7 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RouteLogEntry> {
         resolved_from: r.get(14)?,
         profile: r.get(15)?,
         request_uid: r.get(16)?,
+        decision: r.get(17)?,
     })
 }
 
@@ -683,7 +695,7 @@ mod tests {
     fn entry(result: &str) -> NewEntry<'_> {
         NewEntry {
             agent: None, requested_model: "a/b", source: None, upstream_model: None, status_code: None, result,
-            duration_ms: None, connection_id: None, session_platform: None, session_id: None, client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None }
+            duration_ms: None, connection_id: None, session_platform: None, session_id: None, client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None, decision: None }
     }
 
     fn db() -> Connection {
@@ -781,7 +793,7 @@ mod tests {
             agent: None, requested_model: "a/b".into(), source: None, upstream_model: None,
             status_code: Some(200), result: "ok".into(), duration_ms: None, connection_id: None,
             session_platform: None, session_id: None, client_key: None, request_id: None,
-            request_uid: Some(7), resolved_from: None, profile: None,
+            request_uid: Some(7), resolved_from: None, profile: None, decision: None,
         };
         let row = queue_record(&db, 1_000, owned);
         let stream = futures_util::stream::iter(vec![
@@ -922,11 +934,137 @@ mod tests {
         assert_eq!(day_overview(&conn, 100, 0, 200).unwrap().today, 3);
     }
 
+    /// P2-3：一次用户请求在分组成员间失败转移，多次尝试必须共用同一个 `request_uid`，
+    /// 统计按「一次请求」计数、`reroutes` 记转移次数、`last_error` 取最后一次尝试。
+    ///
+    /// 这是 P2 交付要求里「重试记录和统计能正确对应」的核心：流水一行一次**尝试**，
+    /// 但统计一次**请求**。区分靠 `request_uid`（P0-4 加的持久身份），
+    /// 不是「时间相近」的推断。
+    #[test]
+    fn one_request_failing_over_many_members_counts_once_but_records_every_attempt() {
+        let conn = db();
+        let insert = |ts: i64, source: &str, result: &str, request_uid: i64, connection_id: &str| {
+            conn.execute(
+                "INSERT INTO gateway_route_log(ts, agent, requested_model, source, result, request_uid, connection_id)
+                 VALUES(?1, 'claude-code', 'group/trio', ?2, ?3, ?4, ?5)",
+                params![ts, source, result, request_uid, connection_id],
+            )
+            .unwrap();
+        };
+        // 同一 request_uid=7，三个成员依次尝试：a 失败 → b 失败 → c 成功
+        insert(100, "a", "failed", 7, "c-a");
+        insert(101, "b", "failed", 7, "c-b");
+        insert(102, "c", "ok", 7, "c-c");
+
+        let day = day_overview(&conn, 0, 0, 1000).unwrap();
+        assert_eq!(day.today, 1, "三次尝试是一次请求");
+        assert_eq!(day.reroutes, 1, "发生了转移");
+        assert_eq!(day.errors, 0, "最终成功，不算错误请求");
+        assert!(day.last_error.is_none(), "成功时不该有 last_error");
+
+        // 流水本身保留全部三次尝试（可解释性）
+        let rows = recent(&conn, 10).unwrap();
+        assert_eq!(rows.len(), 3, "流水一行一次尝试，不能合并");
+        assert!(rows.iter().all(|r| r.request_uid == Some(7)), "三次尝试共享身份");
+        let sources: Vec<&str> = rows.iter().filter_map(|r| r.source.as_deref()).collect();
+        assert_eq!(sources, ["c", "b", "a"], "最近在前");
+
+        // 全部失败：仍是一次请求，`last_error` 取最后一次尝试
+        let insert2 = |ts: i64, source: &str, result: &str| {
+            conn.execute(
+                "INSERT INTO gateway_route_log(ts, agent, requested_model, source, result, request_uid, connection_id)
+                 VALUES(?1, 'codex', 'group/trio', ?2, ?3, 8, 'c-')",
+                params![ts, source, result],
+            )
+            .unwrap();
+        };
+        insert2(200, "a", "failed");
+        insert2(201, "b", "failed");
+        let day = day_overview(&conn, 0, 0, 1000).unwrap();
+        assert_eq!(day.today, 2, "第二次请求");
+        assert_eq!(day.errors, 1, "这次请求最终失败");
+        assert_eq!(day.last_error.as_ref().map(|e| e.ts), Some(201), "取最后一次尝试");
+    }
+
+    /// P2-3：失败转移时，流水能看出「每个成员各自试过几次」——这是可解释路由的前提。
+    #[test]
+    fn attempts_are_grouped_by_request_and_keep_per_attempt_source() {
+        let conn = db();
+        for (uid, source, result) in [
+            (11, "zcode/zai", "failed"),
+            (11, "workbuddy/wb", "ok"),
+            (12, "zcode/zai", "ok"),
+        ] {
+            conn.execute(
+                "INSERT INTO gateway_route_log(ts, requested_model, source, result, request_uid)
+                 VALUES(?1, 'group/dual', ?2, ?3, ?4)",
+                params![100 + uid, source, result, uid],
+            )
+            .unwrap();
+        }
+        let rows = recent(&conn, 10).unwrap();
+        // 两次请求、三条尝试
+        assert_eq!(rows.len(), 3);
+        let uid11: Vec<_> = rows.iter().filter(|r| r.request_uid == Some(11)).collect();
+        assert_eq!(uid11.len(), 2, "第一次请求两次尝试");
+        assert!(uid11.iter().any(|r| r.source.as_deref() == Some("zcode/zai") && r.result == "failed"));
+        assert!(uid11.iter().any(|r| r.source.as_deref() == Some("workbuddy/wb") && r.result == "ok"));
+        let day = day_overview(&conn, 0, 0, 1000).unwrap();
+        assert_eq!(day.today, 2, "两次请求");
+        assert_eq!(day.reroutes, 1, "只有第一次转移过");
+    }
+
+    /// P2-4：路由决策的解释要能落到流水里并可读回。
+    ///
+    /// 缺了这一列时，用户只能看到「用了 workbuddy/wb」，看不出「为什么是它」——
+    /// 是分组策略排的？额度用满被降权了？还是亲和把它提到的前面？这些恰恰是
+    /// 「可解释路由」要回答的问题。
+    #[test]
+    fn a_group_decision_explanation_round_trips_through_the_log() {
+        let conn = db();
+        record(&conn, NewEntry {
+            agent: Some("claude-code"),
+            requested_model: "group/trio",
+            source: Some("wb"),
+            upstream_model: Some("deepseek-v4"),
+            status_code: Some(200),
+            result: "ok",
+            duration_ms: Some(42),
+            connection_id: Some("c-wb"),
+            session_platform: Some("claude"),
+            session_id: Some("s1"),
+            client_key: None,
+            request_id: Some(1),
+            request_uid: Some(1),
+            resolved_from: None,
+            profile: None,
+            decision: Some("分组 trio · 策略 pace · 1 个成员额度已用满，已排到候选末尾"),
+        });
+        let rows = recent(&conn, 1).unwrap();
+        let decision = rows[0].decision.as_deref().expect("决策解释应保留");
+        assert!(decision.contains("策略 pace"), "要能看出用的哪个策略：{decision}");
+        assert!(decision.contains("额度已用满"), "要能看出降级原因：{decision}");
+    }
+
+    /// 普通单来源请求没有决策解释——不要为它编一句话。
+    #[test]
+    fn a_plain_request_has_no_decision_explanation() {
+        let conn = db();
+        record(&conn, NewEntry {
+            agent: Some("codex"), requested_model: "kimi/kimi-k2", source: Some("kimi"),
+            upstream_model: Some("kimi-k2"), status_code: Some(200), result: "ok",
+            duration_ms: Some(10), connection_id: Some("c1"), session_platform: None, session_id: None,
+            client_key: None, request_id: None, request_uid: None,
+            resolved_from: Some("bare"), profile: None, decision: None,
+        });
+        assert_eq!(recent(&conn, 1).unwrap()[0].decision, None);
+    }
+
     #[test]
     fn recent_is_newest_first_and_keeps_metadata() {
         let conn = db();
-        record(&conn, NewEntry { agent: Some("codex"), requested_model: "kimi/kimi-k2", source: Some("kimi"), upstream_model: Some("kimi-k2"), status_code: Some(200), result: "ok", duration_ms: Some(42), connection_id: Some("c1"), session_platform: Some("codex"), session_id: Some("s1"), client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None });
-        record(&conn, NewEntry { agent: None, requested_model: "nope/m", source: None, upstream_model: None, status_code: Some(404), result: "rejected", duration_ms: None, connection_id: None, session_platform: None, session_id: None, client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None });
+        record(&conn, NewEntry { agent: Some("codex"), requested_model: "kimi/kimi-k2", source: Some("kimi"), upstream_model: Some("kimi-k2"), status_code: Some(200), result: "ok", duration_ms: Some(42), connection_id: Some("c1"), session_platform: Some("codex"), session_id: Some("s1"), client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None, decision: None });
+        record(&conn, NewEntry { agent: None, requested_model: "nope/m", source: None, upstream_model: None, status_code: Some(404), result: "rejected", duration_ms: None, connection_id: None, session_platform: None, session_id: None, client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None, decision: None });
         let rows = recent(&conn, 10).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].result, "rejected");
@@ -1093,7 +1231,7 @@ mod tests {
         let link = |model: &'static str, conn_id: &'static str, session: &'static str| NewEntry {
             agent: Some("codex"), requested_model: model, source: Some("kimi"), upstream_model: None, status_code: Some(200),
             result: "ok", duration_ms: None, connection_id: Some(conn_id), session_platform: Some("codex"), session_id: Some(session),
-            client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None };
+            client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None, decision: None };
         record(&conn, link("kimi/a", "c1", "s1"));
         record(&conn, link("kimi/b", "c1", "s1"));
         record(&conn, link("kimi/a", "c2", "s1"));

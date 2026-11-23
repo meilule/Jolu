@@ -238,6 +238,11 @@ export interface RouteLogDto {
   resolved_from?: string | null
   /** 请求时生效的 Profile 名 */
   profile?: string | null
+  /**
+   * 路由决策的一句话解释（P2-4）：分组策略、选中成员、降级原因。
+   * 只在经过分组或确有降级时有值；普通单来源请求为 null。
+   */
+  decision?: string | null
 }
 
 /** 路由流水的一页（与后端 `RouteLogPage` 一致）。 */

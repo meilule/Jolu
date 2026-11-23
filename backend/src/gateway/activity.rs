@@ -154,6 +154,9 @@ pub(crate) struct RouteMeta {
     /// 命中的命名客户端 Key 名（局域网共享时，鉴权中间件写入；只进路由流水，
     /// 供限额计数与来源归属；实时事件与在途快照不带它，避免把 Key 名广播给前端）
     pub client_key: Option<String>,
+    /// 路由决策的一句话解释（P2-4）：分组策略、选中的成员、降级原因。
+    /// 只进持久化流水，不进实时事件（事件已经有来源与模型，解释是事后查证用的）。
+    pub decision: Option<String>,
 }
 
 impl RouteMeta {
@@ -364,6 +367,7 @@ mod tests {
             connection_id: Some("conn-1".into()),
             session: Some(SessionRef { platform: "codex".into(), session_id: "ses-1".into() }),
             client_key: None,
+            decision: None,
         }
     }
 

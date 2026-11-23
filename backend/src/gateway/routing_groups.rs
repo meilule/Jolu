@@ -329,11 +329,15 @@ pub(crate) fn delete(conn: &Connection, slug: &str) -> Result<(), String> {
 /// `now_ms` 用于判定暂停是否到期；`exhausted_of` 表示成员的额度是否已用满
 /// （Cap hold：用满的成员降到候选末尾而不是剔除——全员用满时仍要给出候选，
 /// 让上游按真实原因报错，而不是网关说「没有可用成员」）。
+/// `remaining_of` 返回成员的剩余百分比（`0..=100`）；`pace` 用它排序，
+/// 缺值时如实降级为 order 并在 note 里说明——不要拿「重置时间最晚」冒充「剩余最多」。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn ordered_members(
     group: &RoutingGroup,
     rotate_state: &mut std::collections::HashMap<String, u64>,
     usage_of: &dyn Fn(&str) -> i64,
     resets_of: &dyn Fn(&str) -> Option<i64>,
+    remaining_of: &dyn Fn(&str) -> Option<f64>,
     exhausted_of: &dyn Fn(&str) -> bool,
     now_ms: i64,
     affinity_member: Option<&str>,
@@ -386,13 +390,28 @@ pub(crate) fn ordered_members(
             }
         }
         "pace" => {
-            // 剩余最多的先用：最近才重置的成员周期余量最足（magpie pace 的近似——
-            // 按「下一次重置最晚」排，等价于「刚重置完」的先用）
-            let known = members.iter().any(|m| resets_of(&m.slug).is_some());
-            if known {
-                members.sort_by_key(|m| std::cmp::Reverse(resets_of(&m.slug)));
+            // 剩余最多的先用。按**真实剩余百分比**排序（额度快照的 `remaining_percent`），
+            // 不按重置时间近似：A 刚重置但已烧掉 90%、B 两天前重置但只用 30% 时，
+            // 重置时间会把 A 排前面，而真正宽裕的是 B。
+            //
+            // 缺剩余量的成员排在已知的后面（`unwrap_or(-1.0)` 配合降序），
+            // 全员都缺时如实降级为 order。宁可按用户配置的顺序，也不拿假事实排序。
+            let known = members.iter().filter(|m| remaining_of(&m.slug).is_some()).count();
+            if known == 0 {
+                note = Some("策略「pace」需要各成员的额度剩余量（额度快照里没有，先刷新一次额度），已按 order 执行".into());
             } else {
-                note = Some("策略「pace」需要额度快照（先刷新一次额度），已按 order 执行".into());
+                if known < members.len() {
+                    note = Some(format!(
+                        "{} 个成员缺少额度剩余量，已排在有数据的成员之后",
+                        members.len() - known
+                    ));
+                }
+                // 降序：剩余多的在前；None 用 -1.0 垫底（剩余百分比不会为负）
+                members.sort_by(|a, b| {
+                    let left = remaining_of(&a.slug).unwrap_or(-1.0);
+                    let right = remaining_of(&b.slug).unwrap_or(-1.0);
+                    right.partial_cmp(&left).unwrap_or(std::cmp::Ordering::Equal)
+                });
             }
         }
         _ => {}
@@ -483,7 +502,7 @@ mod tests {
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0;
         let firsts: Vec<String> = (0..8)
-            .map(|_| ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None).0[0].slug.clone())
+            .map(|_| ordered_members(&group, &mut state, &no_usage, &no_resets, &no_remaining, &no_exhausted, 0, None).0[0].slug.clone())
             .collect();
         assert_eq!(firsts, ["a", "a", "a", "b", "a", "a", "a", "b"], "a 每轮 3 次、b 1 次");
     }
@@ -494,14 +513,19 @@ mod tests {
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0;
         rest_member("rest-test", "a", "m1", 1_000);
-        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 1_500, None);
+        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_remaining, &no_exhausted, 1_500, None);
         assert_eq!(ordered[0].slug, "b");
         assert!(note.unwrap().contains("休置"));
-        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 1_000 + MEMBER_REST_MS + 1, None);
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_remaining, &no_exhausted, 1_000 + MEMBER_REST_MS + 1, None);
         assert_eq!(ordered[0].slug, "a", "休置到期回到原位");
     }
 
     fn no_resets(_: &str) -> Option<i64> {
+        None
+    }
+
+    /// 没有额度剩余量的成员：`pace` 应当如实降级为 order，而不是拿重置时间冒充。
+    fn no_remaining(_: &str) -> Option<f64> {
         None
     }
 
@@ -591,13 +615,13 @@ mod tests {
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;
-        let (first, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None);
+        let (first, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_remaining, &no_exhausted, 0, None);
         assert_eq!(first[0].slug, "a");
-        let (second, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None);
+        let (second, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_remaining, &no_exhausted, 0, None);
         assert_eq!(second[0].slug, "b");
-        let (third, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None);
+        let (third, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_remaining, &no_exhausted, 0, None);
         assert_eq!(third[0].slug, "c");
-        let (fourth, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None);
+        let (fourth, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_remaining, &no_exhausted, 0, None);
         assert_eq!(fourth[0].slug, "a", "转满一圈回到开头");
     }
 
@@ -639,14 +663,14 @@ mod tests {
         let no_usage = |_: &str| 0;
         // a 用满时会话落到 b 并绑定 b
         let a_exhausted = |slug: &str| slug == "a";
-        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &a_exhausted, 0, Some("b"));
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_remaining, &a_exhausted, 0, Some("b"));
         assert_eq!(ordered[0].slug, "b");
         // a 恢复后：即使会话绑定在 b，也回到 a
-        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, Some("b"));
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_remaining, &no_exhausted, 0, Some("b"));
         assert_eq!(ordered[0].slug, "a", "顺序策略不被绑定粘住");
         // 其他策略仍保留绑定
         group.strategy = "rotate".into();
-        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, Some("b"));
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_remaining, &no_exhausted, 0, Some("b"));
         assert_eq!(ordered[0].slug, "b");
     }
 
@@ -663,10 +687,10 @@ mod tests {
         };
         let mut state = std::collections::HashMap::new();
         let usage = |slug: &str| if slug == "a" { 100 } else { 3 };
-        let (ordered, _) = ordered_members(&group, &mut state, &usage, &no_resets, &no_exhausted, 0, None);
+        let (ordered, _) = ordered_members(&group, &mut state, &usage, &no_resets, &no_remaining, &no_exhausted, 0, None);
         assert_eq!(ordered[0].slug, "b", "用量最少的排最前");
         // 会话已绑定 b：即使 a 用量更少，亲和也要把 b 提到最前（prompt cache）
-        let (ordered, _) = ordered_members(&group, &mut state, &usage, &no_resets, &no_exhausted, 0, Some("b"));
+        let (ordered, _) = ordered_members(&group, &mut state, &usage, &no_resets, &no_remaining, &no_exhausted, 0, Some("b"));
         assert_eq!(ordered[0].slug, "b");
     }
 
@@ -685,12 +709,17 @@ mod tests {
         let no_usage = |_: &str| 0i64;
         // a 的额度马上重置：先花 a，别浪费在等待上（magpie smart 语义）
         let resets = |slug: &str| if slug == "a" { Some(1_000) } else { Some(9_000) };
-        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &resets, &no_exhausted, 0, None);
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &resets, &no_remaining, &no_exhausted, 0, None);
         assert_eq!(ordered[0].slug, "a");
     }
 
+    /// `pace` 按**真实剩余量**排序，不按重置时间近似。
+    ///
+    /// 这正是旧实现的错处：a 刚重置（重置时间最早→旧逻辑排最后），但已经烧掉 90%；
+    /// b 两天前重置（重置时间最晚→旧逻辑排最前），但只用掉 30%。旧逻辑会先选 b 之后
+    /// 才想起 a，而真正宽裕的其实是 b——恰好蒙对；把两者对调就能看出差别。
     #[test]
-    fn pace_orders_latest_reset_first() {
+    fn pace_orders_by_remaining_headroom_not_reset_time() {
         let group = RoutingGroup {
             id: "g".into(),
             slug: "daily".into(),
@@ -702,10 +731,58 @@ mod tests {
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;
-        // b 刚重置完（重置最晚）：周期余量最足，先用 b（magpie pace 的近似）
+        // 重置时间：a 最早（旧逻辑会把它排最后）、b 最晚
         let resets = |slug: &str| if slug == "a" { Some(1_000) } else { Some(9_000) };
-        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &resets, &no_exhausted, 0, None);
-        assert_eq!(ordered[0].slug, "b");
+        // 真实剩余：a 只剩 10%、b 还有 70%
+        let remaining = |slug: &str| if slug == "a" { Some(10.0) } else { Some(70.0) };
+        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &resets, &remaining, &no_exhausted, 0, None);
+        assert_eq!(ordered[0].slug, "b", "剩余 70% 的 b 先用");
+        assert!(note.is_none(), "全员都有数据时不该有降级说明");
+    }
+
+    /// 反向：重置时间最晚的成员剩余量最低时，`pace` 必须把它排到后面。
+    ///
+    /// 这条锁住「不偷偷退回按重置时间排序」——如果实现被改回旧逻辑，上面的测试会因
+    /// 排序键相同而可能通过，这条会失败。
+    #[test]
+    fn pace_does_not_fall_back_to_reset_order_when_headroom_disagrees() {
+        let group = RoutingGroup {
+            id: "g".into(),
+            slug: "daily2".into(),
+            name: "日常".into(),
+            strategy: "pace".into(),
+            members: vec![member("a", "m1"), member("b", "m2")],
+            created_ms: 0,
+            intent: None,
+        };
+        let mut state = std::collections::HashMap::new();
+        let no_usage = |_: &str| 0i64;
+        // b 的重置时间最晚（按旧逻辑排最前），但它只剩 5%
+        let resets = |slug: &str| if slug == "a" { Some(1_000) } else { Some(9_000) };
+        let remaining = |slug: &str| if slug == "a" { Some(60.0) } else { Some(5.0) };
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &resets, &remaining, &no_exhausted, 0, None);
+        assert_eq!(ordered[0].slug, "a", "剩余 60% 的 a 先用，即使它重置时间更早");
+    }
+
+    /// 部分成员缺剩余量：有数据的排在前面，note 说明缺了几个。
+    #[test]
+    fn pace_puts_members_without_headroom_last_and_says_so() {
+        let group = RoutingGroup {
+            id: "g".into(),
+            slug: "daily3".into(),
+            name: "日常".into(),
+            strategy: "pace".into(),
+            members: vec![member("a", "m1"), member("b", "m2"), member("c", "m3")],
+            created_ms: 0,
+            intent: None,
+        };
+        let mut state = std::collections::HashMap::new();
+        let no_usage = |_: &str| 0i64;
+        let remaining = |slug: &str| if slug == "c" { None } else if slug == "a" { Some(20.0) } else { Some(80.0) };
+        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &remaining, &no_exhausted, 0, None);
+        let slugs: Vec<&str> = ordered.iter().map(|m| m.slug.as_str()).collect();
+        assert_eq!(slugs, ["b", "a", "c"], "80% → 20% → 未知垫底");
+        assert!(note.unwrap().contains("缺少额度剩余量"));
     }
 
     #[test]
@@ -721,11 +798,11 @@ mod tests {
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;
-        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None);
+        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_remaining, &no_exhausted, 0, None);
         assert_eq!(ordered.len(), 2, "降级为 order 仍给出全部成员");
         assert!(note.is_some_and(|n| n.contains("order")), "降级要在 trace 里说明");
         let pace = RoutingGroup { strategy: "pace".into(), ..group.clone() };
-        let (ordered, note) = ordered_members(&pace, &mut state, &no_usage, &no_resets, &no_exhausted, 0, None);
+        let (ordered, note) = ordered_members(&pace, &mut state, &no_usage, &no_resets, &no_remaining, &no_exhausted, 0, None);
         assert_eq!(ordered.len(), 2);
         assert!(note.is_some_and(|n| n.contains("order")));
     }
@@ -746,12 +823,12 @@ mod tests {
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;
         // 未到期：跳过 a
-        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 1_000, None);
+        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_remaining, &no_exhausted, 1_000, None);
         assert_eq!(ordered.len(), 1);
         assert_eq!(ordered[0].slug, "b");
         assert!(note.clone().is_some_and(|n| n.contains("暂停")), "{note:?}");
         // 已到期：恢复
-        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 9_000, None);
+        let (ordered, _) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_remaining, &no_exhausted, 9_000, None);
         assert_eq!(ordered.len(), 2);
     }
 
@@ -770,7 +847,7 @@ mod tests {
         };
         let mut state = std::collections::HashMap::new();
         let no_usage = |_: &str| 0i64;
-        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_exhausted, 1_000, None);
+        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_remaining, &no_exhausted, 1_000, None);
         assert_eq!(ordered.len(), 1, "全员暂停时不能给空列表");
         assert!(note.clone().is_some_and(|n| n.contains("全部处于暂停")), "{note:?}");
     }
@@ -790,7 +867,7 @@ mod tests {
         let no_usage = |_: &str| 0i64;
         // a 额度用满：降到末尾，但保留在候选里（全员用满时仍要给出候选）
         let exhausted = |slug: &str| slug == "a";
-        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &exhausted, 0, None);
+        let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &no_remaining, &exhausted, 0, None);
         assert_eq!(ordered.len(), 2, "不剔除");
         assert_eq!(ordered[0].slug, "b");
         assert_eq!(ordered[1].slug, "a");

@@ -55,6 +55,8 @@ pub(crate) async fn handle(
         requested_model: model_id.to_string(),
         connection_id: None,
         client_key,
+        // Gemini 入口不做分组选路，决策解释恒为 None（单来源直转）。
+        decision: None,
     };
     // V10 上下文观察：与 wire::handle 同一挂点。Gemini CLI 目前不带会话标识，所以实际不会建快照（执行文档 §6 已知缺口）
     let capture = meta.session.as_ref().map(|s| {
