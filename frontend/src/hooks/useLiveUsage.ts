@@ -26,6 +26,12 @@ export interface LiveUsage {
    * 未知为 null——是「未知」，不是 0。
    */
   todayTokens: number | null
+  /**
+   * 今日 Token 的覆盖情况（后端 `today_token_coverage`）。用于区分
+   * 「今天没有记录」（真零）与「有记录但都没给 Token」（未知）——两者 `todayTokens` 都是 null。
+   * 老后端不返回时为 null。
+   */
+  todayTokenCoverage: { known: number; unknown: number } | null
   deltaPhase: DeltaPhase
   sessions: SessionActivity[]
   activityCountText: string | null
@@ -63,6 +69,7 @@ export function useLiveUsage(platform: string, enabled = true, dnd = false, paus
   const [sessions, setSessions] = useState<SessionActivity[]>([])
   const [runningDelta, setRunningDelta] = useState<number | null>(null)
   const [today, setToday] = useState<number | null>(null)
+  const [todayCoverage, setTodayCoverage] = useState<{ known: number; unknown: number } | null>(null)
   const [windowSec, setWindowSec] = useState(90)
   const [live, setLive] = useState(false)
   const [attribution, setAttribution] = useState<AttributionDto | null>(null)
@@ -145,6 +152,7 @@ export function useLiveUsage(platform: string, enabled = true, dnd = false, paus
       cursor = u.cursor
       setLive(true)
       setToday(u.today_tokens)
+      setTodayCoverage(u.today_token_coverage ?? null)
       // 归因：本平台正在跑的那条已存连接。后端给的是唯一结论，缺失即「只说得出平台」。
       setAttribution(u.attribution ?? null)
       // 常驻增量段（胶囊的 +xx.xK）追的是「今日累计写入」：它与 running_tokens 不同，
@@ -263,6 +271,7 @@ export function useLiveUsage(platform: string, enabled = true, dnd = false, paus
     deltaPositive,
     runningDelta,
     todayTokens: today,
+    todayTokenCoverage: todayCoverage,
     deltaPhase: phase,
     // 会话数组只在事件到达时换新引用，逐帧数值由各行按 countKey 自行订阅。
     sessions,

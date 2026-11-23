@@ -54,10 +54,12 @@ export function OverviewPanel({ day, range, onRange, sessions, contexts, logRows
   const [search, setSearch] = useState("")
   const [status, setStatus] = useState<StatusFilter>("all")
   const partial = day?.partial ?? false
-  const limitNote = partial ? "（下限）" : ""
-  const change = day && day.yesterday > 0 ? day.today - day.yesterday : null
+  const identityIncomplete = day?.identity_incomplete ?? false
+  const uncertain = partial || identityIncomplete
+  const limitNote = identityIncomplete ? "（身份不完整）" : partial ? "（记录不完整）" : ""
+  const change = day && !uncertain && day.yesterday > 0 ? day.today - day.yesterday : null
   const running = sessions.filter((view) => view.running)
-  const rate = successRate(day?.today, day?.errors)
+  const rate = successRate(uncertain ? undefined : day?.today, uncertain ? undefined : day?.errors)
   const trendStart = Math.floor(nowMs / HOUR) * HOUR - (TREND_HOURS - 1) * HOUR
   const trend = hourlyTrend(logRows, trendStart, nowMs)
   const trendOk = trend.reduce((sum, bucket) => sum + bucket.ok, 0)
@@ -95,7 +97,7 @@ export function OverviewPanel({ day, range, onRange, sessions, contexts, logRows
 
       <div className="grid grid-cols-6 overflow-hidden rounded-xl border border-jolu-border">
         <Metric label={rangeText.period} value={day ? day.today.toLocaleString("zh-CN") : "—"} note={day ? `已结束 · ${change === null ? `${rangeText.compare} ${day.yesterday}${limitNote}` : `较${rangeText.compare} ${change >= 0 ? "+" : ""}${change}${limitNote}`}` : "读取中"} />
-        <Metric label="成功率" value={rate.value === null ? "—" : `${(rate.value * 100).toFixed(1)}%`} tone={rate.value !== null && rate.value < 1 ? "muted" : "ok"} note={rate.ok !== null && day ? `${rate.ok} / ${day.today} 成功${limitNote}` : "读取中"} />
+        <Metric label="成功率" value={rate.value === null ? "—" : `${(rate.value * 100).toFixed(1)}%`} tone={rate.value !== null && rate.value < 1 ? "muted" : "ok"} note={uncertain ? `无法准确计算${limitNote}` : rate.ok !== null && day ? `${rate.ok} / ${day.today} 成功` : "读取中"} />
         <Metric label="正在处理" value={String(running.length)} tone={running.length > 0 ? "ok" : undefined} note={running.length > 0 ? `来自 ${new Set(running.map((view) => view.session.session_id)).size} 个会话` : "现在没有进行中的请求"} />
         <Metric label="发生改道" value={day ? String(day.reroutes) : "—"} note={day && day.today > 0 ? `占${rangeText.period} ${((day.reroutes / day.today) * 100).toFixed(1)}%${limitNote}` : "失败后切换成员"} />
         <Metric label="最终失败" value={day ? String(day.errors) : "—"} tone={day && day.errors > 0 ? "danger" : undefined} note={day && day.errors > 0 ? undefined : `${rangeText.compare === "昨天" ? "今天" : "本期"}没有`} action={day && day.errors > 0 ? "查看失败流水 →" : undefined} onAction={onOpenLog} />

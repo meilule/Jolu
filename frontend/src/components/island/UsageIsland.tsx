@@ -53,6 +53,13 @@ export interface IslandData {
   deltaCountKey?: string
   deltaPhase?: DeltaPhase
   todayTokenText?: string | null
+  /**
+   * 今日 Token 的覆盖说明（P1-4）。两种用处：
+   * - 部分覆盖：`n / m 条有 Token`，提醒主数字是已知小计不是整日总量；
+   * - 全部未知：`n 条记录没有 Token`，此时 `todayTokenText` 是 `—`。
+   * 全覆盖 / 无记录时为 null。
+   */
+  todayTokenNote?: string | null
   sourceText?: string
   status?: { tone: "success" | "warn" | "danger"; label: string }
   /** 会话区标题。来源无可信运行状态时用「最近活跃会话」，不得称为运行中（§2.1.2） */
@@ -366,7 +373,7 @@ export function IslandExpanded({
       {data.todayTokenText && (
         <>
           <Divider />
-          <MetricRow label="本地今日 Token" value={data.todayTokenText} />
+          <MetricRow label="本地今日 Token" value={data.todayTokenText} hint={data.todayTokenNote} />
         </>
       )}
 

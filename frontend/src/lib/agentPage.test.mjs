@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { agentRow as makeAgentRow, buildAgentRows, agentRows, agentGridRows, customAgentRow, customPresetFor, isCustomAgent, CUSTOM_AGENT_PRESETS, longContextMode, longContextText, parseTokens, readHidden, sessionRecordCapability, sessionRecordNote, writeHidden, wireExplanation } from "./agentPage.ts"
+import { AGENT_PLATFORM, agentRow as makeAgentRow, buildAgentRows, agentRows, agentGridRows, customAgentRow, customPresetFor, isCustomAgent, CUSTOM_AGENT_PRESETS, longContextMode, longContextText, parseTokens, readHidden, sessionRecordCapability, sessionRecordNote, writeHidden, wireExplanation } from "./agentPage.ts"
 
 const agentRow = (agent, wiring, discovery, model = null, supported = true) => makeAgentRow(agent, wiring, discovery, model, supported)
 
@@ -228,4 +228,20 @@ test("会话记录能力：不支持的要明说，能观测的不占位置", ()
   // 说明文案要能区分「本来就没有」与「还没接」
   assert.match(sessionRecordNote("pencil"), /不产生会话记录/)
   assert.match(sessionRecordNote("qwen"), /还没接入/)
+})
+
+// AGENT_PLATFORM 是「会话 / Skills / 自动化里用的平台 id」，必须与后端实际写进
+// `requests.platform` 的值一致。dsh 曾经被映射成 "deepseek"（那是图标表的 id），
+// 结果详情页拿这个值去查会话与技能，永远返回 0。
+test("详情页的平台 id 与后端产出的 platform 一致", () => {
+  // 后端 dsh_sessions.rs 产出 platform="dsh"；qoder-cn 的数据挂在 "qoder" 下
+  assert.equal(AGENT_PLATFORM.dsh, "dsh", "dsh 的平台 id 是 dsh，不是图标表里的 deepseek")
+  assert.equal(AGENT_PLATFORM["claude-code"], "claude")
+  assert.equal(AGENT_PLATFORM.kimi, "kimi")
+  assert.equal(AGENT_PLATFORM.pi, "pi")
+  // 不能出现只有图标表才认识、后端不产出的 id
+  const backendPlatforms = new Set(["claude", "codex", "gemini", "opencode", "zcode", "kimi", "dsh", "pi", "pencil", "qoder", "qoder-cn", "qwen", "workbuddy"])
+  for (const [agent, platform] of Object.entries(AGENT_PLATFORM)) {
+    assert.ok(backendPlatforms.has(platform), `${agent} 映射到 ${platform}，但后端不会产出这个 platform`)
+  }
 })

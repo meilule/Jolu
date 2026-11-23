@@ -9,7 +9,7 @@ import { useConnections } from "@/hooks/useConnections"
 import { shouldRefreshConnection } from "@/lib/refreshScope"
 import { useApiUsage, useBalance, useCostEstimate, useQuota } from "@/hooks/useQuota"
 import { toQuotaWindows } from "@/lib/quotaMap"
-import { api, DEFAULT_ISLAND_LINKAGE, isTauri, listenEvent, type SourceBreakdownDto } from "@/lib/api"
+import { api, compactTokens, DEFAULT_ISLAND_LINKAGE, isTauri, listenEvent, type SourceBreakdownDto } from "@/lib/api"
 import type { MainContextDto } from "@/lib/events"
 import { SIGNAL_LABEL, SIGNAL_SHOW_MS, emptySignals, stepSignals, type ActiveSignal } from "@/lib/islandSignals"
 import { islandIdFromSearch, islandProfile } from "@/lib/islandProfile"
@@ -18,7 +18,7 @@ import type { IslandMode, PlatformId } from "@/types"
 import { platformConfig, isFetchOnlyPlatform } from "@/lib/platforms"
 import { useSourceMetrics } from "@/hooks/useSourceMetrics"
 import { useCollectionStatus } from "@/hooks/useCollectionStatus"
-import { balanceSnapshotTime, connectionQueries, islandActiveConnection, islandAttribution, islandConnectionStatus, islandCost, relayQuotaConnection } from "@/lib/islandPresentation"
+import { balanceSnapshotTime, connectionQueries, islandActiveConnection, islandAttribution, islandConnectionStatus, islandCost, relayQuotaConnection, todayTokenView } from "@/lib/islandPresentation"
 import { dockQuotaView } from "@/lib/dockQuotaView"
 import { carriedDeltaCountKey, carriedDeltaView, latchSessionDelta } from "@/lib/carriedDelta"
 import { islandWriting } from "@/lib/islandWriting"
@@ -304,11 +304,25 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
   const waitingIds = useAutomationWaiting(capsule)
   const automationWaiting = Boolean(active && waitingIds.has(active.id))
 
+  // P1-4：今日 Token 的三态。`todayTokens` 为 null 时靠 coverage 区分
+  // 「今天没有记录」（真零）与「有记录但都没给 Token」（未知）。纯逻辑在 islandPresentation。
+  const todayView = todayTokenView({
+    todayTokens: live.todayTokens,
+    coverage: live.todayTokenCoverage,
+    format: compactTokens,
+  })
+
   const data: IslandData = isTauri || live.live
     ? {
         platform: islandPlatform as PlatformId,
         platformName: platformConfig(islandPlatform as PlatformId).name,
-        localMetrics: nativeMonitor ? { token: live.todayTokenText, credits: sourceMetrics.data?.credits?.toLocaleString("zh-CN", { maximumFractionDigits: 4 }) ?? null, message: "本机留存记录；上报积分不等于余额。" } : undefined,
+        // 本机 Token 与岛尾那一行取同一个三态值（P1-4）：无记录真零、全未知给破折号，
+        // 部分覆盖时把说明接到 message 末尾，避免同屏出现两种口径。
+        localMetrics: nativeMonitor ? {
+          token: todayView.text,
+          credits: sourceMetrics.data?.credits?.toLocaleString("zh-CN", { maximumFractionDigits: 4 }) ?? null,
+          message: todayView.note ? `${todayView.note}；本机留存记录，上报积分不等于余额。` : "本机留存记录；上报积分不等于余额。",
+        } : undefined,
         kind: islandKind,
         // Auth 保持额度布局；未知值不回退成 API 用量。
         // 统一订阅条（批 6）：所有平台走同一条 quotas 渲染管道——
@@ -339,7 +353,7 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
           tokenLabel: officialApiUsage.state?.state === "ok" ? "组织今日 Token" : "本机今日 Token",
           token: officialApiUsage.state?.state === "ok"
             ? `${officialApiUsage.state.total_tokens.toLocaleString("en-US")} Token`
-            : live.todayTokenText,
+            : todayView.text,
           ...islandCost(officialApiUsage.state?.state === "ok" ? officialApiUsage.state.cost_usd : null, localCost),
         },
         balanceText: queries.balance && balance.state?.state === "ok" ? `${balance.state.balance.toFixed(2)} ${balance.state.currency}` : undefined,
@@ -350,7 +364,8 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
           : queries.balance ? balance.stale ? "余额可能已过期，请刷新" : balance.state && balance.state.state !== "ok" ? balance.state.reason : undefined
           : officialApiUsage.state?.state === "ok" ? officialApiUsage.state.cost_reason ?? undefined
           : officialApiUsage.state?.reason ?? (officialApiUsage.loading ? "正在查询组织用量，暂显示本机统计" : undefined),
-        todayTokenText: live.todayTokenText,
+        todayTokenText: todayView.text,
+        todayTokenNote: todayView.note,
         connectionLabel: active?.name ?? (profile.connection_id
           ? `${profile.connection_name ?? "所选连接"}（不可用）`
           : conn.label ?? undefined),

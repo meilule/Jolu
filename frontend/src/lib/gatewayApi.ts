@@ -65,8 +65,10 @@ export interface DayOverviewDto {
   errors: number
   /** 今天各 agent 的请求数 */
   by_agent: Record<string, number>
-  /** 流水只保留最近 1000 行：为 true 时这些数是下限 */
+  /** 流水保留范围可能不足以覆盖所选时间段 */
   partial: boolean
+  /** 部分流水缺少可靠请求身份，无法确定是否属于同一次请求 */
+  identity_incomplete: boolean
   last_error: RouteLogDto | null
 }
 
@@ -231,6 +233,7 @@ export interface RouteLogDto {
   session_id?: string | null
   /** 同一次网关请求的编号：分组成员转移时各次尝试共享它（进程内递增，重启后从头计；旧行为 null） */
   request_id?: number | null
+  request_uid?: number | null
   /** `bare`：请求用的是不带来源前缀的裸名（目录第一个来源或默认来源兜底） */
   resolved_from?: string | null
   /** 请求时生效的 Profile 名 */

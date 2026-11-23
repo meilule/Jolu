@@ -16,12 +16,15 @@ const row = (over = {}) => ({
 
 test("finalAttempts 保留无分组的行，分组只留最后一次尝试", () => {
   const rows = [
-    row({ id: 1, request_id: 7, result: "failed", source: "a" }),
-    row({ id: 2, request_id: 7, result: "ok", source: "b" }),
+    row({ id: 1, request_id: 7, request_uid: 42, result: "failed", source: "a" }),
+    row({ id: 2, request_id: 7, request_uid: 42, result: "ok", source: "b" }),
     row({ id: 3, source: "c" }),
+    row({ id: 4, request_id: 7, result: "ok", source: "legacy-a" }),
+    row({ id: 5, request_id: 7, result: "ok", source: "legacy-b" }),
+    row({ id: 6, request_id: 7, request_uid: 43, result: "ok", source: "after-restart" }),
   ]
   const final = finalAttempts(rows)
-  assert.deepEqual(final.map((r) => r.id), [2, 3])
+  assert.deepEqual(final.map((r) => r.id), [2, 3, 4, 5, 6])
 })
 
 test("successRate 是「没有收到错误的比例」，0 请求与异常输入都如实为 null", () => {

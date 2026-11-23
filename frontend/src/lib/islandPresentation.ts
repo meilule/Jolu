@@ -129,3 +129,55 @@ export function relayQuotaConnection(
   if (!target || target.status === "paused" || target.kind !== "auth") return null
   return target
 }
+
+/**
+ * P1-4「未知不是零」在灵动岛上的落点：今日 Token 的三态。
+ *
+ * 后端 `today_tokens` 是 `Option<i64>`，`None` 有两种完全不同的含义：
+ * - **今天没有任何记录**（`known = 0 && unknown = 0`）→ 沿用 `today_tokens` 自己的判断
+ *   （有值即真零，null 即未知，因为原生来源可能只是还没扫到）；
+ * - **有记录但都没给 Token**（`known = 0 && unknown > 0`）→ 未知，写 `—`。
+ *
+ * 单看 `today_tokens` 分不出这两者（都是 null），所以后端另外返回
+ * `today_token_coverage`（共享契约 `data_contract::Coverage`，与用量页
+ * `token_coverage`、会话卡片 `SessionTokens` 同一套规则）。这里把它翻成展示值。
+ *
+ * 三态之外还有「部分覆盖」：有值也有缺口，主数字是已知小计，`note` 说明它覆盖了多少条，
+ * 避免被读成整日总量——与用量页 `providerTokenCell` 的口径一致。
+ *
+ * 老后端不返回该字段时退化：有数按 known，没数按 missing（保守，不把「拿不到」写成 0）。
+ */
+export function todayTokenView(args: {
+  todayTokens: number | null
+  /** 后端 `today_token_coverage`；老后端缺失时为 undefined */
+  coverage?: { total?: number | null; known: number; unknown: number } | null
+  /** 数值格式化（岛里传 `compactTokens`，测试可传原值） */
+  format: (value: number) => string
+  /** 未知态占位符，默认 `—` */
+  dash?: string
+}): { text: string; note: string | null; state: "known" | "partial" | "missing" | "empty" } {
+  const { todayTokens, coverage, format } = args
+  const dash = args.dash ?? "—"
+  // 总量与覆盖分开查询时两边都可能是唯一来源（覆盖里的 `total` 是后端用同一口径补的），
+  // 取先有值的那个；都为 null 才是真「拿不到数」。
+  const sum = coverage?.total ?? todayTokens
+  if (!coverage) {
+    return todayTokens != null
+      ? { text: format(todayTokens), note: null, state: "known" }
+      : { text: dash, note: null, state: "missing" }
+  }
+  if (coverage.known === 0 && coverage.unknown === 0) {
+    // 今天没有记录。这**不等于**真实的零：原生来源（zcode 等）是先扫库再落表，
+    // 还没扫到也是 0 行，所以后端对它们返回 null。沿用后端的判断——
+    // 它给了数值就是真零（claude / codex 的采集器知道自己扫过），是 null 就不冒充零。
+    return sum != null
+      ? { text: format(sum), note: null, state: "empty" }
+      : { text: dash, note: null, state: "missing" }
+  }
+  if (coverage.known === 0) return { text: dash, note: `${coverage.unknown} 条记录没有 Token`, state: "missing" }
+  const text = format(sum ?? 0)
+  if (coverage.unknown > 0) {
+    return { text, note: `${coverage.known} / ${coverage.known + coverage.unknown} 条有 Token`, state: "partial" }
+  }
+  return { text, note: null, state: "known" }
+}

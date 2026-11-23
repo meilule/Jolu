@@ -228,7 +228,7 @@ export function demoDayOverview(range = "today"): DayOverviewDto {
   return {
     today: 846 * factor, yesterday: 712 * factor, reroutes: 14 * factor, errors: 3 * factor,
     by_agent: { "claude-code": 412 * factor, codex: 268 * factor, gemini: 96 * factor, opencode: 42 * factor, dsh: 28 * factor },
-    partial: false,
+    partial: false, identity_incomplete: false,
     last_error: {
       id: 9_812, ts: NOW - 26 * MIN, agent: "gemini", requested_model: "gemini-2.5-pro",
       source: "gemini-work", upstream_model: "gemini-2.5-pro", status_code: 504, result: "failed",

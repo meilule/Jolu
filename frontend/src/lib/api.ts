@@ -86,6 +86,12 @@ export interface LiveUsageDto {
   running_tokens?: number | null
   active_window_seconds: number
   today_tokens: number | null
+  /**
+   * `today_tokens` 的覆盖情况（共享契约 `data_contract::Coverage`）。
+   * `today_tokens` 为 null 时靠它区分「今天没有记录」（known=unknown=0，真零）
+   * 与「有记录但都没给 Token」（known=0、unknown>0，未知）。老后端不返回该字段。
+   */
+  today_token_coverage?: { total: number | null; known: number; unknown: number }
   realtime_delta: boolean
   initial: boolean
   /** 本平台统计自上次推送后有变化；仅续期运行中会话的心跳为 false，统计视图据此跳过重查 */

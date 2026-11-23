@@ -551,6 +551,8 @@ export function CapsuleIsland({
     !showQuotas && !data.localMetrics && data.apiMessage,
     !showQuotas && !data.localMetrics && data.connectionLabel && `连接：${data.connectionLabel}`,
     data.balanceText && `网关余额 ${data.balanceText}${data.balanceTimeText ? `（${data.balanceTimeText}）` : ""}`,
+    // P1-4：部分覆盖或全未知时说明口径，别让「已知小计」被读成整日总量
+    data.todayTokenNote,
   ].filter(Boolean) as string[]
 
   const sessionTotal = data.sessions?.length ?? 0
@@ -707,7 +709,10 @@ export function CapsuleIsland({
 
               <div className="cap-sec cap-foot">
                 {data.todayTokenText && showQuotas && (
-                  <div className="cap-row"><span className="cap-l">本地今日 Token</span><span className="cap-v cap-num">{data.todayTokenText}</span></div>
+                  <div className="cap-row">
+                    <span className="cap-l">本地今日 Token</span>
+                    <span className="cap-v cap-num" title={data.todayTokenNote ?? undefined}>{data.todayTokenText}</span>
+                  </div>
                 )}
                 {notes.map((text) => <p key={text} className="cap-note">{text}</p>)}
                 {data.sourceText && <SourceFooter text={data.sourceText} />}

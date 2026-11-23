@@ -19,7 +19,10 @@ export const AGENT_PLATFORM: Readonly<Record<string, string>> = {
   opencode: "opencode",
   zcode: "zcode",
   kimi: "kimi",
-  dsh: "deepseek",
+  // dsh 的平台 id 就是 "dsh"：后端 `dsh_sessions.rs` 产出的 platform 是 "dsh"，
+  // 用量采集与 Skills 也都按这个 id 走。曾经这里写 "deepseek"，导致详情页的
+  // 会话数与技能数永远取不到（`platformCatalog.json` 里也没有 "deepseek" 这个 id）。
+  dsh: "dsh",
   pi: "pi",
   pencil: "pencil",
   qoder: "qoder",

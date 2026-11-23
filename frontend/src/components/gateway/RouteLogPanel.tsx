@@ -138,8 +138,12 @@ function RouteRow({ row, connection, attempt }: { row: RouteLogDto; connection: 
       </span>
       <span className="tabular-nums text-[11px] text-jolu-muted">{duration(row.duration_ms)}</span>
       <span className={cn("flex min-w-0 flex-col text-[9.5px] leading-tight", row.result === "ok" ? "text-jolu-on" : row.result === "rejected" ? "text-jolu-muted" : "text-jolu-danger")}
-        title={attempt ? "同一次请求在分组成员间转移的第几次尝试" : undefined}>
-        <span>{row.result === "ok" ? "成功" : row.result === "rejected" ? "拒绝" : "失败"}</span>
+        title={row.result === "cancelled"
+          ? "客户端在流式响应中途断开，这次请求没有完成"
+          : attempt ? "同一次请求在分组成员间转移的第几次尝试" : undefined}>
+        {/* cancelled 是 P1 新增的一档：流式响应读了一半客户端断开。它不是「失败」——
+            上游正常开始回了，只是没人收完；也不是「成功」，用量没有完整产生。 */}
+        <span>{row.result === "ok" ? "成功" : row.result === "rejected" ? "拒绝" : row.result === "cancelled" ? "已取消" : "失败"}</span>
         {attempt && <span className="text-[8px] text-jolu-muted">{attempt}</span>}
       </span>
     </div>

@@ -40,17 +40,17 @@ export function finalAttempts(rows: readonly RouteLogDto[]): RouteLogDto[] {
   const counts = new Map<number, number>()
   const finalId = new Map<number, number>()
   for (const row of rows) {
-    if (typeof row.request_id !== "number") continue
-    const count = (counts.get(row.request_id) ?? 0) + 1
-    counts.set(row.request_id, count)
-    const best = finalId.get(row.request_id)
+    if (typeof row.request_uid !== "number") continue
+    const count = (counts.get(row.request_uid) ?? 0) + 1
+    counts.set(row.request_uid, count)
+    const best = finalId.get(row.request_uid)
     // id 自增，同组内 id 最大即最后尝试
-    finalId.set(row.request_id, Math.max(best ?? 0, row.id ?? 0))
+    finalId.set(row.request_uid, Math.max(best ?? 0, row.id ?? 0))
   }
   return rows.filter((row) => {
-    if (typeof row.request_id !== "number") return true
-    if ((counts.get(row.request_id) ?? 0) < 2) return true
-    return row.id === finalId.get(row.request_id)
+    if (typeof row.request_uid !== "number") return true
+    if ((counts.get(row.request_uid) ?? 0) < 2) return true
+    return row.id === finalId.get(row.request_uid)
   })
 }
 

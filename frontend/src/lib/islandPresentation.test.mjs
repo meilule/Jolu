@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { balanceSnapshotTime, islandActiveConnection, islandAttribution, islandConnectionStatus, islandCost, connectionQueries } from "./islandPresentation.ts"
+import { balanceSnapshotTime, islandActiveConnection, islandAttribution, islandConnectionStatus, islandCost, connectionQueries, todayTokenView } from "./islandPresentation.ts"
 
 const conn = (id, platformId, status) =>
   ({ id, platformId, kind: "api", name: id, baseName: id, label: "API Key", masked: null, status, lastSyncText: "", baseUrl: null })
@@ -126,4 +126,57 @@ test("今日按来源：最多 5 行，已删连接有名字，有未归属记�
   assert.equal(view.rows[0].value, "100 Token")
   assert.equal(view.coverage, "14/20 条已归属")
   assert.equal(sourceBreakdownView({ rows: rows.slice(0, 1), total_requests: 2, unattributed_requests: 0 }, fmt).coverage, null)
+})
+
+// P1-4：今日 Token 三态。「没有记录」与「有记录但没 Token」都是 todayTokens = null，
+// 只有 coverage 能分开；写错就是把未知当零，或把真零写成未知。
+test("今日 Token：今天没有记录时沿用后端判断——有值是真零，null 是未知", () => {
+  // claude / codex 的采集器扫过、确实没有请求：后端给 0，这里照实写 0
+  const zero = todayTokenView({ todayTokens: 0, coverage: { known: 0, unknown: 0 }, format: String })
+  assert.deepEqual(zero, { text: "0", note: null, state: "empty" })
+  // 原生来源还没扫到也是 0 行：后端给 null，不能冒充真零
+  const unscanned = todayTokenView({ todayTokens: null, coverage: { known: 0, unknown: 0 }, format: String })
+  assert.deepEqual(unscanned, { text: "—", note: null, state: "missing" })
+})
+
+test("今日 Token：有记录但都没 Token 是未知，给破折号并说明条数", () => {
+  const view = todayTokenView({ todayTokens: null, coverage: { known: 0, unknown: 29 }, format: String })
+  assert.equal(view.state, "missing")
+  assert.equal(view.text, "—")
+  assert.equal(view.note, "29 条记录没有 Token")
+})
+
+test("今日 Token：部分覆盖时主数字是已知小计，并标出覆盖了多少条", () => {
+  const view = todayTokenView({ todayTokens: 4987, coverage: { known: 30, unknown: 1 }, format: String })
+  assert.equal(view.state, "partial")
+  assert.equal(view.text, "4987")
+  assert.equal(view.note, "30 / 31 条有 Token")
+})
+
+test("今日 Token：全覆盖不打扰，不给说明", () => {
+  const view = todayTokenView({ todayTokens: 1234, coverage: { known: 5, unknown: 0 }, format: String })
+  assert.equal(view.state, "known")
+  assert.equal(view.text, "1234")
+  assert.equal(view.note, null)
+})
+
+test("今日 Token：总量优先取 coverage.total（覆盖与总量分开查询时两边都可能只有一边）", () => {
+  // 只有覆盖带了 total，todayTokens 还没到
+  const view = todayTokenView({ todayTokens: null, coverage: { total: 4200, known: 3, unknown: 0 }, format: String })
+  assert.equal(view.text, "4200")
+  assert.equal(view.state, "known")
+  // 两边都有时取 coverage.total —— 它与 known/unknown 同一次查询算出来，口径一致
+  const both = todayTokenView({ todayTokens: 1, coverage: { total: 4200, known: 3, unknown: 0 }, format: String })
+  assert.equal(both.text, "4200")
+})
+
+test("今日 Token：老后端没有覆盖字段时有数按已知、没数按未知，绝不补 0", () => {
+  assert.deepEqual(
+    todayTokenView({ todayTokens: 900, format: String }),
+    { text: "900", note: null, state: "known" },
+  )
+  assert.deepEqual(
+    todayTokenView({ todayTokens: null, format: String }),
+    { text: "—", note: null, state: "missing" },
+  )
 })
