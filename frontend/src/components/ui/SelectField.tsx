@@ -179,7 +179,7 @@ export function SelectField({ value, options, onValueChange, label, disabled,
       <Menu.Portal>
         <Menu.Content loop align="start" sideOffset={6} collisionPadding={12}
           className={cn(
-            "jolu-select-menu motion-popover z-[140] overflow-y-auto overscroll-contain rounded-[8px] border bg-surface text-text-primary shadow-popover",
+            "jolu-select-menu jolu-menu motion-popover z-[140] overflow-y-auto overscroll-contain text-text-primary",
             // 宽度由 open 时实测触发器写入（见下方 onOpenAutoFocus）。
             // 不用 --radix-dropdown-menu-trigger-width：实测该变量在
             // 「触发器被 span 包着 + className 带 w-full」时量到的是错的元素

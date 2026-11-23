@@ -81,6 +81,9 @@ test-results/
 
 # Pencil 导出的画板预览截图（docs/logo、docs/ui/brands 被 Jolu.pen 引用，必须提交）
 /docs/ui/previews/
+# 设计稿引用的参考截图：体积大（约 11MB / 31 张），只在本地作为设计参考。
+# `docs/ui/jolu-new.pen` 里的相对路径仍指向它们，本地保留即可。
+/docs/ui/jolu-new-assets/
 
 # 第三方源码参考副本，不参与构建
 /docs/reference/cc-switch/

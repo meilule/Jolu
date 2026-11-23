@@ -79,8 +79,10 @@ export function ResetButton({ onClick, disabled }: { onClick: () => void; disabl
   return <ToolButton bordered icon={<RotateCcw />} onClick={onClick} disabled={disabled}>重置</ToolButton>
 }
 
-const MENU_CLASS = "motion-popover z-[100] min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[320px] overflow-y-auto overscroll-contain rounded-xl border border-jolu-border bg-jolu-cc-surface p-1.5 shadow-popover"
-const ITEM_CLASS = "relative flex h-8 cursor-default select-none items-center gap-2 rounded-md px-2 text-xs text-jolu-text outline-none data-[highlighted]:bg-jolu-side data-[disabled]:opacity-40"
+// 面板与行的外观收在 index.css 的 .jolu-menu / .jolu-menu-item（公共层），
+// 这里只留布局相关：宽度、滚动、层级。以前各处菜单各有各的圆角与内边距。
+const MENU_CLASS = "jolu-menu jolu-menu-lg motion-popover z-[100] min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[320px] overflow-y-auto overscroll-contain"
+const ITEM_CLASS = "jolu-menu-item jolu-row-hover relative cursor-default select-none text-xs data-[disabled]:opacity-40"
 
 export interface MenuOption {
   value: string

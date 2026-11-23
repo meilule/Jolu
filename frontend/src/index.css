@@ -1349,4 +1349,137 @@ html.reduce-motion .jolu-switch--liquid .jolu-switch-thumb {
   }
   .jolu-tab:not([aria-selected="true"]):not([aria-checked="true"]):hover { color: var(--jolu-text); }
   .jolu-tab:focus-visible { outline: 2px solid var(--jolu-accent); outline-offset: -2px; }
+
+  /* ─────────────────────────────────────────────────────────────────────
+     交互态公共层（2026-11-22 样式收敛）
+     目的：把「当前项」「悬停」「按下」「禁用」「菜单面板」这些到处重写的
+     状态收敛到一组类名。以前同一语义有 7 种底色（见 docs/frontend-ui-guide.md），
+     其中 4 种在浅色主题下与背景同为 #ffffff，等于没有选中反馈。
+
+     只准用这几条，禁止再在组件里手写 bg-jolu-selected / hover:bg-jolu-side。
+     ───────────────────────────────────────────────────────────────────── */
+
+  /* 行级「当前项」：下拉菜单选中行、列表选中行、树节点、分段当前项 */
+  .jolu-row-selected {
+    background: var(--jolu-selected);
+    color: var(--jolu-on);
+  }
+  /* 行级「当前悬停」：必须有可见反馈。浅色主题 --jolu-side 与 bg 同为白，
+     所以悬停一律用 --jolu-stage（#f4f4f5），不能用 side。 */
+  .jolu-row-hover:hover,
+  .jolu-row-hover[data-highlighted] {
+    background: var(--jolu-stage);
+  }
+  /* 选中行被悬停时加深而不是换成悬停色，否则选中态被冲掉 */
+  .jolu-row-selected.jolu-row-hover:hover,
+  .jolu-row-selected.jolu-row-hover[data-highlighted] {
+    background: color-mix(in srgb, var(--jolu-selected) 78%, var(--jolu-accent) 22%);
+  }
+  /* 按下 */
+  .jolu-row-pressed:active { background: var(--jolu-pressed); }
+
+  /* 菜单面板：圆角、边框、表面、阴影、内边距一处定义。
+     以前有 rounded-[8px] / rounded-lg / rounded-xl / rounded-md 四档与
+     bg-jolu-bg / bg-jolu-cc-surface / bg-surface 三种表面。 */
+  .jolu-menu {
+    border: 1px solid var(--jolu-border);
+    border-radius: 12px;
+    background: var(--jolu-cc-surface);
+    box-shadow: 0 10px 24px var(--jolu-cc-popup-shadow);
+    padding: 4px;
+  }
+  .jolu-menu-lg { padding: 8px; }
+  /* 菜单行：高度只留两档（普通 32 / 带副标题 44），半径统一 8 */
+  .jolu-menu-item {
+    display: flex;
+    min-height: 32px;
+    align-items: center;
+    gap: 8px;
+    border-radius: 8px;
+    padding: 0 8px;
+    outline: none;
+    color: var(--jolu-text);
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .jolu-menu-item-lg { min-height: 44px; }
+  .jolu-menu-item:is([data-disabled], [disabled]) { opacity: 0.45; pointer-events: none; }
+  /* 菜单内搜索框 */
+  .jolu-menu-search {
+    display: flex;
+    height: 32px;
+    align-items: center;
+    gap: 8px;
+    border-radius: 8px;
+    background: var(--jolu-stage);
+    padding: 0 8px;
+  }
+
+  /* 分段控件轨道（页签、币种、筛选 chips 共用；浅色下必须与卡片不同色） */
+  .jolu-segment {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 2px;
+    border-radius: 10px;
+    background: var(--jolu-track);
+    padding: 3px;
+  }
+  /* 分段里的当前项：白底 + 阴影，与 .jolu-tab 的选中态同源 */
+  .jolu-segment-item {
+    display: inline-flex;
+    height: 28px;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border-radius: 8px;
+    padding: 0 10px;
+    color: var(--jolu-muted);
+    outline: none;
+    transition: background-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  }
+  .jolu-segment-item:is([aria-selected="true"], [aria-checked="true"], [aria-pressed="true"]) {
+    background: var(--jolu-cc-surface);
+    color: var(--jolu-text);
+    font-weight: 500;
+    box-shadow: 0 2px 4px var(--jolu-cc-control-shadow);
+  }
+  .jolu-segment-item:not([aria-selected="true"]):not([aria-checked="true"]):not([aria-pressed="true"]):hover {
+    color: var(--jolu-text);
+  }
+
+  /* 输入框：以前有 5 个 INPUT 常量（h-8/9/10、rounded-lg/[8px]、bg-jolu-bg/bg-transparent） */
+  .jolu-input {
+    height: 34px;
+    border: 1px solid var(--jolu-border);
+    border-radius: 8px;
+    background: var(--jolu-bg);
+    padding: 0 10px;
+    color: var(--jolu-text);
+    outline: none;
+  }
+  .jolu-input:focus { border-color: var(--jolu-accent); }
+  .jolu-input::placeholder { color: var(--jolu-muted); }
+  .jolu-input-lg { height: 38px; }
+
+  /* 表头行 */
+  .jolu-table-head {
+    background: var(--jolu-side);
+    color: var(--jolu-muted);
+    font-size: 12px;
+  }
+
+  /* 徽章：以前 14 处 Chip + 22 处内联胶囊 */
+  .jolu-badge {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    border-radius: 6px;
+    padding: 0 6px;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 20px;
+  }
+  .jolu-badge-on { background: var(--jolu-selected); color: var(--jolu-on); }
+  .jolu-badge-muted { background: var(--jolu-stage); color: var(--jolu-muted); }
+  .jolu-badge-danger { background: var(--jolu-danger-soft); color: var(--jolu-danger); }
 }
