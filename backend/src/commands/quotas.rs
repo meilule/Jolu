@@ -252,15 +252,38 @@ pub(crate) async fn finish_quota_query(
     let outcome = (success || unauthorized).then_some(success);
     let changed = with_database(pool, move |conn| connections::record_query_result(conn, &update_id, &expected, outcome)).await?;
     if changed { let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ()); }
-    // 额度快照（路由分组 smart / pace / cap hold 的数据源）：成功查询把最早的重置时间、
-    // 剩余百分比与「是否已用满」记入注册表。重置时间缺省的来源不写快照，路由层如实降级；
-    // 剩余百分比缺省时只影响 `pace`（退回按 order），不影响 smart 与 cap hold。
-    if let quota::QuotaState::Ok { windows, .. } = &state {
-        if let Some(resets) = crate::gateway::quota_snapshot::earliest_reset_from_windows(windows) {
-            let now_ms = chrono::Utc::now().timestamp_millis();
-            let exhausted = crate::gateway::quota_snapshot::exhausted_from_windows(windows, now_ms);
-            let remaining = crate::gateway::quota_snapshot::remaining_from_windows(windows);
-            crate::gateway::quota_snapshot::record(&id, resets, remaining, exhausted);
+    // 额度快照（路由分组 smart / pace / cap hold 的数据源）：按查询结果处置。
+    //
+    // 以前只在「能解析出重置时间」时写，于是两个坑：
+    // ① 只给剩余量不给重置时间的来源，数据被整个丢掉；
+    // ② 查询变成结构性失败（授权失效 / 平台不支持）时旧快照继续生效，
+    //    已失效的账号还按「已用满 + 旧重置时间」参与选路。
+    // 现在按 `SnapshotAction` 的映射处理：有事实就写、结构性结论就清、临时失败保留
+    // （新鲜度会兜住），`Observed`（网关限流头推断）不动快照。
+    {
+        use crate::gateway::quota_snapshot::SnapshotAction;
+        let action = match &state {
+            quota::QuotaState::Ok { windows, .. } => {
+                crate::gateway::quota_snapshot::action_for_ok(
+                    windows,
+                    chrono::Utc::now().timestamp_millis(),
+                )
+            }
+            // 结构性结论：这个连接不再有额度可查，旧快照不再代表现实
+            quota::QuotaState::Unauthorized { .. }
+            | quota::QuotaState::Unsupported { .. }
+            | quota::QuotaState::Forbidden { .. } => SnapshotAction::Clear,
+            // 临时失败与网关限流头推断：不动快照，交给新鲜度判断
+            quota::QuotaState::Failed { .. }
+            | quota::QuotaState::RateLimited { .. }
+            | quota::QuotaState::Observed { .. } => SnapshotAction::Keep,
+        };
+        match action {
+            SnapshotAction::Write { resets_at_ms, remaining_percent, exhausted } => {
+                crate::gateway::quota_snapshot::record(&id, resets_at_ms, remaining_percent, exhausted);
+            }
+            SnapshotAction::Clear => crate::gateway::quota_snapshot::clear(&id),
+            SnapshotAction::Keep => {}
         }
     }
     if app.state::<Cfg>().0.get().island_connection_id.as_deref() == Some(id.as_str()) {

@@ -207,19 +207,24 @@ P0-3 的 8 个场景（多账号、源端删除历史、Token 未提供、跨午
     - **问题**：`quota_snapshot::Snapshot` 只存 `resets_at_ms` + `exhausted` 布尔，没有剩余量。于是 `pace`（语义是「剩余最多先用」）只能退化成「重置时间最晚先用」——代码注释自己写着「magpie pace 的近似」。A 刚重置但已烧掉 90%、B 两天前重置但只用 30% 时，按重置时间会先选 A，正好选错。
     - **修复**：`Snapshot` 增加 `remaining_percent`，取**所有窗口里最紧的那个**的 `100 - used_percent`（木桶效应：5h 用到 95% 而周窗口只用 10% 时，这个账号实际快不能用了，取平均会误判成宽裕）。同时增加 15 分钟有效期——过期快照返回 None，`pace` 如实降级为 order 并说明，不拿旧数据假装知道剩余量。
     - **接口**：`ordered_members` 新增 `remaining_of` 参数；`QuotaWindow.used_percent` 一直是有的，只是以前没往快照里存。
+    - **部分成员缺数据时不做半截排序（F-1）**：早先的做法是「有数据的排前面、缺的垫底」。但主窗口不在供应商页时，分组里往往只有灵动岛那一条连接有新数据——按数据排等于「刚被前端查过的永远第一」，比 order 更差。现在只有**全员**都有新鲜剩余量才按剩余量排，否则整体按 order 并在 note 里说明。
+    - **选路时补查过期成员（F-1）**：`ProxyDeps` 新增 `on_quota_stale` 回调，`pace` 分组发现成员剩余量缺失/过期时触发一次后台额度查询。不阻塞当前请求（这次仍按现有数据排序），复用 `commands::quotas::query_connection_quota(force=false)` 的 5 分钟缓存与退避，同一连接 1 分钟内不重复触发。只有声明了 `subscription_quota` 能力的连接才触发——custom API Key 本来没有官方额度，那不是「缺数据」。
     - **测试**（6 条）：`pace_orders_by_remaining_headroom_not_reset_time`、`pace_does_not_fall_back_to_reset_order_when_headroom_disagrees`（反向锁住「不偷偷退回按重置时间排序」）、`pace_puts_members_without_headroom_last_and_says_so`、`remaining_takes_the_tightest_window_not_the_average`、`remaining_is_none_when_no_window_reports_usage`、`a_stale_snapshot_stops_reporting_remaining`。
     - **已验证有效性**：把 `pace` 改回 `sort_by_key(Reverse(resets_of(...)))`，后两条 pace 测试立刻失败（`剩余 60% 的 a 先用` 左 b 右 a）。
-    - **仍未明确**：`smart` 与 `pace` 的差别现在只剩「重置最近 vs 剩余最多」；两者的快照过期策略一致（都是 15 分钟）。「账号健康」与「并发」只在 `rest_member` / `key_slots` 层处理，没进分组策略。
+    - **快照新鲜度（F-3 修完后的实际口径）**：三个读取函数（`remaining_percent` / `resets_of` / `is_exhausted`）**统一**在超过 `STALE_AFTER_MS`（15 分钟）时按「不知道」处理。查询给出结构性结论（`Unauthorized` / `Unsupported` / `Forbidden`）时**清除**快照；临时失败（`Failed` / `RateLimited`）保留、交给新鲜度兜住；`Observed`（网关限流头推断）不动快照。
+    - **仍未明确**：`smart` 与 `pace` 的差别只剩「重置最近 vs 剩余最多」；「账号健康」与「并发」只在 `rest_member` / `key_slots` 层处理，没进分组策略。
 - P2-3 复核会话亲和、失败转移、重试和流式中断。记录原始请求及各次尝试的关联，避免将一次请求当作多次成功或重复消耗。
   - **状态：✅ 已补固定样本（2026-11-23）。**
-    - **已有**：亲和只在成功时绑定（`wire.rs:1071` / `1183` 的 `if response.status().is_success() { bind(entry) }`）；`request_uid` 在重试循环里随 `meta` clone 传递，多次尝试共享身份。
-    - **本轮补**：`one_request_failing_over_many_members_counts_once_but_records_every_attempt`（三成员 a→b→c，`request_uid=7` 全部共享；统计 `today=1 / reroutes=1 / errors=0`；流水保留 3 行可解释）与 `attempts_are_grouped_by_request_and_keep_per_attempt_source`（两次请求三条尝试，能看出每组成员各自试过几次）。
+    - **已有**：亲和只在成功时绑定（`forward_one` 里成功后 `bind(entry)`）；`request_uid` 在重试循环里随 `meta` clone 传递，多次尝试共享身份。
+    - **P2 阶段补的两条只验证统计分组**：`one_request_failing_over_many_members_counts_once_but_records_every_attempt` 与 `attempts_are_grouped_by_request_and_keep_per_attempt_source` 都是直接 `INSERT INTO gateway_route_log`，验证的是 `day_overview` 怎么分组，**没有经过 `wire::handle` 的重试循环**。
+    - **F-4 补的是走真实重试循环的测试**：`a_failing_member_hands_over_to_the_next_and_the_log_shows_both_attempts`（A 返回 503、B 返回 200；断言最终 200、2 行流水共用 `request_uid`、`day_overview` 记 1 请求 1 转移 0 错误、亲和绑到 B、A 被休置）与 `all_members_failing_still_counts_as_one_error_request`（两个都 503 时 2 行流水、1 个 `request_uid`、1 次错误、最终响应是最后一次的状态）。假上游用 axum router 而不是手写 HTTP——手写响应容易在超时/半包上出问题，会把「上游不可达」的 502 混进来掩盖真正要测的转移逻辑（第一版就是这样失败的）。
     - **区分**：流水一行一次**尝试**，统计一次**请求**，靠 `request_uid` 而非「时间相近」推断。
     - **仍未做**：流式中断下的失败转移（第一次尝试已开始流式输出后断，是否该换下一个成员）没有固定样本，也没有代码处理——当前只在**响应头**阶段判断 `is_retryable_status`。
 - P2-4 让已有路由查询能解释选中的来源、账号、模型、策略及结果。缺数据时保留未知。涉及新界面遵循画板约束。
   - **状态：✅ 已补决策解释（2026-11-23）。**
     - **缺口**：流水已有来源（`source`）、连接（`connection_id`）、模型（`requested_model` / `upstream_model`）、结果（`result` / `status_code`）、解析方式（`resolved_from`）、Profile，**唯独没有「策略」**——分组策略与选它的原因只在失败时用作错误文案（`wire.rs:791`），成功时丢弃。
     - **修复**：`gateway_route_log` 新增 `decision TEXT` 列（纯增列、可空，旧流水为 NULL）。分组选路后写入 `分组 {slug} · 策略 {strategy} · {降级原因}`。普通单来源请求保持 NULL——不为它编一句话。
+    - **`decision` 里没有「选中的成员」**：选中的成员由流水的 `source` 列表达，`decision` 只说「用的是哪个策略、有没有降级」。两者合起来才是完整的可解释路由。
     - **前端**：`RouteLogPanel` 把决策解释挂到请求模型那一列的 tooltip（与「裸名」说明合并），并加一个「分组」小标记提示有解释可看。**没有新增列**，不改布局。
     - **测试**：`a_group_decision_explanation_round_trips_through_the_log`、`a_plain_request_has_no_decision_explanation`。
     - **待确认**：「分组」标记与 tooltip 是路由流水页的新界面元素，该页签本身没有 V6 画板。按 AGENTS.md 标「待确认」。
@@ -235,8 +240,8 @@ P0-3 的 8 个场景（多账号、源端删除历史、Token 未提供、跨午
 | 固定场景验证选路 | ✅ `pace` / `smart` / `usage` / `rotate` / `order` 均有测试 |
 | 额度过期 | ✅ 快照 15 分钟过期返回 None，`pace` 如实降级 |
 | 限流 | ✅ `rest_member` 休置 + `Cooldowns`，测试 `affinity_rejects_instead_of_switching_when_account_rate_limited` |
-| 失败转移 | ✅ 本轮 2 条固定样本 |
-| 并发 | 🟡 `key_slots` 在途并发限制有实现，未补固定样本 |
+| 失败转移 | ✅ P2 阶段 2 条（只验证统计分组）+ F-4 补的 2 条（走真实 `wire::handle` 重试循环） |
+| 并发 | 🟡 `key_slots.rs` 已有 3 条异步测试（超上限排队、断开退出队列、流式占位）；**缺的是分组层面的并发**——多个请求同时轮转、同时绑定亲和 |
 | 账号切换 | ✅ P1-3 已覆盖 |
 | 重试记录与统计正确对应 | ✅ `request_uid` 分组，本轮 2 条样本 |
 | **端到端真实生成** | ⚠️ **只有 WorkBuddy CN 窄场景**，其余来源无真实账号样本 |

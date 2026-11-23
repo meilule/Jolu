@@ -712,7 +712,7 @@ pub(crate) async fn handle(
                     .map(|e| e.connection_id.as_str())
                     .is_some_and(|id| crate::gateway::quota_snapshot::is_exhausted(id, now_ms))
             };
-            crate::gateway::routing_groups::ordered_members(
+            let ordered = crate::gateway::routing_groups::ordered_members(
                 &group,
                 &mut rotate,
                 &usage_of,
@@ -721,7 +721,38 @@ pub(crate) async fn handle(
                 &exhausted_of,
                 now_ms,
                 bound.as_deref(),
-            )
+            );
+            // `pace` 缺成员的剩余量时，在后台补查——不阻塞这次请求，
+            // 它仍按现有数据排序（部分缺失时整体按 order）。
+            //
+            // 只对「支持额度查询」的连接触发：custom API Key 没有官方额度，
+            // 那不是「缺数据」而是「本来就没有」，查了也是 Unsupported。
+            if group.strategy == "pace" {
+                let candidates: Vec<(&str, bool, Option<f64>)> = group
+                    .members
+                    .iter()
+                    .filter_map(|member| {
+                        let entry = pool.iter().find(|e| e.slug == member.slug)?;
+                        // 平台能力判定：与额度查询入口同一份目录
+                        let supports = crate::platforms::supports(&entry.platform, "subscription_quota");
+                        Some((
+                            entry.connection_id.as_str(),
+                            supports,
+                            crate::gateway::quota_snapshot::remaining_percent(&entry.connection_id),
+                        ))
+                    })
+                    .collect();
+                let stale = crate::gateway::quota_snapshot::connections_needing_refresh(
+                    candidates,
+                    &crate::gateway::quota_snapshot::stale_trigger_state(),
+                    now_ms,
+                );
+                for connection_id in stale {
+                    crate::gateway::quota_snapshot::note_stale_trigger(&connection_id, now_ms);
+                    (deps.on_quota_stale)(&connection_id);
+                }
+            }
+            ordered
         };
         // 判定档位的成员排前、另一档留作兜底（会话亲和在档内仍然生效）
         if let Some(verdict) = &intent_verdict {
@@ -1391,6 +1422,320 @@ mod tests {
             |row| row.get(0),
         ).unwrap();
         assert_eq!(count, 1);
+    }
+
+    /// F-4：走**真实重试循环**的失败转移——A 返回 503，B 返回 200。
+    ///
+    /// P2-3 的两条固定样本是直接 `INSERT INTO gateway_route_log`，只验证
+    /// `day_overview` 怎么分组。这条补上另一半：经过 `wire::handle` 的重试循环，
+    /// 确认「多次尝试共用 request_uid / 每次尝试各写一行 / 只有成功才绑亲和 /
+    /// 失败成员被休置」这四条真的成立。
+    #[tokio::test]
+    async fn a_failing_member_hands_over_to_the_next_and_the_log_shows_both_attempts() {
+        crate::gateway::route_log::flush();
+        let deps = crate::proxy::test_support::bare_deps();
+
+        // A：503（可重试）；B：200 + 最小 Chat Completions JSON。
+        // 用 axum 起假上游而不是手写 HTTP：手写响应容易在超时/半包上出问题，
+        // 会把「上游不可达」的 502 混进来，掩盖真正要测的转移逻辑。
+        let failing = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let failing_base = format!("http://{}", failing.local_addr().unwrap());
+        tokio::spawn(async move {
+            let service = axum::Router::new().fallback(|| async {
+                axum::http::StatusCode::SERVICE_UNAVAILABLE
+            });
+            let _ = axum::serve(failing, service).await;
+        });
+        let healthy = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let healthy_base = format!("http://{}", healthy.local_addr().unwrap());
+        tokio::spawn(async move {
+            let service = axum::Router::new().fallback(|| async {
+                (
+                    [("content-type", "application/json")],
+                    r#"{"id":"chatcmpl-f4","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6}}"#,
+                )
+            });
+            let _ = axum::serve(healthy, service).await;
+        });
+
+        for (id, base) in [("f4-a", &failing_base), ("f4-b", &healthy_base)] {
+            deps.db.lock().unwrap().execute(
+                "INSERT INTO connections(id,platform,kind,name,secret,base_url,protocol,status,serve_enabled,created_ms,slug)
+                 VALUES(?1,'custom','api',?1,'fixture-token',?2,'openai','connected',1,1,?1)",
+                rusqlite::params![id, base],
+            ).unwrap();
+        }
+        {
+            let conn = deps.db.lock().unwrap();
+            let members = vec![
+                crate::gateway::routing_groups::GroupMember {
+                    slug: "f4-a".into(), model: "fixture-model".into(),
+                    paused_until_ms: None, weight: None, tier: None,
+                },
+                crate::gateway::routing_groups::GroupMember {
+                    slug: "f4-b".into(), model: "fixture-model".into(),
+                    paused_until_ms: None, weight: None, tier: None,
+                },
+            ];
+            crate::gateway::routing_groups::create(&conn, "f4-failover", "转移测试", "order", &members, None).unwrap();
+        }
+
+        // 带 codex 身份与会话标识，以便验证亲和
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer jolu-codex.f4".parse().unwrap());
+        headers.insert("session-id", "f4-session".parse().unwrap());
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            handle(
+                CallerProtocol::Chat,
+                deps.clone(),
+                headers,
+                axum::body::Bytes::from_static(
+                    br#"{"model":"group/f4-failover","messages":[{"role":"user","content":"hi"}]}"#,
+                ),
+                "/v1/chat/completions",
+                None,
+            ),
+        )
+        .await
+        .expect("请求应在 10 秒内完成");
+        assert_eq!(response.status(), StatusCode::OK, "B 成功，最终响应应是 200");
+
+        // 流水：等写入线程落库
+        crate::gateway::route_log::flush();
+        let rows: Vec<(String, String, Option<i64>, Option<String>)> = {
+            let conn = deps.db.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT source, result, request_uid, decision FROM gateway_route_log ORDER BY id",
+                )
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            rows
+        };
+        assert_eq!(rows.len(), 2, "两次尝试各一行，实际 {rows:?}");
+        assert_eq!(rows[0].0, "f4-a");
+        assert_eq!(rows[0].1, "failed", "A 返回 503 应记为 failed");
+        assert_eq!(rows[1].0, "f4-b");
+        assert_eq!(rows[1].1, "ok");
+        assert_eq!(rows[0].2, rows[1].2, "两次尝试共用同一个 request_uid");
+        assert!(rows[0].2.is_some(), "request_uid 应已分配");
+        for (source, _, _, decision) in &rows {
+            let decision = decision.as_deref().unwrap_or_default();
+            assert!(decision.contains("分组 f4-failover"), "{source} 的决策解释缺分组：{decision}");
+            assert!(decision.contains("策略 order"), "{source} 的决策解释缺策略：{decision}");
+        }
+
+        // 统计：1 次请求、1 次转移、0 次错误
+        {
+            let conn = deps.db.lock().unwrap();
+            let now = chrono::Local::now().timestamp_millis();
+            let day = crate::gateway::route_log::day_overview(&conn, now - 60_000, 0, now + 60_000).unwrap();
+            assert_eq!(day.today, 1, "两次尝试是一次请求");
+            assert_eq!(day.reroutes, 1, "发生了一次转移");
+            assert_eq!(day.errors, 0, "最终成功，不算错误");
+        }
+
+        // 亲和：绑定到 B。会话键由 `session_key` 生成——`session-id` 头映射成
+        // `hdr:codex-session:<值>`，不是「平台:值」。
+        {
+            let affinity = deps.affinity.as_ref().unwrap().lock().unwrap();
+            assert_eq!(
+                affinity.get("hdr:codex-session:f4-session"),
+                Some("f4-b"),
+                "成功的成员获得亲和",
+            );
+        }
+
+        // 休置：A 刚失败过，下一次请求应先试 B
+        {
+            let conn = deps.db.lock().unwrap();
+            let now = chrono::Local::now().timestamp_millis();
+            let ordered = crate::gateway::routing_groups::get(&conn, "f4-failover").unwrap().unwrap();
+            // 直接看休置状态：A 应处于休置中
+            let a_rested = ordered.members.iter().find(|m| m.slug == "f4-a").map(|m| {
+                crate::gateway::routing_groups::is_rested("f4-failover", m, now)
+            }).unwrap_or(false);
+            assert!(a_rested, "失败的成员应被休置，避免下一个请求又先撞上它");
+        }
+    }
+
+    /// F-4 第二条：两个成员都返回 503 时，仍是一次请求（2 行流水、1 个 request_uid），
+    /// `day_overview` 记 1 次错误，最终响应是最后一次尝试的状态。
+    #[tokio::test]
+    async fn all_members_failing_still_counts_as_one_error_request() {
+        crate::gateway::route_log::flush();
+        let deps = crate::proxy::test_support::bare_deps();
+
+        let mut bases = Vec::new();
+        for _ in 0..2 {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            bases.push(format!("http://{}", listener.local_addr().unwrap()));
+            tokio::spawn(async move {
+                let service = axum::Router::new().fallback(|| async {
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE
+                });
+                let _ = axum::serve(listener, service).await;
+            });
+        }
+        for (index, base) in bases.iter().enumerate() {
+            let id = format!("f4x-{index}");
+            deps.db.lock().unwrap().execute(
+                "INSERT INTO connections(id,platform,kind,name,secret,base_url,protocol,status,serve_enabled,created_ms,slug)
+                 VALUES(?1,'custom','api',?1,'fixture-token',?2,'openai','connected',1,1,?1)",
+                rusqlite::params![id, base],
+            ).unwrap();
+        }
+        {
+            let conn = deps.db.lock().unwrap();
+            let members: Vec<_> = (0..2)
+                .map(|index| crate::gateway::routing_groups::GroupMember {
+                    slug: format!("f4x-{index}"),
+                    model: "fixture-model".into(),
+                    paused_until_ms: None,
+                    weight: None,
+                    tier: None,
+                })
+                .collect();
+            crate::gateway::routing_groups::create(&conn, "f4x-all-fail", "全失败", "order", &members, None).unwrap();
+        }
+
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            handle(
+                CallerProtocol::Chat,
+                deps.clone(),
+                HeaderMap::new(),
+                axum::body::Bytes::from_static(
+                    br#"{"model":"group/f4x-all-fail","messages":[{"role":"user","content":"hi"}]}"#,
+                ),
+                "/v1/chat/completions",
+                None,
+            ),
+        )
+        .await
+        .expect("请求应在 10 秒内完成");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "最后一次尝试的状态");
+
+        crate::gateway::route_log::flush();
+        let conn = deps.db.lock().unwrap();
+        let rows: Vec<(String, String, Option<i64>)> = {
+            let mut stmt = conn
+                .prepare("SELECT source, result, request_uid FROM gateway_route_log ORDER BY id")
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        assert_eq!(rows.len(), 2, "两次尝试各一行");
+        assert!(rows.iter().all(|(_, result, _)| result == "failed"), "两次都失败");
+        assert_eq!(rows[0].2, rows[1].2, "共用 request_uid");
+        let now = chrono::Local::now().timestamp_millis();
+        let day = crate::gateway::route_log::day_overview(&conn, now - 60_000, 0, now + 60_000).unwrap();
+        assert_eq!(day.today, 1, "两次尝试是一次请求");
+        assert_eq!(day.errors, 1, "最终失败算一次错误请求");
+        assert_eq!(day.reroutes, 1);
+    }
+
+    /// F-1：`pace` 分组里缺剩余量的成员，选路时触发一次后台补查；1 分钟内不重复。
+    ///
+    /// 为什么必须在请求路径上触发：后端没有定时查额度的任务，`finish_quota_query`
+    /// 只在有人调 `connection_quota` 时才跑。主窗口不在供应商页时，分组里往往只有
+    /// 灵动岛那一条连接有新数据——不补查的话 `pace` 永远只有一条连接的数据可用。
+    ///
+    /// 回调必须非阻塞：这里用 mpsc 收集连接 id，请求本身照常完成。
+    #[tokio::test]
+    async fn pace_group_triggers_one_background_quota_refresh_per_member_within_a_minute() {
+        crate::gateway::quota_snapshot::forget_stale_triggers();
+        let mut deps = Arc::try_unwrap(crate::proxy::test_support::bare_deps())
+            .unwrap_or_else(|_| panic!("test dependencies must have a single owner"));
+        let (stale_tx, stale_rx) = std::sync::mpsc::channel::<String>();
+        deps.on_quota_stale = Arc::new(move |connection_id: &str| {
+            stale_tx.send(connection_id.to_string()).ok();
+        });
+        let deps = Arc::new(deps);
+
+        // 两个假上游：都返回 200。这里只关心「有没有触发补查」，不关心转发结果。
+        let mut upstreams = Vec::new();
+        for _ in 0..2 {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            tokio::spawn(async move {
+                loop {
+                    let Ok((mut socket, _)) = listener.accept().await else { break };
+                    use tokio::io::AsyncWriteExt;
+                    let _ = socket
+                        .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\r\n{}")
+                        .await;
+                }
+            });
+            upstreams.push(base);
+        }
+
+        // 两条支持额度查询的订阅连接（zcode: subscription_quota），故意都不写快照
+        for (index, base) in upstreams.iter().enumerate() {
+            let id = format!("pace-source-{index}");
+            deps.db.lock().unwrap().execute(
+                "INSERT INTO connections(id,platform,kind,name,secret,base_url,protocol,status,serve_enabled,created_ms,slug)
+                 VALUES(?1,'zcode','auth',?1,'fixture-token',?2,'openai','connected',1,1,?1)",
+                rusqlite::params![id, base],
+            ).unwrap();
+        }
+        {
+            let conn = deps.db.lock().unwrap();
+            let members = vec![
+                crate::gateway::routing_groups::GroupMember {
+                    slug: "pace-source-0".into(), model: "glm-5.3".into(),
+                    paused_until_ms: None, weight: None, tier: None,
+                },
+                crate::gateway::routing_groups::GroupMember {
+                    slug: "pace-source-1".into(), model: "glm-5.3".into(),
+                    paused_until_ms: None, weight: None, tier: None,
+                },
+            ];
+            crate::gateway::routing_groups::create(&conn, "pace-probe", "补查探测", "pace", &members, None).unwrap();
+        }
+
+        let request = || {
+            handle(
+                CallerProtocol::Chat,
+                deps.clone(),
+                HeaderMap::new(),
+                axum::body::Bytes::from_static(
+                    br#"{"model":"group/pace-probe","messages":[{"role":"user","content":"hi"}]}"#,
+                ),
+                "/v1/chat/completions",
+                None,
+            )
+        };
+        // 第一次：两个成员都没有剩余量 → 两个连接都应被触发
+        // 补查在**选路阶段**触发（回调是同步 send），不需要等响应完成；给 300ms 足够。
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(300), request()).await;
+        let mut first: Vec<String> = Vec::new();
+        while let Ok(id) = stale_rx.try_recv() {
+            first.push(id);
+        }
+        first.sort();
+        assert_eq!(
+            first,
+            vec!["pace-source-0".to_string(), "pace-source-1".to_string()],
+            "两个缺数据的成员都要后台补查，实际收到 {first:?}",
+        );
+
+        // 第二次（1 分钟内）：冷却中，不应再触发
+        // 补查在**选路阶段**触发（回调是同步 send），不需要等响应完成；给 300ms 足够。
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(300), request()).await;
+        let mut second: Vec<String> = Vec::new();
+        while let Ok(id) = stale_rx.try_recv() {
+            second.push(id);
+        }
+        assert!(second.is_empty(), "1 分钟内不应重复补查，实际收到 {second:?}");
+        crate::gateway::quota_snapshot::forget_stale_triggers();
     }
 
     #[tokio::test]

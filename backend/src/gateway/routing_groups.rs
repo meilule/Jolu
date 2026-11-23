@@ -85,7 +85,11 @@ pub(crate) fn rest_member(group: &str, slug: &str, model: &str, now_ms: i64) {
     }
 }
 
-fn is_rested(group: &str, member: &GroupMember, now_ms: i64) -> bool {
+/// 成员此刻是否处于休置中（刚失败过，暂时排到候选末尾）。
+///
+/// 公开给测试用：失败转移之后要能断言「失败的成员确实被休置」，
+/// 否则「下一个请求会不会又先撞上它」只能靠再发一次请求间接验证。
+pub(crate) fn is_rested(group: &str, member: &GroupMember, now_ms: i64) -> bool {
     RESTED.lock().map(|map| map.get(&rest_key(group, member)).is_some_and(|until| *until > now_ms)).unwrap_or(false)
 }
 
@@ -394,19 +398,27 @@ pub(crate) fn ordered_members(
             // 不按重置时间近似：A 刚重置但已烧掉 90%、B 两天前重置但只用 30% 时，
             // 重置时间会把 A 排前面，而真正宽裕的是 B。
             //
-            // 缺剩余量的成员排在已知的后面（`unwrap_or(-1.0)` 配合降序），
-            // 全员都缺时如实降级为 order。宁可按用户配置的顺序，也不拿假事实排序。
+            // ## 为什么「部分成员有数据」时不做半截排序
+            //
+            // 只剩一两个成员有新鲜快照时（主窗口不在供应商页，只有灵动岛那一条在轮询），
+            // 按数据排等于「刚被前端查过的永远第一」，其余成员按配置顺序跟在后面——
+            // 决定顺序的是「谁刚被查过」而不是剩余量，比 order 更差。
+            //
+            // 所以只有**全员**都有新鲜剩余量才按剩余量排；否则整体按 order，
+            // 并让调用方去后台补查（`wire` 侧的 `on_quota_stale` 回调）。
+            let total = members.len();
             let known = members.iter().filter(|m| remaining_of(&m.slug).is_some()).count();
             if known == 0 {
-                note = Some("策略「pace」需要各成员的额度剩余量（额度快照里没有，先刷新一次额度），已按 order 执行".into());
+                note = Some(
+                    "策略「pace」需要各成员的额度剩余量（额度快照里没有，已按 order 执行并在后台刷新）".into(),
+                );
+            } else if known < total {
+                note = Some(format!(
+                    "{total} 个成员中有 {} 个缺少新鲜的额度剩余量，已按 order 执行并在后台刷新",
+                    total - known
+                ));
             } else {
-                if known < members.len() {
-                    note = Some(format!(
-                        "{} 个成员缺少额度剩余量，已排在有数据的成员之后",
-                        members.len() - known
-                    ));
-                }
-                // 降序：剩余多的在前；None 用 -1.0 垫底（剩余百分比不会为负）
+                // 全员都有数据：降序，剩余多的在前
                 members.sort_by(|a, b| {
                     let left = remaining_of(&a.slug).unwrap_or(-1.0);
                     let right = remaining_of(&b.slug).unwrap_or(-1.0);
@@ -764,9 +776,14 @@ mod tests {
         assert_eq!(ordered[0].slug, "a", "剩余 60% 的 a 先用，即使它重置时间更早");
     }
 
-    /// 部分成员缺剩余量：有数据的排在前面，note 说明缺了几个。
+    /// 部分成员缺剩余量：**整体按 order**，不做半截排序。
+    ///
+    /// 早先的行为是「有数据的排前面、缺的垫底」。在主窗口不在供应商页时，
+    /// 分组里往往只有灵动岛那一条连接有新数据——那时按数据排等于
+    /// 「刚被前端查过的永远第一」，决定顺序的是「谁刚被查过」而不是剩余量，
+    /// 比 order 更差。
     #[test]
-    fn pace_puts_members_without_headroom_last_and_says_so() {
+    fn pace_falls_back_to_order_when_only_some_members_have_headroom() {
         let group = RoutingGroup {
             id: "g".into(),
             slug: "daily3".into(),
@@ -781,8 +798,11 @@ mod tests {
         let remaining = |slug: &str| if slug == "c" { None } else if slug == "a" { Some(20.0) } else { Some(80.0) };
         let (ordered, note) = ordered_members(&group, &mut state, &no_usage, &no_resets, &remaining, &no_exhausted, 0, None);
         let slugs: Vec<&str> = ordered.iter().map(|m| m.slug.as_str()).collect();
-        assert_eq!(slugs, ["b", "a", "c"], "80% → 20% → 未知垫底");
-        assert!(note.unwrap().contains("缺少额度剩余量"));
+        assert_eq!(slugs, ["a", "b", "c"], "部分缺失时整体按 order，不按剩余量半截排序");
+        let note = note.expect("要说明为什么没按剩余量排");
+        assert!(note.contains("已按 order 执行"), "{note}");
+        assert!(note.contains("缺少新鲜的额度剩余量"), "{note}");
+        assert!(note.contains('1'), "要说出缺了几个：{note}");
     }
 
     #[test]

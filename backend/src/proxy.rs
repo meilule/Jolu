@@ -183,6 +183,7 @@ pub(crate) fn detached_deps(db: Arc<Mutex<rusqlite::Connection>>) -> Arc<ProxyDe
         live_circuit_threshold: None,
         on_circuit: Arc::new(|_| {}),
         on_activity: Arc::new(|_, _| {}),
+        on_quota_stale: Arc::new(|_| {}),
         gateway_auth_relaxed: true,
         gateway_lan_shared: false,
         request_uids: Default::default(),
@@ -234,6 +235,12 @@ pub(crate) struct ProxyDeps {
     pub(crate) on_circuit: Arc<dyn Fn(&str) + Send + Sync>,
     /// 网关模式：请求开始 / 结束的实时事件（灵动岛转发动效用，只带元数据）。
     pub(crate) on_activity: crate::gateway::activity::Emit,
+    /// 分组 `pace` 选路时发现成员的额度剩余量缺失或过期，触发一次后台补查。
+    ///
+    /// 参数是连接 id。**必须是非阻塞的**：请求路径上不能等额度查询，
+    /// 这一次请求仍按现有数据排序。生产实现里 `spawn` 一个任务去查；
+    /// 测试与 `detached_deps` 传空回调。
+    pub(crate) on_quota_stale: Arc<dyn Fn(&str) + Send + Sync>,
     /// 网关鉴权宽松开关：中转模式且未开启局域网共享（回环监听，见 start 的绑定）时为
     /// true，调用方令牌只用于识别 agent、不比对密钥——手动 Key 刷新不再让已接线工具
     /// 集体 401。局域网共享开启后绑定 0.0.0.0，此开关必须为 false 走严格校验
@@ -923,6 +930,23 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
                 let _ = app.emit(name, payload);
             })
         },
+        on_quota_stale: {
+            let app = app.clone();
+            Arc::new(move |connection_id: &str| {
+                // 分组 `pace` 在选路时发现这个成员的剩余量缺失/过期。
+                // 甩到运行时上异步查：**不能**在这里等——请求正在转发，
+                // 等一次额度查询会把首字推后几百毫秒到几秒。
+                let app = app.clone();
+                let connection_id = connection_id.to_string();
+                tauri::async_runtime::spawn(async move {
+                    // `force=false`：命中 QUOTA_CACHE（成功 5 分钟、失败有退避）就不打上游。
+                    // 失败只记日志：补查是尽力而为，不能影响转发。
+                    if let Err(error) = crate::commands::quotas::query_connection_quota(app, connection_id.clone(), false).await {
+                        eprintln!("[路由分组] 后台补查「{connection_id}」额度失败：{error}");
+                    }
+                });
+            })
+        },
         // 局域网共享（P8.3，与 P2.2 的回环安全注释呼应）：只在网关模式生效——观测
         // 模式在请求头里透传真实上游凭证且无鉴权，监听地址必须保持回环。共享开启时
         // 绑定 0.0.0.0（下面两个绑定分支都按 bind_host 走），同时 gateway_auth_relaxed
@@ -1286,6 +1310,7 @@ pub(crate) mod test_support {
             live_circuit_threshold: None,
             on_circuit: Arc::new(|_| {}),
             on_activity: Arc::new(|_, _| {}),
+            on_quota_stale: Arc::new(|_| {}),
             // 测试固定走严格校验，保持 access.rs 既有 HTTP 用例的 401 语义。
             gateway_auth_relaxed: false,
             gateway_lan_shared: false,
@@ -1449,6 +1474,7 @@ mod tests {
             live_circuit_threshold: None,
             on_circuit: Arc::new(|_| {}),
             on_activity: Arc::new(|_, _| {}),
+            on_quota_stale: Arc::new(|_| {}),
             gateway_auth_relaxed: false,
             gateway_lan_shared: false,
             request_uids: Default::default(),

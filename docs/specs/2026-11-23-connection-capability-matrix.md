@@ -24,8 +24,8 @@
 
 | 平台 | 额度查询 | 模型发现 | 实际转发 | 备注 |
 |---|---|---|---|---|
-| **claude** | ✅ 订阅额度（5h / 7d） | — 固定清单 | ⚠️ 仅 Anthropic 协议 | `wire.rs:1080` 对非 Anthropic 直接 400；订阅适配器 `adapter/claude.rs` |
-| **codex** | ✅ 订阅额度 | — 固定清单 | ⚠️ 仅 OpenAI 协议 | `wire.rs:1077` 对 Anthropic 直接 400 |
+| **claude** | ✅ 订阅额度（5h / 7d） | — 固定清单 | ⚠️ 仅 Anthropic 协议 | `forward_one` 订阅分支的协议检查对它直接 400；订阅适配器 `adapter/claude.rs` |
+| **codex** | ✅ 订阅额度 | — 固定清单 | ⚠️ 仅 OpenAI 协议 | `forward_one` 订阅分支的协议检查对 Anthropic 请求直接 400 |
 | **gemini** | ✅ `adapter/gemini_subscription` | ✅ `gemini_subscription::models` | ✅ | 原生 `/v1beta` + Chat/Responses/Anthropic 三协议 |
 | **opencode** | ✅ | — 固定清单 | ⚠️ 仅 OpenAI 协议 | 复用 codex 适配器链 |
 | **zcode** | ✅ | ✅ `adapter/zcode::models` | ✅ | 双通道（个人套餐 / Start Plan） |
@@ -40,7 +40,8 @@
 
 1. **claude / codex / opencode 的协议限制是有意的**：它们各自的适配器只能翻译一种协议，网关在 `wire.rs` 里直接拒掉不匹配的调用方，而不是悄悄转错。这是「明确失败」而非「静默降级」。
 2. **模型发现只有 6 家有实时拉取**：其余走 `platformCatalog.json` 的内置清单或本地配置（Claude Code / Codex 的模型由 CLI 决定，不是账号决定的）。
-3. **qoder / trae / workbuddy 的模型清单是「富缓存」**：适配器自己写 `models_json`（含 `display_name` 与凭证指纹），`providers.rs:127` 特意不为它们覆盖——否则会砸掉显示名并让指纹校验失败。
+3. **额度快照的字段是「任一有值就记」**（F-2）：重置时间与剩余量任一存在就写，两者都缺才不留。只给剩余量不给重置时间的来源，`pace` 能用、`smart` 用不了——`smart` 需要重置时间才能排。
+4. **qoder / trae / workbuddy 的模型清单是「富缓存」**：适配器自己写 `models_json`（含 `display_name` 与凭证指纹），`commands/providers.rs` 里富缓存不覆盖的判断（`matches!(platform, "qoder" \| "trae" \| "workbuddy")`）特意不为它们覆盖——否则会砸掉显示名并让指纹校验失败。
 
 ---
 
@@ -48,8 +49,8 @@
 
 | 平台 | 限制 | 出处 |
 |---|---|---|
-| claude | 仅 Anthropic Messages 协议 | `wire.rs:1080` |
-| codex | 仅 OpenAI 协议（Chat / Responses） | `wire.rs:1077` |
+| claude | 仅 Anthropic Messages 协议 | `forward_one` 订阅分支的协议检查 |
+| codex | 仅 OpenAI 协议（Chat / Responses） | `forward_one` 订阅分支的协议检查 |
 | opencode | 仅 OpenAI 协议 | 同上 |
 | gemini | 检测只认命令行（`Detect::CliOnly`），因 `~/.gemini` 也被 Antigravity / Code Assist 使用 | `agent_discovery.rs:337` |
 | qoder-cn | 会话 / Skills 查询挂在 `platform="qoder"`，`qoder-cn` 无独立入口 | 能力矩阵 §4.5 |
