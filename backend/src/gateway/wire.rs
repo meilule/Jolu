@@ -355,6 +355,10 @@ pub(crate) fn agent_from_headers(headers: &HeaderMap) -> AgentIdentity {
 }
 
 /// 写一条路由流水并发结束事件。事件先于写库发出：数据库忙、这一条没写进库时界面仍能收到。
+///
+/// 写库排队交给后台写入线程（[`route_log::submit`](crate::gateway::route_log::submit)），
+/// 请求路径不等数据库锁。返回的 [`RowSlot`](crate::gateway::route_log::RowSlot)
+/// 在写好后带行 id，供流式响应没读完时改判。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn record_route(
     deps: &Arc<ProxyDeps>,
@@ -365,14 +369,15 @@ pub(crate) fn record_route(
     status: Option<u16>,
     result: &str,
     started: std::time::Instant,
-) {
+) -> crate::gateway::route_log::RowSlot {
     use crate::gateway::activity::{emit_end, RouteEnd};
     let duration_ms = started.elapsed().as_millis() as i64;
+    let ts = chrono::Local::now().timestamp_millis();
     emit_end(
         &deps.on_activity,
         &RouteEnd {
             request_id,
-            ts: chrono::Local::now().timestamp_millis(),
+            ts,
             agent: meta.agent.as_deref(),
             identified_by: meta.identified_by,
             unidentified_ua: meta.unidentified_ua.as_deref(),
@@ -388,27 +393,29 @@ pub(crate) fn record_route(
             session_id: meta.session_id(),
         },
     );
-    let Ok(conn) = deps.db.try_lock() else { return };
-    crate::gateway::route_log::record(
-        &conn,
-        crate::gateway::route_log::NewEntry {
-            agent: meta.agent.as_deref(),
-            requested_model: &meta.requested_model,
-            source,
-            upstream_model: upstream,
+    // 采集任务持有数据库锁时由写入线程等待，不把锁暂忙当成可丢弃的流水，也不卡住请求线程。
+    crate::gateway::route_log::queue_record(
+        &deps.db,
+        ts,
+        crate::gateway::route_log::OwnedEntry {
+            agent: meta.agent.clone(),
+            requested_model: meta.requested_model.clone(),
+            source: source.map(str::to_string),
+            upstream_model: upstream.map(str::to_string),
             status_code: status.map(i64::from),
-            result,
+            result: result.to_string(),
             duration_ms: Some(duration_ms),
-            connection_id: meta.connection_id.as_deref(),
-            session_platform: meta.session_platform(),
-            session_id: meta.session_id(),
-            client_key: meta.client_key.as_deref(),
+            connection_id: meta.connection_id.clone(),
+            session_platform: meta.session_platform().map(str::to_string),
+            session_id: meta.session_id().map(str::to_string),
+            client_key: meta.client_key.clone(),
             request_id: Some(request_id as i64),
+            request_uid: meta.request_uid,
             // 不带来源前缀、也不是分组的模型 id 走的是裸名解析（目录里第一个暴露它的来源 / 默认来源）
             resolved_from: (!meta.requested_model.contains('/')).then_some("bare"),
-            profile: crate::gateway::profiles::active().as_deref(),
+            profile: crate::gateway::profiles::active(),
         },
-    );
+    )
 }
 
 /// 选路成功、交给上游之前：发开始事件；返回的 guard 保证请求中途被取消时也有结束事件。
@@ -474,6 +481,7 @@ pub(crate) async fn handle(
     // 内联字节统一成标准 base64（base64_input.rs）：在任何人读请求体之前做
     body = crate::gateway::base64_input::standardize_body(body);
     let request_id = crate::gateway::activity::next_request_id();
+    let request_uid = deps.request_uids.take(&deps.db);
     let identity = agent_from_headers(&headers);
     let agent = identity.agent.clone();
     // 中间件链（P6.1）：model-map / param-override 在选路之前执行，失败隔离——
@@ -572,12 +580,14 @@ pub(crate) async fn handle(
             &s.platform,
             &s.session_id,
             request_id,
+            request_uid,
         )
     });
     // 以下选路与转发包在一个 async 块里：块内的 `return` 只结束这个块，
     // 返回的响应统一在块外套上 Token 计量。
     let response = async {
     let meta = RouteMeta {
+        request_uid,
         session: session_ref.clone(),
         agent: agent.clone(),
         identified_by: identity.identified_by,
@@ -653,6 +663,7 @@ pub(crate) async fn handle(
             .ok()
             .and_then(|conn| crate::gateway::routing_groups::get(&conn, group_slug).ok().flatten());
         let Some(group) = group else {
+            record_route(&deps, request_id, &meta, None, None, Some(404), "rejected", started);
             return error_response(StatusCode::NOT_FOUND, &format!("没有名为「{group_slug}」的路由分组"));
         };
         // 「按意图」（3.9）：先判档位（新的人工回合会多一次判定调用）。必须在拿轮转锁之前 await
@@ -767,6 +778,7 @@ pub(crate) async fn handle(
         }
     };
     if candidates.is_empty() {
+        record_route(&deps, request_id, &meta, None, None, Some(503), "rejected", started);
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             group_note.as_deref().unwrap_or("路由分组的成员都不在模型池中：请检查分组配置"),
@@ -799,6 +811,7 @@ pub(crate) async fn handle(
             let before: Vec<String> = candidates.iter().map(|(entry, _)| entry.slug.clone()).collect();
             let kept: Vec<_> = candidates.into_iter().filter(|(entry, _)| allowed.contains(&entry.connection_id)).collect();
             if kept.is_empty() {
+                record_route(&deps, request_id, &meta, None, None, Some(403), "rejected", started);
                 return error_response(
                     StatusCode::FORBIDDEN,
                     &format!("这把客户端 Key 只能使用指定的账号，本次要用的来源（{}）不在范围内", before.join("、")),
@@ -820,6 +833,7 @@ pub(crate) async fn handle(
         }
         if !route::source_is_current(&deps, &entry) {
             if last {
+                record_route(&deps, request_id, &meta, None, None, Some(503), "rejected", started);
                 return error_response(StatusCode::SERVICE_UNAVAILABLE, "来源已关闭或配置已变化，请刷新后重试");
             }
             eprintln!("[路由] 成员「{}」配置已变化，跳过换下一个候选", entry.slug);
@@ -1036,7 +1050,7 @@ async fn forward_one(
                 }
             };
             guard.finish();
-            record_route(
+            let row_id = record_route(
                 deps,
                 request_id,
                 &meta,
@@ -1050,7 +1064,8 @@ async fn forward_one(
             if response.status().is_success() {
                 bind(entry);
             }
-            response
+            // 流式响应：客户端可能在中途断开，那时流水已记成 ok。包一层在 drop 时改判。
+            crate::gateway::route_log::CancelWatch::watch(response, &deps.db, row_id)
         }
         // 订阅来源：按平台分发到各自适配器；协议不匹配本地直接返回，不发开始事件
         _ => {
@@ -1148,7 +1163,7 @@ async fn forward_one(
                     }
                 }
             };
-            record_route(
+            let row_id = record_route(
                 deps,
                 request_id,
                 &meta,
@@ -1161,7 +1176,7 @@ async fn forward_one(
             if response.status().is_success() {
                 bind(entry);
             }
-            response
+            crate::gateway::route_log::CancelWatch::watch(response, &deps.db, row_id)
         }
     }
 }
@@ -1332,6 +1347,35 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// C-1：数据库被占着时，写流水不卡住请求线程；锁放开后这一行照样写进库。
+    #[test]
+    fn route_record_does_not_block_on_a_busy_database_and_still_lands() {
+        let mut deps = Arc::try_unwrap(crate::proxy::test_support::bare_deps())
+            .unwrap_or_else(|_| panic!("test dependencies must have a single owner"));
+        let (emitted_tx, emitted_rx) = std::sync::mpsc::channel();
+        deps.on_activity = Arc::new(move |_, _| {
+            emitted_tx.send(()).unwrap();
+        });
+        let deps = Arc::new(deps);
+        let guard = deps.db.lock().unwrap();
+        let started = std::time::Instant::now();
+        let meta = RouteMeta { requested_model: "fixture/model".into(), ..Default::default() };
+        let row = record_route(&deps, 42, &meta, None, None, Some(503), "failed", std::time::Instant::now());
+        assert!(started.elapsed() < std::time::Duration::from_millis(200), "请求线程不能等数据库锁");
+        emitted_rx.recv_timeout(std::time::Duration::from_secs(2)).expect("结束事件先于写库发出");
+        assert_eq!(row.get(), None, "锁还被占着，这一行还没写");
+        drop(guard);
+        crate::gateway::route_log::flush();
+        assert!(row.get().is_some(), "锁放开后写入线程补上这一行");
+        let conn = deps.db.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM gateway_route_log WHERE request_id = 42 AND result = 'failed'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(count, 1);
+    }
 
     #[tokio::test]
     async fn closing_or_pausing_a_source_rejects_warmed_pool_before_upstream() {

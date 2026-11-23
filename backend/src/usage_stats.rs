@@ -724,11 +724,16 @@ pub fn overview(conn: &Connection, f: &StatsFilter) -> rusqlite::Result<Overview
     let cache_known: Vec<&Req> = reqs.iter().filter(|r| r.cache_read.is_some() && r.hit_denominator.is_some()).collect();
     Ok(Overview {
         tokens: split(reqs.iter(), empty),
-        token_coverage: TokenCoverage {
-            known_total: reqs.iter().filter_map(|r| r.total).reduce(|a, b| a + b),
-            known_requests: reqs.iter().filter(|r| r.total.is_some()).count() as i64,
-            cache_hit_rate: hit_rate(cache_known.iter().copied()),
-            cache_requests: cache_known.len() as i64,
+        // 用共享契约算覆盖：`Coverage::of` 与 `SessionTokens` / 灵动岛用的是同一套
+        // 「未知不是零、负数当未知」规则。这里取其中两个字段填既有 DTO，不改序列化形状。
+        token_coverage: {
+            let coverage = crate::data_contract::Coverage::of(reqs.iter().map(|r| r.total));
+            TokenCoverage {
+                known_total: coverage.total(),
+                known_requests: coverage.known(),
+                cache_hit_rate: hit_rate(cache_known.iter().copied()),
+                cache_requests: cache_known.len() as i64,
+            }
         },
         requests: reqs.len() as i64,
         failed: reqs.iter().filter(|r| r.failed).count() as i64,

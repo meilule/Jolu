@@ -909,6 +909,7 @@ mod tests {
         assert!(request.contains("\"role\":\"user\""), "{request}");
 
         // 统一网关：Gemini 入口同样写路由流水，识别新版 UA；不带会话标识时不猜会话
+        crate::gateway::route_log::flush();
         let rows = crate::gateway::route_log::recent(&deps.db.lock().unwrap(), 5).unwrap();
         let row = rows.iter().find(|r| r.requested_model == "gem/gemini-2.5-pro").expect("Gemini 请求应写入路由流水");
         assert_eq!((row.agent.as_deref(), row.result.as_str(), row.connection_id.as_deref()), (Some("gemini"), "ok", Some("c-gem")));
@@ -1145,6 +1146,7 @@ mod tests {
         assert_eq!(row.connection_id.as_deref(), Some("c-kimi"));
         assert_eq!(row.parts.as_ref().unwrap().iter().map(|p| p.tokens).sum::<i64>(), 40_100);
         assert!(row.estimated.is_some_and(|e| e > 10_000 && e != 40_100), "估算值保留：{:?}", row.estimated);
+        crate::gateway::route_log::flush();
         let request_id: i64 = {
             let conn = deps.db.lock().unwrap();
             conn.query_row("SELECT request_id FROM gateway_route_log ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap()

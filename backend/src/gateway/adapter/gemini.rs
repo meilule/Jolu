@@ -43,9 +43,11 @@ pub(crate) async fn handle(
     // Gemini CLI 的 API Key 请求不带会话标识（2026-11-06 用 0.65.0 实测），这里不猜会话。
     let started = std::time::Instant::now();
     let request_id = crate::gateway::activity::next_request_id();
+    let request_uid = deps.request_uids.take(&deps.db);
     let identity = crate::gateway::wire::agent_from_headers(headers);
     let agent = identity.agent.clone();
     let meta = crate::gateway::activity::RouteMeta {
+        request_uid,
         session: crate::gateway::wire::session_identity(agent.as_deref(), headers, &body),
         agent,
         identified_by: identity.identified_by,
@@ -63,6 +65,7 @@ pub(crate) async fn handle(
             &s.platform,
             &s.session_id,
             request_id,
+            request_uid,
         )
     });
     let metered = |response: Response| match capture.as_ref() {
@@ -92,6 +95,7 @@ pub(crate) async fn handle(
     let decision = route::decide(&pool, model_id, None, &history, &bare);
     if let RouteDecision::Direct(entry, _) | RouteDecision::Subscription(entry) = &decision {
         if !route::source_is_current(&deps, entry) {
+            crate::gateway::wire::record_route(&deps, request_id, &meta, None, None, Some(503), "rejected", started);
             return error_response(StatusCode::SERVICE_UNAVAILABLE, "来源已关闭或配置已变化，请刷新后重试");
         }
     }

@@ -1,7 +1,7 @@
 //! 上下文快照的查询（第 3 期，执行文档 §3.4 的 5 个命令都落在这里，命令层只做转发）。
 //!
-//! 链路信息（agent、请求模型、实际模型、来源、结果）按 `request_id` 取路由流水里这次请求的最后一条
-//! （换候选时每次尝试各记一条，最后一条就是给出回复的那次）；来源账号名取 `connections`。
+//! 链路信息按持久请求身份和会话身份取路由流水里这次请求的最后一条。
+//! 历史数据缺少持久请求身份时链路保留未知。
 //! 未知一律返回 `null`：没有上游用量、模型窗口查不到、流水已被清理，都不写成 0 或空串。
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -92,7 +92,12 @@ const SUMMARY_COLUMNS: &str = "s.id, s.session_platform, s.session_id, s.request
     r.agent, r.requested_model, r.upstream_model, r.source, r.result, r.status_code, r.duration_ms,
     s.connection_id, c.name, c.platform";
 
-const SUMMARY_JOINS: &str = "LEFT JOIN gateway_route_log r ON r.id = (SELECT MAX(id) FROM gateway_route_log WHERE request_id = s.request_id)
+const SUMMARY_JOINS: &str = "LEFT JOIN gateway_route_log r ON r.id = (
+        SELECT MAX(l.id) FROM gateway_route_log l
+        WHERE l.request_uid = s.request_uid AND s.request_uid IS NOT NULL
+          AND l.session_platform = s.session_platform AND l.session_id = s.session_id
+          AND (SELECT COUNT(*) FROM gateway_context_snapshot x WHERE x.request_uid = s.request_uid) = 1
+    )
     LEFT JOIN connections c ON c.id = s.connection_id";
 
 fn summary_of(r: &Row<'_>) -> rusqlite::Result<SnapshotSummary> {
@@ -245,7 +250,7 @@ mod tests {
     }
 
     fn put(conn: &Connection, sid: &str, request_id: i64, ts: i64, state: State, usage: Usage) -> i64 {
-        let id = store::insert(conn, &NewSnapshot { session_platform: "claude", session_id: sid, request_id, protocol: "anthropic", ts }).unwrap();
+        let id = store::insert(conn, &NewSnapshot { session_platform: "claude", session_id: sid, request_id, request_uid: Some(request_id), protocol: "anthropic", ts }).unwrap();
         let prompt = (state == State::Ready).then(|| {
             let p = parse(Protocol::Anthropic, CLAUDE.as_bytes()).unwrap();
             match usage.input {
@@ -273,6 +278,7 @@ mod tests {
                 session_id: Some("a"),
                 client_key: None,
                 request_id: Some(request_id),
+                request_uid: Some(request_id),
                 resolved_from: None,
                 profile: None,
             },
@@ -306,6 +312,19 @@ mod tests {
         let hist = history(&conn, "claude", "a").unwrap();
         assert_eq!(hist.iter().map(|s| s.request_id).collect::<Vec<_>>(), vec![Some(2), Some(1)]);
         assert_eq!((hist[1].source.as_deref(), hist[1].route_result.as_deref()), (Some("kimi"), Some("ok")));
+    }
+
+    #[test]
+    fn route_is_unknown_when_request_id_belongs_to_another_session_or_multiple_snapshots() {
+        let conn = conn();
+        put(&conn, "b", 1, 100, State::Failed, Usage::default());
+        route(&conn, 1, "other-session", "ok");
+        let b = history(&conn, "claude", "b").unwrap();
+        assert_eq!(b[0].source, None);
+
+        put(&conn, "a", 1, 200, State::Failed, Usage::default());
+        let a = history(&conn, "claude", "a").unwrap();
+        assert_eq!(a[0].source, None, "重复编号的历史快照不能猜测归属");
     }
 
     #[test]

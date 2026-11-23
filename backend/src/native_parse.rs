@@ -249,6 +249,58 @@ mod tests {
         assert_eq!(r.request.total_tokens, Some(1020));
         assert_eq!(r.credits, Some(0.65));
     }
+    /// P0-3 WorkBuddy 对账的对照基准：`scripts/acceptance/reconcile-usage-by-id.py`
+    /// 的 `read_workbuddy` 必须与这里逐字段一致，否则对账报告里的「字段差异」是假的。
+    ///
+    /// 本机没有 WorkBuddy 客户端，无法用真实样本对账；这条 + Python 侧同一组样本
+    /// 至少保证「两边读法相同」。样本覆盖四种形状：
+    /// rawUsage 带缓存、只有 usage、messageId + inputTokensDetails 数组、缓存写。
+    #[test]
+    fn workbuddy_shapes_that_the_reconcile_script_must_match() {
+        let cases = [
+            // (输入, 期望 input, cache_read, cache_write, output, total, includes_cache)
+            (
+                json!({"id":"m1","sessionId":"s1","timestamp":1700000000000i64,
+                    "providerData":{"usage":{"inputTokens":1000,"outputTokens":20,"totalTokens":1020},
+                                    "rawUsage":{"prompt_tokens":1000,"completion_tokens":20,"total_tokens":1020,
+                                                "prompt_tokens_details":{"cached_tokens":800}}}}),
+                (1000, Some(800), None, 20, Some(1020), true),
+            ),
+            (
+                json!({"id":"m2","sessionId":"s1","timestamp":1700000001000i64,
+                    "providerData":{"usage":{"inputTokens":500,"outputTokens":10,"totalTokens":510}}}),
+                (500, None, None, 10, Some(510), false),
+            ),
+            (
+                json!({"messageId":"m3","sessionId":"s2","timestamp":1700000002000i64,
+                    "providerData":{"usage":{"inputTokens":2000,"outputTokens":30,"totalTokens":2030,
+                                             "inputTokensDetails":[{"cached_tokens":1500}]}}}),
+                (2000, Some(1500), None, 30, Some(2030), false),
+            ),
+            (
+                json!({"id":"m4","sessionId":"s2","timestamp":1700000003000i64,
+                    "providerData":{"usage":{"inputTokens":300,"outputTokens":5},
+                                    "rawUsage":{"prompt_tokens":300,"completion_tokens":5,
+                                                "prompt_cache_write_tokens":120}}}),
+                // m4 的 rawUsage 没有 total_tokens：解析器留 None，不自己加总
+                (300, None, Some(120), 5, None, true),
+            ),
+        ];
+        for (value, (input, read, write, output, total, includes_cache)) in cases {
+            let r = workbuddy(&value, "native:workbuddy:main", "fallback").unwrap();
+            let id = value.get("id").or_else(|| value.get("messageId")).and_then(|v| v.as_str()).unwrap();
+            let session = value.get("sessionId").and_then(|v| v.as_str()).unwrap();
+            assert_eq!(r.request.dedup_key, format!("{session}:{id}"));
+            // 存原始输入，缓存单列：不能在这里提前扣（会被消费方按 includes_cache 再扣一次）
+            assert_eq!(r.request.input_tokens, Some(input), "{id} input");
+            assert_eq!(r.request.cache_read_tokens, read, "{id} cache_read");
+            assert_eq!(r.request.cache_write_tokens, write, "{id} cache_write");
+            assert_eq!(r.request.output_tokens, Some(output), "{id} output");
+            assert_eq!(r.request.total_tokens, total, "{id} total");
+            assert_eq!(r.input_semantics == "includes_cache", includes_cache, "{id} semantics");
+        }
+    }
+
     #[test]
     fn qoder_unavailable_zero_is_unknown_not_free_usage() {
         let v = json!({"type":"assistant","timestamp":1000,"message":{"id":"m","usage":{

@@ -185,6 +185,7 @@ pub(crate) fn detached_deps(db: Arc<Mutex<rusqlite::Connection>>) -> Arc<ProxyDe
         on_activity: Arc::new(|_, _| {}),
         gateway_auth_relaxed: true,
         gateway_lan_shared: false,
+        request_uids: Default::default(),
     })
 }
 
@@ -242,6 +243,8 @@ pub(crate) struct ProxyDeps {
     /// 任意 IP 字面量（局域网客户端连的是 IP），域名 Host 仍然拒绝。
     /// 只在网关模式为 true；观测模式透传上游凭证且无鉴权，永不共享。
     pub(crate) gateway_lan_shared: bool,
+    /// 网关：持久请求身份的进程内号段（C-1：请求路径不为取号等数据库锁）
+    pub(crate) request_uids: crate::gateway::activity::UidBlock,
 }
 
 impl ProxyDeps {
@@ -927,7 +930,12 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
         // 「只监听回环」让出的安全由密钥校验补上。
         gateway_auth_relaxed: mode == crate::gateway::Mode::Relay && !lan_shared,
         gateway_lan_shared: lan_shared,
+        request_uids: Default::default(),
     });
+    // 先预留一段请求身份，第一个请求就不必碰数据库
+    if mode == crate::gateway::Mode::Relay {
+        deps.request_uids.prefetch(&deps.db);
+    }
 
     let router = build_router(mode, deps.clone());
     // 来源地址白名单（P2-9）：列表写错时如实报错并只放行本机，不当成「不限」
@@ -1281,6 +1289,7 @@ pub(crate) mod test_support {
             // 测试固定走严格校验，保持 access.rs 既有 HTTP 用例的 401 语义。
             gateway_auth_relaxed: false,
             gateway_lan_shared: false,
+            request_uids: Default::default(),
         })
     }
 
@@ -1442,6 +1451,7 @@ mod tests {
             on_activity: Arc::new(|_, _| {}),
             gateway_auth_relaxed: false,
             gateway_lan_shared: false,
+            request_uids: Default::default(),
         });
         (deps, shutdown_rx)
     }

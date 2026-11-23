@@ -53,6 +53,7 @@ pub struct NewSnapshot<'a> {
     pub session_platform: &'a str,
     pub session_id: &'a str,
     pub request_id: i64,
+    pub request_uid: Option<i64>,
     pub protocol: &'a str,
     pub ts: i64,
 }
@@ -60,9 +61,9 @@ pub struct NewSnapshot<'a> {
 /// 写 `analyzing` 行，返回行 id。
 pub fn insert(conn: &Connection, s: &NewSnapshot<'_>) -> rusqlite::Result<i64> {
     conn.execute(
-        "INSERT INTO gateway_context_snapshot(session_platform, session_id, request_id, ts, state, protocol)
-         VALUES(?1, ?2, ?3, ?4, 'analyzing', ?5)",
-        params![s.session_platform, s.session_id, s.request_id, s.ts, s.protocol],
+        "INSERT INTO gateway_context_snapshot(session_platform, session_id, request_id, ts, state, protocol, request_uid)
+         VALUES(?1, ?2, ?3, ?4, 'analyzing', ?5, ?6)",
+        params![s.session_platform, s.session_id, s.request_id, s.ts, s.protocol, s.request_uid],
     )?;
     Ok(conn.last_insert_rowid())
 }

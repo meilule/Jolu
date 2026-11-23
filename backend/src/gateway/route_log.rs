@@ -20,7 +20,11 @@ pub struct RouteLogEntry {
     pub source: Option<String>,
     pub upstream_model: Option<String>,
     pub status_code: Option<i64>,
-    /// ok / rejected / failed
+    /// ok / rejected / failed / cancelled
+    ///
+    /// `cancelled` 是 P1 新增的一档：客户端在流式响应中途断开，请求没有完成。
+    /// 它既不是成功（用量不完整）也不是失败（上游正常开始回了）。
+    /// 上游在流中途报错时，原先的 `ok` 改判为 `failed`。见 [`CancelWatch`]。
     pub result: String,
     pub duration_ms: Option<i64>,
     pub connection_id: Option<String>,
@@ -30,6 +34,8 @@ pub struct RouteLogEntry {
     pub client_key: Option<String>,
     /// 同一次网关请求的编号：分组成员失败转移时，各次尝试的行共享它（进程内递增，重启后从头计）
     pub request_id: Option<i64>,
+    /// 跨进程可验证的请求身份；旧流水与分配失败时为空。
+    pub request_uid: Option<i64>,
     /// 模型 id 怎么解析到来源的：`bare` = 请求用的是不带来源前缀的裸名（目录或默认来源兜底）
     pub resolved_from: Option<String>,
     /// 请求发生时生效的 Profile（应用 Profile 后、手动改接线前）
@@ -51,19 +57,31 @@ pub struct NewEntry<'a> {
     pub client_key: Option<&'a str>,
     /// 同一次网关请求的编号（见 [`RouteLogEntry::request_id`]）
     pub request_id: Option<i64>,
+    pub request_uid: Option<i64>,
     /// 见 [`RouteLogEntry::resolved_from`]
     pub resolved_from: Option<&'a str>,
     /// 见 [`RouteLogEntry::profile`]
     pub profile: Option<&'a str>,
 }
 
-pub fn record(conn: &Connection, entry: NewEntry<'_>) {
-    let _ = conn.execute(
+/// 写入一条流水（时间取现在），返回新行 id（写入失败为 None）。
+///
+/// 返回 id 是为了「先记成功、后发现流没正常读完」的场景：流式响应的状态码在响应头到手时
+/// 就已经确定，但客户端可能中途断开、上游也可能中途报错。那时这行已经写成 `ok`，
+/// 只能回过头改它——没有 id 就只能靠 (ts, request_uid) 猜，猜错会改到别人的行。
+pub fn record(conn: &Connection, entry: NewEntry<'_>) -> Option<i64> {
+    record_at(conn, chrono::Local::now().timestamp_millis(), entry)
+}
+
+/// 同 [`record`]，时间由调用方给定。网关经 [`submit`] 排队写入，时间必须在请求结束时
+/// 取好——排队期间数据库可能正被采集任务占着，到写入时再取会把时间推后。
+pub fn record_at(conn: &Connection, ts: i64, entry: NewEntry<'_>) -> Option<i64> {
+    let result = conn.execute(
         "INSERT INTO gateway_route_log(ts, agent, requested_model, source, upstream_model, status_code, result, duration_ms,
-                                       connection_id, session_platform, session_id, client_key, request_id, resolved_from, profile)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                                       connection_id, session_platform, session_id, client_key, request_id, resolved_from, profile, request_uid)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
-            chrono::Local::now().timestamp_millis(),
+            ts,
             entry.agent,
             entry.requested_model,
             entry.source,
@@ -78,8 +96,16 @@ pub fn record(conn: &Connection, entry: NewEntry<'_>) {
             entry.request_id,
             entry.resolved_from,
             entry.profile,
+            entry.request_uid,
         ],
     );
+    let row_id = match result {
+        Ok(_) => Some(conn.last_insert_rowid()),
+        Err(error) => {
+            eprintln!("[路由流水] 记录写入失败：{error}");
+            return None;
+        }
+    };
     // 只保留最近 1000 行；每 50 次写清理一次，避免每条请求都做一次 NOT IN 子查询。
     use std::sync::atomic::{AtomicU32, Ordering};
     static WRITES: AtomicU32 = AtomicU32::new(0);
@@ -91,10 +117,271 @@ pub fn record(conn: &Connection, entry: NewEntry<'_>) {
         // 上下文快照与流水在同一处清理（执行文档 §6）
         crate::gateway::context::store::prune(conn);
     }
+    row_id
+}
+
+type Db = std::sync::Arc<std::sync::Mutex<Connection>>;
+type Job = Box<dyn FnOnce() + Send>;
+
+/// 把一次流水写入交给后台写入线程，立即返回。
+///
+/// ## 为什么不在请求里直接写
+///
+/// 网关和采集器共用同一把数据库锁（`ProxyDeps.db`），采集器扫描时会持锁较久。
+/// 请求处理跑在 tokio 工作线程上，在那里用 `std::sync::Mutex::lock()` 等锁会把工作线程
+/// 卡住，流式请求的首字也跟着推迟。所以请求路径只排队，由一个专门的线程等锁、写库。
+///
+/// ## 顺序
+///
+/// 只有一个写入线程，按提交顺序执行。「写一行 → 稍后改判这一行」因此天然有序，
+/// 改判任务执行时，前面那次写入已经完成，[`RowSlot`] 里已有行 id。
+///
+/// 线程起不来（极少见）时退回在当前线程执行，流水不会因此丢。
+/// 进程退出时队列里还没写完的几条会丢，这与原先「锁忙就跳过」的风险相当。
+pub(crate) fn submit(job: impl FnOnce() + Send + 'static) {
+    use std::sync::mpsc::{channel, Sender};
+    static WRITER: std::sync::OnceLock<Option<Sender<Job>>> = std::sync::OnceLock::new();
+    let writer = WRITER.get_or_init(|| {
+        let (tx, rx) = channel::<Job>();
+        std::thread::Builder::new()
+            .name("jolu-route-log".into())
+            .spawn(move || {
+                for job in rx {
+                    // 一个任务出错不能让写入线程退出，否则后面的流水全丢
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                }
+            })
+            .map_err(|error| eprintln!("[路由流水] 写入线程启动失败，改为同步写入：{error}"))
+            .ok()
+            .map(|_| tx)
+    });
+    let job: Job = Box::new(job);
+    match writer {
+        Some(tx) => {
+            if let Err(std::sync::mpsc::SendError(job)) = tx.send(job) {
+                job();
+            }
+        }
+        None => job(),
+    }
+}
+
+/// 等写入队列里此前提交的任务全部执行完。测试在读流水之前调用。
+///
+/// 调用方不能持有任何排队任务要用的数据库锁，否则会互相等待。
+#[cfg(test)]
+pub(crate) fn flush() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    submit(move || {
+        let _ = tx.send(());
+    });
+    let _ = rx.recv();
+}
+
+/// 一条排队写入的流水写好后的行 id。写入失败、或还没轮到写时为空。
+#[derive(Clone, Default)]
+pub(crate) struct RowSlot(std::sync::Arc<std::sync::OnceLock<i64>>);
+
+impl RowSlot {
+    pub(crate) fn get(&self) -> Option<i64> {
+        self.0.get().copied()
+    }
+
+    fn set(&self, id: i64) {
+        let _ = self.0.set(id);
+    }
+}
+
+/// 排队写一条流水（时间在调用时取好）。写好后把行 id 填进返回的 [`RowSlot`]。
+pub(crate) fn queue_record(db: &Db, ts: i64, entry: OwnedEntry) -> RowSlot {
+    let slot = RowSlot::default();
+    let (db, filled) = (db.clone(), slot.clone());
+    submit(move || {
+        let conn = match db.lock() {
+            Ok(conn) => conn,
+            Err(error) => {
+                eprintln!("[路由流水] 数据库锁不可用，记录写入失败：{error}");
+                return;
+            }
+        };
+        if let Some(id) = record_at(&conn, ts, entry.borrowed()) {
+            filled.set(id);
+        }
+    });
+    slot
+}
+
+/// [`NewEntry`] 的自有版本：排队写入时，请求里借来的字符串活不到写入那一刻。
+pub(crate) struct OwnedEntry {
+    pub agent: Option<String>,
+    pub requested_model: String,
+    pub source: Option<String>,
+    pub upstream_model: Option<String>,
+    pub status_code: Option<i64>,
+    pub result: String,
+    pub duration_ms: Option<i64>,
+    pub connection_id: Option<String>,
+    pub session_platform: Option<String>,
+    pub session_id: Option<String>,
+    pub client_key: Option<String>,
+    pub request_id: Option<i64>,
+    pub request_uid: Option<i64>,
+    pub resolved_from: Option<&'static str>,
+    pub profile: Option<String>,
+}
+
+impl OwnedEntry {
+    fn borrowed(&self) -> NewEntry<'_> {
+        NewEntry {
+            agent: self.agent.as_deref(),
+            requested_model: &self.requested_model,
+            source: self.source.as_deref(),
+            upstream_model: self.upstream_model.as_deref(),
+            status_code: self.status_code,
+            result: &self.result,
+            duration_ms: self.duration_ms,
+            connection_id: self.connection_id.as_deref(),
+            session_platform: self.session_platform.as_deref(),
+            session_id: self.session_id.as_deref(),
+            client_key: self.client_key.as_deref(),
+            request_id: self.request_id,
+            request_uid: self.request_uid,
+            resolved_from: self.resolved_from,
+            profile: self.profile.as_deref(),
+        }
+    }
+}
+
+/// 流式响应没有正常读完时的两种结局。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamEnd {
+    /// 客户端中途断开（Ctrl-C、关终端、读超时）
+    Cancelled,
+    /// 上游在流中途报错
+    Failed,
+}
+
+impl StreamEnd {
+    fn result(self) -> &'static str {
+        match self {
+            StreamEnd::Cancelled => "cancelled",
+            StreamEnd::Failed => "failed",
+        }
+    }
+}
+
+/// 流式响应的结束追踪器（P1：没读完的流不能记成 `ok`）。
+///
+/// ## 为什么要单独追踪
+///
+/// 流式请求的流水在**响应头到手**时就写下了，那时 `result` 是 `ok`——状态码 200，
+/// 上游确实开始回了。之后流可能没有正常结束：客户端（Claude Code / Codex / 用户在终端
+/// 按 Ctrl-C）读到一半断开，或者上游中途报错。只看状态码会把这些都记成完全成功，
+/// 用量统计和「今天成功几次」都会偏高。
+///
+/// ## 怎么判断
+///
+/// | 情形 | `poll_next` 返回 | 判定 |
+/// |---|---|---|
+/// | 上游正常写完 | `Ready(None)` | 完成，不改 |
+/// | 上游中途报错 | `Ready(Some(Err))` | **失败**（随后 body 被丢弃，不再记成取消） |
+/// | 客户端断开 / 读超时 | 没等到 `None` 流就被 drop | **取消** |
+///
+/// 上游报错后 hyper 会丢弃 body，`Drop` 照样执行。所以收到 `Err` 时必须先把结局定为失败、
+/// 收走回调，否则 `Drop` 会把上游的错误说成客户端断开。
+///
+/// ## 为什么改原行而不是新写一行
+///
+/// 同一请求已经在流水里有一行 `ok`，再写一行会让「一次请求」变成两行——
+/// 正是 P1 反复要消除的「把尝试当请求」。改原行则保持一行一请求，`request_uid`
+/// 关联不变。行 id 经 [`RowSlot`] 传过来。
+pub(crate) struct CancelWatch {
+    inner: axum::body::BodyDataStream,
+    /// 流没有正常读完时执行，参数说明是哪种结局。`None` 表示已经自然结束（或已经执行过）。
+    on_unfinished: Option<Box<dyn FnOnce(StreamEnd) + Send>>,
+}
+
+impl CancelWatch {
+    /// 包一层响应 body：流没有正常读完时执行 `on_unfinished`。
+    ///
+    /// 自然读完不执行。用闭包而不是直接传数据库，是为了让判定逻辑（读完了吗？怎么没读完？）
+    /// 可以脱离数据库单独测。
+    pub(crate) fn wrap(
+        response: axum::response::Response,
+        on_unfinished: impl FnOnce(StreamEnd) + Send + 'static,
+    ) -> axum::response::Response {
+        let (parts, body) = response.into_parts();
+        let stream = Self { inner: body.into_data_stream(), on_unfinished: Some(Box::new(on_unfinished)) };
+        axum::response::Response::from_parts(parts, axum::body::Body::from_stream(stream))
+    }
+
+    /// 生产用：流没有正常读完时，把这条流水改判为 cancelled / failed。
+    ///
+    /// 改判同样排队交给写入线程，`Drop` 里不等数据库锁。它排在这一行的写入之后，
+    /// 执行时 `row` 里已有行 id；流水没写进库时 `row` 为空，什么都不做。
+    pub(crate) fn watch(response: axum::response::Response, db: &Db, row: RowSlot) -> axum::response::Response {
+        let db = db.clone();
+        Self::wrap(response, move |end| {
+            submit(move || {
+                let Some(id) = row.get() else { return };
+                let Ok(conn) = db.lock() else { return };
+                match mark_unfinished(&conn, id, end) {
+                    Ok(true) => eprintln!("[路由流水] 流式响应没有读完，第 {id} 行改判为 {}", end.result()),
+                    Ok(false) => {}
+                    Err(error) => eprintln!("[路由流水] 改判失败：{error}"),
+                }
+            })
+        })
+    }
+
+    fn finish(&mut self, end: StreamEnd) {
+        if let Some(callback) = self.on_unfinished.take() {
+            callback(end);
+        }
+    }
+}
+
+impl futures_util::Stream for CancelWatch {
+    type Item = Result<axum::body::Bytes, axum::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let polled = std::pin::Pin::new(&mut self.inner).poll_next(cx);
+        match &polled {
+            // 自然读完：不改判，放弃回调
+            std::task::Poll::Ready(None) => self.on_unfinished = None,
+            // 上游中途报错：定为失败并收走回调，随后的 Drop 不再记成取消
+            std::task::Poll::Ready(Some(Err(_))) => self.finish(StreamEnd::Failed),
+            _ => {}
+        }
+        polled
+    }
+}
+
+impl Drop for CancelWatch {
+    fn drop(&mut self) {
+        self.finish(StreamEnd::Cancelled);
+    }
+}
+
+/// 把一行流水改判为流没读完的结局（P1：客户端中途断开 → cancelled；上游中途报错 → failed）。
+///
+/// **只改 `ok` 行**。已经写成 `failed` / `rejected` 的行不动——那些是上游或网关
+/// 在响应头阶段给出的结论，比「流没读完」更早也更具体，覆盖它只会丢信息。
+///
+/// 返回是否真的改了一行：`false` 说明该行已被清理、或本来就不是 `ok`。
+pub fn mark_unfinished(conn: &Connection, id: i64, end: StreamEnd) -> rusqlite::Result<bool> {
+    let changed = conn.execute(
+        "UPDATE gateway_route_log SET result = ?2 WHERE id = ?1 AND result = 'ok'",
+        params![id, end.result()],
+    )?;
+    Ok(changed > 0)
 }
 
 const COLUMNS: &str = "id, ts, agent, requested_model, source, upstream_model, status_code, result, duration_ms,
-                       connection_id, session_platform, session_id, client_key, request_id, resolved_from, profile";
+                       connection_id, session_platform, session_id, client_key, request_id, resolved_from, profile, request_uid";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RouteLogEntry> {
     Ok(RouteLogEntry {
@@ -114,6 +401,7 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RouteLogEntry> {
         request_id: r.get(13)?,
         resolved_from: r.get(14)?,
         profile: r.get(15)?,
+        request_uid: r.get(16)?,
     })
 }
 
@@ -241,7 +529,7 @@ pub fn source_usage(conn: &Connection) -> rusqlite::Result<Vec<SourceUsage>> {
 /// 今天 → 本期今天 / 上期昨天；昨天 → 本期昨天 / 上期前天；近 7 天 → 本期 7 天 / 上期前 7 天；
 /// 近 30 天同理。前端文案按范围换称呼即可，计算不分叉。
 ///
-/// 流水只保留最近 1000 行：最早一行晚于上期起点时，`partial = true`，两期数字都是下限。
+/// 流水受保留数量限制，旧记录缺少持久请求身份时无法准确去重。
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct DayOverview {
     pub today: i64,
@@ -249,7 +537,10 @@ pub struct DayOverview {
     pub reroutes: i64,
     pub errors: i64,
     pub by_agent: std::collections::BTreeMap<String, i64>,
+    /// 保留范围可能未覆盖完整的本期或上期。
     pub partial: bool,
+    /// 相关时间范围内有无法可靠归并到请求的流水。
+    pub identity_incomplete: bool,
     /// 本期最近一次 Agent 收到的错误（最后一次尝试那行）
     pub last_error: Option<RouteLogEntry>,
 }
@@ -299,6 +590,12 @@ impl Range {
         let prior_start = current_start - chrono::Duration::days(days);
         (midnight_ms(current_start), midnight_ms(prior_start))
     }
+
+    /// 本期结束边界，使用本地自然日的下一次零点。
+    pub fn end_exclusive(self, today: chrono::NaiveDate) -> i64 {
+        let end = if self.ends_today() { today.succ_opt().unwrap_or(today) } else { today };
+        midnight_ms(end)
+    }
 }
 
 /// 本地时区某天 00:00 的毫秒时间戳；时区异常时退回 0（与既有实现一致）。
@@ -309,40 +606,39 @@ fn midnight_ms(day: chrono::NaiveDate) -> i64 {
         .unwrap_or(0)
 }
 
-pub fn day_overview(conn: &Connection, today_start: i64, yesterday_start: i64) -> rusqlite::Result<DayOverview> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM gateway_route_log WHERE ts >= ?1 ORDER BY id ASC"))?;
-    let rows = stmt.query_map([yesterday_start], row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+pub fn day_overview(conn: &Connection, today_start: i64, yesterday_start: i64, end_exclusive: i64) -> rusqlite::Result<DayOverview> {
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM gateway_route_log ORDER BY id ASC"))?;
+    let rows = stmt.query_map([], row)?.collect::<rusqlite::Result<Vec<_>>>()?;
     let oldest: Option<i64> = conn.query_row("SELECT MIN(ts) FROM gateway_route_log", [], |r| r.get(0))?;
     let total: i64 = conn.query_row("SELECT COUNT(*) FROM gateway_route_log", [], |r| r.get(0))?;
-    // 按请求分组。request_id 是进程内计数、重启后从头开始：编号明显倒退时视为新一轮，避免把两次运行的请求并在一起
+    // 仅有持久身份的行可以确认属于同一次请求。旧行独立保留，不猜测关联。
     let mut groups: Vec<(i64, Vec<RouteLogEntry>)> = Vec::new();
-    let mut index: std::collections::HashMap<(u32, i64), usize> = std::collections::HashMap::new();
-    let (mut epoch, mut max_seen) = (0u32, 0i64);
+    let mut index: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
     for entry in rows {
-        let key = match entry.request_id {
-            Some(id) => {
-                if id + 100 < max_seen {
-                    epoch += 1;
-                    max_seen = 0;
-                }
-                max_seen = max_seen.max(id);
-                (epoch, id)
+        if let Some(at) = entry.request_uid.and_then(|uid| index.get(&uid).copied()) {
+            groups[at].0 = groups[at].0.min(entry.ts);
+            groups[at].1.push(entry);
+        } else {
+            if let Some(uid) = entry.request_uid {
+                index.insert(uid, groups.len());
             }
-            None => (u32::MAX, -entry.id),
-        };
-        match index.get(&key) {
-            Some(&at) => groups[at].1.push(entry),
-            None => {
-                index.insert(key, groups.len());
-                groups.push((entry.ts, vec![entry]));
-            }
+            groups.push((entry.ts, vec![entry]));
         }
     }
     let mut out = DayOverview {
-        partial: total >= 1000 && oldest.is_some_and(|ts| ts > yesterday_start),
+        // 流水按 `KEEP_ROWS` 滚动删除，所以「行数正好达到上限」就说明更早的行可能已被删掉。
+        // 用 `>=` 而不是 `>`：等于上限时无法排除刚删过一批，宁可标不完整也不要给假完整。
+        // 第二个条件是「现存最老一行比上期起点还新」——那说明上期根本没数据留下来。
+        partial: total >= KEEP_ROWS && oldest.is_some_and(|ts| ts > yesterday_start),
         ..Default::default()
     };
     for (first_ts, attempts) in groups {
+        if first_ts < yesterday_start || first_ts >= end_exclusive {
+            continue;
+        }
+        if attempts[0].request_uid.is_none() {
+            out.identity_incomplete = true;
+        }
         if first_ts < today_start {
             out.yesterday += 1;
             continue;
@@ -367,9 +663,14 @@ pub fn day_overview(conn: &Connection, today_start: i64, yesterday_start: i64) -
 /// 流水只保留最近 1000 行，当天超过 1000 次时这是下限，调用方据此标注。
 pub fn counts_since(conn: &Connection, since_ms: i64) -> rusqlite::Result<(i64, i64, i64)> {
     conn.query_row(
-        "SELECT COALESCE(SUM(result = 'ok'), 0), COALESCE(SUM(result = 'rejected'), 0),
-                COALESCE(SUM(result NOT IN ('ok', 'rejected')), 0)
-         FROM gateway_route_log WHERE ts >= ?1",
+        "WITH grouped AS (
+             SELECT MIN(ts) AS first_ts, MAX(id) AS last_id
+             FROM gateway_route_log
+             GROUP BY CASE WHEN request_uid IS NULL THEN 'legacy:' || id ELSE 'request:' || request_uid END
+         )
+         SELECT COALESCE(SUM(l.result = 'ok'), 0), COALESCE(SUM(l.result = 'rejected'), 0),
+                COALESCE(SUM(l.result NOT IN ('ok', 'rejected')), 0)
+         FROM grouped g JOIN gateway_route_log l ON l.id = g.last_id WHERE g.first_ts >= ?1",
         [since_ms],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )
@@ -382,11 +683,171 @@ mod tests {
     fn entry(result: &str) -> NewEntry<'_> {
         NewEntry {
             agent: None, requested_model: "a/b", source: None, upstream_model: None, status_code: None, result,
-            duration_ms: None, connection_id: None, session_platform: None, session_id: None, client_key: None, request_id: None, resolved_from: None, profile: None }
+            duration_ms: None, connection_id: None, session_platform: None, session_id: None, client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None }
     }
 
     fn db() -> Connection {
         crate::db::open(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    /// P1：客户端中途断开时，那条已写成 ok 的流水要能改判为 cancelled。
+    ///
+    /// 为什么必须能改：流式请求的流水在响应头到手时就落库了（那时状态码 200、
+    /// 上游确实开始回了）。客户端读到一半断开，这次请求实际上没完成——不改的话
+    /// 用量与「成功几次」都会把它算成完全成功。
+    #[test]
+    fn a_cancelled_stream_flips_its_ok_row_to_cancelled() {
+        let conn = db();
+        let id = record(&conn, entry("ok")).expect("流水应写入成功");
+        assert!(mark_unfinished(&conn, id, StreamEnd::Cancelled).unwrap(), "ok 行应被改判");
+        let result: String = conn
+            .query_row("SELECT result FROM gateway_route_log WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(result, "cancelled");
+        // 行数不变：改判不能制造第二行，否则「一次请求」会变成两次尝试
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM gateway_route_log", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
+        // request_uid 等身份字段原样保留，仍能关联到同一次请求
+    }
+
+    #[test]
+    fn a_failed_row_is_not_overwritten_by_cancellation() {
+        // failed / rejected 是上游或网关给出的更具体结论，不能被「流没读完」盖掉
+        let conn = db();
+        for result in ["failed", "rejected"] {
+            let id = record(&conn, entry(result)).unwrap();
+            for end in [StreamEnd::Cancelled, StreamEnd::Failed] {
+                assert!(!mark_unfinished(&conn, id, end).unwrap(), "{result} 行不应被改判");
+            }
+            let stored: String = conn
+                .query_row("SELECT result FROM gateway_route_log WHERE id = ?1", [id], |r| r.get(0))
+                .unwrap();
+            assert_eq!(stored, result);
+        }
+    }
+
+    /// 包一层 `CancelWatch`，记下回调收到的结局（`None` = 回调没跑）。
+    fn watched(body: axum::body::Body) -> (axum::response::Response, std::sync::Arc<std::sync::Mutex<Option<StreamEnd>>>) {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let sink = seen.clone();
+        let wrapped = CancelWatch::wrap(axum::response::Response::new(body), move |end| {
+            *sink.lock().unwrap() = Some(end);
+        });
+        (wrapped, seen)
+    }
+
+    /// 流读完 → 不改判。
+    ///
+    /// 这是最容易写错的一侧：`Drop` 总会在流结束时执行，如果把「drop 了」当取消，
+    /// 每一次成功的流式请求都会被改成 cancelled，比不改还糟。
+    #[test]
+    fn a_stream_read_to_the_end_is_not_a_cancellation() {
+        let (wrapped, seen) = watched(axum::body::Body::from("hello"));
+        let collected = blocking_read_body(wrapped);
+        assert_eq!(collected, b"hello");
+        assert_eq!(*seen.lock().unwrap(), None, "读完不改判");
+    }
+
+    /// 上游在流中途报错 → 记失败，而不是取消。
+    ///
+    /// 报错后 body 会被丢弃、`Drop` 照样执行；修复前 `Drop` 会把它记成客户端断开。
+    #[test]
+    fn an_upstream_error_mid_stream_is_a_failure_not_a_cancellation() {
+        let stream = futures_util::stream::iter(vec![
+            Ok(axum::body::Bytes::from_static(b"hello")),
+            Err(axum::Error::new(std::io::Error::other("upstream failed"))),
+        ]);
+        let (wrapped, seen) = watched(axum::body::Body::from_stream(stream));
+        let _ = blocking_read_body(wrapped);
+        assert_eq!(*seen.lock().unwrap(), Some(StreamEnd::Failed), "上游 Err 要记失败");
+    }
+
+    /// 流中途被丢弃 → 记取消。
+    #[test]
+    fn a_stream_dropped_before_the_end_is_a_cancellation() {
+        let (wrapped, seen) = watched(axum::body::Body::from("hello"));
+        // 一个字节都不读就直接丢弃
+        drop(wrapped);
+        assert_eq!(*seen.lock().unwrap(), Some(StreamEnd::Cancelled), "没读完就 drop 要记取消");
+    }
+
+    /// 生产路径：排队写入的流水在流中途报错后被改判为 failed，且仍只有一行。
+    #[test]
+    fn a_queued_row_is_flipped_to_failed_when_the_upstream_errors() {
+        let db: Db = std::sync::Arc::new(std::sync::Mutex::new(db()));
+        let owned = OwnedEntry {
+            agent: None, requested_model: "a/b".into(), source: None, upstream_model: None,
+            status_code: Some(200), result: "ok".into(), duration_ms: None, connection_id: None,
+            session_platform: None, session_id: None, client_key: None, request_id: None,
+            request_uid: Some(7), resolved_from: None, profile: None,
+        };
+        let row = queue_record(&db, 1_000, owned);
+        let stream = futures_util::stream::iter(vec![
+            Ok(axum::body::Bytes::from_static(b"data: {}\n\n")),
+            Err(axum::Error::new(std::io::Error::other("upstream reset"))),
+        ]);
+        let response = axum::response::Response::new(axum::body::Body::from_stream(stream));
+        let _ = blocking_read_body(CancelWatch::watch(response, &db, row.clone()));
+        flush();
+        let id = row.get().expect("排队写入后应拿到行 id");
+        let conn = db.lock().unwrap();
+        let (result, ts, rows): (String, i64, i64) = conn
+            .query_row(
+                "SELECT result, ts, (SELECT COUNT(*) FROM gateway_route_log) FROM gateway_route_log WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((result.as_str(), ts, rows), ("failed", 1_000, 1), "改判原行、时间用提交时给定的值");
+    }
+
+    /// 同步读完一个 axum Body（测试用最小实现，避免引入额外依赖）。
+    fn blocking_read_body(response: axum::response::Response) -> Vec<u8> {
+        use std::sync::{Arc as StdArc, Mutex as StdMutex};
+        let collected = StdArc::new(StdMutex::new(Vec::new()));
+        let sink = collected.clone();
+        let (_parts, body) = response.into_parts();
+        let mut stream = Box::pin(body.into_data_stream());
+        let waker = futures_util::task::noop_waker();
+        let mut context = std::task::Context::from_waker(&waker);
+        loop {
+            // `into_data_stream` 是 `Stream`，poll_next 来自 trait 而非固有方法
+            let polled = futures_util::Stream::poll_next(stream.as_mut(), &mut context);
+            match polled {
+                std::task::Poll::Ready(Some(Ok(chunk))) => sink.lock().unwrap().extend_from_slice(&chunk),
+                std::task::Poll::Ready(Some(Err(_))) | std::task::Poll::Ready(None) => break,
+                std::task::Poll::Pending => break,
+            }
+        }
+        let out = collected.lock().unwrap().clone();
+        out
+    }
+
+    #[test]
+    fn cancelling_a_missing_row_reports_no_change() {
+        // 行可能已被 KEEP_ROWS 清理掉：返回 false 而不是报错
+        let conn = db();
+        assert!(!mark_unfinished(&conn, 999, StreamEnd::Cancelled).unwrap());
+    }
+
+    #[test]
+    fn record_returns_the_row_id_it_wrote() {
+        // 取消改判靠这个 id 定位；返回错的值会改到别人的行
+        let conn = db();
+        let first = record(&conn, entry("ok")).unwrap();
+        let second = record(&conn, entry("ok")).unwrap();
+        assert!(second > first, "id 必须递增");
+        mark_unfinished(&conn, first, StreamEnd::Cancelled).unwrap();
+        let (a, b): (String, String) = conn
+            .query_row(
+                "SELECT (SELECT result FROM gateway_route_log WHERE id=?1),                         (SELECT result FROM gateway_route_log WHERE id=?2)",
+                [first, second],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((a.as_str(), b.as_str()), ("cancelled", "ok"), "只改指定的那一行");
     }
 
     /// 范围下拉的各档时间窗：本期起点与上期起点必须连续、等长，且落在自然日零点。
@@ -434,37 +895,38 @@ mod tests {
     #[test]
     fn day_overview_counts_requests_not_rows() {
         let conn = db();
-        let insert = |ts: i64, agent: &str, result: &str, request_id: Option<i64>| {
+        let insert = |ts: i64, agent: &str, result: &str, request_id: Option<i64>, request_uid: Option<i64>| {
             conn.execute(
-                "INSERT INTO gateway_route_log(ts, agent, requested_model, result, request_id) VALUES(?1, ?2, 'group/x', ?3, ?4)",
-                params![ts, agent, result, request_id],
+                "INSERT INTO gateway_route_log(ts, agent, requested_model, result, request_id, request_uid) VALUES(?1, ?2, 'group/x', ?3, ?4, ?5)",
+                params![ts, agent, result, request_id, request_uid],
             )
             .unwrap();
         };
         // 昨天 1 次；今天：一次改道后成功、一次两次尝试都失败、一次直接成功（无 request_id）
-        insert(50, "claude-code", "ok", Some(1));
-        insert(150, "claude-code", "failed", Some(2));
-        insert(151, "claude-code", "ok", Some(2));
-        insert(160, "codex", "failed", Some(3));
-        insert(161, "codex", "failed", Some(3));
-        insert(170, "claude-code", "ok", None);
-        let day = day_overview(&conn, 100, 0).unwrap();
+        insert(50, "claude-code", "ok", Some(1), Some(1));
+        insert(150, "claude-code", "failed", Some(2), Some(2));
+        insert(151, "claude-code", "ok", Some(2), Some(2));
+        insert(160, "codex", "failed", Some(3), Some(3));
+        insert(161, "codex", "failed", Some(3), Some(3));
+        insert(170, "claude-code", "ok", None, None);
+        let day = day_overview(&conn, 100, 0, 1000).unwrap();
         assert_eq!((day.today, day.yesterday, day.reroutes, day.errors), (3, 1, 2, 1));
         assert_eq!(day.by_agent.get("claude-code"), Some(&2));
         assert_eq!(day.by_agent.get("codex"), Some(&1));
         assert_eq!(day.last_error.as_ref().map(|e| e.ts), Some(161), "取最后一次尝试那行");
         assert!(!day.partial);
         // 重启后 request_id 从头计：不能并进上一轮的同号请求
-        insert(300, "codex", "ok", Some(500));
-        insert(301, "codex", "ok", Some(2));
-        assert_eq!(day_overview(&conn, 100, 0).unwrap().today, 5);
+        insert(300, "codex", "ok", Some(500), Some(4));
+        insert(301, "codex", "ok", Some(2), Some(5));
+        assert_eq!(day_overview(&conn, 100, 0, 1000).unwrap().today, 5);
+        assert_eq!(day_overview(&conn, 100, 0, 200).unwrap().today, 3);
     }
 
     #[test]
     fn recent_is_newest_first_and_keeps_metadata() {
         let conn = db();
-        record(&conn, NewEntry { agent: Some("codex"), requested_model: "kimi/kimi-k2", source: Some("kimi"), upstream_model: Some("kimi-k2"), status_code: Some(200), result: "ok", duration_ms: Some(42), connection_id: Some("c1"), session_platform: Some("codex"), session_id: Some("s1"), client_key: None, request_id: None, resolved_from: None, profile: None });
-        record(&conn, NewEntry { agent: None, requested_model: "nope/m", source: None, upstream_model: None, status_code: Some(404), result: "rejected", duration_ms: None, connection_id: None, session_platform: None, session_id: None, client_key: None, request_id: None, resolved_from: None, profile: None });
+        record(&conn, NewEntry { agent: Some("codex"), requested_model: "kimi/kimi-k2", source: Some("kimi"), upstream_model: Some("kimi-k2"), status_code: Some(200), result: "ok", duration_ms: Some(42), connection_id: Some("c1"), session_platform: Some("codex"), session_id: Some("s1"), client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None });
+        record(&conn, NewEntry { agent: None, requested_model: "nope/m", source: None, upstream_model: None, status_code: Some(404), result: "rejected", duration_ms: None, connection_id: None, session_platform: None, session_id: None, client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None });
         let rows = recent(&conn, 10).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].result, "rejected");
@@ -478,11 +940,72 @@ mod tests {
     #[test]
     fn counts_since_groups_by_result() {
         let conn = db();
-        for result in ["ok", "ok", "rejected", "failed"] {
+        for result in ["ok", "ok", "rejected", "failed", "cancelled"] {
             record(&conn, entry(result));
         }
-        assert_eq!(counts_since(&conn, 0).unwrap(), (2, 1, 1));
+        // 第三项是「既非 ok 也非 rejected」：failed 与 cancelled 都进这里。
+        // 灵动岛靠这一项判断「今天有多少次没成」，把 cancelled 漏掉会少报。
+        assert_eq!(counts_since(&conn, 0).unwrap(), (2, 1, 2));
         assert_eq!(counts_since(&conn, i64::MAX).unwrap(), (0, 0, 0));
+    }
+
+    /// 流水被滚动删除后，`partial` 必须为真：统计只代表当前保留范围。
+    ///
+    /// 此前只有 `assert!(!day.partial)`（数据量小时的否定断言），从没测过「真的被截断」。
+    /// 这条把流水灌到保留上限之上，再断言 `partial` 为真。
+    #[test]
+    fn a_truncated_log_is_reported_as_partial() {
+        let conn = db();
+        // 上期与本期的时间：上期在 yesterday_start 之前
+        let (yesterday_start, today_start, end) = (1_000i64, 2_000i64, 3_000i64);
+        let insert = |ts: i64| {
+            conn.execute(
+                "INSERT INTO gateway_route_log(ts, requested_model, result) VALUES(?1, 'm', 'ok')",
+                params![ts],
+            )
+            .unwrap();
+        };
+        // 少量数据：不完整标记应为假
+        for i in 0..10 {
+            insert(today_start + i);
+        }
+        assert!(!day_overview(&conn, today_start, yesterday_start, end).unwrap().partial);
+
+        // 精确灌到保留上限（含前面 10 条），且最早一行落在上期起点之后
+        for i in 0..(KEEP_ROWS - 10) {
+            insert(today_start + 100 + i);
+        }
+        let exact: i64 = conn.query_row("SELECT COUNT(*) FROM gateway_route_log", [], |r| r.get(0)).unwrap();
+        assert_eq!(exact, KEEP_ROWS, "先确认行数正好等于上限");
+        let day = day_overview(&conn, today_start, yesterday_start, end).unwrap();
+        assert!(
+            day.partial,
+            "行数正好等于保留上限时无法排除更早的行刚被删掉，必须标不完整（用 > 会漏掉这一档）"
+        );
+        assert!(day.identity_incomplete, "这些行没有 request_uid，身份同样不完整");
+    }
+
+    #[test]
+    fn request_counts_keep_restarts_and_legacy_rows_separate() {
+        let conn = db();
+        let insert = |ts, request_id, request_uid, result| {
+            conn.execute(
+                "INSERT INTO gateway_route_log(ts, requested_model, result, request_id, request_uid) VALUES (?1, 'm', ?2, ?3, ?4)",
+                params![ts, result, request_id, request_uid],
+            ).unwrap();
+        };
+        insert(90, Some(1), Some(10), "failed");
+        insert(110, Some(2), Some(11), "ok");
+        insert(120, Some(1), Some(10), "ok");
+        insert(130, Some(1), Some(12), "failed");
+        insert(140, Some(1), None::<i64>, "failed");
+        insert(150, Some(1), None::<i64>, "ok");
+
+        // 按保留流水中首次尝试时间归属。旧行缺身份，不能证明彼此属于同一次请求。
+        assert_eq!(counts_since(&conn, 100).unwrap(), (2, 0, 2));
+        let overview = day_overview(&conn, 100, 0, 1000).unwrap();
+        assert_eq!((overview.today, overview.yesterday, overview.errors), (4, 1, 2));
+        assert!(overview.identity_incomplete);
     }
 
     /// 局域网共享（P8.3）：命中的命名客户端 Key 随流水落库，供限额按 Key 名统计。
@@ -570,7 +1093,7 @@ mod tests {
         let link = |model: &'static str, conn_id: &'static str, session: &'static str| NewEntry {
             agent: Some("codex"), requested_model: model, source: Some("kimi"), upstream_model: None, status_code: Some(200),
             result: "ok", duration_ms: None, connection_id: Some(conn_id), session_platform: Some("codex"), session_id: Some(session),
-            client_key: None, request_id: None, resolved_from: None, profile: None };
+            client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None };
         record(&conn, link("kimi/a", "c1", "s1"));
         record(&conn, link("kimi/b", "c1", "s1"));
         record(&conn, link("kimi/a", "c2", "s1"));

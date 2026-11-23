@@ -711,6 +711,215 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    /// P1「扫描期间源端被并发改写」形态一：**边扫边追加**。
+    ///
+    /// ## 真实场景
+    ///
+    /// Claude Code / Codex 正在写日志，Jolu 同时在扫。`scan_file` 先 `metadata()` 拿到
+    /// `size`，再 `file.take(size - offset)` 只读到那个长度——扫描期间新增的字节**不在**
+    /// 本次读取范围内。正确行为是：本次把已知部分读完并推进位点到 `offset + consumed`，
+    /// 新增的那部分留给下一次扫描，且下一次不会重复写已采过的行。
+    ///
+    /// 已有测试覆盖的缺口：`equal_length_rewrite_is_rescanned_when_mtime_changes` 只测
+    /// `read_new_lines` 的纯判定，没走 `scan_file` 的事务路径（记录写入 + 位点提交 +
+    /// `insert_records_into` 的合并语义）。这条补上完整链路。
+    #[test]
+    fn a_file_growing_during_the_scan_is_picked_up_next_round_without_duplicates() {
+        let path = temp_jsonl("concurrent-append");
+        let mut conn = db::open(Path::new(":memory:")).unwrap();
+        let line = |id: &str, ts: &str| {
+            format!(
+                "{{\"type\":\"assistant\",\"timestamp\":\"{ts}\",\"sessionId\":\"s\",\
+                  \"message\":{{\"id\":\"{id}\",\"usage\":{{\"input_tokens\":10,\"output_tokens\":5,\
+                  \"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}}}}\n"
+            )
+        };
+        // 初始：两行
+        std::fs::write(&path, format!(
+            "{}{}",
+            line("m1", "2026-09-16T00:00:00Z"),
+            line("m2", "2026-09-16T00:00:01Z"),
+        ))
+        .unwrap();
+        assert_eq!(scan_file(&mut conn, &path, "claude").unwrap(), 2);
+
+        // 模拟「扫描过程中源端还在写」：scan_file 拿到的 size 是此刻的，
+        // 读完这两行后源端又追加了一行。下一轮扫描必须补上它。
+        {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            write!(file, "{}", line("m3", "2026-09-16T00:00:02Z")).unwrap();
+            file.flush().unwrap();
+        }
+        let count = |c: &Connection| -> i64 {
+            c.query_row("SELECT COUNT(*) FROM requests WHERE platform='claude'", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(count(&conn), 2, "上一轮只采到当时看见的两行");
+
+        // 下一轮：补上第三行，不重复前两行
+        assert_eq!(scan_file(&mut conn, &path, "claude").unwrap(), 1, "只新增 1 行");
+        assert_eq!(count(&conn), 3, "三行都在，一条不多");
+        let dup: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM (SELECT dedup_key FROM requests GROUP BY dedup_key HAVING COUNT(*)>1)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(dup, 0, "不能有重复行");
+
+        // 第三轮：无新增
+        assert_eq!(scan_file(&mut conn, &path, "claude").unwrap(), 0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// P-4「缺 ID」固定样本：源端记录没有稳定 ID（`message.id` 缺失或不是字符串）时，
+    /// 不能编一个键入库——编出来的键每次扫描都可能不同，重扫就会翻倍；也不能让它挡住同文件的好行。
+    ///
+    /// 判据：只有带 ID 的两行入库；重扫一行都不新增；位点照常推进（坏行不卡住后面的行）。
+    #[test]
+    fn records_without_a_stable_id_are_not_given_a_made_up_key() {
+        let path = temp_jsonl("missing-id");
+        let mut conn = db::open(Path::new(":memory:")).unwrap();
+        let with_id = |id: &str, ts: &str| {
+            format!(
+                "{{\"type\":\"assistant\",\"timestamp\":\"{ts}\",\"sessionId\":\"s\",\
+                  \"message\":{{\"id\":\"{id}\",\"usage\":{{\"input_tokens\":10,\"output_tokens\":5,\
+                  \"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}}}}\n"
+            )
+        };
+        // 缺 message.id
+        let no_id = "{\"type\":\"assistant\",\"timestamp\":\"2026-09-16T00:00:01Z\",\"sessionId\":\"s\",\
+            \"message\":{\"usage\":{\"input_tokens\":99,\"output_tokens\":1}}}\n";
+        // message.id 不是字符串
+        let numeric_id = "{\"type\":\"assistant\",\"timestamp\":\"2026-09-16T00:00:02Z\",\"sessionId\":\"s\",\
+            \"message\":{\"id\":42,\"usage\":{\"input_tokens\":99,\"output_tokens\":1}}}\n";
+        std::fs::write(&path, format!(
+            "{}{no_id}{numeric_id}{}",
+            with_id("m1", "2026-09-16T00:00:00Z"),
+            with_id("m2", "2026-09-16T00:00:03Z"),
+        ))
+        .unwrap();
+        assert_eq!(scan_file(&mut conn, &path, "claude").unwrap(), 2, "只有带 ID 的两行入库");
+        let keys: Vec<String> = conn
+            .prepare("SELECT dedup_key FROM requests WHERE platform='claude' ORDER BY dedup_key")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(keys, ["m1", "m2"], "缺 ID 的行不编键");
+        let total: i64 = conn
+            .query_row("SELECT SUM(input_tokens) FROM requests WHERE platform='claude'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 20, "缺 ID 那两行的 99 不能混进来");
+        assert_eq!(scan_file(&mut conn, &path, "claude").unwrap(), 0, "重扫不新增");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// P-2「源端删除历史」固定样本：源端把旧会话文件删掉之后，Jolu 已采的历史保留，
+    /// 新文件照常采集，统计不倒退。
+    ///
+    /// 这是对账里「只在 Jolu」那部分记录（Claude Code 692 条、ZCode 5,872 条）的可重复版本：
+    /// 真实对账只能观察一次，这条每次都能跑。
+    #[test]
+    fn history_survives_the_source_deleting_its_files() {
+        let old = temp_jsonl("deleted-history-old");
+        let new = temp_jsonl("deleted-history-new");
+        let mut conn = db::open(Path::new(":memory:")).unwrap();
+        let line = |id: &str, ts: &str| {
+            format!(
+                "{{\"type\":\"assistant\",\"timestamp\":\"{ts}\",\"sessionId\":\"s\",\
+                  \"message\":{{\"id\":\"{id}\",\"usage\":{{\"input_tokens\":10,\"output_tokens\":5,\
+                  \"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}}}}\n"
+            )
+        };
+        std::fs::write(&old, format!("{}{}", line("old-1", "2026-09-01T00:00:00Z"), line("old-2", "2026-09-01T00:00:01Z"))).unwrap();
+        assert_eq!(scan_file(&mut conn, &old, "claude").unwrap(), 2);
+
+        // 源端清理：旧文件被删掉，随后出现一个新文件
+        std::fs::remove_file(&old).unwrap();
+        std::fs::write(&new, line("new-1", "2026-09-30T00:00:00Z")).unwrap();
+        assert!(scan_file(&mut conn, &old, "claude").is_err(), "文件已删，读不到是正常的错误，不是清空历史");
+        assert_eq!(scan_file(&mut conn, &new, "claude").unwrap(), 1);
+
+        let keys: Vec<String> = conn
+            .prepare("SELECT dedup_key FROM requests WHERE platform='claude' ORDER BY ts")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(keys, ["old-1", "old-2", "new-1"], "源端删掉的历史仍在 Jolu，且新记录照常补上");
+        let _ = std::fs::remove_file(&new);
+    }
+
+    /// P1「扫描期间源端被并发改写」形态二：**同名文件被截断 / 重写**。
+    ///
+    /// 两种子形态，判定逻辑不同（见 `scan_file` 的 `rewritten`）：
+    ///
+    /// | 情形 | 判据 | 期望 |
+    /// |---|---|---|
+    /// | 文件变短（截断后重写） | `saved.offset > size` | 从头重扫；已采行靠去重键兜底，不翻倍 |
+    /// | 等长内容替换 | `saved.offset == size && mtime != saved.mtime` | 同样从头重扫 |
+    ///
+    /// 真实场景：CLI 做 compaction 后把会话文件重写一遍，行数变少、内容重排。
+    /// 这是最容易丢记录的地方——若只看 offset 不检查 size/mtime，重写后的新行永远采不到。
+    #[test]
+    fn a_truncated_or_rewritten_file_is_rescanned_from_the_start() {
+        let path = temp_jsonl("concurrent-rewrite");
+        let mut conn = db::open(Path::new(":memory:")).unwrap();
+        let line = |id: &str, input: i64, ts: &str| {
+            format!(
+                "{{\"type\":\"assistant\",\"timestamp\":\"{ts}\",\"sessionId\":\"s\",\
+                  \"message\":{{\"id\":\"{id}\",\"usage\":{{\"input_tokens\":{input},\"output_tokens\":5,\
+                  \"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}}}}\n"
+            )
+        };
+        let count = |c: &Connection| -> i64 {
+            c.query_row("SELECT COUNT(*) FROM requests WHERE platform='claude'", [], |r| r.get(0)).unwrap()
+        };
+        let tokens = |c: &Connection, key: &str| -> Option<i64> {
+            c.query_row(
+                "SELECT CASE WHEN total_known=1 THEN total_tokens END FROM requests WHERE dedup_key=?1",
+                [key], |r| r.get(0),
+            ).unwrap()
+        };
+
+        // 初始三行
+        std::fs::write(&path, format!(
+            "{}{}{}",
+            line("m1", 10, "2026-09-16T00:00:00Z"),
+            line("m2", 20, "2026-09-16T00:00:01Z"),
+            line("m3", 30, "2026-09-16T00:00:02Z"),
+        ))
+        .unwrap();
+        assert_eq!(scan_file(&mut conn, &path, "claude").unwrap(), 3);
+        assert_eq!(count(&conn), 3);
+
+        // 子形态 A：文件被截断重写——只剩一行，且 ID 不同（compaction 后的新会话内容）
+        std::fs::write(&path, line("m4", 40, "2026-09-16T01:00:00Z")).unwrap();
+        assert_eq!(scan_file(&mut conn, &path, "claude").unwrap(), 1, "截断后要能读到新行");
+        assert_eq!(count(&conn), 4, "旧的三行保留（历史账本不删），新的第四行补上");
+        assert_eq!(tokens(&conn, "m4"), Some(45), "m4 = 40 输入 + 5 输出");
+
+        // 子形态 B：等长内容替换——同样的字节数，内容不同
+        let before = std::fs::read_to_string(&path).unwrap();
+        let replacement = line("m5", 50, "2026-09-16T02:00:00Z");
+        assert_eq!(replacement.len(), before.len(), "构造等长替换是这条子形态的前提");
+        // 改 mtime：等长替换只能靠 mtime 认出来
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&path, &replacement).unwrap();
+        assert_eq!(scan_file(&mut conn, &path, "claude").unwrap(), 1, "等长替换也要重扫");
+        assert_eq!(count(&conn), 5);
+        assert_eq!(tokens(&conn, "m5"), Some(55));
+
+        // 再扫一次：位点已追平且 mtime 未变，不该再插入
+        assert_eq!(scan_file(&mut conn, &path, "claude").unwrap(), 0);
+        assert_eq!(count(&conn), 5, "重复扫描不能增加记录");
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn codex_task_started_marks_session_running_and_tracks_latest_write() {
         let state = parse_codex_file_state([

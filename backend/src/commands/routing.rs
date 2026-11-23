@@ -653,10 +653,11 @@ pub(crate) fn gateway_lan_address() -> Option<String> {
 #[tauri::command]
 pub(crate) fn gateway_day_overview(app: tauri::AppHandle, range: Option<String>) -> Result<crate::gateway::route_log::DayOverview, String> {
     let today = chrono::Local::now().date_naive();
-    let (current_start, prior_start) = crate::gateway::route_log::Range::parse(range.as_deref()).bounds(today);
+    let range = crate::gateway::route_log::Range::parse(range.as_deref());
+    let (current_start, prior_start) = range.bounds(today);
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-    crate::gateway::route_log::day_overview(&conn, current_start, prior_start).map_err(|error| error.to_string())
+    crate::gateway::route_log::day_overview(&conn, current_start, prior_start, range.end_exclusive(today)).map_err(|error| error.to_string())
 }
 
 /// 锁定 ZCode 连接的订阅通道（账号卡「订阅通道」切换）。

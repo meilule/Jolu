@@ -262,6 +262,12 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
             duration_ms    INTEGER
         );
         CREATE INDEX IF NOT EXISTS idx_gateway_route_log_ts ON gateway_route_log(ts DESC);
+        -- 持久请求身份独立于进程内事件编号。单行计数器由 SQLite 原子更新。
+        CREATE TABLE IF NOT EXISTS gateway_request_sequence (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            value INTEGER NOT NULL
+        );
+        INSERT OR IGNORE INTO gateway_request_sequence(singleton, value) VALUES(1, 0);
         -- V10 Agent 上下文观察：每次经网关的请求的上下文组成快照（gateway/context/store.rs）。
         -- 只存名字、tag、次数与 token，不存正文；未知的数字存 NULL，不存 0。
         CREATE TABLE IF NOT EXISTS gateway_context_snapshot (
@@ -381,6 +387,11 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN client_key TEXT", []);
     // 同一次请求的多次尝试（分组成员转移）共享 request_id，界面据此标「第 N 次尝试」
     let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN request_id INTEGER", []);
+    // 旧请求没有跨进程身份，保留 NULL，不根据时间或编号猜测归属。
+    let _ = conn.execute("ALTER TABLE gateway_route_log ADD COLUMN request_uid INTEGER", []);
+    let _ = conn.execute("ALTER TABLE gateway_context_snapshot ADD COLUMN request_uid INTEGER", []);
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_gateway_route_log_uid ON gateway_route_log(request_uid)", [])?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ctx_snap_uid ON gateway_context_snapshot(request_uid)", [])?;
     // 上下文快照按 request_id 取这次请求的流水（context/query.rs）
     let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_gateway_route_log_request ON gateway_route_log(request_id)", []);
     // 裸名解析的请求标 bare（路由歧义时排查用，magpie resolved_from 同款）
@@ -1317,6 +1328,13 @@ pub struct LiveUsage {
     /// 0 表示由生命周期驱动，不因静默过期；正数只用于“最近活跃”来源。
     pub active_window_seconds: i64,
     pub today_tokens: Option<i64>,
+    /// `today_tokens` 的覆盖情况：今天有多少条请求带 Token、多少条没有。
+    ///
+    /// 为什么单独给：`today_tokens` 为 None 有两种可能——「今天没有记录」或者
+    /// 「有记录但全都没给 Token」。灵动岛需要区分这两者（前者是真零，后者是未知），
+    /// 而单一个 `Option` 表达不了。用共享契约 `data_contract::Coverage` 算，
+    /// 与用量页 `token_coverage`、会话卡片 `SessionTokens` 同一套规则。
+    pub today_token_coverage: crate::data_contract::Coverage,
     /// 新增记录是否来自刚发生的实时写入；历史补采不得播放增量动画。
     pub realtime_delta: bool,
     /// 首次加载：调用方不得据此播放增量动画（§2.1.1）
@@ -1344,6 +1362,32 @@ pub fn sum_running_tokens(sessions: &[ActiveSession]) -> Option<i64> {
         Some(values) => Some(values.iter().sum()),
         None => None,
     }
+}
+
+/// 今天有多少条请求带 Token、多少条没有。
+///
+/// 与 [`today_fresh_tokens`] 配套：那个函数只给总量（全未知时是 None），
+/// 这个给覆盖情况，让灵动岛能区分「今天没有记录」（真零）与「有记录但全没给 Token」（未知）。
+/// 规则与 `data_contract::Coverage` 一致：不把未知当零。
+///
+/// 总量由调用方另算后传入（`today_fresh_tokens` 才有各平台口径：Codex 要扣缓存），
+/// 由 `Coverage::from_counts` 保证「零条已知时总量未知」。
+pub fn today_token_coverage(
+    conn: &Connection,
+    platform: &str,
+    total_tokens: Option<i64>,
+) -> rusqlite::Result<crate::data_contract::Coverage> {
+    let (start, end) = period_range(conn, platform, "today");
+    let (tc, te) = platform_clause_n(platform, 3);
+    let sql = format!(
+        "SELECT COUNT(*), COALESCE(SUM(total_known), 0)
+         FROM requests WHERE ts >= ?1 AND ts < ?2{EXCLUDE_DEGENERATE_SQL}{tc}"
+    );
+    let mut args: Vec<&dyn rusqlite::ToSql> = vec![&start, &end];
+    args.extend(te.iter().map(|value| value as &dyn rusqlite::ToSql));
+    let (rows, known): (i64, i64) =
+        conn.query_row(&sql, rusqlite::params_from_iter(args), |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(crate::data_contract::Coverage::from_counts(known, rows - known, total_tokens))
 }
 
 /// 本机今日 Token（新鲜口径）：Claude 取输入+输出，Codex 扣除缓存重读与缓存写入，
@@ -1583,6 +1627,10 @@ pub fn live_usage(
     }
 
     let today_tokens = today_fresh_tokens(conn, platform)?;
+    // 覆盖里的 `total` 直接用同一个 `today_fresh_tokens` 的结果：
+    // 它算的就是「已知行的新鲜 Token 合计」（Codex 已扣缓存），与 `known` 的口径一致。
+    // 不在这里另算一次总量——两套口径迟早会漂移。
+    let today_token_coverage = today_token_coverage(conn, platform, today_tokens)?;
 
     Ok(LiveUsage {
         platform: platform.to_string(),
@@ -1593,6 +1641,7 @@ pub fn live_usage(
         running_tokens,
         active_window_seconds,
         today_tokens,
+        today_token_coverage,
         realtime_delta,
         initial: since.is_none(),
         data_changed: false,
@@ -2675,6 +2724,114 @@ mod tests {
         assert_eq!(duplicate.delta_tokens, 0);
     }
 
+    /// P1「其它重试入口的幂等性」：所有写入路径都汇到 `insert_records_into`，
+    /// 靠 `(source, dedup_key)` 去重。这条固定样本把**四个真实入口**在同一条记录上
+    /// 依次跑一遍，验证累计效果仍然只有一行、总量不翻倍。
+    ///
+    /// 四个入口来自代码里的实际调用点：
+    /// 1. 文件增量扫描（`insert_scanned_records`，collector.rs）
+    /// 2. 库型来源扫描（`source_store::write`，native_sources.rs）
+    /// 3. 网关订阅直接记账（`insert_gateway_record`，写 connection_id）
+    /// 4. 本地代理计时回填（`apply_proxy_timing`，只 UPDATE 不 INSERT）
+    ///
+    /// 重试场景：扫描器重复扫同一区间、网关重试同一请求、回填滞后到记录已存在之后。
+    #[test]
+    fn every_retry_entry_point_is_idempotent_on_the_same_record() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        init(&conn).unwrap();
+        let now = Local::now().timestamp_millis();
+        let record = || RequestRecord {
+            platform: "codex".into(),
+            source: "local-session".into(),
+            dedup_key: "resp-retry-1".into(),
+            session_id: Some("s1".into()),
+            ts: now,
+            model: Some("gpt-5".into()),
+            input_tokens: Some(100),
+            output_tokens: Some(20),
+            cache_read_tokens: Some(0),
+            cache_write_tokens: Some(0),
+            total_tokens: Some(120),
+            effort: None,
+        };
+        let snapshot = |c: &Connection| -> (i64, i64) {
+            c.query_row(
+                "SELECT COUNT(*), COALESCE(SUM(CASE WHEN total_known=1 THEN total_tokens END), 0)
+                 FROM requests WHERE platform='codex'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+
+        // 入口 1：文件增量扫描，连跑三次（幂等重试）
+        for _ in 0..3 {
+            insert_scanned_records(&conn, std::slice::from_ref(&record())).unwrap();
+        }
+        assert_eq!(snapshot(&conn), (1, 120), "三次扫描只留一行、总量不变");
+
+        // 入口 2：库型来源 source_store::write（同一记录再写两次）
+        let stored = crate::source_store::Record {
+            request: record(),
+            input_semantics: "unknown",
+            credits: None,
+            original_credits: None,
+            billable: None,
+            context_ratio: None,
+            reasoning: None,
+            tool: None,
+        };
+        for _ in 0..2 {
+            crate::source_store::write(&conn, std::slice::from_ref(&stored)).unwrap();
+        }
+        assert_eq!(snapshot(&conn), (1, 120), "source_store 重复写不翻倍");
+
+        // 入口 3：网关订阅记账（同一 dedup_key 再来一次，绑定 connection_id）
+        conn.execute(
+            "INSERT INTO connections(id,platform,kind,name,secret,masked,created_ms,slug)
+             VALUES('c-gw','codex','auth','网关','x','****',1,'c-gw')",
+            [],
+        ).unwrap();
+        insert_gateway_record(&mut conn, &record(), "c-gw", 1234).unwrap();
+        assert_eq!(snapshot(&conn), (1, 120), "网关记账不新增行");
+
+        // 入口 4：代理计时回填（UPDATE 语义，重复调用不产生行）
+        for _ in 0..2 {
+            apply_proxy_timing(&conn, "resp-retry-1", 50, 900, 200, Some("c-gw")).unwrap();
+        }
+        assert_eq!(snapshot(&conn), (1, 120), "回填重复调用不产生行");
+
+        // 四个入口叠加后，那一行仍然带着最新的事实
+        let row: (Option<i64>, Option<String>, Option<i64>) = conn.query_row(
+            "SELECT duration_ms, connection_id, first_token_ms FROM requests WHERE dedup_key='resp-retry-1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap();
+        assert_eq!(row, (Some(900), Some("c-gw".into()), Some(50)));
+    }
+
+    /// 同一 `dedup_key` 在不同 `source` 下是**两条**记录：去重键是 `(source, dedup_key)`
+    /// 而不是只有 `dedup_key`。两个来源各自看到同一份日志时会各记一行，不能被误合并。
+    #[test]
+    fn dedup_key_is_scoped_to_source_not_global() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        init(&conn).unwrap();
+        let now = Local::now().timestamp_millis();
+        let make = |source: &str| RequestRecord {
+            platform: "codex".into(), source: source.into(), dedup_key: "same-id".into(),
+            session_id: None, ts: now, model: None,
+            input_tokens: Some(10), output_tokens: Some(5),
+            cache_read_tokens: Some(0), cache_write_tokens: Some(0),
+            total_tokens: Some(15), effort: None,
+        };
+        insert_records(&mut conn, &[make("local-session")]).unwrap();
+        insert_records(&mut conn, &[make("native:zcode:main")]).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM requests WHERE dedup_key='same-id'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 2, "不同来源的同名键是两条记录，不能合并");
+    }
+
     #[test]
     fn calendar_ranges_keep_local_midnight_and_cross_year_labels_include_year() {
         let conn = Connection::open_in_memory().unwrap();
@@ -2877,6 +3034,34 @@ mod tests {
         assert_eq!(updated.today_tokens, Some(50));
     }
 
+    /// P1-4：灵动岛入口（`live_usage`）必须把覆盖一起带出去。
+    ///
+    /// 只给 `today_tokens` 时，前端拿到 null 分不清「今天没请求」和「请求都没 Token」，
+    /// 只能二选一猜一个——早期就是在这里把未知画成了 0。
+    #[test]
+    fn live_usage_carries_today_token_coverage() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        init(&conn).unwrap();
+        let now = Local::now().timestamp_millis() - 1;
+        let record = |key: &str, total: Option<i64>| RequestRecord {
+            platform: "claude".into(), source: "local".into(), dedup_key: key.into(),
+            session_id: Some("s1".into()), ts: now, model: Some("claude-sonnet-4".into()),
+            input_tokens: total, output_tokens: Some(1),
+            cache_read_tokens: Some(0), cache_write_tokens: Some(0),
+            total_tokens: total, effort: None,
+        };
+
+        // 一条有数、一条没有：覆盖是 1 已知 / 1 未知，总量只算已知的那条
+        insert_records(&mut conn, &[record("a", Some(40)), record("b", None)]).unwrap();
+        let live = live_usage(&conn, "claude", None).unwrap();
+        assert_eq!(live.today_token_coverage.known(), 1);
+        assert_eq!(live.today_token_coverage.unknown(), 1);
+        assert_eq!(live.today_token_coverage.state(), "partial");
+        // total 与 today_tokens 同源（都是 `today_fresh_tokens`），不会两套口径
+        assert_eq!(live.today_token_coverage.total(), live.today_tokens);
+        assert_eq!(live.today_tokens, Some(41), "40 输入 + 1 输出");
+    }
+
     #[test]
     fn failed_sessions_stay_visible_within_window_without_counting_as_running() {
         let mut conn = Connection::open_in_memory().unwrap();
@@ -3038,6 +3223,55 @@ mod tests {
         let ended = live_usage(&conn, "codex", Some(initial.cursor)).unwrap();
         assert!(ended.active_sessions.is_empty());
         assert_eq!(ended.running_tokens, None);
+    }
+
+    /// P1-4：灵动岛的「今日 Token」覆盖要能区分「今天没记录」与「有记录但全没给 Token」。
+    ///
+    /// 单一个 `today_tokens: Option<i64>` 表达不了这个差别——两者都是 None。
+    /// `today_token_coverage` 用共享契约把它补上：`known` 为 0 说明全未知，
+    /// 而「没记录」时 `known + unknown` 也是 0。
+    #[test]
+    fn today_token_coverage_separates_empty_from_all_unknown() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        init(&conn).unwrap();
+        // `period_range` 的右边界是「此刻」且为开区间（`ts < end`），
+        // 用 `now` 当 ts 会和取边界的时刻撞在同一毫秒导致整行落在窗口外——这里退 1ms。
+        let now = Local::now().timestamp_millis() - 1;
+        // 输出给非零值：全零 + 有未知的行会被 `EXCLUDE_DEGENERATE_SQL` 当退化记录排除，
+        // 那样测的就不是覆盖逻辑了。
+        let record = |key: &str, total: Option<i64>| RequestRecord {
+            platform: "claude".into(),
+            source: "local".into(),
+            dedup_key: key.into(),
+            session_id: None,
+            ts: now,
+            model: Some("claude-sonnet-4".into()),
+            input_tokens: total,
+            output_tokens: Some(1),
+            cache_read_tokens: Some(0),
+            cache_write_tokens: Some(0),
+            total_tokens: total,
+            effort: None,
+        };
+
+        // 1) 今天完全没有记录：覆盖是「零条」，不是「未知」
+        let empty = today_token_coverage(&conn, "claude", None).unwrap();
+        assert_eq!((empty.known(), empty.unknown()), (0, 0), "没有记录 = 零条，不是未知");
+
+        // 2) 有记录但全都没给 Token：这才是真正的未知
+        insert_records(&mut conn, &[record("u1", None)]).unwrap();
+        let unknown = today_token_coverage(&conn, "claude", None).unwrap();
+        assert_eq!((unknown.known(), unknown.unknown()), (0, 1), "有 1 条但没 Token");
+        assert_eq!(unknown.state(), "missing");
+        assert_eq!(today_fresh_tokens(&conn, "claude").unwrap(), None, "全未知时总量是 None");
+
+        // 3) 部分有值：已知与未知分开计
+        insert_records(&mut conn, &[record("u2", Some(100))]).unwrap();
+        let partial = today_token_coverage(&conn, "claude", None).unwrap();
+        assert_eq!((partial.known(), partial.unknown()), (1, 1));
+        assert_eq!(partial.state(), "partial");
+        // Claude 的新鲜 Token 是 input + output（缓存单列），所以是 100 + 1
+        assert_eq!(today_fresh_tokens(&conn, "claude").unwrap(), Some(101), "已知部分照常给出");
     }
 
     #[test]
@@ -3329,6 +3563,339 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM pragma_table_info('connections') WHERE name='serve_enabled'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(cols, 1);
+    }
+
+    /// `request_uid` 是后加的列：旧库升级后要能补上、旧行留 NULL、新行能写。
+    ///
+    /// 为什么单独测：它是「一次用户请求对应多条路由尝试」的唯一持久身份。
+    /// 迁移失败会让统计退回按行计数（一次重试算两次），而这在界面上看不出来——
+    /// 数字只是偏大，没有任何报错。
+    /// P1「旧数据库升级」：构造一个真正旧版的 `usage.db`（缺后来加的全部列），
+    /// 跑真实迁移路径，验证四件事：旧记录不丢、旧值不变、新列可用、重复迁移幂等。
+    ///
+    /// ## 为什么不能只测「ALTER 加列能跑」
+    ///
+    /// `init` 里有 47 处 `ALTER TABLE`，分属 6 张表，绝大多数被 `let _ =` 吞掉错误
+    /// （列已存在时报错是正常的）。这种写法很容易在某一张表上漏掉、或把 NOT NULL
+    /// 默认值写错。单测若只验「列存在」，漏掉默认值时旧行的语义会悄悄变掉：
+    /// `*_known` 若默认 0，历史行会被当成「Token 未知」，整库统计立刻变灰。
+    ///
+    /// 所以这条固定样本从最早的 schema 开始升级，逐表断言
+    /// 「列存在 + 旧行默认值语义正确 + 旧数据原样」。
+    #[test]
+    fn an_old_schema_upgrades_without_losing_rows_or_changing_their_meaning() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE requests (
+                id INTEGER PRIMARY KEY, platform TEXT NOT NULL, source TEXT NOT NULL,
+                dedup_key TEXT NOT NULL, session_id TEXT, ts INTEGER NOT NULL, model TEXT,
+                input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                total_tokens INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(source, dedup_key)
+             );
+             INSERT INTO requests(platform,source,dedup_key,ts,model,input_tokens,output_tokens,total_tokens)
+               VALUES('claude','local-session','m1',1000,'claude-sonnet-4',100,20,120);
+             INSERT INTO requests(platform,source,dedup_key,ts,model,input_tokens,output_tokens,total_tokens)
+               VALUES('codex','local-session','m2',2000,'gpt-5',50,10,60);
+             CREATE TABLE connections (
+                id TEXT PRIMARY KEY, platform TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL,
+                secret TEXT, masked TEXT, status TEXT, created_ms INTEGER
+             );
+             INSERT INTO connections VALUES('c-old','claude','auth','旧账号','s','****','connected',1);
+             CREATE TABLE sessions (
+                platform TEXT NOT NULL, session_id TEXT NOT NULL, title TEXT,
+                PRIMARY KEY(platform, session_id)
+             );
+             INSERT INTO sessions VALUES('claude','s1','旧标题');
+             CREATE TABLE gateway_route_log (
+                id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, agent TEXT,
+                requested_model TEXT NOT NULL, result TEXT NOT NULL
+             );
+             INSERT INTO gateway_route_log(ts,requested_model,result) VALUES(1000,'group/x','ok');
+             CREATE TABLE scan_state (
+                path TEXT PRIMARY KEY, offset INTEGER NOT NULL, mtime INTEGER NOT NULL
+             );
+             INSERT INTO scan_state VALUES('/tmp/old.jsonl', 123, 456);",
+        )
+        .unwrap();
+
+        init(&conn).unwrap();
+
+        let column_exists = |table: &str, column: &str| -> bool {
+            conn.query_row(
+                &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name='{column}'"),
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+                > 0
+        };
+
+        let expected: &[(&str, &str)] = &[
+            ("requests", "input_known"),
+            ("requests", "output_known"),
+            ("requests", "cache_read_known"),
+            ("requests", "cache_write_known"),
+            ("requests", "total_known"),
+            ("requests", "effort"),
+            ("requests", "duration_ms"),
+            ("requests", "first_token_ms"),
+            ("requests", "status_code"),
+            ("requests", "connection_id"),
+            ("requests", "provider_key"),
+            ("connections", "base_url"),
+            ("connections", "model"),
+            ("connections", "effort"),
+            ("connections", "context_1m"),
+            ("connections", "protocol"),
+            ("connections", "service"),
+            ("connections", "account_email"),
+            ("connections", "serve_enabled"),
+            ("connections", "start_channel"),
+            ("connections", "slug"),
+            ("connections", "account_fp"),
+            ("connections", "models_json"),
+            ("connections", "catalog_auto"),
+            ("connections", "exhausted_day"),
+            ("sessions", "cwd"),
+            ("sessions", "is_running"),
+            ("sessions", "activity_state"),
+            ("sessions", "activity_updated_ms"),
+            ("sessions", "turn_started_ms"),
+            ("gateway_route_log", "connection_id"),
+            ("gateway_route_log", "session_platform"),
+            ("gateway_route_log", "session_id"),
+            ("gateway_route_log", "client_key"),
+            ("gateway_route_log", "request_id"),
+            ("gateway_route_log", "request_uid"),
+            ("gateway_route_log", "resolved_from"),
+            ("gateway_route_log", "profile"),
+            ("scan_state", "parser_model"),
+            ("scan_state", "parser_session_id"),
+            ("scan_state", "parser_activity_state"),
+            ("scan_state", "parser_updated_at_ms"),
+            ("scan_state", "parser_effort"),
+            ("scan_state", "parser_initialized"),
+        ];
+        for (table, column) in expected {
+            assert!(column_exists(table, column), "{table} 缺列 {column}");
+        }
+
+        let rows: Vec<(String, i64, i64, i64)> = conn
+            .prepare("SELECT dedup_key, ts, input_tokens, total_tokens FROM requests ORDER BY ts")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![("m1".to_string(), 1000, 100, 120), ("m2".to_string(), 2000, 50, 60)],
+            "旧记录必须原样保留"
+        );
+
+        // 最容易漏的一处：新增的 *_known 默认必须是 1（已知）。默认成 0 会让历史
+        // Token 全变「未知」，统计从彩色变灰。
+        let known: (i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*) FILTER (WHERE input_known=1 AND total_known=1),
+                        COUNT(*) FILTER (WHERE connection_id IS NULL AND provider_key IS NULL)
+                 FROM requests",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(known, (2, 2), "旧行默认按已知处理；无归因证据的列留 NULL");
+
+        let conn_row: (String, i64) = conn
+            .query_row("SELECT name, serve_enabled FROM connections WHERE id='c-old'", [],
+                |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(conn_row, ("旧账号".to_string(), 0), "旧连接保留，serve_enabled 默认关闭");
+        let session_row: (String, String) = conn
+            .query_row("SELECT title, activity_state FROM sessions WHERE session_id='s1'", [],
+                |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(session_row, ("旧标题".to_string(), "done".to_string()));
+        let log_uid: Option<i64> = conn
+            .query_row("SELECT request_uid FROM gateway_route_log WHERE ts=1000", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(log_uid, None, "旧流水没有身份证据，留 NULL 而不是编一个");
+        let scan_row: (i64, i64, i64) = conn
+            .query_row(
+                "SELECT offset, mtime, parser_initialized FROM scan_state WHERE path='/tmp/old.jsonl'",
+                [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        assert_eq!(scan_row, (123, 456, 0), "旧位点保留，解析上下文标记为未初始化");
+
+        // 新列真的能用：写一条带 effort 的完整记录
+        insert_records(&mut conn, &[RequestRecord {
+            platform: "claude".into(),
+            source: "local-session".into(),
+            dedup_key: "m3".into(),
+            session_id: Some("s1".into()),
+            ts: 3000,
+            model: Some("claude-sonnet-4".into()),
+            input_tokens: Some(7), output_tokens: Some(3),
+            cache_read_tokens: Some(0), cache_write_tokens: Some(0),
+            total_tokens: Some(10), effort: Some("high".into()),
+        }])
+        .unwrap();
+        let fresh: (i64, Option<String>) = conn
+            .query_row("SELECT total_tokens, effort FROM requests WHERE dedup_key='m3'", [],
+                |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(fresh, (10, Some("high".into())), "新列可写可读");
+
+        // 重复迁移幂等：再跑两次，行数与旧值都不变
+        let before: i64 = conn.query_row("SELECT COUNT(*) FROM requests", [], |r| r.get(0)).unwrap();
+        init(&conn).unwrap();
+        init(&conn).unwrap();
+        let after: i64 = conn.query_row("SELECT COUNT(*) FROM requests", [], |r| r.get(0)).unwrap();
+        assert_eq!(before, after, "重复迁移不能增删行");
+        let still_m1: i64 = conn
+            .query_row("SELECT total_tokens FROM requests WHERE dedup_key='m1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(still_m1, 120, "重复迁移不能改旧值");
+    }
+
+    /// P1「旧数据库升级」第二部分：走**真实文件路径**（`db::open` + WAL + 外键 + 调优），
+    /// 而不是内存连接。
+    ///
+    /// 上一条测的是 `init` 的迁移逻辑本身；这条测的是「用户真的打开一个旧版
+    /// `usage.db` 文件」时会不会出事。差异在：
+    /// - WAL 模式下 ALTER TABLE 的表现与内存库不同；
+    /// - `foreign_keys=ON` 时旧库里若有悬空引用，迁移/新写入会直接报错；
+    /// - `open_reader`（只读连接池）随后能不能读到迁移后的新列。
+    #[test]
+    fn an_old_database_file_opens_reads_and_reopens_cleanly() {
+        let root = std::env::temp_dir().join(format!(
+            "jolu-old-db-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("usage.db");
+
+        // 用一个裸连接造出旧版文件（不走 open，避免提前迁移）
+        {
+            let raw = Connection::open(&path).unwrap();
+            raw.execute_batch(
+                "CREATE TABLE requests (
+                    id INTEGER PRIMARY KEY, platform TEXT NOT NULL, source TEXT NOT NULL,
+                    dedup_key TEXT NOT NULL, session_id TEXT, ts INTEGER NOT NULL, model TEXT,
+                    input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(source, dedup_key)
+                 );
+                 INSERT INTO requests(platform,source,dedup_key,ts,total_tokens)
+                   VALUES('zcode','native:zcode:main','old-1',1000000,999999);
+                 CREATE TABLE connections (
+                    id TEXT PRIMARY KEY, platform TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL,
+                    secret TEXT, masked TEXT, status TEXT, created_ms INTEGER
+                 );",
+            )
+            .unwrap();
+            // 确保数据落到磁盘（不靠 checkpoint）
+            raw.execute_batch("PRAGMA journal_mode=DELETE;").ok();
+        }
+
+        // 用户真实的打开路径
+        {
+            let conn = open(&path).unwrap();
+            let row: (i64, i64) = conn
+                .query_row(
+                    "SELECT total_tokens, total_known FROM requests WHERE dedup_key='old-1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(row, (999999, 1), "旧 Token 保留，且默认按已知处理");
+            // 新列可用
+            conn.execute(
+                "INSERT INTO requests(platform,source,dedup_key,ts,provider_key,connection_id)
+                 VALUES('zcode','native:zcode:main','new-1',2000000,'zai','c-1')",
+                [],
+            )
+            .unwrap();
+            // 只读连接池能读到
+            let reader = open_reader(&path).unwrap();
+            let count: i64 = reader
+                .query_row("SELECT COUNT(*) FROM requests WHERE provider_key='zai'", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, 1, "只读连接能看到迁移后的新列");
+        }
+
+        // 关掉再开一次：迁移在已有 WAL 的库上也要幂等
+        {
+            let conn = open(&path).unwrap();
+            let count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM requests", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, 2, "重开不能增删记录");
+            let old: i64 = conn
+                .query_row("SELECT total_tokens FROM requests WHERE dedup_key='old-1'", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(old, 999999, "重开不能改旧值");
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn request_uid_column_migrates_and_old_rows_stay_unknown() {
+        // 模拟旧库：gateway_route_log 没有 request_uid 列，且已有一条历史记录
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE gateway_route_log (
+                id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, agent TEXT,
+                requested_model TEXT NOT NULL, result TEXT NOT NULL
+            );
+            INSERT INTO gateway_route_log (ts, requested_model, result) VALUES (100, 'group/x', 'ok');",
+        ).unwrap();
+        init(&conn).unwrap();
+
+        // 1) 列补上了
+        let cols: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('gateway_route_log') WHERE name='request_uid'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cols, 1, "旧库升级后必须有 request_uid 列");
+
+        // 2) 旧行的身份保持未知，不编一个值
+        let old: Option<i64> = conn
+            .query_row("SELECT request_uid FROM gateway_route_log ORDER BY id LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(old, None, "历史行没有身份证据，必须留 NULL");
+
+        // 3) 新行能写入
+        conn.execute(
+            "INSERT INTO gateway_route_log (ts, requested_model, result, request_uid) VALUES (200, 'group/x', 'ok', 7)",
+            [],
+        )
+        .unwrap();
+        let fresh: Option<i64> = conn
+            .query_row("SELECT request_uid FROM gateway_route_log WHERE ts=200", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fresh, Some(7));
+
+        // 4) 新库直接 init 也有该列（幂等 ALTER 不会因重复执行失败）
+        let again = Connection::open_in_memory().unwrap();
+        init(&again).unwrap();
+        init(&again).unwrap();
+        let cols: i64 = again
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('gateway_route_log') WHERE name='request_uid'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cols, 1, "重复 init 不应破坏结构");
     }
 }
 

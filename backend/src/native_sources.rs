@@ -80,7 +80,17 @@ pub fn sources_at(home: &Path, app: &Path) -> Vec<Source> {
     .map(|(platform, instance, name, path)| {
         let implemented =
             crate::platforms::supports(platform, "local_sessions") || platform == "grok" || platform == "trae";
-        let available = path.exists() && implemented;
+        // Qoder 有两套本地布局（2026-11-23 对账查出：本机只有用量库，没有
+        // `~/.qoder/projects`；只按 projects 判定会让整个来源永不启用）。
+        //
+        // 但账本只有一份，属于国际版客户端（`~/.qoder/`）。国内版是 `~/.qoder-cn/`，
+        // 它自己的数据目录没有账本 —— 不能让 cn 实例共用国际版账本，否则同一批记录
+        // 会被两个 source 各写一遍（去重键含 source，会真的变成两行）。
+        let available = if platform == "qoder" && instance == "global" {
+            implemented && (path.exists() || crate::qoder_usage::ledger_path(home).is_file())
+        } else {
+            path.exists() && implemented
+        };
         Source {
             id: format!("native:{platform}:{instance}"),
             platform: platform.into(),
@@ -671,6 +681,35 @@ fn zcode_boost_running(
     }
 }
 
+/// Qoder 桌面客户端用量账本的一轮扫描（C-3：主库与 WAL 都没变时直接跳过）。
+///
+/// 原先每轮都把整张 `chat_message` 读出、逐行解析、再整批写回，账本越大越慢，
+/// 而且写回期间一直占着数据库锁。现在沿用 ZCode 的内容戳记：变了才整份重建。
+/// 戳记与记录在同一个事务里提交，写入失败时戳记不前进，下一轮会重读。
+///
+/// 返回值第二项是逐行跳过的坏行说明（见 `qoder_usage::read_usage`），计入扫描错误。
+fn qoder_ledger(db: &mut impl Store, home: &Path, source_id: &str) -> Result<(usize, Vec<String>), String> {
+    let path = crate::qoder_usage::ledger_path(home);
+    let key = path.to_string_lossy().to_string();
+    let stamps = db_stamps(&path)?;
+    if db.write(|conn| db_unchanged(conn, &key, stamps)) {
+        return Ok((0, Vec::new()));
+    }
+    // 读取第三方库不占本应用写锁
+    let ledger = readonly(&path)?;
+    let read = crate::qoder_usage::read_usage(&ledger, source_id, 0)?;
+    drop(ledger);
+    let changed = db.write(|conn| -> rusqlite::Result<usize> {
+        let tx = conn.transaction()?;
+        let changed = source_store::write(&tx, &read.records)?;
+        save_db_stamps(&tx, &key, stamps)?;
+        tx.commit()?;
+        Ok(changed)
+    })
+    .map_err(|e| e.to_string())?;
+    Ok((changed, read.skipped))
+}
+
 fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
     let key = source.path.to_string_lossy().to_string();
     let timestamp_migration = format!("{key}#zcode-started-at-v1");
@@ -1197,6 +1236,14 @@ fn scan_sources(db: &mut impl Store, home: &Path, app: &Path, only: Option<&[Pat
             (||->Result<(usize,Vec<String>),String>{let records=if source.path.is_dir(){crate::opencode_usage::read_json_files(&source.path)?}else{let input=readonly(&source.path)?;crate::opencode_usage::read_usage(&input,crate::opencode_usage::detect_layout(&input)?,0)?};db.write(|conn|source_store::write(conn,&records)).map(|n|(n,vec![])).map_err(|e|e.to_string())})()
         } else if source.platform == "zcode" {
             zcode(db, &source).map(|n| (n, Vec::new()))
+        } else if source.platform == "qoder"
+            && source.id == "native:qoder:global"
+            && crate::qoder_usage::ledger_path(home).is_file()
+        {
+            // Qoder 桌面客户端的用量账本（2026-11-23 对账查出：本机真实数据在这里，
+            // `~/.qoder/projects` 不存在）。整份重建：`chat_message` 可能被客户端改写/清理，
+            // 按行追加的位点对它不适用；去重靠 `(source, dedup_key)` 兜底。
+            qoder_ledger(db, home, &source.id)
         } else {
             scan_files(db, &source, app)
         };
@@ -1285,6 +1332,527 @@ mod tests {
         let mut db=crate::db::open(&root.join("jolu.db")).unwrap();db.execute("INSERT INTO connections(id,platform,kind,name,label,masked,status,created_ms) VALUES('monitor:native:opencode:openai','opencode','auth','test','','','paused',0)",[]).unwrap();
         assert_eq!(scan_at(&mut db,&root,&root).records_inserted,0);
         db.execute("UPDATE connections SET status='connected'",[]).unwrap();assert_eq!(scan_at(&mut db,&root,&root).records_inserted,1);assert_eq!(scan_at(&mut db,&root,&root).records_inserted,0);
+    }
+
+    /// P0-3 场景「扫描延迟」：源库在两次扫描之间新增数据，第二次扫描要补上，
+    /// 且不能重复写已经采过的行。
+    ///
+    /// 这是「扫描延迟」的固定样本 —— 用「先扫、再往源库插一行、再扫」模拟
+    /// 采集器落后于源端的真实情况。判据是：第一次 N 条、第二次 N+1 条、
+    /// 没有重复行（`dedup_key` 唯一）、第二次不重复消耗已采数据。
+    #[test]
+    fn a_delayed_scan_picks_up_new_rows_without_duplicating() {
+        let root = fixture_dir("zcode-delay");
+        let folder = root.join(".zcode/cli/db");
+        std::fs::create_dir_all(&folder).unwrap();
+        let db = folder.join("db.sqlite");
+        let now = chrono::Utc::now().timestamp_millis();
+        let mk = || -> Connection {
+            let c = Connection::open(&db).unwrap();
+            c.execute_batch("CREATE TABLE IF NOT EXISTS session(id TEXT PRIMARY KEY, title TEXT);
+                CREATE TABLE IF NOT EXISTS model_usage(id TEXT PRIMARY KEY, session_id TEXT, model_id TEXT,
+                  status TEXT, started_at INTEGER, completed_at INTEGER, input_tokens INTEGER, output_tokens INTEGER,
+                  cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER, provider_total_tokens INTEGER,
+                  computed_total_tokens INTEGER, reasoning_tokens INTEGER, raw_usage_json TEXT);").unwrap();
+            c
+        };
+        {
+            let input = mk();
+            input.execute("INSERT INTO session VALUES('s1','会话')", []).unwrap();
+            input.execute("INSERT INTO model_usage VALUES('u1','s1','glm-4.7','completed',?1,?2,10,5,0,0,15,15,0,NULL)",
+                params![now - 2000, now - 1000]).unwrap();
+        }
+        let mut conn = crate::db::open(Path::new(":memory:")).unwrap();
+        let first = scan_at(&mut conn, &root, &root);
+        assert!(first.errors.is_empty(), "{:?}", first.errors);
+        let count = |c: &Connection| -> i64 { c.query_row("SELECT COUNT(*) FROM requests WHERE platform='zcode'", [], |r| r.get(0)).unwrap() };
+        assert_eq!(count(&conn), 1, "第一次扫描采到 1 条");
+
+        // 源端在两次扫描之间新增一行（真实的「采集延迟」）
+        {
+            let input = mk();
+            input.execute("INSERT INTO model_usage VALUES('u2','s1','glm-4.7','completed',?1,?2,20,8,0,0,28,28,0,NULL)",
+                params![now - 500, now]).unwrap();
+        }
+        let second = scan_at(&mut conn, &root, &root);
+        assert!(second.errors.is_empty(), "{:?}", second.errors);
+        assert_eq!(count(&conn), 2, "第二次扫描补上新增的那行");
+        let dup: i64 = conn
+            .query_row("SELECT COUNT(*) FROM (SELECT dedup_key FROM requests GROUP BY dedup_key HAVING COUNT(*) > 1)", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(dup, 0, "不能有重复行");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// P0-3 场景「多账号并发」：同一平台的两个账号在同一时刻产生请求，
+    /// 各自独立记在 `connection_id` 下，不能互相覆盖或错配。
+    ///
+    /// 固定样本：两个连接 + 四条请求，两个连接各两条、时间完全交错。
+    /// 判据是 `source_usage` 按连接分组后各自计数正确，且没有一条记录连到错的连接。
+    #[test]
+    fn concurrent_accounts_keep_their_own_rows() {
+        let conn = crate::db::open(Path::new(":memory:")).unwrap();
+        // 两个账号（连接）
+        for (id, name) in [("c-a", "账号 A"), ("c-b", "账号 B")] {
+            conn.execute(
+                "INSERT INTO connections(id,platform,kind,name,secret,masked,created_ms,slug) VALUES(?1,'claude','auth',?2,'x','****',1,?3)",
+                params![id, name, id],
+            )
+            .unwrap();
+        }
+        // 四条请求，两个账号交替、时间交错
+        let entries = [
+            ("u-1", "c-a", 1000),
+            ("u-2", "c-b", 1001),
+            ("u-3", "c-a", 1002),
+            ("u-4", "c-b", 1003),
+        ];
+        for (key, conn_id, ts) in entries {
+            conn.execute(
+                "INSERT INTO requests(platform,source,dedup_key,ts,connection_id) VALUES('claude','local-session',?1,?2,?3)",
+                params![key, ts, conn_id],
+            )
+            .unwrap();
+        }
+        let breakdown = crate::usage_stats::source_breakdown(&conn, Some("claude"), 0, 10_000).unwrap();
+        let a = breakdown.rows.iter().find(|r| r.connection_id == "c-a").expect("账号 A 的一行");
+        let b = breakdown.rows.iter().find(|r| r.connection_id == "c-b").expect("账号 B 的一行");
+        assert_eq!((a.requests, b.requests), (2, 2), "两个账号各自 2 条，不能错配");
+        assert_eq!(breakdown.total_requests, 4);
+        assert_eq!(breakdown.unattributed_requests, 0, "没有记录被丢进未归属");
+    }
+
+    /// Qoder 真实布局（2026-11-23 对账修复 P0-3-a）：只有用量库、没有 `~/.qoder/projects`
+    /// 的机器上，来源也必须可用并采到数据。
+    ///
+    /// 修复前：`available = path.exists()`，`path` 是 `~/.qoder/projects`。本机没有该目录，
+    /// 于是整个 Qoder 来源永不启用，999 条真实用量一条都采不到。
+    #[test]
+    fn qoder_source_is_available_from_the_ledger_alone() {
+        let root = fixture_dir("qoder-ledger");
+        let home = root.join("home");
+        // 只建账本，不建 projects 目录
+        let ledger_path = crate::qoder_usage::ledger_path(&home);
+        std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+        {
+            let ledger = Connection::open(&ledger_path).unwrap();
+            ledger.execute_batch(
+                "CREATE TABLE chat_message(id TEXT, session_id TEXT, role TEXT, token_info TEXT, gmt_create INTEGER);
+                 INSERT INTO chat_message VALUES('m1','s1','assistant',
+                   '{\"prompt_tokens\":1000,\"completion_tokens\":50,\"cached_tokens\":800}',1700000000000);
+                 INSERT INTO chat_message VALUES('m2','s1','assistant',
+                   '{\"prompt_tokens\":2000,\"completion_tokens\":60,\"cached_tokens\":1500}',1700000001000);",
+            ).unwrap();
+        }
+        let sources: Vec<_> = sources_at(&home, &home)
+            .into_iter()
+            .filter(|s| s.platform == "qoder" && s.id == "native:qoder:global")
+            .collect();
+        assert_eq!(sources.len(), 1);
+        assert!(sources[0].available, "有账本就应该可用，不要求 projects 目录");
+
+        let mut conn = crate::db::open(&root.join("jolu.db")).unwrap();
+        let result = scan_at(&mut conn, &home, &home);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let (rows, input, cache): (i64, i64, i64) = conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(cache_read_tokens),0)
+             FROM requests WHERE platform='qoder'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap();
+        assert_eq!(rows, 2, "两条 assistant 调用各记一行");
+        // 存的是**原始 prompt**（含缓存），缓存单列。新鲜输入由 `input_semantics`
+        // = includes_cache 的消费方扣减，不能在这里提前扣。
+        assert_eq!(input, 3000, "原始 prompt 之和 = 1000 + 2000");
+        assert_eq!(cache, 2300, "缓存读单独记 = 800 + 1500");
+
+        // 重扫不重复
+        let again = scan_at(&mut conn, &home, &home);
+        assert!(again.errors.is_empty(), "{:?}", again.errors);
+        let rows2: i64 = conn
+            .query_row("SELECT COUNT(*) FROM requests WHERE platform='qoder'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows2, 2, "重扫不重复写");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// C-3：账本没变时不重读。用「改 Jolu 库里的值、看下一轮会不会被覆盖回去」判断有没有重读——
+    /// 没重读，改过的值会留着；账本一变，整份重建会把它改回源端的值。
+    #[test]
+    fn an_unchanged_qoder_ledger_is_not_reread() {
+        let root = fixture_dir("qoder-ledger-stamp");
+        let home = root.join("home");
+        let ledger_path = crate::qoder_usage::ledger_path(&home);
+        std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+        {
+            let ledger = Connection::open(&ledger_path).unwrap();
+            ledger.execute_batch(
+                "CREATE TABLE chat_message(id TEXT, session_id TEXT, role TEXT, token_info TEXT, gmt_create INTEGER);
+                 INSERT INTO chat_message VALUES('m1','s1','assistant',
+                   '{\"prompt_tokens\":1000,\"completion_tokens\":50,\"cached_tokens\":800}',1700000000000);",
+            ).unwrap();
+        }
+        let mut conn = crate::db::open(&root.join("jolu.db")).unwrap();
+        let output = |c: &Connection| -> i64 {
+            c.query_row("SELECT output_tokens FROM requests WHERE platform='qoder' AND dedup_key='s1:m1'", [], |r| r.get(0)).unwrap()
+        };
+        assert!(scan_at(&mut conn, &home, &home).errors.is_empty());
+        assert_eq!(output(&conn), 50);
+
+        // 只改 Jolu 侧，账本不动：下一轮不该重读，改过的值留着
+        conn.execute("UPDATE requests SET output_tokens = 999 WHERE platform='qoder'", []).unwrap();
+        assert!(scan_at(&mut conn, &home, &home).errors.is_empty());
+        assert_eq!(output(&conn), 999, "账本没变，不应重读重写");
+
+        // 账本有变化（新增一条）：整份重建，旧行也按源端的值改回来
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        {
+            let ledger = Connection::open(&ledger_path).unwrap();
+            ledger.execute(
+                "INSERT INTO chat_message VALUES('m2','s1','assistant',
+                   '{\"prompt_tokens\":10,\"completion_tokens\":5,\"cached_tokens\":0}',1700000001000)",
+                [],
+            ).unwrap();
+        }
+        assert!(scan_at(&mut conn, &home, &home).errors.is_empty());
+        assert_eq!(output(&conn), 50, "账本变了要重读，旧行回到源端的值");
+        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM requests WHERE platform='qoder'", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 2);
+        drop(conn);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// C-5：账本里的坏行进入扫描错误（按来源定界），好行照常入库。
+    #[test]
+    fn qoder_bad_rows_surface_as_scan_errors_without_blocking_good_rows() {
+        let root = fixture_dir("qoder-ledger-bad");
+        let home = root.join("home");
+        let ledger_path = crate::qoder_usage::ledger_path(&home);
+        std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+        {
+            let ledger = Connection::open(&ledger_path).unwrap();
+            ledger.execute_batch(
+                "CREATE TABLE chat_message(id TEXT, session_id TEXT, role TEXT, token_info TEXT, gmt_create INTEGER);
+                 INSERT INTO chat_message VALUES('m1','s1','assistant',
+                   '{\"prompt_tokens\":10,\"completion_tokens\":5,\"cached_tokens\":0}',1700000000000);
+                 INSERT INTO chat_message VALUES('m2','s1','assistant','{oops',1700000001000);",
+            ).unwrap();
+        }
+        let mut conn = crate::db::open(&root.join("jolu.db")).unwrap();
+        let result = scan_at(&mut conn, &home, &home);
+        assert!(result.errors.iter().any(|e| e.contains("JSON")), "{:?}", result.errors);
+        assert!(result.failed_sources.contains(&"qoder".to_string()));
+        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM requests WHERE platform='qoder'", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 1, "好行照常入库");
+        drop(conn);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 真机只读验证（`#[ignore]`）：用真实 `~/.qoder` 账本扫进一个**临时** Jolu 库，
+    /// 确认端到端能写出正确条数与 Token 合计，且不碰用户真实 `usage.db`。
+    #[test]
+    #[ignore = "真实账号只读验证：读 ~/.qoder 账本，写入临时库"]
+    fn real_qoder_ledger_scans_into_a_temp_db() {
+        let Some(home) = crate::creds::home() else { return };
+        if !crate::qoder_usage::ledger_path(&home).is_file() {
+            eprintln!("跳过：真实 Qoder 账本不存在");
+            return;
+        }
+        // 临时目录 + 空库，绝不碰用户的 usage.db
+        let root = std::env::temp_dir().join(format!(
+            "jolu-qoder-real-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut conn = crate::db::open(&root.join("usage.db")).unwrap();
+        let result = scan_at(&mut conn, &home, &root);
+        eprintln!("真实扫描：插入 {} 条，错误 {:?}", result.records_inserted, result.errors);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let (rows, input, cache, output): (i64, i64, i64, i64) = conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(cache_read_tokens),0),
+                    COALESCE(SUM(output_tokens),0) FROM requests WHERE platform='qoder'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        ).unwrap();
+        eprintln!("真实扫描结果：{rows} 条，原始输入（含缓存）{input}，缓存读 {cache}，新鲜输入 {}，输出 {output}", input - cache);
+        assert!(rows > 0, "真实账本应能扫出记录");
+        assert!(cache > 0, "缓存读应为正");
+        let dup: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM (SELECT dedup_key FROM requests WHERE platform='qoder'
+             GROUP BY dedup_key HAVING COUNT(*) > 1)", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(dup, 0, "去重键不能重复");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// P1「账号切换」：切换账号后重扫历史日志，不重复写、不把旧记录改归到新账号。
+    ///
+    /// ## 真实场景
+    ///
+    /// 用户在同一个工具里退出 A 账号、登录 B 账号后继续用。旧日志文件还在
+    /// （`~/.claude/projects/` 里的历史 jsonl 不会因为换账号被删），而 Jolu 的
+    /// 采集器仍会扫到它们。两件事必须同时成立：
+    ///
+    /// 1. **重扫不重复**：旧日志的 `dedup_key` 已经存在，不能因为「换账号了」再写一遍；
+    /// 2. **归因不错配**：旧记录不能因为连接表里多了 B 而被改判成 B。
+    ///
+    /// 这条固定样本把这两件事都锁住：先扫出 A 名下的记录，再插入 B 连接、再扫一遍，
+    /// 断言记录数不变、且 `connection_id` 一个都没变。
+    #[test]
+    fn switching_accounts_rescans_without_duplication_or_reattribution() {
+        let root = fixture_dir("account-switch");
+        let home = root.join("home");
+        std::fs::create_dir_all(home.join(".qoder/projects/p")).unwrap();
+        let log = home.join(".qoder/projects/p/s.jsonl");
+        let mut body = String::new();
+        for i in 0..2 {
+            let line = serde_json::json!({
+                "type": "assistant",
+                "timestamp": 1_700_000_000_000i64 + i * 1000,
+                "sessionId": "s",
+                "message": { "id": format!("m{i}"), "usage": { "input_tokens": 100, "output_tokens": 20,
+                            "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } }
+            });
+            body.push_str(&line.to_string());
+            body.push('\n');
+        }
+        std::fs::write(&log, &body).unwrap();
+
+        let db_path = root.join("jolu.db");
+        let mut conn = crate::db::open(&db_path).unwrap();
+        // A 账号：注册为一条 auth 连接，并把首次扫描的记录归到它下面
+        conn.execute(
+            "INSERT INTO connections(id,platform,kind,name,secret,masked,created_ms,slug)
+             VALUES('c-a','qoder','auth','账号 A','x','****',1,'c-a')",
+            [],
+        ).unwrap();
+        let first = scan_at(&mut conn, &home, &home);
+        assert!(first.errors.is_empty(), "{:?}", first.errors);
+        let count = |c: &Connection| -> i64 {
+            c.query_row("SELECT COUNT(*) FROM requests WHERE platform='qoder'", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(count(&conn), 2, "A 账号下采到 2 条");
+        // 把这两条归到 A（生产里由代理计时 / 网关记账写入 connection_id）
+        conn.execute("UPDATE requests SET connection_id='c-a' WHERE platform='qoder'", []).unwrap();
+        let attributed_to = |c: &Connection, id: &str| -> i64 {
+            c.query_row("SELECT COUNT(*) FROM requests WHERE platform='qoder' AND connection_id=?1",
+                [id], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(attributed_to(&conn, "c-a"), 2);
+
+        // 换账号：B 连接出现（A 保留，用户只是切了个登录）
+        conn.execute(
+            "INSERT INTO connections(id,platform,kind,name,secret,masked,created_ms,slug)
+             VALUES('c-b','qoder','auth','账号 B','y','****',2,'c-b')",
+            [],
+        ).unwrap();
+        // 再扫一遍（等价于切换账号后的下一次扫描）
+        let second = scan_at(&mut conn, &home, &home);
+        assert!(second.errors.is_empty(), "{:?}", second.errors);
+        assert_eq!(count(&conn), 2, "重扫不能重复写");
+        assert_eq!(second.records_inserted, 0, "位点已推进，不该有新插入");
+        assert_eq!(attributed_to(&conn, "c-a"), 2, "旧记录仍归 A，不能被改判成 B");
+        assert_eq!(attributed_to(&conn, "c-b"), 0, "B 不该凭空得到历史记录");
+
+        // 归因视图也不该把旧会话算到 B 头上：平台内两条 auth 连接时，
+        // 无端点事实的请求落「平台」档而不是猜一个
+        let snapshot = crate::attribution::Snapshot::load(&conn).unwrap();
+        let view = snapshot.resolve("qoder", None, None, None);
+        assert_eq!(view.confidence, crate::attribution::Confidence::Platform,
+            "两条 auth 连接、没有端点事实时不能猜");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// P1「账号切换」第二种形态：旧账号**被删掉**，新账号接管。
+    ///
+    /// 与上一条不同：上一条是两个账号并存（旧记录仍能归到 A）。这条是 A 真的没了，
+    /// 它的 `connection_id` 成了指向不存在连接的悬空值。正确行为：
+    ///
+    /// - 记录本身不能丢（历史账本必须保留，AGENTS.md 明确要求）；
+    /// - 归因**不能**自动改到 B —— 那些请求确实是 A 产生的，改成 B 就是伪造归属；
+    /// - 展示层遇到悬空 id 要落回「平台」档，而不是显示一个已删除的连接名。
+    #[test]
+    fn deleting_the_old_account_keeps_history_and_does_not_hand_it_to_the_new_one() {
+        let conn = crate::db::open(Path::new(":memory:")).unwrap();
+        let now = chrono::Local::now().timestamp_millis();
+        conn.execute(
+            "INSERT INTO connections(id,platform,kind,name,secret,masked,created_ms,slug)
+             VALUES('c-a','qoder','auth','账号 A','x','****',1,'c-a')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO requests(platform,source,dedup_key,ts,total_tokens,total_known,connection_id)
+             VALUES('qoder','native:qoder:global','s:m0',?1,120,1,'c-a')",
+            params![now],
+        ).unwrap();
+        // 删掉 A，插入 B
+        conn.execute("DELETE FROM connections WHERE id='c-a'", []).unwrap();
+        conn.execute(
+            "INSERT INTO connections(id,platform,kind,name,secret,masked,created_ms,slug)
+             VALUES('c-b','qoder','auth','账号 B','y','****',2,'c-b')",
+            [],
+        ).unwrap();
+
+        // 记录仍在，且 connection_id 仍是已消失的 A（不被改写成 B）
+        let (rows, owner): (i64, Option<String>) = conn.query_row(
+            "SELECT COUNT(*), MAX(connection_id) FROM requests WHERE platform='qoder'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert_eq!(rows, 1, "删除账号不能删历史记录");
+        assert_eq!(owner.as_deref(), Some("c-a"), "归属仍是产生它的账号，不能被改写");
+
+        // 归因视图：悬空 id 落平台档，不显示已删除的连接、也不冒充 B
+        let snapshot = crate::attribution::Snapshot::load(&conn).unwrap();
+        let view = snapshot.resolve("qoder", Some("c-a"), None, None);
+        assert_eq!(view.confidence, crate::attribution::Confidence::Platform,
+            "指向已删除连接时要落平台档");
+        assert_eq!(view.connection_id, None, "不能返回不存在的连接 id");
+    }
+
+    /// P1「中断恢复」：扫描中途被强制终止（kill -9 级别）后重扫，不丢记录、不重复。
+    ///
+    /// ## 为什么不能只测「正常扫两遍」
+    ///
+    /// 正常扫两遍走的是「位点已推进 → 提前返回」。真正的中断发生在**事务未提交**时：
+    /// 记录已写进事务、位点还没落库，进程被杀，SQLite 回滚整个事务。此时
+    /// 数据库里既没有记录也没有位点（正确），重扫必须从头补齐 —— 但去重键还在，
+    /// 所以「补齐」不会变成「翻倍」。这三件事只有真中断才测得出来。
+    ///
+    /// ## 怎么模拟 kill -9
+    ///
+    /// 起一个子进程扫同一份文件、同一份库，在事务提交前 `std::process::abort()`。
+    /// 不用 `panic`：panic 会走 unwinding 并 drop 事务（等于回滚），与 SIGKILL 不同；
+    /// `abort` 直接结束进程，正是「位点与记录都没落盘」的状态。
+    #[test]
+    fn a_scan_killed_mid_transaction_is_recovered_without_loss_or_duplication() {
+        if std::env::var_os("JOLU_SCAN_CRASH_CHILD").is_some() {
+            return;
+        }
+        let root = fixture_dir("scan-crash");
+        let home = root.join("home");
+        std::fs::create_dir_all(home.join(".qoder/projects/p")).unwrap();
+        let log = home.join(".qoder/projects/p/s.jsonl");
+        // 三条可解析的 assistant 记录
+        let mut body = String::new();
+        for i in 0..3 {
+            let line = serde_json::json!({
+                "type": "assistant",
+                "timestamp": 1_700_000_000_000i64 + i * 1000,
+                "sessionId": "s",
+                "message": { "id": format!("m{i}"), "usage": { "input_tokens": 10, "output_tokens": 5,
+                                                            "cache_read_input_tokens": 0,
+                                                            "cache_creation_input_tokens": 0 } }
+            });
+            body.push_str(&line.to_string());
+            body.push('\n');
+        }
+        std::fs::write(&log, &body).unwrap();
+        let db_path = root.join("jolu.db");
+
+        // 子进程：开库、扫一份「未提交」的事务，然后 abort
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "native_sources::tests::scan_crash_child", "--nocapture"])
+            .env("JOLU_SCAN_CRASH_CHILD", "1")
+            .env("JOLU_SCAN_CRASH_HOME", &home)
+            .env("JOLU_SCAN_CRASH_DB", &db_path)
+            .output()
+            .unwrap();
+        // abort 的退出码是非零、无正常退出码；这里只断言「确实非正常结束」
+        assert!(!output.status.success(), "子进程应被中断而非正常退出：{:?}", output.status);
+
+        // 父进程接着扫：必须补齐全部 3 条，且一条不多
+        let mut conn = crate::db::open(&db_path).unwrap();
+        let first = scan_at(&mut conn, &home, &home);
+        assert!(first.errors.is_empty(), "{:?}", first.errors);
+        let count = |c: &Connection| -> i64 {
+            c.query_row("SELECT COUNT(*) FROM requests WHERE platform='qoder'", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(count(&conn), 3, "中断后重扫要补齐全部记录，一条都不能丢");
+
+        // 再扫一次：位点已推进，不应再写入
+        let second = scan_at(&mut conn, &home, &home);
+        assert!(second.errors.is_empty(), "{:?}", second.errors);
+        assert_eq!(count(&conn), 3, "重复扫描不能增加记录");
+        assert_eq!(second.records_inserted, 0, "位点已推进，第二次不应再插入");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// P1「中断恢复」第二种形态：源端写到一半被 kill（文件里留下没有换行的半行）。
+    ///
+    /// 与上一条不同：这里**进程没崩在事务里**，而是源端文件本身不完整。真实场景是
+    /// Claude Code / Codex 正在追加一条 assistant 行，写到一半进程被杀，留半行。
+    /// 正确行为是「只采完整行、半行留到下次」，且下一次文件写完后补齐那一条 ——
+    /// 不能因为见到半行就整份重读（会重复），也不能把半行当坏行永久跳过（会丢）。
+    #[test]
+    fn a_half_written_tail_is_picked_up_after_the_source_finishes_it() {
+        let root = fixture_dir("scan-tail");
+        let home = root.join("home");
+        std::fs::create_dir_all(home.join(".qoder/projects/p")).unwrap();
+        let log = home.join(".qoder/projects/p/s.jsonl");
+        let line = |id: &str| {
+            serde_json::json!({
+                "type": "assistant", "timestamp": 1_700_000_000_000i64, "sessionId": "s",
+                "message": { "id": id, "usage": { "input_tokens": 10, "output_tokens": 5,
+                            "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } }
+            }).to_string()
+        };
+        let complete = format!("{}
+", line("m0"));
+        let second = line("m1");
+        // 前半行：只写一半，没有换行
+        let half = &second[..second.len() / 2];
+        std::fs::write(&log, format!("{complete}{half}")).unwrap();
+
+        let db_path = root.join("jolu.db");
+        let mut conn = crate::db::open(&db_path).unwrap();
+        let first = scan_at(&mut conn, &home, &home);
+        assert!(first.errors.is_empty(), "{:?}", first.errors);
+        let count = |c: &Connection| -> i64 {
+            c.query_row("SELECT COUNT(*) FROM requests WHERE platform='qoder'", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(count(&conn), 1, "只采到完整的那一行");
+
+        // 源端把剩下的半行写完
+        std::fs::write(&log, format!("{complete}{second}
+")).unwrap();
+        let second_scan = scan_at(&mut conn, &home, &home);
+        assert!(second_scan.errors.is_empty(), "{:?}", second_scan.errors);
+        assert_eq!(count(&conn), 2, "补齐第二行，不丢");
+        let dup: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM (SELECT dedup_key FROM requests GROUP BY dedup_key HAVING COUNT(*) > 1)",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(dup, 0, "不能重复");
+
+        // 再扫：无新增
+        assert_eq!(scan_at(&mut conn, &home, &home).records_inserted, 0);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 上一条测试的子进程体：写一批记录但不提交，然后 abort。
+    #[test]
+    fn scan_crash_child() {
+        if std::env::var_os("JOLU_SCAN_CRASH_CHILD").is_none() {
+            return;
+        }
+        let db_path = PathBuf::from(std::env::var_os("JOLU_SCAN_CRASH_DB").unwrap());
+        let mut conn = crate::db::open(&db_path).unwrap();
+        // 扫到一个「记录写了、位点还没提交」的状态：这里直接开事务写入后 abort，
+        // 不 commit —— 与进程在 commit 之前被 SIGKILL 完全等价。
+        let tx_state = conn.transaction().unwrap();
+        tx_state.execute(
+            "INSERT INTO requests(platform,source,dedup_key,ts,total_tokens,total_known)
+             VALUES('qoder','native:qoder:global','s:m-crash',1,15,1)",
+            [],
+        ).unwrap();
+        // 故意不提交
+        std::mem::forget(tx_state);
+        std::process::abort();
     }
 
     fn fixture_dir(label: &str) -> PathBuf {

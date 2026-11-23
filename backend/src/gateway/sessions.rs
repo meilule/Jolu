@@ -95,14 +95,21 @@ fn tokens(item: Option<&crate::session_threads::SessionItem>) -> SessionTokens {
         return SessionTokens { fresh_input: None, cache_read: None, cache_write: None, output: None, total: None, state: "missing" };
     };
     let parts = [item.fresh_input, item.cache_read, item.cache_write, item.output];
-    let total = parts.iter().copied().sum::<Option<i64>>();
+    // 用共享契约判「完整 / 部分 / 缺失」：与用量页 `token_coverage` 同一套规则
+    // （未知不是零、负数当未知）。四个分项都齐全才算 known。
+    let coverage = crate::data_contract::Coverage::of(parts);
+    let state = coverage.state();
+    // 注意语义差别：`Coverage.total` 是「已知部分之和」（部分覆盖时也有值），
+    // 而这里的 `total` 要求**四个分项全部可信**——缺一项就不给合计，
+    // 因为会话卡片要显示「总 Token」，把已知三项加起来会低估真实用量。
+    let total = if coverage.complete() { coverage.total() } else { None };
     SessionTokens {
         fresh_input: item.fresh_input,
         cache_read: item.cache_read,
         cache_write: item.cache_write,
         output: item.output,
         total,
-        state: if total.is_some() { "known" } else { "partial" },
+        state,
     }
 }
 
@@ -230,7 +237,7 @@ mod tests {
         NewEntry {
             agent: Some("codex"), requested_model: "kimi/k2", source: Some("kimi"), upstream_model: Some("k2"),
             status_code: Some(200), result: "ok", duration_ms: Some(10), connection_id: Some(conn_id),
-            session_platform: Some(platform), session_id: Some(session), client_key: None, request_id: None, resolved_from: None, profile: None }
+            session_platform: Some(platform), session_id: Some(session), client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None }
     }
 
     /// 方案 C：只在本地会话文件里、从未经过网关的会话也要出现在活跃会话里。

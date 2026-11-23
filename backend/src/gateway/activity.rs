@@ -4,7 +4,7 @@
 //!   被拒（Reject）在选路时就判定了，不发开始事件。
 //! - `gateway-route`：每个请求结束时发出，含被拒与失败；与开始事件带同一个 `request_id`。
 //!
-//! `request_id` 由进程内自增生成，只在内存和事件里使用，不写库，不能当跨重启的标识。
+//! `request_id` 是进程内事件编号，历史流水也保存了它，但不能当跨重启的标识。
 //! 事件只带元数据（时间、Agent、请求模型、来源 slug、连接 id、会话标识、上游模型、状态码、结果、耗时），
 //! 不带提示词、请求体与凭证。
 //!
@@ -28,6 +28,107 @@ pub(crate) fn next_request_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+/// JavaScript 安全整数上限：`request_uid` 会传给前端，超过它就不再分配，保留未知。
+const UID_MAX: i64 = 9007199254740991;
+/// 每次向数据库预留的号段长度。
+const UID_BLOCK: i64 = 1000;
+/// 当前号段剩余不足这么多时，提前在后台预留下一段。
+const UID_LOW: i64 = 200;
+
+/// 向数据库预留 `count` 个跨进程唯一的请求身份，返回半开区间 `[start, end)`。
+///
+/// 单行计数器由 SQLite 原子更新，多个进程 / 连接同时预留也不会重叠。
+/// 计数器接近 [`UID_MAX`] 时返回错误（没有行被更新），调用方保留未知。
+pub(crate) fn reserve_request_uids(conn: &rusqlite::Connection, count: i64) -> rusqlite::Result<(i64, i64)> {
+    let last: i64 = conn.query_row(
+        "UPDATE gateway_request_sequence SET value = value + ?1
+         WHERE singleton = 1 AND value <= ?2 - ?1 RETURNING value",
+        rusqlite::params![count, UID_MAX],
+        |row| row.get(0),
+    )?;
+    Ok((last - count + 1, last + 1))
+}
+
+/// 进程内的请求身份号段（C-1：请求路径不等数据库锁）。
+///
+/// 原先每个请求在选路前都要拿一次数据库锁去递增计数器；采集器扫描时持锁较久，
+/// 请求线程（tokio 工作线程）会被卡住。现在一次预留一段号码，请求只在内存里取号；
+/// 剩余不足 [`UID_LOW`] 时把「预留下一段」交给后台写入线程。
+///
+/// 用不完的号码在进程退出时作废，只会留下空号，不影响唯一性。
+#[derive(Clone, Default)]
+pub(crate) struct UidBlock(Arc<Mutex<UidState>>);
+
+#[derive(Default)]
+struct UidState {
+    /// 当前号段 `[next, end)`
+    next: i64,
+    end: i64,
+    /// 后台预留好、还没用上的下一段
+    spare: Option<(i64, i64)>,
+    /// 已经排了一次后台预留，还没完成
+    refilling: bool,
+}
+
+impl UidBlock {
+    /// 取一个请求身份。
+    ///
+    /// 号段用尽且后台预留还没到时，只用 `try_lock` 试一次数据库：拿不到锁就返回 `None`
+    /// （这一个请求身份未知，按旧行处理），不在请求线程上等锁。
+    pub(crate) fn take(&self, db: &Arc<Mutex<rusqlite::Connection>>) -> Option<i64> {
+        let mut state = self.0.lock().ok()?;
+        if state.next >= state.end {
+            if let Some((start, end)) = state.spare.take() {
+                (state.next, state.end) = (start, end);
+            } else {
+                let reserved = match db.try_lock() {
+                    Ok(conn) => reserve_request_uids(&conn, UID_BLOCK).map_err(|error| error.to_string()),
+                    Err(_) => Err("数据库正忙".to_string()),
+                };
+                match reserved {
+                    Ok((start, end)) => (state.next, state.end) = (start, end),
+                    Err(error) => {
+                        eprintln!("[路由流水] 暂时无法分配请求身份（{error}），本次记为未知");
+                        self.schedule_refill(&mut state, db);
+                        return None;
+                    }
+                }
+            }
+        }
+        let uid = state.next;
+        state.next += 1;
+        if state.end - state.next < UID_LOW && state.spare.is_none() {
+            self.schedule_refill(&mut state, db);
+        }
+        Some(uid)
+    }
+
+    /// 在后台预留一段号码，不等它完成。网关启动时调用一次，第一个请求就不必碰数据库。
+    pub(crate) fn prefetch(&self, db: &Arc<Mutex<rusqlite::Connection>>) {
+        if let Ok(mut state) = self.0.lock() {
+            self.schedule_refill(&mut state, db);
+        }
+    }
+
+    fn schedule_refill(&self, state: &mut UidState, db: &Arc<Mutex<rusqlite::Connection>>) {
+        if state.refilling {
+            return;
+        }
+        state.refilling = true;
+        let (block, db) = (self.clone(), db.clone());
+        crate::gateway::route_log::submit(move || {
+            // 写入线程上可以等锁；先拿号段、放开数据库锁，再登记，避免两把锁交叉持有
+            let reserved = db.lock().ok().and_then(|conn| reserve_request_uids(&conn, UID_BLOCK).ok());
+            if let Ok(mut state) = block.0.lock() {
+                state.refilling = false;
+                if reserved.is_some() {
+                    state.spare = reserved;
+                }
+            }
+        });
+    }
+}
+
 /// 已验证的调用方会话：平台（与会话线程的 platform 一致）+ 原始会话 ID。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 pub(crate) struct SessionRef {
@@ -38,6 +139,8 @@ pub(crate) struct SessionRef {
 /// 一次请求在开始与结束事件里共用的元数据。
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RouteMeta {
+    /// 数据库分配的持久请求身份；无法分配时为未知。
+    pub request_uid: Option<i64>,
     pub agent: Option<String>,
     /// agent 识别依据（批 6）：token / originator / ua / codex_marker / vscode_agent_host
     pub identified_by: Option<&'static str>,
@@ -253,6 +356,7 @@ mod tests {
 
     fn meta() -> RouteMeta {
         RouteMeta {
+            request_uid: None,
             agent: Some("codex".into()),
             identified_by: Some("token"),
             unidentified_ua: None,
@@ -289,6 +393,71 @@ mod tests {
         let a = next_request_id();
         let b = next_request_id();
         assert!(b > a);
+    }
+
+    #[test]
+    fn persisted_ids_survive_reopen_and_concurrent_connections() {
+        let path = std::env::temp_dir().join(format!(
+            "jolu-request-uid-{}-{}.sqlite",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let conn = crate::db::open(&path).unwrap();
+        assert_eq!(reserve_request_uids(&conn, 1).unwrap(), (1, 2));
+        drop(conn);
+
+        // 两条连接各预留 50 段、每段 3 个：号段两两不重叠，合起来正好连续
+        let left = crate::db::open(&path).unwrap();
+        let right = crate::db::open(&path).unwrap();
+        let threads = [left, right].map(|conn| std::thread::spawn(move || {
+            (0..50).flat_map(|_| {
+                let (start, end) = reserve_request_uids(&conn, 3).unwrap();
+                start..end
+            }).collect::<Vec<_>>()
+        }));
+        let mut ids: Vec<_> = threads.into_iter().flat_map(|thread| thread.join().unwrap()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (2..=301).collect::<Vec<_>>());
+
+        // 接近安全整数上限：剩余不够一整段就不分配
+        let conn = crate::db::open(&path).unwrap();
+        conn.execute("UPDATE gateway_request_sequence SET value = ?1 WHERE singleton = 1", [UID_MAX - 2]).unwrap();
+        assert!(reserve_request_uids(&conn, 3).is_err(), "不能越过 JavaScript 安全整数");
+        assert_eq!(reserve_request_uids(&conn, 2).unwrap(), (UID_MAX - 1, UID_MAX + 1));
+        drop(conn);
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// 号段：请求在内存里取号，号段耗尽前在后台预留下一段；跨号段仍然严格递增、不重复。
+    #[test]
+    fn uid_block_hands_out_unique_ids_across_refills() {
+        let db = Arc::new(Mutex::new(crate::db::open(std::path::Path::new(":memory:")).unwrap()));
+        let block = UidBlock::default();
+        let ids: Vec<i64> = (0..(UID_BLOCK * 3)).map(|_| {
+            let uid = block.take(&db).expect("库空闲时总能取到号");
+            // 让后台预留有机会完成，模拟请求之间的间隔
+            crate::gateway::route_log::flush();
+            uid
+        }).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), ids.len(), "号码不能重复");
+        assert!(ids.windows(2).all(|w| w[0] < w[1]), "同一进程内单调递增");
+    }
+
+    /// 号段用尽、数据库又被占着时，请求不等锁：这一次身份记为未知，锁放开后恢复。
+    #[test]
+    fn uid_block_does_not_wait_for_a_busy_database() {
+        let db = Arc::new(Mutex::new(crate::db::open(std::path::Path::new(":memory:")).unwrap()));
+        let block = UidBlock::default();
+        let held = db.lock().unwrap();
+        let started = std::time::Instant::now();
+        assert_eq!(block.take(&db), None, "库忙时不阻塞，本次记未知");
+        assert!(started.elapsed() < std::time::Duration::from_millis(200), "取号不能等锁");
+        drop(held);
+        crate::gateway::route_log::flush();
+        assert!(block.take(&db).is_some(), "锁放开后后台预留补上号段");
     }
 
     #[test]

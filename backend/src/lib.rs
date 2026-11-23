@@ -8,6 +8,7 @@
 
 mod opencode;
 mod opencode_usage;
+mod qoder_usage;
 mod platforms;
 mod quota_registry;
 mod toast_link;
@@ -94,6 +95,7 @@ mod claude_auth;
 mod current_connection;
 mod login_detect;
 mod usage_stats;
+mod data_contract;
 mod dsh_sessions;
 mod kimi_sessions;
 mod pi_sessions;

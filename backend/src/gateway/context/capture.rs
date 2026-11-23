@@ -38,11 +38,11 @@ pub(crate) struct Capture {
 
 impl Capture {
     /// 开始采集：后台写 `analyzing` 行并解析，不等它完成。
-    pub(crate) fn start(db: Db, protocol: Protocol, body: axum::body::Bytes, platform: &str, session_id: &str, request_id: u64) -> Capture {
+    pub(crate) fn start(db: Db, protocol: Protocol, body: axum::body::Bytes, platform: &str, session_id: &str, request_id: u64, request_uid: Option<i64>) -> Capture {
         let capture = Capture { shared: Arc::new(Mutex::new(Shared::default())), db };
         let worker = capture.clone();
         let (platform, session_id) = (platform.to_string(), session_id.to_string());
-        let job = move || worker.run(protocol, &body, &platform, &session_id, request_id);
+        let job = move || worker.run(protocol, &body, &platform, &session_id, request_id, request_uid);
         // 网关在 tokio 运行时里；单元测试等没有运行时的场合直接在当前线程跑
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
@@ -53,11 +53,12 @@ impl Capture {
         capture
     }
 
-    fn run(&self, protocol: Protocol, body: &[u8], platform: &str, session_id: &str, request_id: u64) {
+    fn run(&self, protocol: Protocol, body: &[u8], platform: &str, session_id: &str, request_id: u64, request_uid: Option<i64>) {
         let new = store::NewSnapshot {
             session_platform: platform,
             session_id,
             request_id: request_id as i64,
+            request_uid,
             protocol: protocol.as_str(),
             ts: chrono::Local::now().timestamp_millis(),
         };
@@ -245,7 +246,7 @@ mod tests {
     #[test]
     fn parse_then_usage_calibrates() {
         let db = fresh_db();
-        let capture = Capture::start(db.clone(), Protocol::Anthropic, CLAUDE.as_bytes().to_vec().into(), "claude-code", "ses-1", 7);
+        let capture = Capture::start(db.clone(), Protocol::Anthropic, CLAUDE.as_bytes().to_vec().into(), "claude-code", "ses-1", 7, None);
         let id = only_id(&db);
         let first = row(&db, id);
         assert_eq!((first.state.as_str(), first.counted, first.input_tokens, first.cache_read), ("ready", false, None, None));
@@ -283,7 +284,7 @@ mod tests {
         let db = fresh_db();
         let capture = idle(&db);
         capture.finish(Usage { input: Some(50_000), output: Some(3), cache_read: None });
-        capture.run(Protocol::Anthropic, CLAUDE.as_bytes(), "claude-code", "ses-2", 7);
+        capture.run(Protocol::Anthropic, CLAUDE.as_bytes(), "claude-code", "ses-2", 7, None);
         let done = row(&db, only_id(&db));
         assert_eq!((done.state.as_str(), done.counted, done.input_tokens, done.cache_read), ("ready", true, Some(50_000), None));
         assert_eq!(done.parts.unwrap().iter().map(|p| p.tokens).sum::<i64>(), 50_000);
@@ -293,13 +294,13 @@ mod tests {
     #[test]
     fn states_and_unknowns() {
         let db = fresh_db();
-        let capture = Capture::start(db.clone(), Protocol::Chat, b"not json".to_vec().into(), "codex", "s", 7);
+        let capture = Capture::start(db.clone(), Protocol::Chat, b"not json".to_vec().into(), "codex", "s", 7, None);
         capture.finish(Usage::default());
         let r = row(&db, only_id(&db));
         assert_eq!((r.state.as_str(), r.parts.is_none(), r.estimated, r.input_tokens, r.cache_read, r.window_tokens, r.counted),
                    ("unsupported", true, None, None, None, None, false));
         let db = fresh_db();
-        Capture::start(db.clone(), Protocol::Chat, axum::body::Bytes::new(), "codex", "s", 7);
+        Capture::start(db.clone(), Protocol::Chat, axum::body::Bytes::new(), "codex", "s", 7, None);
         assert_eq!(row(&db, only_id(&db)).state, "no_body");
     }
 
@@ -308,7 +309,7 @@ mod tests {
     async fn meter_reads_upstream_usage() {
         let db = fresh_db();
         let capture = idle(&db);
-        capture.run(Protocol::Anthropic, CLAUDE.as_bytes(), "claude-code", "ses-3", 7);
+        capture.run(Protocol::Anthropic, CLAUDE.as_bytes(), "claude-code", "ses-3", 7, None);
         let sse = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":100,\"cache_read_input_tokens\":900,\"cache_creation_input_tokens\":0,\"output_tokens\":1}}}\n\n\
                    event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":42}}\n\n";
         let response = axum::response::Response::builder().status(200).body(axum::body::Body::from(sse)).unwrap();
@@ -319,7 +320,7 @@ mod tests {
 
         let db = fresh_db();
         let capture = idle(&db);
-        capture.run(Protocol::Anthropic, CLAUDE.as_bytes(), "claude-code", "ses-4", 7);
+        capture.run(Protocol::Anthropic, CLAUDE.as_bytes(), "claude-code", "ses-4", 7, None);
         let failed = axum::response::Response::builder().status(429).body(axum::body::Body::from("{\"usage\":{\"input_tokens\":5}}")).unwrap();
         let _ = axum::body::to_bytes(capture.meter(failed).into_body(), usize::MAX).await.unwrap();
         let r = row(&db, only_id(&db));
@@ -332,10 +333,10 @@ mod tests {
         let db = fresh_db();
         let conn = db.lock().unwrap();
         for i in 0..25 {
-            store::insert(&conn, &store::NewSnapshot { session_platform: "codex", session_id: "a", request_id: i, protocol: "responses", ts: i }).unwrap();
+            store::insert(&conn, &store::NewSnapshot { session_platform: "codex", session_id: "a", request_id: i, request_uid: None, protocol: "responses", ts: i }).unwrap();
         }
         for i in 0..3 {
-            store::insert(&conn, &store::NewSnapshot { session_platform: "codex", session_id: "b", request_id: 100 + i, protocol: "responses", ts: i }).unwrap();
+            store::insert(&conn, &store::NewSnapshot { session_platform: "codex", session_id: "b", request_id: 100 + i, request_uid: None, protocol: "responses", ts: i }).unwrap();
         }
         store::prune(&conn);
         let count = |sid: &str| -> i64 {
