@@ -67,6 +67,9 @@ pub enum LibraryError {
     ForeignEntry { agent: String, name: String },
     /// 该 agent 暂不支持（Trae：格式没有可靠来源）
     UnsupportedAgent(String),
+    /// Jolu 装过的条目在文件里已被用户改过（命令、参数、环境变量或其他字段变了）：
+    /// 不覆盖、不删除，并把它交还给用户（不再登记为 Jolu 的）
+    UserModified { agent: String, name: String },
     /// 文件读写 / 解析失败
     Io(String),
 }
@@ -81,6 +84,10 @@ impl std::fmt::Display for LibraryError {
             LibraryError::UnsupportedAgent(agent) => {
                 write!(f, "{}", unsupported_reason(agent).unwrap_or("这个 agent 暂不支持安装 MCP server"))
             }
+            LibraryError::UserModified { agent, name } => write!(
+                f,
+                "{agent} 配置里的「{name}」已被手动修改，Jolu 不再管理它、也不会覆盖或删除；如需重新安装，请先手动移除或改名"
+            ),
             LibraryError::Io(reason) => write!(f, "{reason}"),
         }
     }
@@ -181,6 +188,28 @@ pub fn applied_names(conn: &Connection, agent: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Jolu 上次写进这个 agent 的条目内容（`library_applied.payload_json`）；没有记录或读不懂为 None。
+fn applied_item(conn: &Connection, agent: &str, name: &str) -> Option<McpServerItem> {
+    let payload: String = conn
+        .query_row("SELECT payload_json FROM library_applied WHERE agent = ?1 AND name = ?2", [agent, name], |row| row.get(0))
+        .ok()?;
+    match serde_json::from_str::<LibraryItem>(&payload).ok()? {
+        LibraryItem::McpServer(server) => Some(server),
+    }
+}
+
+/// 文件里这个名字的条目，是否已经和 Jolu 上次写入的不一样（被用户改过）。
+///
+/// 以前只按名字判断归属：用户在 Jolu 装好的条目上加了 env、改了参数，重装会被覆盖、
+/// 卸载会被整条删掉（MCP 配置管理设计 §1「归属判断」）。现在按归一化形状比对——
+/// 与共享指令 / 子代理按哈希判归属同一思路。文件里没有这一条、或没有登记内容时不算改过。
+fn user_modified(path: &std::path::Path, conn: &Connection, agent: &str, key: &str, name: &str) -> Result<bool, LibraryError> {
+    let Some(previous) = applied_item(conn, agent, name) else { return Ok(false) };
+    let entries = agents::read_entries(path, agent, key).map_err(LibraryError::Io)?;
+    let Some((_, current)) = entries.iter().find(|(entry_name, _)| entry_name == name) else { return Ok(false) };
+    Ok(agents::entry_shape(current) != agents::entry_shape(&agents::written_entry(agent, &previous)))
+}
+
 /// 这个名字是不是 Jolu 装的（决定同名冲突时允许更新还是拒绝）。
 fn is_ours(conn: &Connection, agent: &str, name: &str) -> bool {
     conn.query_row(
@@ -224,6 +253,11 @@ pub fn install_at(path: &std::path::Path, conn: &Connection, agent: &str, item: 
     if existing.iter().any(|n| n == name) && !ours {
         return Err(LibraryError::ForeignEntry { agent: agent.to_string(), name: name.to_string() });
     }
+    if ours && user_modified(path, conn, agent, key, name)? {
+        // 交还给用户：不再登记，以后同名安装按第三方条目拒绝
+        let _ = conn.execute("DELETE FROM library_applied WHERE agent = ?1 AND name = ?2", [agent, name]);
+        return Err(LibraryError::UserModified { agent: agent.to_string(), name: name.to_string() });
+    }
     // 先落库再写文件，文件写失败回滚记录——与 wiring 的 mark_pending→写→mark_wired
     // 同一半事务语义：绝不允许「配置已写、记录却没有」的失忆状态（那样同名重装
     // 会被当第三方拒绝，用户只能手改配置解锁）
@@ -241,6 +275,19 @@ pub fn install_at(path: &std::path::Path, conn: &Connection, agent: &str, item: 
         return Err(LibraryError::Io(error));
     }
     Ok(InstallOutcome { agent: agent.to_string(), name: name.to_string(), created: !existing.contains(&name.to_string()) })
+}
+
+/// [`install`] 加跨进程配置锁（与桌面端接线、Library 命令同一把 `cli_switch` 锁）。
+///
+/// 给 `jolu library install` 用：命令行以前不加锁，桌面端同时在改同一个文件
+/// （Codex 的 config.toml、OpenCode 的 opencode.json 也被接线写）时可能互相覆盖。
+pub fn install_locked(conn: &Connection, agent: &str, item: &LibraryItem) -> Result<InstallOutcome, String> {
+    crate::cli_switch::with_switch(|| install(conn, agent, item).map_err(|error| error.to_string()))
+}
+
+/// [`remove`] 加跨进程配置锁，见 [`install_locked`]。
+pub fn remove_locked(conn: &Connection, agent: &str, name: &str) -> Result<bool, String> {
+    crate::cli_switch::with_switch(|| remove(conn, agent, name).map_err(|error| error.to_string()))
 }
 
 /// 卸载：只删 `library_applied` 表里登记过的项。返回是否真的删了文件里的条目。
@@ -266,10 +313,85 @@ pub fn remove_at(path: &std::path::Path, conn: &Connection, agent: &str, name: &
     let Some(key) = agent_key(agent) else {
         return Err(LibraryError::UnsupportedAgent(agent.to_string()));
     };
+    if user_modified(path, conn, agent, key, name)? {
+        // 用户改过的条目不删；登记也一并撤掉，交还给用户
+        conn.execute("DELETE FROM library_applied WHERE agent = ?1 AND name = ?2", [agent, name])
+            .map_err(|error| LibraryError::Io(format!("清理 library_applied 失败：{error}")))?;
+        return Err(LibraryError::UserModified { agent: agent.to_string(), name: name.to_string() });
+    }
     let removed = agents::remove_server(path, agent, key, name).map_err(LibraryError::Io)?;
     conn.execute("DELETE FROM library_applied WHERE agent = ?1 AND name = ?2", [agent, name])
         .map_err(|error| LibraryError::Io(format!("清理 library_applied 失败：{error}")))?;
     Ok(removed)
+}
+
+/// 导入预览里的一条：某个 agent 配置里现有的一个 MCP 条目（只读扫描，不改任何文件）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImportEntry {
+    pub agent: String,
+    pub name: String,
+    /// 展示路径（用户目录写成 ~）
+    pub path: String,
+    pub shape: agents::EntryShape,
+    /// jolu = Jolu 装的且未改动；jolu_modified = Jolu 装的但已被用户改过；external = 用户或第三方的
+    pub ownership: &'static str,
+    /// 其他 agent 里有同名但内容不同的条目：导入成一份时要用户改名其中一个
+    pub conflicts_with: Vec<String>,
+}
+
+/// 导入预览的结果：条目与读取失败的 agent（失败不拖累其他 agent）。
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ImportPreview {
+    pub entries: Vec<ImportEntry>,
+    /// (agent, 原因)
+    pub failures: Vec<(String, String)>,
+}
+
+/// 扫描各 agent 用户级 MCP 配置，列出已有条目（MCP 配置管理设计 §3.3 第 1 步，只读）。
+pub fn import_preview(conn: &Connection) -> ImportPreview {
+    import_preview_at(mcp_config_path, conn)
+}
+
+/// [`import_preview`] 的路径可注入版本（测试用临时目录）。
+pub fn import_preview_at(path_of: impl Fn(&str) -> Option<std::path::PathBuf>, conn: &Connection) -> ImportPreview {
+    let mut preview = ImportPreview::default();
+    for agent in LIBRARY_AGENTS {
+        let (Some(key), Some(path)) = (agent_key(agent), path_of(agent)) else { continue };
+        let entries = match agents::read_entries(&path, agent, key) {
+            Ok(entries) => entries,
+            Err(reason) => {
+                preview.failures.push((agent.to_string(), reason));
+                continue;
+            }
+        };
+        for (name, raw) in entries {
+            let ownership = match applied_item(conn, agent, &name) {
+                None if is_ours(conn, agent, &name) => "jolu",
+                None => "external",
+                Some(previous) if agents::entry_shape(&raw) == agents::entry_shape(&agents::written_entry(agent, &previous)) => "jolu",
+                Some(_) => "jolu_modified",
+            };
+            preview.entries.push(ImportEntry {
+                agent: agent.to_string(),
+                name,
+                path: crate::gateway::wiring_diff::display_path(&path),
+                shape: agents::entry_shape(&raw),
+                ownership,
+                conflicts_with: Vec::new(),
+            });
+        }
+    }
+    // 同名异内容：按命令 / 参数 / 地址比较（环境变量名与其他字段属于各家差异，不算冲突）
+    let same = |a: &agents::EntryShape, b: &agents::EntryShape| a.command == b.command && a.args == b.args && a.url == b.url;
+    let snapshot = preview.entries.clone();
+    for entry in &mut preview.entries {
+        entry.conflicts_with = snapshot
+            .iter()
+            .filter(|other| other.name == entry.name && other.agent != entry.agent && !same(&other.shape, &entry.shape))
+            .map(|other| other.agent.clone())
+            .collect();
+    }
+    preview
 }
 
 /// 卸载钩子（`--restore-agents`）：移除所有 agent 的全部 Jolu 库项，返回每项结果行。
@@ -299,6 +421,7 @@ pub fn restore_all_library_at(
             match result {
                 Ok(true) => lines.push(format!("已移除 {agent} 的「{name}」")),
                 Ok(false) => lines.push(format!("跳过 {agent} 的「{name}」（配置里已不在）")),
+                Err(LibraryError::UserModified { .. }) => lines.push(format!("保留 {agent} 的「{name}」（已被手动修改，不删除）")),
                 Err(error) => lines.push(format!("失败 {agent} 的「{name}」：{error}")),
             }
         }
@@ -481,5 +604,118 @@ mod tests {
         for agent in ["claude-code", "opencode"] {
             assert!(applied_names(&conn, agent).is_empty(), "{agent} 应被清空");
         }
+    }
+    /// MCP 配置管理设计 §1「归属判断」：用户在 Jolu 装好的条目上加了 env，重装不覆盖、卸载不删除，
+    /// 并交还给用户（之后同名安装按第三方条目拒绝）。
+    #[test]
+    fn a_user_edited_entry_is_neither_overwritten_nor_removed() {
+        for agent in ["claude-code", "codex", "opencode"] {
+            let conn = database();
+            let path = temp_path_of(agent);
+            install_at(&path, &conn, agent, &item("jolu-search")).unwrap();
+            // 用户手改：Claude Code / OpenCode 加 env，Codex 改参数
+            let edited = match agent {
+                "codex" => std::fs::read_to_string(&path).unwrap().replace("--mcp-search", "--mcp-search-mine"),
+                _ => {
+                    let mut value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                    let key = if agent == "opencode" { "mcp" } else { "mcpServers" };
+                    value[key]["jolu-search"]["env"] = serde_json::json!({"TOKEN": "x"});
+                    value.to_string()
+                }
+            };
+            std::fs::write(&path, &edited).unwrap();
+
+            let reinstall = install_at(&path, &conn, agent, &item("jolu-search")).unwrap_err();
+            assert!(matches!(reinstall, LibraryError::UserModified { .. }), "{agent}：{reinstall}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), edited, "{agent}：用户改过的内容不能被覆盖");
+            assert!(applied_names(&conn, agent).is_empty(), "{agent}：交还给用户后不再登记");
+            assert!(!remove_at(&path, &conn, agent, "jolu-search").unwrap(), "{agent}：不再登记的条目卸载时不动");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
+        }
+    }
+
+    #[test]
+    fn removing_a_user_edited_entry_keeps_it_and_says_so() {
+        let conn = database();
+        let path = temp_path_of("claude-code");
+        install_at(&path, &conn, "claude-code", &item("jolu-search")).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        value["mcpServers"]["jolu-search"]["args"] = serde_json::json!(["--mcp-search", "--verbose"]);
+        std::fs::write(&path, value.to_string()).unwrap();
+        let error = remove_at(&path, &conn, "claude-code", "jolu-search").unwrap_err();
+        assert!(matches!(error, LibraryError::UserModified { .. }));
+        let after: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(after["mcpServers"]["jolu-search"]["args"][1], "--verbose", "用户改过的条目保留");
+    }
+
+    #[test]
+    fn an_untouched_entry_still_updates_and_removes_normally() {
+        let conn = database();
+        let path = temp_path_of("opencode");
+        install_at(&path, &conn, "opencode", &item("jolu-search")).unwrap();
+        let moved = LibraryItem::McpServer(McpServerItem { name: "jolu-search".into(), command: r"D:\new\jolu.exe".into(), args: vec!["--mcp-search".into()] });
+        install_at(&path, &conn, "opencode", &moved).expect("Jolu 自己换了路径不算用户修改");
+        assert!(std::fs::read_to_string(&path).unwrap().contains(r"D:\\new\\jolu.exe"));
+        assert!(remove_at(&path, &conn, "opencode", "jolu-search").unwrap());
+    }
+
+    #[test]
+    fn entry_shapes_hide_secret_values_and_normalise_command_arrays() {
+        let shape = agents::entry_shape(&serde_json::json!({
+            "type": "local", "command": ["npx", "-y", "server"], "environment": {"API_KEY": "sk-secret"}, "timeout": 5
+        }));
+        assert_eq!(shape.command.as_deref(), Some("npx"));
+        assert_eq!(shape.args, vec!["-y", "server"]);
+        assert_eq!(shape.env_keys, vec!["API_KEY"]);
+        assert_eq!(shape.extra_keys, vec!["timeout"]);
+        assert!(!serde_json::to_string(&shape).unwrap().contains("sk-secret"), "形状只留变量名，不能带出值");
+        let remote = agents::entry_shape(&serde_json::json!({"url": "https://example.com/mcp", "headers": {"Authorization": "Bearer x"}}));
+        assert_eq!((remote.transport, remote.header_keys.clone()), ("remote", vec!["Authorization".to_string()]));
+    }
+    #[test]
+    fn import_preview_classifies_ownership_and_flags_same_name_conflicts() {
+        let conn = database();
+        let dir = std::env::temp_dir().join(format!(
+            "jolu-library-import-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let claude = dir.join("claude.json");
+        let gemini = dir.join("gemini.json");
+        let codex = dir.join("codex.toml");
+        install_at(&claude, &conn, "claude-code", &item("jolu-search")).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&claude).unwrap()).unwrap();
+        value["mcpServers"]["github"] = serde_json::json!({"command": "npx", "args": ["-y", "gh"], "env": {"GITHUB_TOKEN": "ghp_secret"}});
+        std::fs::write(&claude, value.to_string()).unwrap();
+        std::fs::write(&gemini, r#"{"mcpServers":{"github":{"command":"npx","args":["-y","gh-other"]}}}"#).unwrap();
+        std::fs::write(&codex, "[mcp_servers.github]\ncommand = \"npx\"\nargs = [\"-y\", \"gh\"]\n").unwrap();
+        install_at(&gemini, &conn, "gemini", &item("jolu-search")).unwrap();
+        // 用户改了 gemini 里 Jolu 装的那条
+        let mut g: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&gemini).unwrap()).unwrap();
+        g["mcpServers"]["jolu-search"]["args"] = serde_json::json!(["--other"]);
+        std::fs::write(&gemini, g.to_string()).unwrap();
+
+        let preview = import_preview_at(
+            |agent| match agent {
+                "claude-code" => Some(claude.clone()),
+                "gemini" => Some(gemini.clone()),
+                "codex" => Some(codex.clone()),
+                _ => None,
+            },
+            &conn,
+        );
+        assert!(preview.failures.is_empty(), "{:?}", preview.failures);
+        let find = |agent: &str, name: &str| preview.entries.iter().find(|e| e.agent == agent && e.name == name).unwrap();
+        assert_eq!(find("claude-code", "jolu-search").ownership, "jolu");
+        assert_eq!(find("gemini", "jolu-search").ownership, "jolu_modified");
+        assert_eq!(find("claude-code", "github").ownership, "external");
+        assert_eq!(find("claude-code", "github").shape.env_keys, vec!["GITHUB_TOKEN"]);
+        assert_eq!(find("claude-code", "github").conflicts_with, vec!["gemini"], "codex 里的 github 内容相同，不算冲突");
+        assert_eq!(find("codex", "github").conflicts_with, vec!["gemini"]);
+        let json = serde_json::to_string(&preview).unwrap();
+        assert!(!json.contains("ghp_secret"), "预览不能带出环境变量的值");
+        // 只读：扫描不改文件
+        assert!(std::fs::read_to_string(&codex).unwrap().starts_with("[mcp_servers.github]"));
     }
 }

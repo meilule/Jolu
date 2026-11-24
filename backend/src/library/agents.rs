@@ -83,6 +83,108 @@ pub(super) fn read_server_names(path: &Path, agent: &str, key: &str) -> Result<V
     }
 }
 
+/// 读该 agent 配置里现有的全部 MCP 条目（名字 → 原始条目，Codex 的 TOML 表转成 JSON）。
+/// 只读：导入预览与「条目是否被用户改过」判定用。文件不存在返回空表。
+pub(crate) fn read_entries(path: &Path, agent: &str, key: &str) -> Result<Vec<(String, serde_json::Value)>, String> {
+    if !crate::steady::exists(path) {
+        return Ok(Vec::new());
+    }
+    let text = crate::steady::read_to_string(path).map_err(|error| error.to_string())?;
+    match agent {
+        "codex" => {
+            let document = text.parse::<toml::Table>().map_err(|error| format!("{} 格式无效：{error}", path.display()))?;
+            let Some(table) = document.get(key).and_then(toml::Value::as_table) else { return Ok(Vec::new()) };
+            Ok(table
+                .iter()
+                .map(|(name, entry)| (name.clone(), serde_json::to_value(entry).unwrap_or(serde_json::Value::Null)))
+                .collect())
+        }
+        _ => {
+            let value = parse_lenient_json(&text, path)?;
+            Ok(object_at(&value, key)
+                .map(|object| object.iter().map(|(name, entry)| (name.clone(), entry.clone())).collect())
+                .unwrap_or_default())
+        }
+    }
+}
+
+/// 一个 MCP 条目的归一化形状：抹平各家写法差异（OpenCode 的 command 数组、`env` / `environment`），
+/// 只保留判断「是同一个 server 吗、被改过吗」需要的字段。**环境变量与请求头只留名字不留值**，
+/// 这份形状会交给前端展示，不能带出密钥。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct EntryShape {
+    /// stdio（本地命令）/ remote（url）/ unknown
+    pub transport: &'static str,
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub url: Option<String>,
+    pub env_keys: Vec<String>,
+    pub header_keys: Vec<String>,
+    /// 显式写了启停开关时的值（OpenCode / Codex 的 `enabled`）；没写为 None
+    pub enabled: Option<bool>,
+    /// 上述以外的字段名（cwd、timeout、disabled_tools……）：Jolu 写的条目没有这些
+    pub extra_keys: Vec<String>,
+}
+
+const KNOWN_ENTRY_KEYS: &[&str] = &["type", "transport", "command", "args", "url", "env", "environment", "headers", "enabled"];
+
+pub fn entry_shape(entry: &serde_json::Value) -> EntryShape {
+    let strings = |value: Option<&serde_json::Value>| -> Vec<String> {
+        value
+            .and_then(serde_json::Value::as_array)
+            .map(|items| items.iter().map(|item| item.as_str().map(str::to_string).unwrap_or_else(|| item.to_string())).collect())
+            .unwrap_or_default()
+    };
+    let keys_of = |value: Option<&serde_json::Value>| -> Vec<String> {
+        let mut keys: Vec<String> = value.and_then(serde_json::Value::as_object).map(|o| o.keys().cloned().collect()).unwrap_or_default();
+        keys.sort();
+        keys
+    };
+    // OpenCode：command 是数组，第一项是程序，其余是参数
+    let (command, args) = match entry.get("command") {
+        Some(serde_json::Value::Array(_)) => {
+            let mut all = strings(entry.get("command"));
+            let command = (!all.is_empty()).then(|| all.remove(0));
+            all.extend(strings(entry.get("args")));
+            (command, all)
+        }
+        other => (other.and_then(serde_json::Value::as_str).map(str::to_string), strings(entry.get("args"))),
+    };
+    let url = entry.get("url").and_then(serde_json::Value::as_str).map(str::to_string);
+    let transport = if command.is_some() { "stdio" } else if url.is_some() { "remote" } else { "unknown" };
+    let mut env_keys = keys_of(entry.get("env"));
+    env_keys.extend(keys_of(entry.get("environment")));
+    env_keys.sort();
+    let mut extra_keys: Vec<String> = entry
+        .as_object()
+        .map(|o| o.keys().filter(|k| !KNOWN_ENTRY_KEYS.contains(&k.as_str())).cloned().collect())
+        .unwrap_or_default();
+    extra_keys.sort();
+    EntryShape {
+        transport,
+        command,
+        args,
+        url,
+        env_keys,
+        header_keys: keys_of(entry.get("headers")),
+        enabled: entry.get("enabled").and_then(serde_json::Value::as_bool),
+        extra_keys,
+    }
+}
+
+/// Jolu 给这个 agent 写这个 server 时，条目长什么样（与 [`write_server`] 一致）。
+pub(super) fn written_entry(agent: &str, server: &McpServerItem) -> serde_json::Value {
+    match agent {
+        "codex" => serde_json::json!({"command": server.command, "args": server.args}),
+        "opencode" => {
+            let mut command = vec![server.command.clone()];
+            command.extend(server.args.iter().cloned());
+            serde_json::json!({"type": "local", "command": command, "enabled": true})
+        }
+        _ => json_entry(agent, server),
+    }
+}
+
 /// 按点分路径取对象（`mcp.servers` → `value["mcp"]["servers"]`）；路径上任一段不是对象返回 None。
 fn object_at<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
     key.split('.').try_fold(value, |current, segment| current.get(segment))?.as_object()

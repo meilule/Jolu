@@ -116,6 +116,7 @@ pub(crate) fn library_install(app: tauri::AppHandle, agent: String) -> Result<li
     // 桌面端场景：current_exe 就是主程序 jolu.exe（自带 --mcp-search 分支）
     let item = library::search_item_with(&std::env::current_exe().map_err(|error| error.to_string())?);
     let outcome = crate::cli_switch::with_switch(|| {
+        backup_library_config(&app, &agent)?;
         let db = app.state::<Db>();
         let conn = db.0.lock().map_err(|_| "数据库不可用".to_string())?;
         library::install(&conn, &agent, &item).map_err(|error| error.to_string())
@@ -125,10 +126,19 @@ pub(crate) fn library_install(app: tauri::AppHandle, agent: String) -> Result<li
     Ok(outcome)
 }
 
+/// 改 agent 的 MCP 配置前先备份到 `gateway-backups/`（与接线同一目录、同一纪律：备份失败就不写）。
+/// 文件还不存在时无需备份。
+fn backup_library_config(app: &tauri::AppHandle, agent: &str) -> Result<(), String> {
+    let Some(path) = library::mcp_config_path(agent) else { return Ok(()) };
+    let dir = crate::commands::agents::custom_backup_dir(app)?;
+    crate::gateway::wiring::backup(&path, &dir)
+}
+
 /// Library：卸载指定 agent 里的一个库项（只删 Jolu 自己装的）。
 #[tauri::command]
 pub(crate) fn library_remove(app: tauri::AppHandle, agent: String, name: String) -> Result<bool, String> {
     let removed = crate::cli_switch::with_switch(|| {
+        backup_library_config(&app, &agent)?;
         let db = app.state::<Db>();
         let conn = db.0.lock().map_err(|_| "数据库不可用".to_string())?;
         library::remove(&conn, &agent, &name).map_err(|error| error.to_string())
@@ -223,6 +233,15 @@ pub(crate) struct LibraryAgentStatus {
     supported: bool,
     /// 不支持的原因，或装好后用户还要做的事
     note: Option<String>,
+}
+
+/// MCP 导入预览（MCP 配置管理第 1 期，只读）：列出各 agent 用户级配置里已有的条目、归属与同名冲突。
+/// 不改任何文件；环境变量与请求头只给名字。界面无画板，待确认。
+#[tauri::command]
+pub(crate) fn library_import_preview(app: tauri::AppHandle) -> Result<library::ImportPreview, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库不可用".to_string())?;
+    Ok(library::import_preview(&conn))
 }
 
 #[tauri::command]

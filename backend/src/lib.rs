@@ -1918,6 +1918,7 @@ pub fn run() {
             library_install,
             library_remove,
             library_list,
+            library_import_preview,
             library_shared_state,
             library_instructions_save,
             library_subagent_save,

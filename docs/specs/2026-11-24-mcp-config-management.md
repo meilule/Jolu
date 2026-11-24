@@ -9,6 +9,33 @@
 
 ---
 
+## 决策与进度（2026-11-24，鼠鼠同意「全部按推荐」）
+
+§6 的决策按推荐定为：
+
+1. 第 1 期只做按 Agent 分发；网关汇聚放第 2 期、默认关闭，依赖项目目录的 server 默认直连
+2. 只开放 §2.1 的 8 家，其余逐家用官方文档核实后加入
+3. 目标 Agent 不支持变量引用时**拒绝写入**，不提供明文开关
+4. 不写用户环境变量：只写 Agent 已支持的变量引用，变量由用户自己在系统里配置
+5. 导入的条目默认仍算用户自己的，勾选分发后才由 Jolu 接管
+6. 项目作用域复用 Skills 的「会话自动带出 + 手动添加」
+7. resources / prompts 本期不做
+8. 界面要先在 `Jolu.pen` 补画板；修改设计稿须鼠鼠明确要求，所以第 1 期前端暂停
+9. `library_applied` 迁移时旧表保留只读，迁移可恢复
+
+第 1 期已完成的后端部分（不依赖界面）：
+
+| 项 | 实现 | 测试 |
+|---|---|---|
+| 按内容判断归属（§3.4 第 2 行） | `library::user_modified`：文件里的条目与 Jolu 上次写入的内容（`library_applied.payload_json`）按 `agents::entry_shape` 比对；改过的条目重装不覆盖、卸载不删除，并撤掉登记交还给用户（`LibraryError::UserModified`），卸载钩子输出「保留」 | `a_user_edited_entry_is_neither_overwritten_nor_removed`（Claude Code / Codex / OpenCode）、`removing_a_user_edited_entry_keeps_it_and_says_so`、`an_untouched_entry_still_updates_and_removes_normally`；改回只按名字判断即失败 |
+| 导入预览（§3.3 第 1–3 步，只读） | `library::import_preview` + 命令 `library_import_preview`：逐 Agent 读用户级 MCP 段，归一化形状（OpenCode 命令数组、`env` / `environment` 合并），标归属 jolu / jolu_modified / external 与跨 Agent 同名异内容；环境变量和请求头只给名字 | `import_preview_classifies_ownership_and_flags_same_name_conflicts`、`entry_shapes_hide_secret_values_and_normalise_command_arrays` |
+| 写前备份（§3.8） | `library_install` / `library_remove` 改文件前备份到 `gateway-backups/`，备份失败不写（`wiring::backup` 提升为 `pub(crate)`） | 沿用接线备份的既有测试 |
+| CLI 加锁（§1 并发保护） | `jolu library install / remove` 改走 `install_locked` / `remove_locked`，与桌面端同一把 `cli_switch` 锁 | 编译检查 |
+
+未做：`mcp_servers` / `mcp_targets` 条目库与多 Agent 同步、启停、项目作用域、凭据加密、导入后接管——都需要界面承载，等画板。
+
+---
+
 ## 0. 结论
 
 1. **现有 Library 只做了一件事**：把一个本地 stdio server（`jolu-search`，即 `jolu.exe --mcp-search`）写进 8 家 Agent 的**用户级** MCP 配置，并且只认自己登记过的名字。它没有导入、启停、项目作用域、远程（http / sse）、环境变量与凭据、写前备份，也不按内容判断条目是否被用户改过。

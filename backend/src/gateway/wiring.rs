@@ -1474,7 +1474,7 @@ fn verify_written(path: &Path, expected: &[u8]) -> Result<(), String> {
 }
 
 /// 写前备份到应用数据目录（沿用 cli_apply 的纪律：备份失败则不写）。
-pub(super) fn backup(path: &Path, backup_dir: &Path) -> Result<(), String> {
+pub(crate) fn backup(path: &Path, backup_dir: &Path) -> Result<(), String> {
     if !crate::steady::exists(&path) {
         return Ok(());
     }

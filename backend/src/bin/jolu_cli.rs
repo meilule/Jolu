@@ -258,8 +258,8 @@ async fn library(args: &[String]) -> Result<(), String> {
             let Some(agent) = args.get(1) else { return Err("指定 agent：claude-code / codex / gemini / opencode".into()) };
             let (command, cmd_args) = jolu_lib::library::search_entry_command_from_cli().map_err(|e| e.to_string())?;
             let item = jolu_lib::library::search_item_with(std::path::Path::new(&command));
-            let mut conn = jolu_lib::db::open(&database).map_err(|e| e.to_string())?;
-            let outcome = jolu_lib::library::install(&mut conn, agent, &item).map_err(|e| e.to_string())?;
+            let conn = jolu_lib::db::open(&database).map_err(|e| e.to_string())?;
+            let outcome = jolu_lib::library::install_locked(&conn, agent, &item)?;
             if outcome.created {
                 println!("已装进 {agent}：{}（{} {}）", outcome.name, command, cmd_args.join(" "));
             } else {
@@ -272,8 +272,8 @@ async fn library(args: &[String]) -> Result<(), String> {
             let (Some(agent), Some(name)) = (args.get(1), args.get(2)) else {
                 return Err("用 `jolu library remove <agent> <名称>`".into());
             };
-            let mut conn = jolu_lib::db::open(&database).map_err(|e| e.to_string())?;
-            let removed = jolu_lib::library::remove(&mut conn, agent, name).map_err(|e| e.to_string())?;
+            let conn = jolu_lib::db::open(&database).map_err(|e| e.to_string())?;
+            let removed = jolu_lib::library::remove_locked(&conn, agent, name)?;
             println!("{}", if removed { format!("已从 {agent} 移除 {name}") } else { format!("{agent} 里没有 Jolu 装的「{name}」") });
             Ok(())
         }
