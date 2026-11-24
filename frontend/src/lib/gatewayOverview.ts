@@ -169,10 +169,11 @@ export interface OverviewRange {
 }
 
 export const OVERVIEW_RANGES: readonly OverviewRange[] = [
-  { id: "today", label: "今天", period: "今日请求", compare: "昨天" },
+  // 截止到此刻的范围，后端上期只算到同一时段（route_log::Range::prior_end），文案随之写明
+  { id: "today", label: "今天", period: "今日请求", compare: "昨天同时段" },
   { id: "yesterday", label: "昨天", period: "昨日请求", compare: "前一天" },
-  { id: "7d", label: "近 7 天", period: "近 7 天请求", compare: "前 7 天" },
-  { id: "30d", label: "近 30 天", period: "近 30 天请求", compare: "前 30 天" },
+  { id: "7d", label: "近 7 天", period: "近 7 天请求", compare: "前 7 天同时段" },
+  { id: "30d", label: "近 30 天", period: "近 30 天请求", compare: "前 30 天同时段" },
 ]
 
 export function overviewRange(id: string): OverviewRange {

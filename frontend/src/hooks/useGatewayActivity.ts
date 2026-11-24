@@ -63,7 +63,7 @@ export function useGatewayActivity(enabled: boolean): GatewayActivity {
         after = countByRequest((early ?? []).filter((event) => event.ts > counts.at))
       }
       early = null
-      setActivity((current) => mergeSnapshot(current, { lastByAgent: restored.lastByAgent, today }, after))
+      setActivity((current) => mergeSnapshot(current, { lastByAgent: restored.lastByAgent, today, partial: counts?.partial }, after))
     }).catch(() => { early = null })
     return () => { stopped = true; offs.forEach((off) => off()) }
   }, [enabled, relay])

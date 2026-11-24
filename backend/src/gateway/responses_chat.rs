@@ -39,6 +39,25 @@ const COMPACT_PROMPT: &str = "You are performing a CONTEXT CHECKPOINT COMPACTION
 /// Codex 的摘要前缀（`prompts/templates/compact/summary_prefix.md`，Apache-2.0）
 const SUMMARY_PREFIX: &str = "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:";
 
+/// Responses 请求转 Chat 时会被省略的内置工具（`web_search`、`file_search`、`mcp` 等，取类型名）。
+///
+/// 压缩请求本来就不带工具，不算省略。转换仍然省略它们，但路由流水要写明（P3 盘点 S7）。
+pub(crate) fn builtin_tools_dropped_for_chat(body: &Value) -> Vec<String> {
+    if compaction_requested(body) {
+        return Vec::new();
+    }
+    body.get("tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| match tool.get("type").and_then(Value::as_str) {
+            Some("function" | "custom") => None,
+            Some(other) => Some(other.to_string()),
+            None => Some("未标类型的工具".to_string()),
+        })
+        .collect()
+}
+
 /// 这个 Responses 请求是不是 Codex 的远程压缩（input 里有 `compaction_trigger`）
 pub(crate) fn compaction_requested(body: &Value) -> bool {
     body.get("input").and_then(Value::as_array).is_some_and(|items| items.iter().any(|item| item.get("type").and_then(Value::as_str) == Some("compaction_trigger")))

@@ -610,6 +610,17 @@ impl Range {
         (midnight_ms(current_start), midnight_ms(prior_start))
     }
 
+    /// 上期的结束边界：本期截止到此刻时取「上期起点 + 本期已过去的时长」（同时段），
+    /// 已结束的本期（昨天）取本期起点（上期全长）。
+    pub fn prior_end(self, today: chrono::NaiveDate, now_ms: i64) -> i64 {
+        let (current_start, prior_start) = self.bounds(today);
+        if self.ends_today() {
+            (prior_start + (now_ms - current_start).max(0)).min(current_start)
+        } else {
+            current_start
+        }
+    }
+
     /// 本期结束边界，使用本地自然日的下一次零点。
     pub fn end_exclusive(self, today: chrono::NaiveDate) -> i64 {
         let end = if self.ends_today() { today.succ_opt().unwrap_or(today) } else { today };
@@ -626,6 +637,22 @@ fn midnight_ms(day: chrono::NaiveDate) -> i64 {
 }
 
 pub fn day_overview(conn: &Connection, today_start: i64, yesterday_start: i64, end_exclusive: i64) -> rusqlite::Result<DayOverview> {
+    day_overview_until(conn, today_start, yesterday_start, today_start, end_exclusive)
+}
+
+/// 同 [`day_overview`]，但上期只算到 `prior_end`（不含）。
+///
+/// 本期截止到「此刻」时（今天 / 近 N 天），上期应取同样长度——「昨天 0 点到昨天此刻」，
+/// 与用量页「较昨天同时段」同一口径；以前上期是昨天全天，上午看概览时「比上期」
+/// 总是大幅下降（P4 审计 D9）。`prior_end` 不晚于本期起点。
+pub fn day_overview_until(
+    conn: &Connection,
+    today_start: i64,
+    yesterday_start: i64,
+    prior_end: i64,
+    end_exclusive: i64,
+) -> rusqlite::Result<DayOverview> {
+    let prior_end = prior_end.clamp(yesterday_start, today_start);
     let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM gateway_route_log ORDER BY id ASC"))?;
     let rows = stmt.query_map([], row)?.collect::<rusqlite::Result<Vec<_>>>()?;
     let oldest: Option<i64> = conn.query_row("SELECT MIN(ts) FROM gateway_route_log", [], |r| r.get(0))?;
@@ -679,7 +706,9 @@ pub fn day_overview(conn: &Connection, today_start: i64, yesterday_start: i64, e
             out.identity_incomplete = true;
         }
         if first_ts < today_start {
-            out.yesterday += 1;
+            if first_ts < prior_end {
+                out.yesterday += 1;
+            }
             continue;
         }
         out.today += 1;
@@ -1126,6 +1155,27 @@ mod tests {
     ///
     /// 此前只有 `assert!(!day.partial)`（数据量小时的否定断言），从没测过「真的被截断」。
     /// 这条把流水灌到保留上限之上，再断言 `partial` 为真。
+    /// P4 审计 D9：上期只算到同一时段，昨天下午的请求不进「今天上午」的对比。
+    #[test]
+    fn the_prior_period_stops_at_the_same_time_of_day() {
+        let conn = db();
+        let (yesterday_start, today_start) = (0i64, 86_400_000i64);
+        let hour = 3_600_000i64;
+        for ts in [yesterday_start + 5 * hour, yesterday_start + 20 * hour, today_start + 2 * hour] {
+            conn.execute("INSERT INTO gateway_route_log(ts, requested_model, result) VALUES(?1, 'm', 'ok')", params![ts]).unwrap();
+        }
+        let same_time = day_overview_until(&conn, today_start, yesterday_start, yesterday_start + 10 * hour, today_start * 2).unwrap();
+        assert_eq!((same_time.today, same_time.yesterday), (1, 1), "上午 10 点只比昨天 0–10 点");
+        let whole_day = day_overview(&conn, today_start, yesterday_start, today_start * 2).unwrap();
+        assert_eq!(whole_day.yesterday, 2, "旧入口仍是上期全长");
+        // 「今天」范围：上期终点 = 上期起点 + 已过去的时长；「昨天」范围：上期全长
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 24).unwrap();
+        let (current, prior) = Range::Today.bounds(today);
+        assert_eq!(Range::Today.prior_end(today, current + 10 * hour), prior + 10 * hour);
+        let (current, _) = Range::Yesterday.bounds(today);
+        assert_eq!(Range::Yesterday.prior_end(today, current + 30 * hour), current);
+    }
+
     #[test]
     fn a_truncated_log_is_reported_as_partial() {
         let conn = db();

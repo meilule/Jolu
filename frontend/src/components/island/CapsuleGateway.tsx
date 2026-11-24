@@ -1,7 +1,7 @@
 import { PlatformLogo } from "@/components/brand/PlatformLogo"
 import { api, isTauri } from "@/lib/api"
 import { agentLabel } from "@/lib/gatewayPage"
-import { formatDuration, rejectReason, type ActiveRelay, type ActivityState } from "@/lib/gatewayActivity"
+import { formatDuration, rejectReason, todayTotalText, type ActiveRelay, type ActivityState } from "@/lib/gatewayActivity"
 import type { GatewayStatusDto, WiringStatusDto } from "@/lib/gatewayApi"
 import { AGENT_PLATFORMS } from "@/lib/providers/registry"
 import { cn } from "@/lib/utils"
@@ -75,7 +75,6 @@ export function GatewaySection({ status, activity, agents, now }: {
   now: number
 }) {
   const inFlight = new Map(activity.inFlight.map((r) => [r.agent ?? "", r]))
-  const total = activity.today.ok + activity.today.rejected + activity.today.failed
   const openGateway = () => { if (isTauri) void api.openMainSection("gateway").catch(() => {}) }
   return (
     <div className="cap-sec cap-col">
@@ -119,7 +118,8 @@ export function GatewaySection({ status, activity, agents, now }: {
         </div>
       )}
       <div className="cap-sum">
-        <div><span>今日经网关</span><b className="cap-num">{total} 次</b></div>
+        {/* 待确认：截断时的「≥」无画板，按最小版处理 */}
+        <div title={activity.todayPartial ? "流水只保留最近 1000 条，今天更早的请求已被清理，这里是下限" : undefined}><span>今日经网关</span><b className="cap-num">{todayTotalText(activity)}</b></div>
         <div><span>成功</span><b className="cap-num cap-g">{activity.today.ok}</b></div>
         <div><span>被拒</span><b className="cap-num cap-o">{activity.today.rejected}</b></div>
         {activity.today.failed > 0 && <div><span>失败</span><b className="cap-num cap-r">{activity.today.failed}</b></div>}

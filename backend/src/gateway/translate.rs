@@ -98,6 +98,26 @@ fn effort_of(s: &str) -> &'static str {
     }
 }
 
+/// Anthropic 工具能否原样变成 Chat 的函数工具：有 `input_schema`，或没有类型 / 类型为 `custom`。
+/// 其余是 Anthropic 服务端工具（`web_search_*`、`bash_*`、`text_editor_*`、`computer_*` 等），Chat 接口没有对应物。
+fn chat_compatible_tool(tool: &Value) -> bool {
+    tool["input_schema"].is_object() || tool["type"].as_str().is_none_or(|ty| ty.is_empty() || ty == "custom")
+}
+
+/// Anthropic 请求转 Chat 时会被省略的服务端工具（名称优先，没有名称用类型）。
+///
+/// 转换本身仍然省略它们（拒绝请求会让 Claude Code 接第三方来源整体不可用），
+/// 但要让用户在路由流水里看得到，不再无声消失（P3 盘点 S1）。
+pub(crate) fn anthropic_tools_dropped_for_chat(body: &Value) -> Vec<String> {
+    body["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| !chat_compatible_tool(t) && t["name"] != "DeferredToolPlaceholder")
+        .map(|t| t["name"].as_str().or_else(|| t["type"].as_str()).unwrap_or("未命名工具").to_string())
+        .collect()
+}
+
 /// Anthropic Messages 请求体 → OpenAI Chat Completions 请求体。
 pub(crate) fn anthropic_request(body: &[u8]) -> Result<Bytes, String> {
     let a: Value = serde_json::from_slice(body).map_err(|_| "请求 JSON 无效")?;
@@ -186,7 +206,7 @@ pub(crate) fn anthropic_request(body: &[u8]) -> Result<Bytes, String> {
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|t| t["input_schema"].is_object() || t["type"].as_str().is_none_or(|ty| ty.is_empty() || ty == "custom"))
+        .filter(|t| chat_compatible_tool(t))
         .filter(|t| t["name"] != "DeferredToolPlaceholder")
         .map(|t| json!({"type":"function","function":{"name":t["name"],"description":t["description"].as_str().unwrap_or_default(),
             "parameters":if t["input_schema"].is_object() { t["input_schema"].clone() } else { json!({"type":"object","properties":{}}) }}}))

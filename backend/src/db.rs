@@ -1435,9 +1435,22 @@ pub fn today_provenance(conn: &Connection, platform: &str) -> rusqlite::Result<c
 pub fn today_fresh_tokens(conn: &Connection, platform: &str) -> rusqlite::Result<Option<i64>> {
     if crate::platforms::native(platform) {
         let (start,end)=period_range(conn,platform,"today");
+        // 新鲜口径与灵动岛增量（`source_store` 写 `usage_events.delta_fresh`）一致：
+        // `includes_cache` 的输入扣掉缓存读取，`excludes_cache` 直接取输入 + 输出。
+        // 语义未知或分项缺失的行拆不出缓存，只能沿用来源给的总量——这是上界，不是新鲜值；
+        // 以前所有原生行都用总量，ZCode / Qoder 这类缓存占大头的平台今日数字被放大十几倍，
+        // 而同一张卡片上的增量却是新鲜值（P4 审计 D5）。
         return conn.query_row(
             "SELECT CASE WHEN COUNT(*) = 0 OR COALESCE(SUM(total_known), 0) = 0 THEN NULL
-                         ELSE SUM(CASE WHEN total_known = 1 THEN total_tokens END)
+                         ELSE SUM(CASE WHEN total_known = 1 THEN
+                             CASE WHEN input_semantics = 'includes_cache' AND input_known = 1
+                                       AND output_known = 1 AND cache_read_known = 1
+                                  THEN MAX(input_tokens - cache_read_tokens, 0) + output_tokens
+                                  WHEN input_semantics = 'excludes_cache' AND input_known = 1 AND output_known = 1
+                                  THEN input_tokens + output_tokens
+                                  ELSE total_tokens
+                             END
+                         END)
                     END
                FROM requests WHERE platform = ?1 AND ts >= ?2 AND ts < ?3",
             params![platform, start, end],
@@ -3065,6 +3078,31 @@ mod tests {
         assert_eq!(updated.delta_tokens, 10);
         assert_eq!(updated.running_tokens, Some(50));
         assert_eq!(updated.today_tokens, Some(50));
+    }
+
+    /// P4 审计 D5：原生平台的今日 Token 与灵动岛增量同为新鲜口径；拆不出缓存的行沿用总量。
+    #[test]
+    fn native_today_tokens_use_the_fresh_measure() {
+        let conn = Connection::open_in_memory().unwrap();
+        init(&conn).unwrap();
+        let now = Local::now().timestamp_millis() - 1;
+        let insert = |key: &str, semantics: &str, input: i64, cache: i64, output: i64, total: i64| {
+            conn.execute(
+                "INSERT INTO requests(platform, source, dedup_key, ts, input_tokens, cache_read_tokens, output_tokens, total_tokens, input_semantics)
+                 VALUES('qoder', 'native:qoder:global', ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![key, now, input, cache, output, total, semantics],
+            )
+            .unwrap();
+        };
+        // 输入 1000（其中缓存读 900）+ 输出 10：新鲜值 110，不是总量 1010
+        insert("a", "includes_cache", 1000, 900, 10, 1010);
+        assert_eq!(today_fresh_tokens(&conn, "qoder").unwrap(), Some(110));
+        // 不含缓存口径：输入 + 输出
+        insert("b", "excludes_cache", 20, 500, 5, 525);
+        assert_eq!(today_fresh_tokens(&conn, "qoder").unwrap(), Some(135));
+        // 语义未知：拆不出缓存，只能沿用来源总量
+        insert("c", "unknown", 0, 0, 0, 40);
+        assert_eq!(today_fresh_tokens(&conn, "qoder").unwrap(), Some(175));
     }
 
     /// P1-4：灵动岛入口（`live_usage`）必须把覆盖一起带出去。

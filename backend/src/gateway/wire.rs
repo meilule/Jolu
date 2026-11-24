@@ -986,6 +986,32 @@ fn rewrite_body_model(body: &[u8], model: &str) -> Result<axum::body::Bytes, Str
 /// 单个候选的转发：Direct / Subscription 两类分发（原主路径逻辑原样搬入），
 /// 每次尝试独立记流水、发开始/结束事件，成功时会话绑定到该来源（亲和）。
 #[allow(clippy::too_many_arguments)]
+/// 这次转发经协议转换会省略哪些服务端工具；不经「转 Chat」的路径返回 None。
+///
+/// 只覆盖确定会转 Chat 的路径：API Key 来源的 Anthropic→Chat、Responses→Chat（来源不接 Responses 时）、
+/// Responses→Anthropic（先转 Chat），以及只说 Chat 的订阅（Gemini / WorkBuddy / Qoder / Trae）。
+/// Claude 订阅桥是否转发服务端工具要真实账号确认（P3 盘点 B1），这里不写。
+fn dropped_tools_note(protocol: CallerProtocol, entry: &route::PoolEntry, body: &axum::body::Bytes) -> Option<String> {
+    let converts_to_chat = match entry.kind.as_str() {
+        "api" => match (protocol, entry.protocol.as_str()) {
+            (CallerProtocol::Anthropic, "openai") | (CallerProtocol::Responses, "anthropic") => true,
+            (CallerProtocol::Responses, "openai") => !crate::gateway::responses_chat::serves_responses(entry.base_url.as_deref()),
+            _ => false,
+        },
+        _ => matches!(entry.platform.as_str(), "gemini" | "workbuddy" | "qoder" | "trae") && protocol != CallerProtocol::Chat,
+    };
+    if !converts_to_chat {
+        return None;
+    }
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let dropped = match protocol {
+        CallerProtocol::Anthropic => crate::gateway::translate::anthropic_tools_dropped_for_chat(&value),
+        CallerProtocol::Responses => crate::gateway::responses_chat::builtin_tools_dropped_for_chat(&value),
+        CallerProtocol::Chat => return None,
+    };
+    (!dropped.is_empty()).then(|| format!("来源不支持，已省略服务端工具：{}", dropped.join("、")))
+}
+
 async fn forward_one(
     deps: &Arc<ProxyDeps>,
     entry: &route::PoolEntry,
@@ -1000,6 +1026,15 @@ async fn forward_one(
     started: std::time::Instant,
     requested_model: &str,
 ) -> Response {
+    // 协议转换会省略来源接不住的服务端工具：照常转发，但把省略了什么写进这次尝试的决策说明，
+    // 路由流水里看得到（P3 盘点 S1 / S7）。
+    let mut meta = meta;
+    if let Some(note) = dropped_tools_note(protocol, entry, body) {
+        meta.decision = Some(match meta.decision.take() {
+            Some(decision) => format!("{decision} · {note}"),
+            None => note,
+        });
+    }
     let begin = |entry: &route::PoolEntry, meta: &RouteMeta| begin_route(deps, request_id, meta, entry, started);
     let outcome = |response: &Response| if response.status().is_success() { "ok" } else { "failed" };
     let bind = |entry: &route::PoolEntry| {
@@ -1286,6 +1321,15 @@ where
     F: Fn(axum::body::Bytes) -> Fut,
     Fut: std::future::Future<Output = Response>,
 {
+    with_tool_loop_within(body, crate::gateway::tool_loop::LOOP_BUDGET, send).await
+}
+
+/// 同 [`with_tool_loop`]，整体时限可注入（测试用短时限）。
+async fn with_tool_loop_within<F, Fut>(body: &axum::body::Bytes, budget: std::time::Duration, send: F) -> Response
+where
+    F: Fn(axum::body::Bytes) -> Fut,
+    Fut: std::future::Future<Output = Response>,
+{
     use crate::gateway::tool_loop;
     let Ok(mut value) = serde_json::from_slice::<Value>(body) else { return send(body.clone()).await };
     let managed = tool_loop::managed_tools(&value);
@@ -1295,6 +1339,7 @@ where
     let streaming = tool_loop::rewrite_request(&mut value, &managed);
     let mut usage = tool_loop::Usage::default();
     let mut notes: Vec<String> = Vec::new();
+    let loop_started = std::time::Instant::now();
     for round in 0..tool_loop::MAX_ROUNDS {
         let request = serde_json::to_vec(&value).map(axum::body::Bytes::from).unwrap_or_else(|_| body.clone());
         let response = send(request).await;
@@ -1312,15 +1357,19 @@ where
         tool_loop::add_usage(&mut usage, &message);
         let (calls, foreign) = tool_loop::calls_in(&message, &managed);
         if calls.is_empty() {
-            return deliver_message(tool_loop::finish(message, &notes, usage, &managed, false), streaming);
+            return deliver_message(tool_loop::finish(message, &notes, usage, &managed, None), streaming);
         }
         if foreign {
             tool_loop::strip_managed(&mut message, &managed);
             notes.push("模型同时调用了工具自己的功能，联网调用本轮未执行".into());
-            return deliver_message(tool_loop::finish(message, &notes, usage, &managed, false), streaming);
+            return deliver_message(tool_loop::finish(message, &notes, usage, &managed, None), streaming);
         }
         if round + 1 == tool_loop::MAX_ROUNDS {
-            return deliver_message(tool_loop::finish(message, &notes, usage, &managed, true), streaming);
+            return deliver_message(tool_loop::finish(message, &notes, usage, &managed, Some(tool_loop::rounds_exhausted_note())), streaming);
+        }
+        if loop_started.elapsed() >= budget {
+            let stop = tool_loop::budget_exhausted_note(budget);
+            return deliver_message(tool_loop::finish(message, &notes, usage, &managed, Some(stop)), streaming);
         }
         let mut results = Vec::new();
         for call in &calls {
@@ -1875,6 +1924,59 @@ mod tests {
         assert_eq!((day.today, day.reroutes, day.errors), (1, 0, 1), "一次请求、没有转移、一次错误");
     }
 
+    /// P3 盘点 S1 / S7：转 Chat 时省略的服务端工具照常省略，但这次尝试的决策说明里写明省略了什么。
+    #[tokio::test]
+    async fn server_tools_dropped_in_conversion_are_written_to_the_log() {
+        crate::gateway::route_log::flush();
+        let deps = crate::proxy::test_support::bare_deps();
+        let (base, hits) = counting_upstream(false).await;
+        add_group(&deps, "p3-drop", "order", &[("p3d-a", &base)]);
+
+        let cases: [(CallerProtocol, &str, &str, &str); 2] = [
+            (
+                CallerProtocol::Responses,
+                "/v1/responses",
+                r#"{"model":"group/p3-drop","input":"hi","tools":[{"type":"function","name":"shell","parameters":{"type":"object"}},{"type":"web_search"},{"type":"file_search"}]}"#,
+                "web_search、file_search",
+            ),
+            (
+                CallerProtocol::Anthropic,
+                "/v1/messages",
+                r#"{"model":"group/p3-drop","max_tokens":16,"messages":[{"role":"user","content":"hi"}],"tools":[{"name":"Read","input_schema":{"type":"object"}},{"type":"bash_20250124","name":"bash"}]}"#,
+                "bash",
+            ),
+        ];
+        for (protocol, path, body, dropped) in cases {
+            let response = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                handle(protocol, deps.clone(), HeaderMap::new(), axum::body::Bytes::from(body), path, None),
+            )
+            .await
+            .expect("请求应在 10 秒内完成");
+            assert_eq!(response.status(), StatusCode::OK, "{path} 照常转发，不因省略工具而拒绝");
+            axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            crate::gateway::route_log::flush();
+            let decision: Option<String> = deps
+                .db
+                .lock()
+                .unwrap()
+                .query_row("SELECT decision FROM gateway_route_log ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
+                .unwrap();
+            let decision = decision.unwrap_or_default();
+            assert!(decision.contains("分组 p3-drop"), "原有的分组解释要保留：{decision}");
+            assert!(decision.contains(&format!("已省略服务端工具：{dropped}")), "{path}：{decision}");
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn plain_tools_are_not_reported_as_dropped() {
+        let anthropic = serde_json::json!({"tools": [{"name": "Read", "input_schema": {}}, {"type": "custom", "name": "x"}, {"name": "DeferredToolPlaceholder", "type": "x"}]});
+        assert!(crate::gateway::translate::anthropic_tools_dropped_for_chat(&anthropic).is_empty());
+        let responses = serde_json::json!({"tools": [{"type": "function", "name": "a"}, {"type": "custom", "name": "b"}]});
+        assert!(crate::gateway::responses_chat::builtin_tools_dropped_for_chat(&responses).is_empty());
+    }
+
     /// F-1：`pace` 分组里缺剩余量的成员，选路时触发一次后台补查；1 分钟内不重复。
     ///
     /// 为什么必须在请求路径上触发：后端没有定时查额度的任务，`finish_quota_query`
@@ -1990,6 +2092,33 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     fn json_response(value: serde_json::Value) -> Response {
         Response::builder().status(StatusCode::OK).header("content-type", "application/json").body(axum::body::Body::from(value.to_string())).unwrap()
+    }
+
+    /// P3 盘点 D2：超过整体时限就不再开新一轮，用已有结果收尾、去掉悬空的接管调用并说明。
+    #[tokio::test]
+    async fn the_tool_loop_stops_when_its_time_budget_is_spent() {
+        let body = axum::body::Bytes::from(serde_json::json!({
+            "model": "m", "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "web_search_20250305", "name": "web_search"}]
+        }).to_string());
+        let rounds = std::sync::atomic::AtomicU32::new(0);
+        let response = with_tool_loop_within(&body, std::time::Duration::ZERO, |_| {
+            rounds.fetch_add(1, Ordering::SeqCst);
+            async {
+                json_response(serde_json::json!({"id": "msg", "type": "message", "role": "assistant", "model": "m", "stop_reason": "tool_use",
+                    "content": [{"type": "text", "text": "先搜一下"}, {"type": "tool_use", "id": "s", "name": "web_search", "input": {"query": "q"}}],
+                    "usage": {"input_tokens": 3, "output_tokens": 4}}))
+            }
+        })
+        .await;
+        assert_eq!(rounds.load(Ordering::SeqCst), 1, "时限已到，不再执行搜索、不再问下一轮");
+        let message: serde_json::Value =
+            serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+        assert_eq!(message["stop_reason"], "end_turn", "去掉接管调用后不能留着 tool_use 结束原因");
+        let content = message["content"].as_array().unwrap();
+        assert!(content.iter().all(|block| block["type"] != "tool_use"));
+        assert!(content[0]["text"].as_str().unwrap().contains("累计耗时超过 0 秒"));
+        assert_eq!(content[1]["text"], "先搜一下", "已有的回答保留");
     }
 
     #[tokio::test]

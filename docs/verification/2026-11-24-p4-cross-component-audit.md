@@ -18,11 +18,11 @@
 | 编号 | 核实 | 处理 |
 |---|---|---|
 | D1 今日经网关按尝试计 | ✅ 属实 | 已修：`gatewayActivity.ts` `onEnd` 按 `request_id` 只计最后一次尝试；快照补加用 `countByRequest` 折叠；测试 2 条（去掉撤销上一次计数即失败） |
-| D3 今日经网关不标截断 | ✅ 属实 | 已修：`route_log::truncated_since`（与概览 `partial` 同一判定），`GatewayTodayCounts.partial`；测试 `today_counts_report_truncation_like_the_overview`。界面展示无画板，待确认 |
+| D3 今日经网关不标截断 | ✅ 属实 | 已修：`route_log::truncated_since`（与概览 `partial` 同一判定），`GatewayTodayCounts.partial`；胶囊「今日经网关」截断时显示「≥N 次」（`todayTotalText`，无画板，最小版，待确认）；测试 `today_counts_report_truncation_like_the_overview` 与前端 1 条 |
 | D4 趋势与 P50 最多 100 行 | ✅ 属实 | 已修：`route_log::page` 上限改为 `MAX_PAGE_SIZE = 500`；测试 `a_page_can_hold_the_overview_sample_of_240_rows` |
 | D8 「较昨天同时段」比的是昨天最后 N 小时 | ✅ 属实 | 已修：`usage_stats::previous_window` 按整天平移、长度不变；测试 `todays_comparison_uses_the_same_hours_of_yesterday` |
-| D5 原生平台今日 Token 含缓存 | ✅ 属实 | ⏸ 待鼠鼠决策：改成新鲜口径会让 ZCode / Qoder 等平台灵动岛的今日数字大幅变小（缓存占多数），属可见口径变化 |
-| D9 两个页面「上期」不同 | 部分 | D8 修后用量页为「同时段」，路由概览仍是昨天全天；是否统一待决策 |
+| D5 原生平台今日 Token 含缓存 | ✅ 属实 | 已修（鼠鼠 2026-11-24 同意按推荐）：`today_fresh_tokens` 原生分支按 `input_semantics` 取新鲜值，与增量同口径；语义未知或分项缺失的行沿用总量（上界）；测试 `native_today_tokens_use_the_fresh_measure`。ZCode / Qoder 等平台灵动岛今日数字会明显变小，属预期 |
+| D9 两个页面「上期」不同 | ✅ 属实 | 已修：`route_log::day_overview_until` + `Range::prior_end`，截止到此刻的范围上期只算到同一时段；前端文案改「昨天同时段」「前 7 天同时段」；测试 `the_prior_period_stops_at_the_same_time_of_day` |
 | D10 同一次调用记两遍 | 待复现 | 依赖调用方工具是否必写本机日志，放 P4-3 真实环境核对 |
 | D2、D6、D7、D11–D14 | 未处理 | 见 §2 各条；涉及界面口径或展示的需对应画板 |
 

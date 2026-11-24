@@ -148,3 +148,13 @@ test("快照补加的实时事件同样按请求折叠", () => {
   ])
   assert.deepEqual(counted, { ok: 1, rejected: 1, failed: 0 })
 })
+
+test("今日经网关被截断时显示为下限，跨零点后清掉", async () => {
+  const { mergeSnapshot, todayTotalText } = await import("./gatewayActivity.ts")
+  let s = mergeSnapshot(emptyActivity(T0), { lastByAgent: {}, today: { day: dayKey(T0), ok: 3, rejected: 1, failed: 0 }, partial: true }, { ok: 0, rejected: 0, failed: 0 })
+  assert.equal(todayTotalText(s), "≥4 次")
+  s = onEnd(s, end(9), T0 + 1)
+  assert.equal(todayTotalText(s), "≥5 次", "新到的结束事件不能把下限标记弄丢")
+  s = onTick(s, T0 + 86_400_000)
+  assert.equal(todayTotalText(s), "0 次")
+})

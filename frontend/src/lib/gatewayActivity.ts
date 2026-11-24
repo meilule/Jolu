@@ -68,6 +68,11 @@ export interface ActivityState {
    * 先撤掉上一次计入的结果再计新的，与后端 `counts_since`（按 request_uid 取最后一次尝试）同口径。
    */
   counted?: Record<number, string>
+  /**
+   * 后端 `gateway_today_counts.partial`：流水已滚动删除过今天的部分，今日计数只是下限。
+   * 跨零点后清掉。展示为「≥N」，无画板，待确认。
+   */
+  todayPartial?: boolean
 }
 
 /** 成功停留 2.4s，被拒 / 失败停留 4.8s；只有开始没有结束的请求 120s 后收回 */
@@ -163,7 +168,7 @@ export function onEnd(state: ActivityState, event: RouteEndEvent, now: number): 
     ? { ...state.lastByAgent, [event.agent]: { source: relay.source, model: relay.model, ts: now, ok: phase === "ok", durationMs: event.duration_ms, statusCode: event.status_code } }
     : state.lastByAgent
   // 结果停留期间若还有别的请求在转发，先显示这次结果；停留结束后回到进行中的那条
-  return { inFlight, shown: relay, lastByAgent, today, counted }
+  return { inFlight, shown: relay, lastByAgent, today, counted, todayPartial: sameDay ? state.todayPartial : false }
 }
 
 /**
@@ -182,7 +187,7 @@ export function onTick(state: ActivityState, now: number): ActivityState {
   const sameDay = dayKey(now) === state.today.day
   const today = sameDay ? state.today : { day: dayKey(now), ok: 0, rejected: 0, failed: 0 }
   if (inFlight.length === state.inFlight.length && shown === state.shown && today === state.today) return state
-  return { ...state, inFlight, shown, today, counted: sameDay ? state.counted : {} }
+  return { ...state, inFlight, shown, today, counted: sameDay ? state.counted : {}, todayPartial: sameDay ? state.todayPartial : false }
 }
 
 /** 下一次需要 onTick 的时刻；没有待收尾的内容时为 null */
@@ -198,7 +203,7 @@ export function nextTickAt(state: ActivityState): number | null {
  */
 export function mergeSnapshot(
   live: ActivityState,
-  snapshot: { lastByAgent: ActivityState["lastByAgent"]; today: { day: string; ok: number; rejected: number; failed: number } },
+  snapshot: { lastByAgent: ActivityState["lastByAgent"]; today: { day: string; ok: number; rejected: number; failed: number }; partial?: boolean },
   liveSince: { ok: number; rejected: number; failed: number },
 ): ActivityState {
   const lastByAgent = { ...snapshot.lastByAgent }
@@ -208,7 +213,8 @@ export function mergeSnapshot(
   const today = snapshot.today.day === live.today.day
     ? { day: live.today.day, ok: snapshot.today.ok + liveSince.ok, rejected: snapshot.today.rejected + liveSince.rejected, failed: snapshot.today.failed + liveSince.failed }
     : live.today
-  return { ...live, lastByAgent, today }
+  const todayPartial = snapshot.today.day === live.today.day ? Boolean(snapshot.partial) : live.todayPartial
+  return { ...live, lastByAgent, today, todayPartial }
 }
 
 /** 被拒 / 失败原因：以状态码为准，与 gateway/route.rs 的拒绝分支一一对应 */
@@ -227,3 +233,9 @@ export function rejectReason(status: number | null, phase: ActiveRelay["phase"])
 
 /** 耗时文案：到响应头的时间，不是首字时间 */
 export const formatDuration = (ms: number | null) => (ms == null ? "—" : ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`)
+
+/** 「今日经网关」次数的展示：流水被截断时只是下限，写成「≥N」 */
+export function todayTotalText(state: Pick<ActivityState, "today" | "todayPartial">): string {
+  const total = state.today.ok + state.today.rejected + state.today.failed
+  return `${state.todayPartial ? "≥" : ""}${total} 次`
+}

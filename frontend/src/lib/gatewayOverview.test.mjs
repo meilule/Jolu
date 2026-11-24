@@ -108,9 +108,9 @@ test("概览范围：四档齐全，未知值退回今天", async () => {
   assert.deepEqual(OVERVIEW_RANGES.map((r) => r.id), ["today", "yesterday", "7d", "30d"])
   // 每档的指标名与对比文案都要不同，否则选「昨天」会显示「今日请求」
   assert.equal(overviewRange("today").period, "今日请求")
-  assert.equal(overviewRange("today").compare, "昨天")
+  assert.equal(overviewRange("today").compare, "昨天同时段")
   assert.equal(overviewRange("yesterday").period, "昨日请求")
-  assert.equal(overviewRange("7d").compare, "前 7 天")
+  assert.equal(overviewRange("7d").compare, "前 7 天同时段")
   assert.equal(overviewRange("30d").period, "近 30 天请求")
   // 拼错不能把页面变空
   assert.equal(overviewRange("week").id, "today")

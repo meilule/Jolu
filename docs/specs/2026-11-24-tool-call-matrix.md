@@ -14,8 +14,9 @@
 | D1 强制 `tool_choice` 让循环跑满 | ✅ 已修 | `tool_loop.rs` `append_round` → `relax_tool_choice`：`any` / 指定工具在第一轮后改为 `auto`；测试 `a_forced_tool_choice_is_relaxed_after_the_first_round`（去掉放开调用即失败） |
 | D3 多轮缓存用量只剩最后一轮、流式回放丢缓存字段 | ✅ 已修 | `tool_loop::Usage` 累加 `cache_read` / `cache_creation`（从没报过保持缺省，不写 0）；`message_to_sse` 的 `message_start` 带缓存字段；测试 `cache_usage_of_every_round_is_summed_and_unknown_stays_absent` |
 | D5 Responses 流把上游错误块当成功 | ✅ 已修 | `responses_chat.rs` `StreamTranslator::push` 遇 `{"error":…}` 发 `response.failed` 并停止，收尾不再补 `completed`；测试 `an_upstream_error_chunk_fails_the_stream_instead_of_completing` |
-| S1 / S7 / S10 / B1 静默丢弃 | ⏸ 待鼠鼠决策 | 改成显式拒绝还是降级并提示（§4；T14、T21 等决策后改断言） |
-| D2 中间轮结果不回传、无整体时限与进度 | ⏸ 待鼠鼠决策 | 是否回传中间轮结果、是否加整体时限与流式进度（§5.6、§5.8；T11 依赖此决策） |
+| S1 / S7 静默丢弃 | ✅ 已处理（2026-11-24 鼠鼠同意按推荐：降级转发并记录） | 照常省略来源接不住的服务端工具，但在这次尝试的流水 `decision` 里写「来源不支持，已省略服务端工具：…」（`wire.rs` `dropped_tools_note`，覆盖 API Key 来源的三种转 Chat 路径与 Gemini / WorkBuddy / Qoder / Trae 订阅）；测试 `server_tools_dropped_in_conversion_are_written_to_the_log`（去掉记录即失败）、`plain_tools_are_not_reported_as_dropped` |
+| S10 历史里的内置工具项 / B1 Claude 订阅桥 | ⏸ 待真实账号 | S10 的历史项省略不影响本轮工具；B1 需真实 Claude 订阅确认桥是否转发服务端工具 |
+| D2 无整体时限 / 中间轮结果不回传 | ✅ 已处理（按推荐） | 加整体时限 `tool_loop::LOOP_BUDGET` = 90 秒，两轮之间检查，超时用已有结果收尾、去掉悬空调用并说明；测试 `the_tool_loop_stops_when_its_time_budget_is_spent`（即 T11）。中间轮结果维持只回传一行摘要（完整结果会撑大后续上下文），流式进度事件不做 |
 | D4、D6–D10 及其余待补测试 | ⬜ 未做 | 按 §7 / §8 清单继续 |
 
 ---

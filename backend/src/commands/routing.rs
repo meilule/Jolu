@@ -658,7 +658,9 @@ pub(crate) fn gateway_day_overview(app: tauri::AppHandle, range: Option<String>)
     let (current_start, prior_start) = range.bounds(today);
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
-    crate::gateway::route_log::day_overview(&conn, current_start, prior_start, range.end_exclusive(today)).map_err(|error| error.to_string())
+    let prior_end = range.prior_end(today, chrono::Local::now().timestamp_millis());
+    crate::gateway::route_log::day_overview_until(&conn, current_start, prior_start, prior_end, range.end_exclusive(today))
+        .map_err(|error| error.to_string())
 }
 
 /// 锁定 ZCode 连接的订阅通道（账号卡「订阅通道」切换）。

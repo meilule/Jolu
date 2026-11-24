@@ -26,6 +26,22 @@ use serde_json::{json, Value};
 /// 最多问上游几轮。
 pub(crate) const MAX_ROUNDS: usize = 5;
 
+/// 代执行整体时限：多轮上游调用 + 搜索 / 抓取累计超过它，就不再开新一轮，用已有结果收尾。
+///
+/// 流式调用方在循环期间收不到任何字节（转成了非流式），时间过长时 Agent 端会先超时、
+/// 整轮白跑；所以宁可提前收尾并说明（P3 盘点 D2）。只在两轮之间检查，不打断进行中的调用。
+pub(crate) const LOOP_BUDGET: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// 轮次用尽时附在最终消息里的说明。
+pub(crate) fn rounds_exhausted_note() -> String {
+    format!("联网工具已连续调用 {MAX_ROUNDS} 轮，停止继续调用")
+}
+
+/// 超过整体时限时附在最终消息里的说明。
+pub(crate) fn budget_exhausted_note(budget: std::time::Duration) -> String {
+    format!("联网工具累计耗时超过 {} 秒，停止继续调用", budget.as_secs())
+}
+
 /// 请求里网关要接管的工具名（服务端工具的 `name`，通常是 `web_search` / `web_fetch`）。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Managed {
@@ -195,9 +211,10 @@ pub(crate) fn add_usage(total: &mut Usage, message: &Value) {
     }
 }
 
-/// 最终消息：开头加一行说明，用量换成各轮之和；轮次用尽时把仍在调用的接管工具去掉并说明。
-pub(crate) fn finish(mut message: Value, notes: &[String], usage: Usage, managed: &Managed, exhausted: bool) -> Value {
-    if exhausted {
+/// 最终消息：开头加一行说明，用量换成各轮之和；提前停止（轮次用尽 / 超时，`stop` 为说明）时
+/// 把仍在调用的接管工具去掉并说明。
+pub(crate) fn finish(mut message: Value, notes: &[String], usage: Usage, managed: &Managed, stop: Option<String>) -> Value {
+    if stop.is_some() {
         strip_managed(&mut message, managed);
         if message.get("stop_reason").and_then(Value::as_str) == Some("tool_use")
             && !message.get("content").and_then(Value::as_array).is_some_and(|c| c.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("tool_use")))
@@ -206,8 +223,8 @@ pub(crate) fn finish(mut message: Value, notes: &[String], usage: Usage, managed
         }
     }
     let mut lines: Vec<String> = notes.to_vec();
-    if exhausted {
-        lines.push(format!("联网工具已连续调用 {MAX_ROUNDS} 轮，停止继续调用"));
+    if let Some(reason) = stop {
+        lines.push(reason);
     }
     if !lines.is_empty() {
         let notice = json!({"type": "text", "text": format!("（Jolu 代为执行：{}）\n\n", lines.join("；"))});
@@ -393,7 +410,7 @@ mod tests {
         add_usage(&mut usage, &round);
         let last = json!({"id": "msg_1", "model": "glm", "content": [{"type": "text", "text": "答案"}], "stop_reason": "end_turn", "usage": {"input_tokens": 150, "output_tokens": 20}});
         add_usage(&mut usage, &last);
-        let done = finish(last, &["搜索「q」，3 条结果".into()], usage, &managed_tools(&claude_code_body()), false);
+        let done = finish(last, &["搜索「q」，3 条结果".into()], usage, &managed_tools(&claude_code_body()), None);
         assert!(done["content"][0]["text"].as_str().unwrap().contains("搜索「q」"));
         assert_eq!(done["content"][1]["text"], "答案");
         assert_eq!((done["usage"]["input_tokens"].as_i64(), done["usage"]["output_tokens"].as_i64()), (Some(250), Some(30)));
@@ -403,7 +420,7 @@ mod tests {
     fn exhausted_rounds_end_the_turn_without_dangling_managed_calls() {
         let managed = managed_tools(&claude_code_body());
         let last = json!({"content": [{"type": "tool_use", "id": "t9", "name": "web_search", "input": {"query": "again"}}], "stop_reason": "tool_use", "usage": {}});
-        let done = finish(last, &[], Usage { input: 1, output: 1, ..Usage::default() }, &managed, true);
+        let done = finish(last, &[], Usage { input: 1, output: 1, ..Usage::default() }, &managed, Some(rounds_exhausted_note()));
         assert_eq!(done["stop_reason"], "end_turn");
         assert!(done["content"].as_array().unwrap().iter().all(|b| b["type"] != "tool_use"));
         assert!(done["content"][0]["text"].as_str().unwrap().contains(&MAX_ROUNDS.to_string()));
@@ -447,7 +464,7 @@ mod tests {
         add_usage(&mut usage, &json!({"usage": {"input_tokens": 5, "output_tokens": 1, "cache_read_input_tokens": 10}}));
         add_usage(&mut usage, &json!({"usage": {"input_tokens": 6, "output_tokens": 2, "cache_read_input_tokens": 20}}));
         assert_eq!(usage, Usage { input: 11, output: 3, cache_read: Some(30), cache_creation: None });
-        let done = finish(json!({"content": [], "usage": {"cache_read_input_tokens": 20}}), &[], usage, &Managed::default(), false);
+        let done = finish(json!({"content": [], "usage": {"cache_read_input_tokens": 20}}), &[], usage, &Managed::default(), None);
         assert_eq!(done["usage"]["cache_read_input_tokens"], 30, "不能只剩最后一轮的 20");
         assert!(done["usage"].get("cache_creation_input_tokens").is_none(), "没报过的缓存写入保持未知");
         let sse = message_to_sse(&done);
