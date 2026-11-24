@@ -7,7 +7,7 @@ import { MAX_SKILLS, projectOf, skillSummary, toolName, usableSkills } from "@/l
 import { automationApi, type AutomationPlatform, type SkillOptionDto } from "@/lib/automationApi"
 import { demoSkills } from "@/mock/automation"
 
-const TRIGGER = "flex h-[38px] w-full items-center justify-between gap-2.5 rounded-lg border bg-jolu-bg px-3 text-left text-xs outline-none focus-visible:border-jolu-accent"
+const TRIGGER = "flex h-[38px] w-full items-center justify-between gap-2.5 rounded-lg border bg-jn-stage px-3 text-left text-xs outline-none focus-visible:border-jn-primary"
 
 /**
  * 「Skills（可选）」多选（画板 60、72；D-08）。字段文案、占位与「已选择 N 项 · a、b」按画板；
@@ -105,20 +105,20 @@ export function SkillPicker({ platform, cwd, value, onChange, open, onOpenChange
 
   return (
     <div ref={ref} className="flex min-w-0 flex-col gap-[7px]">
-      <span className="text-[12px] text-jolu-muted">Skills（可选）</span>
+      <span className="text-[12px] text-jn-text-3">Skills（可选）</span>
       <button
         ref={triggerRef}
         type="button"
         aria-label="选择 Skills"
         aria-expanded={open}
         onClick={() => onOpenChange(!open)}
-        className={cn(TRIGGER, open ? "border-jolu-accent" : "border-jolu-border", missing.length && "border-jolu-danger")}
+        className={cn(TRIGGER, open ? "border-jn-primary" : "border-jn-line", missing.length && "border-jn-danger")}
       >
-        <span className={cn("truncate", value.length ? "text-jolu-text" : "text-jolu-muted")}>{value.length ? skillSummary(value) : "选择需要使用的 Skills（可选）"}</span>
-        {open ? <ChevronUp aria-hidden className="size-[15px] shrink-0 text-jolu-muted" /> : <ChevronDown aria-hidden className="size-[15px] shrink-0 text-jolu-muted" />}
+        <span className={cn("truncate", value.length ? "text-jn-text" : "text-jn-text-3")}>{value.length ? skillSummary(value) : "选择需要使用的 Skills（可选）"}</span>
+        {open ? <ChevronUp aria-hidden className="size-[15px] shrink-0 text-jn-text-3" /> : <ChevronDown aria-hidden className="size-[15px] shrink-0 text-jn-text-3" />}
       </button>
       {missing.length > 0 && (
-        <span role="alert" className="text-[11px] text-jolu-danger">{missing.map((n) => `「${n}」`).join("、")}已停用或不存在，执行时会转为需要处理；可在列表中取消选择。</span>
+        <span role="alert" className="text-[11px] text-jn-danger">{missing.map((n) => `「${n}」`).join("、")}已停用或不存在，执行时会转为需要处理；可在列表中取消选择。</span>
       )}
 
       {open && root && place && createPortal(
@@ -127,19 +127,19 @@ export function SkillPicker({ platform, cwd, value, onChange, open, onOpenChange
           role="dialog"
           aria-label="选择 Skills"
           style={{ top: place.top, left: place.left, width: place.width, maxHeight: place.maxHeight }}
-          className="motion-popover absolute z-10 flex flex-col gap-1.5 overflow-hidden rounded-xl border border-jolu-border bg-jolu-cc-surface p-2 shadow-popover"
+          className="motion-popover absolute z-10 flex flex-col gap-1.5 overflow-hidden rounded-xl border border-jn-line bg-jn-surface p-2 shadow-popover"
         >
-          <label className="flex h-[38px] shrink-0 items-center gap-2 rounded-lg border border-jolu-accent px-2.5">
-            <Search aria-hidden className="size-4 text-jolu-muted" />
-            <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索 Skill 名称或说明" aria-label="搜索 Skills" className="min-w-0 flex-1 bg-transparent text-xs text-jolu-text outline-none placeholder:text-jolu-muted" />
-            {query && <button type="button" aria-label="清除搜索" onClick={() => setQuery("")} className="text-jolu-muted hover:text-jolu-text"><X aria-hidden className="size-3.5" /></button>}
+          <label className="flex h-[38px] shrink-0 items-center gap-2 rounded-lg border border-jn-primary px-2.5">
+            <Search aria-hidden className="size-4 text-jn-text-3" />
+            <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索 Skill 名称或说明" aria-label="搜索 Skills" className="min-w-0 flex-1 bg-transparent text-xs text-jn-text outline-none placeholder:text-jn-text-3" />
+            {query && <button type="button" aria-label="清除搜索" onClick={() => setQuery("")} className="text-jn-text-3 hover:text-jn-text"><X aria-hidden className="size-3.5" /></button>}
           </label>
-          {error && <span role="alert" className="px-2.5 text-[12px] text-jolu-danger">Skills 读取失败：{error}</span>}
-          {!error && options === null && <span className="px-2.5 text-[12px] text-jolu-muted">正在读取 Skills…</span>}
+          {error && <span role="alert" className="px-2.5 text-[12px] text-jn-danger">Skills 读取失败：{error}</span>}
+          {!error && options === null && <span className="px-2.5 text-[12px] text-jn-text-3">正在读取 Skills…</span>}
           {options !== null && !options.length && !missing.length && (
-            <span className="px-2.5 text-[12px] text-jolu-muted">{toolName(platform)} 没有已启用的 Skills{dir ? "" : "；选择项目目录后会带出项目 Skills"}</span>
+            <span className="px-2.5 text-[12px] text-jn-text-3">{toolName(platform)} 没有已启用的 Skills{dir ? "" : "；选择项目目录后会带出项目 Skills"}</span>
           )}
-          {options !== null && !!options.length && !shown.length && <span className="px-2.5 text-[12px] text-jolu-muted">没有匹配的 Skills</span>}
+          {options !== null && !!options.length && !shown.length && <span className="px-2.5 text-[12px] text-jn-text-3">没有匹配的 Skills</span>}
           <div role="group" aria-label="Skills" className="flex max-h-[240px] min-h-0 shrink flex-col gap-0.5 overflow-y-auto">
             {missing.map((name) => (
               <SkillRow key={`missing-${name}`} name={name} note="已停用或不存在" checked danger onToggle={() => toggle(name)} />
@@ -159,7 +159,7 @@ export function SkillPicker({ platform, cwd, value, onChange, open, onOpenChange
               )
             })}
           </div>
-          <span className="border-t border-jolu-border px-2.5 pt-2 text-[11px] text-jolu-muted">
+          <span className="border-t border-jn-line px-2.5 pt-2 text-[11px] text-jn-text-3">
             {toolName(platform)}{dir ? ` · ${projectOf(dir)}` : ""} · 已选 {value.length} / {MAX_SKILLS}{full ? " · 已达上限" : ""}
           </span>
         </div>,
@@ -186,19 +186,19 @@ function SkillRow({ name, note, tag, checked, disabled, danger, onToggle }: {
       disabled={disabled}
       title={disabled ? `最多选择 ${MAX_SKILLS} 个 Skills` : undefined}
       onClick={onToggle}
-      className={cn("flex min-h-[44px] shrink-0 items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-jolu-side focus-visible:bg-jolu-side disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent", checked && "bg-jolu-selected hover:bg-jolu-selected")}
+      className={cn("flex min-h-[44px] shrink-0 items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-jn-surface focus-visible:bg-jn-surface disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent", checked && "bg-jn-primary-wash hover:bg-jn-primary-wash")}
     >
-      <span className={cn("grid size-4 shrink-0 place-items-center rounded-[4px]", checked ? "bg-jolu-accent" : "border border-jolu-border bg-jolu-bg")}>
-        {checked && <Check aria-hidden className="size-3 text-[#071B10]" />}
+      <span className={cn("grid size-4 shrink-0 place-items-center rounded-[4px]", checked ? "bg-jn-primary" : "border border-jn-line bg-jn-stage")}>
+        {checked && <Check aria-hidden className="size-3 text-jn-on-primary" />}
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-1.5">
-          <span className={cn("truncate text-xs", danger ? "text-jolu-danger" : checked ? "text-jolu-on" : "text-jolu-text")}>{name}</span>
-          {tag && <span className="shrink-0 rounded-[4px] bg-jolu-side px-1.5 text-[11px] text-jolu-muted">{tag}</span>}
+          <span className={cn("truncate text-xs", danger ? "text-jn-danger" : checked ? "text-jn-primary-ink" : "text-jn-text")}>{name}</span>
+          {tag && <span className="shrink-0 rounded-[4px] bg-jn-surface px-1.5 text-[11px] text-jn-text-3">{tag}</span>}
         </span>
-        {note && <span className={cn("truncate text-[11px]", danger ? "text-jolu-danger" : "text-jolu-muted")}>{note}</span>}
+        {note && <span className={cn("truncate text-[11px]", danger ? "text-jn-danger" : "text-jn-text-3")}>{note}</span>}
       </span>
-      {danger && <Info aria-hidden className="size-4 shrink-0 text-jolu-danger" />}
+      {danger && <Info aria-hidden className="size-4 shrink-0 text-jn-danger" />}
     </button>
   )
 }

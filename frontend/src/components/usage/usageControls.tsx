@@ -9,80 +9,80 @@ import { UNATTRIBUTED_ACCOUNT, accountLabel, accountsTriggerLabel } from "@/lib/
 import { JoluButton } from "@/components/ui/JoluButton"
 import type { Connection } from "@/types"
 
-/** 统计卡片：12px 圆角、1px 描边（画板 30） */
+/** 统计卡片：24px 圆角、1px 描边、表面投影（R1-04 / R1-C） */
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
-  return <section className={cn("jolu-card min-w-0 rounded-xl border border-jolu-border bg-jolu-cc-surface", className)}>{children}</section>
+  return <section className={cn("min-w-0 rounded-jn-card border border-jn-line bg-jn-surface shadow-jn-surface", className)}>{children}</section>
 }
 
 export function CardTitle({ title, note, children }: { title: string; note?: ReactNode; children?: ReactNode }) {
   return (
     <div className="flex min-h-5 items-center justify-between gap-3">
-      <h3 className="truncate text-sm font-semibold text-jolu-text">{title}</h3>
-      {children ?? (note && <span className="shrink-0 text-[11px] text-jolu-muted">{note}</span>)}
+      <h3 className="truncate text-sm font-semibold text-jn-text">{title}</h3>
+      {children ?? (note && <span className="shrink-0 text-xs text-jn-text-3">{note}</span>)}
     </div>
   )
 }
 
-/** 四项指标卡：名称 11px、数值 25px、说明 10px */
+/** 四项指标卡（R1-04）：24px 圆角白卡、14px 标题、28px 粗体数字、底部说明 */
 export function MetricCard({ icon, label, value, note, noteTitle }: { icon?: ReactNode; label: string; value: string; note: ReactNode; noteTitle?: string }) {
   return (
-    <Card className="flex min-h-[100px] flex-col gap-2 p-3.5">
-      <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-jolu-muted">{icon && <span aria-hidden className="grid size-3.5 shrink-0 place-items-center [&_svg]:size-3.5">{icon}</span>}<span className="truncate">{label}</span></span>
-      <span className="tnum truncate text-[25px] font-semibold leading-none text-jolu-text">{value}</span>
+    <Card className="flex min-h-[112px] flex-col gap-2 px-[18px] pt-[18px] pb-3.5">
+      <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-jn-text-2">
+        {icon && <span aria-hidden className="grid size-4 shrink-0 place-items-center text-jn-text-3 [&_svg]:size-3.5">{icon}</span>}
+        <span className="truncate">{label}</span>
+      </span>
+      <span className="tnum truncate text-[28px] font-bold leading-none tracking-tight text-jn-text">{value}</span>
       {/* 费用说明带未收录模型名，单行放不下；两行后仍超出的部分交给 title 悬停 */}
-      <span className="line-clamp-2 text-[11px] text-jolu-muted" title={noteTitle}>{note}</span>
+      <span className="line-clamp-2 text-[11px] leading-relaxed text-jn-text-3" title={noteTitle}>{note}</span>
     </Card>
   )
 }
 
 const FILTER_CLASS =
-  "jolu-control inline-flex h-[34px] shrink-0 items-center gap-2 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-xs text-jolu-text outline-none transition-colors hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent data-[state=open]:bg-jolu-stage disabled:cursor-not-allowed disabled:opacity-45"
+  "jn-interactive inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-jn-line bg-jn-surface px-3.5 text-xs font-medium text-jn-text shadow-jn-surface outline-none hover:bg-jn-well data-[state=open]:bg-jn-well disabled:cursor-not-allowed disabled:opacity-45"
 
-/** 筛选按钮：概览 / 分析页图标在前（画板 30），调用明细页箭头在后（画板 34） */
+/** 筛选按钮（R1-04 / R1-24）：白底胶囊 + 旋转箭头 */
 export const FilterTrigger = forwardRef<HTMLButtonElement, React.ButtonHTMLAttributes<HTMLButtonElement> & { leading?: ReactNode; trailingChevron?: boolean }>(
   function FilterTrigger({ leading, trailingChevron, className, children, ...props }, ref) {
     return (
       <button ref={ref} type="button" className={cn(FILTER_CLASS, className)} {...props}>
-        {leading ?? (!trailingChevron && <ChevronDown aria-hidden className="size-4 text-jolu-muted" />)}
+        {leading && <span aria-hidden className="flex shrink-0 items-center text-jn-text-3">{leading}</span>}
         <span className="max-w-[180px] truncate">{children}</span>
-        {trailingChevron && <ChevronDown aria-hidden className="size-3.5 text-jolu-muted" />}
+        {(!leading || trailingChevron) && <ChevronDown aria-hidden className="jn-chevron size-3.5 shrink-0 text-jn-text-3" />}
       </button>
     )
   },
 )
 
-/** 浅底工具按钮：刷新、导出 CSV；`bordered` 用于「重置」（画板 34） */
+/** 工具按钮：刷新、导出 CSV、重置（R1 胶囊形态） */
 export function ToolButton({ icon, children, bordered, busy, className, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { icon: ReactNode; bordered?: boolean; busy?: boolean }) {
   return (
     <button
       type="button"
       aria-busy={busy || undefined}
       className={cn(
-        "jolu-control motion-button inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-medium text-jolu-text outline-none transition-colors focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-45",
-        bordered ? "border border-jolu-border bg-jolu-bg hover:bg-jolu-stage" : "border border-jolu-border bg-jolu-cc-surface hover:bg-jolu-stage",
+        "jn-interactive inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-xs font-semibold text-jn-text outline-none disabled:cursor-not-allowed disabled:opacity-45",
+        bordered ? "border border-jn-line bg-jn-surface shadow-jn-surface hover:bg-jn-well" : "bg-jn-well hover:bg-jn-track",
         className,
       )}
       {...props}
     >
-      <span aria-hidden className={cn("grid size-4 place-items-center text-jolu-muted [&_svg]:size-4", busy && "[&_svg]:animate-spin")}>{icon}</span>
+      <span aria-hidden className={cn("grid size-4 place-items-center text-jn-text-2 [&_svg]:size-3.5", busy && "[&_svg]:animate-spin")}>{icon}</span>
       {children}
     </button>
   )
 }
 
 export function RefreshButton({ loading, onClick }: { loading: boolean; onClick: () => void }) {
-  // 加载时禁用，避免重复触发（画板 38「交互」）
-  return <ToolButton icon={<RefreshCw />} busy={loading} disabled={loading} onClick={onClick}>刷新</ToolButton>
+  return <ToolButton bordered icon={<RefreshCw />} busy={loading} disabled={loading} onClick={onClick}>刷新</ToolButton>
 }
 
 export function ResetButton({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {
-  return <ToolButton bordered icon={<RotateCcw />} onClick={onClick} disabled={disabled}>重置</ToolButton>
+  return <ToolButton icon={<RotateCcw />} onClick={onClick} disabled={disabled}>重置</ToolButton>
 }
 
-// 面板与行的外观收在 index.css 的 .jolu-menu / .jolu-menu-item（公共层），
-// 这里只留布局相关：宽度、滚动、层级。以前各处菜单各有各的圆角与内边距。
-const MENU_CLASS = "jolu-menu jolu-menu-lg motion-popover z-[100] min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[320px] overflow-y-auto overscroll-contain"
-const ITEM_CLASS = "jolu-menu-item jolu-row-hover relative cursor-default select-none text-xs data-[disabled]:opacity-40"
+const MENU_CLASS = "jn-popover z-[140] min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[320px] overflow-y-auto overscroll-contain rounded-[14px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface"
+const ITEM_CLASS = "relative flex cursor-pointer items-center gap-2 rounded-[10px] px-2.5 py-2 text-xs text-jn-text select-none outline-none data-[highlighted]:bg-jn-well data-[disabled]:opacity-40"
 
 export interface MenuOption {
   value: string
@@ -110,7 +110,7 @@ export function MenuFilter({ value, options, onChange, label, trailingChevron }:
         <Menu.Content ref={glide} align="start" sideOffset={6} collisionPadding={12} className={MENU_CLASS} style={{ maxHeight: "min(320px, var(--radix-dropdown-menu-content-available-height))" }}>
           <Menu.RadioGroup value={value} onValueChange={onChange}>
             {options.map((option) => (
-              <Menu.RadioItem key={option.value} value={option.value} className={cn(ITEM_CLASS, "pr-7 data-[state=checked]:text-jolu-on")}>
+              <Menu.RadioItem key={option.value} value={option.value} className={cn(ITEM_CLASS, "pr-7 data-[state=checked]:text-jn-primary-ink")}>
                 {option.icon && <span aria-hidden className="grid size-4 place-items-center">{option.icon}</span>}
                 <span className="truncate">{option.label}</span>
                 <Menu.ItemIndicator className="absolute right-2"><Check aria-hidden className="size-3.5" /></Menu.ItemIndicator>
@@ -144,9 +144,9 @@ export function AccountFilter({ accounts, value, onChange }: {
         event.preventDefault()
         onSelect()
       }}
-      className={cn(ITEM_CLASS, "h-7", checked && "bg-jolu-selected data-[highlighted]:bg-jolu-selected")}
+      className={cn(ITEM_CLASS, "h-7", checked && "bg-jn-primary-wash data-[highlighted]:bg-jn-primary-wash")}
     >
-      {checked ? <SquareCheck aria-hidden className="size-[15px] text-jolu-on" /> : <Square aria-hidden className="size-[15px] text-jolu-muted" />}
+      {checked ? <SquareCheck aria-hidden className="size-[15px] text-jn-primary-ink" /> : <Square aria-hidden className="size-[15px] text-jn-text-3" />}
       <span className="truncate">{label}</span>
     </Menu.CheckboxItem>
   )
@@ -178,9 +178,9 @@ export function LoadingCard({ title = "正在读取本地用量", layout = "tabl
 export function EmptyCard({ onClear }: { onClear?: () => void }) {
   return (
     <Card className="flex flex-col items-start gap-3 p-4">
-      <ChartNoAxesCombined aria-hidden className="size-[26px] text-jolu-muted" />
-      <span className="text-base font-semibold text-jolu-text">这个范围内暂无用量</span>
-      <span className="text-xs text-jolu-muted">尝试扩大日期范围，或清除账号筛选。</span>
+      <ChartNoAxesCombined aria-hidden className="size-[26px] text-jn-text-3" />
+      <span className="text-base font-semibold text-jn-text">这个范围内暂无用量</span>
+      <span className="text-xs text-jn-text-3">尝试扩大日期范围，或清除账号筛选。</span>
       {onClear && <ToolButton icon={<RotateCcw />} onClick={onClear}>清除筛选</ToolButton>}
     </Card>
   )
@@ -189,7 +189,7 @@ export function EmptyCard({ onClear }: { onClear?: () => void }) {
 /** 读取失败：没有上次数据时整块显示；有上次数据时只在顶部提示并保留数据 */
 export function ErrorNotice({ error, onRetry, stale }: { error: string; onRetry: () => void; stale: boolean }) {
   return (
-    <div role="alert" className="flex items-center justify-between gap-3 rounded-[10px] bg-jolu-danger-soft px-4 py-2.5 text-xs text-jolu-danger">
+    <div role="alert" className="flex items-center justify-between gap-3 rounded-[10px] bg-jn-danger-soft px-4 py-2.5 text-xs text-jn-danger">
       <span className="min-w-0 truncate">{stale ? `刷新失败，暂时显示上次数据：${error}` : `本地用量读取失败：${error}`}</span>
       <JoluButton size="sm" variant="danger-soft" onClick={onRetry}>重试</JoluButton>
     </div>
@@ -197,5 +197,5 @@ export function ErrorNotice({ error, onRetry, stale }: { error: string; onRetry:
 }
 
 export function Spinner() {
-  return <LoaderCircle aria-hidden className="size-4 animate-spin text-jolu-muted" />
+  return <LoaderCircle aria-hidden className="size-4 animate-spin text-jn-text-3" />
 }

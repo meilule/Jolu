@@ -1,17 +1,22 @@
-import { ChevronLeft, ChevronRight, Info, RefreshCw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { RUN_RANGES, RUN_STATUSES, clock, hhmmss, runCode, runStatusLabel, runTokens, runningMs, shortTool, sourceLabel, waitingMs } from "@/lib/automation"
 import type { RunFilterDto, RunPageDto, RunRange, RunStatus } from "@/lib/automationApi"
 import { formatTokens, localZone } from "@/lib/usageStats"
-import { Card, MenuFilter, MetricCard } from "@/components/usage/usageControls"
-import { JoluButton } from "@/components/ui/JoluButton"
-import { Notice, TONE } from "./automationParts"
+import { Card, MenuFilter } from "@/components/usage/usageControls"
 import type { AccountRef } from "./TaskList"
 import { MetricGrid } from "../ui/MetricGrid"
+import { Icon } from "@/icons"
+import { Banner, Button, DataValue, IconButton, MetricCard, Pagination, StatusPill, type StatusTone } from "@/ui"
 
 const ALL = "__all__"
 
-/** 运行记录页签（画板 64）：概览、筛选、记录表与分页 */
+function statusTone(tone: "on" | "danger" | "muted" | "text"): StatusTone {
+  if (tone === "on") return "success"
+  if (tone === "danger") return "danger"
+  return "neutral"
+}
+
+/** 运行记录页签（R1-25）：4 枚 MetricCard 概览、筛选栏、圆角斑马纹记录表、Pagination 与提示横幅。 */
 export function RunList({ data, filter, page, now, loading, accounts, onFilter, onPage, onRefresh, onOpen }: {
   data: RunPageDto
   filter: RunFilterDto
@@ -27,81 +32,117 @@ export function RunList({ data, filter, page, now, loading, accounts, onFilter, 
   const today = filter.range === "today"
   const rangeLabel = RUN_RANGES.find((r) => r.value === filter.range)?.label ?? "今天"
   const accountIds = [...new Set(data.rows.map((r) => r.connection_id).concat(filter.connection ? [filter.connection] : []))]
+
   return (
     <>
       <MetricGrid>
-        <MetricCard label={today ? "今日完成" : "完成"} value={String(data.completed)} note={`其中 ${data.completed_waited} 次经历额度等待`} />
-        <MetricCard label="执行中" value={String(data.running)} note={data.running ? "可查看步骤并停止" : "当前没有执行中的运行"} />
-        <MetricCard label="失败" value={String(data.failed)} note={data.failed_note ?? "没有失败的运行"} />
-        <MetricCard label={today ? "今日消耗 Token" : "消耗 Token"} value={formatTokens(data.tokens).replace(" ", "")} note="不含等待期间；以执行器返回为准" />
+        <MetricCard
+          title={<span className="inline-flex items-center gap-1.5"><Icon name="success" size="sm" className="text-jn-primary" />{today ? "今日完成" : "完成"}</span>}
+          value={<DataValue state={data.completed === 0 ? "zero" : "value"} value={data.completed} format={(v) => String(v)} className="[&>span:first-child]:text-[28px] [&>span:first-child]:font-bold [&>span:first-child]:leading-none" />}
+          compare={`其中 ${data.completed_waited} 次经历额度等待`}
+        />
+        <MetricCard
+          title={<span className="inline-flex items-center gap-1.5"><Icon name="play" size="sm" className="text-jn-info" />执行中</span>}
+          value={<DataValue state={data.running === 0 ? "zero" : "value"} value={data.running} format={(v) => String(v)} className="[&>span:first-child]:text-[28px] [&>span:first-child]:font-bold [&>span:first-child]:leading-none" />}
+          compare={data.running ? "可查看步骤并停止" : "当前没有执行中的运行"}
+        />
+        <MetricCard
+          title={<span className="inline-flex items-center gap-1.5"><Icon name="fail" size="sm" className={data.failed > 0 ? "text-jn-danger" : "text-jn-text-3"} />失败</span>}
+          value={<DataValue state={data.failed === 0 ? "zero" : "value"} value={data.failed} format={(v) => String(v)} className={cn("[&>span:first-child]:text-[28px] [&>span:first-child]:font-bold [&>span:first-child]:leading-none", data.failed > 0 && "[&>span:first-child]:text-jn-danger")} />}
+          compare={data.failed_note ?? "没有失败的运行"}
+        />
+        <MetricCard
+          title={<span className="inline-flex items-center gap-1.5"><Icon name="coins" size="sm" className="text-jn-text-3" />{today ? "今日消耗 Token" : "消耗 Token"}</span>}
+          value={
+            data.tokens === null ? (
+              <DataValue state="unknown" note="未提供" />
+            ) : (
+              <DataValue state={data.tokens === 0 ? "zero" : "value"} value={data.tokens} format={(v) => formatTokens(v).replace(" ", "")} className="[&>span:first-child]:text-[28px] [&>span:first-child]:font-bold [&>span:first-child]:leading-none" />
+            )
+          }
+          compare="不含等待期间；以执行器返回为准"
+        />
       </MetricGrid>
 
-      <div className="flex h-[34px] items-center gap-1.5">
-        <MenuFilter label="时间范围" value={filter.range} onChange={(v) => onFilter({ ...filter, range: v as RunRange })} options={RUN_RANGES.map((r) => ({ value: r.value, label: r.label }))} />
-        <MenuFilter label="状态筛选" value={filter.status ?? ALL} onChange={(v) => onFilter({ ...filter, status: v === ALL ? null : (v as RunStatus) })} options={[{ value: ALL, label: "全部状态" }, ...RUN_STATUSES]} />
+      <div className="flex flex-wrap items-center gap-2">
+        <MenuFilter trailingChevron label="时间范围" value={filter.range} onChange={(v) => onFilter({ ...filter, range: v as RunRange })} options={RUN_RANGES.map((r) => ({ value: r.value, label: r.label }))} />
+        <MenuFilter trailingChevron label="状态筛选" value={filter.status ?? ALL} onChange={(v) => onFilter({ ...filter, status: v === ALL ? null : (v as RunStatus) })} options={[{ value: ALL, label: "全部状态" }, ...RUN_STATUSES]} />
         <MenuFilter
+          trailingChevron
           label="账号筛选"
           value={filter.connection ?? ALL}
           onChange={(v) => onFilter({ ...filter, connection: v === ALL ? null : v })}
           options={[{ value: ALL, label: "全部账号" }, ...accountIds.map((id) => ({ value: id, label: accounts.get(id)?.name ?? "未知账号" }))]}
         />
         <MenuFilter
+          trailingChevron
           label="任务筛选"
           value={filter.task === null ? ALL : String(filter.task)}
           onChange={(v) => onFilter({ ...filter, task: v === ALL ? null : Number(v) })}
           options={[{ value: ALL, label: "全部任务" }, ...data.tasks.map((t) => ({ value: String(t.task_id), label: t.name }))]}
         />
         <span className="flex-1" />
-        <button type="button" aria-label="刷新运行记录" disabled={loading} onClick={onRefresh} className="grid size-[30px] place-items-center rounded-[7px] bg-jolu-side text-jolu-muted outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
-          <RefreshCw aria-hidden className={cn("size-4", loading && "animate-spin")} />
-        </button>
+        <IconButton icon="refresh" label="刷新运行记录" size="sm" kind="ghost" disabled={loading} onClick={onRefresh} className={cn(loading && "[&_svg]:animate-spin")} />
       </div>
 
-      <Card className="overflow-hidden">
-        <div className="flex h-11 items-center bg-jolu-side px-4 text-[12px] font-medium text-jolu-muted">
-          <span className="w-[240px] shrink-0">任务 / 运行编号</span>
-          <span className="w-[184px] shrink-0">账号 / 启动方式</span>
-          <span className="min-w-0 flex-1">开始时间</span>
-          <span className="w-[140px] shrink-0">执行 / 等待</span>
-          <span className="w-[90px] shrink-0">Token</span>
-          <span className="w-[172px] shrink-0">状态 / 操作</span>
-        </div>
-        {data.rows.length ? data.rows.map((run) => {
-          const status = runStatusLabel(run.status)
-          const account = accounts.get(run.connection_id)?.name ?? run.account ?? "未知账号"
-          return (
-            <div key={run.id} className="flex h-[72px] items-center border-t border-jolu-border px-4 transition-colors hover:bg-jolu-stage">
-              <div className="flex w-[240px] shrink-0 flex-col gap-1.5 pr-3">
-                <span className="truncate text-xs font-medium text-jolu-text">{run.task_name}</span>
-                <span className="text-[11px] text-jolu-muted">{runCode(run.id)}</span>
-              </div>
-              <div className="flex w-[184px] shrink-0 flex-col gap-1.5 pr-3">
-                <span className="truncate text-[12px] text-jolu-text">{shortTool(run.platform)} · {account}</span>
-                <span className="text-[11px] text-jolu-muted">{sourceLabel(run.source)}</span>
-              </div>
-              <span className="tnum min-w-0 flex-1 text-[12px] text-jolu-text">{hhmmss(run.started_at ?? run.created_at)}</span>
-              <span className="tnum w-[140px] shrink-0 text-[12px] text-jolu-text">{clock(runningMs(run, now))} / {clock(waitingMs(run, now))}</span>
-              <span className="tnum w-[90px] shrink-0 text-[12px] text-jolu-text">{formatTokens(runTokens(run)).replace(" ", "")}</span>
-              <div className="flex w-[172px] shrink-0 items-center gap-2.5">
-                <span className={cn("min-w-[52px] text-[12px]", TONE[status.tone])}>{status.label}</span>
-                <JoluButton size="sm" variant="soft" className="w-20" onClick={() => onOpen(run.id)}>详情<ChevronRight aria-hidden /></JoluButton>
-              </div>
+      <Card className="flex flex-col gap-1 p-3">
+        <div className="overflow-x-auto">
+          <div className="flex min-w-[820px] flex-col gap-1">
+            <div className="flex h-8 items-center gap-3 px-3 text-[11.5px] font-medium text-jn-text-3">
+              <span className="w-[220px] shrink-0">任务 / 运行编号</span>
+              <span className="w-[176px] shrink-0">账号 / 启动方式</span>
+              <span className="min-w-[80px] flex-1">开始时间</span>
+              <span className="w-[132px] shrink-0">执行 / 等待</span>
+              <span className="w-[84px] shrink-0">Token</span>
+              <span className="w-[168px] shrink-0 text-right">状态 / 操作</span>
             </div>
-          )
-        }) : (
-          <div className="border-t border-jolu-border px-4 py-5 text-[12px] text-jolu-muted">{rangeLabel}没有符合条件的运行记录</div>
-        )}
-        <div className="flex h-11 items-center gap-2.5 border-t border-jolu-border px-4 text-[12px] text-jolu-muted">
-          <span>{rangeLabel}共 {data.total} 次运行 · 当前显示 {data.rows.length} 条</span>
-          <span className="flex-1" />
-          <JoluButton size="sm" variant="neutral" disabled={page <= 1} onClick={() => onPage(page - 1)}><ChevronLeft aria-hidden />上一页</JoluButton>
-          <span className="tnum text-jolu-text">{data.page} / {data.pages}</span>
-          <JoluButton size="sm" variant="neutral" disabled={page >= data.pages} onClick={() => onPage(page + 1)}>下一页<ChevronRight aria-hidden /></JoluButton>
+            {data.rows.length ? data.rows.map((run, index) => {
+              const status = runStatusLabel(run.status)
+              const account = accounts.get(run.connection_id)?.name ?? run.account ?? "未知账号"
+              return (
+                <div
+                  key={run.id}
+                  className={cn(
+                    "jn-interactive flex h-[64px] items-center gap-3 rounded-[12px] px-3 hover:bg-jn-primary-wash/50",
+                    index % 2 === 0 && "bg-jn-well",
+                  )}
+                >
+                  <div className="flex w-[220px] shrink-0 flex-col gap-0.5">
+                    <span className="truncate text-xs font-semibold text-jn-text">{run.task_name}</span>
+                    <span className="font-mono text-[11px] text-jn-text-3">{runCode(run.id)}</span>
+                  </div>
+                  <div className="flex w-[176px] shrink-0 flex-col gap-0.5">
+                    <span className="truncate text-xs text-jn-text">{shortTool(run.platform)} · {account}</span>
+                    <span className="text-[11px] text-jn-text-3">{sourceLabel(run.source)}</span>
+                  </div>
+                  <span className="tnum min-w-[80px] flex-1 font-mono text-xs text-jn-text">{hhmmss(run.started_at ?? run.created_at)}</span>
+                  <span className="tnum w-[132px] shrink-0 font-mono text-xs text-jn-text">{clock(runningMs(run, now))} / {clock(waitingMs(run, now))}</span>
+                  <span className="tnum w-[84px] shrink-0 font-mono text-xs text-jn-text">{formatTokens(runTokens(run)).replace(" ", "")}</span>
+                  <div className="flex w-[168px] shrink-0 items-center justify-end gap-2">
+                    <StatusPill tone={statusTone(status.tone)}>{status.label}</StatusPill>
+                    <Button kind="soft" size="sm" icon="next" onClick={() => onOpen(run.id)}>详情</Button>
+                  </div>
+                </div>
+              )
+            }) : (
+              <div className="rounded-[12px] bg-jn-well px-4 py-8 text-center text-xs text-jn-text-3">{rangeLabel}没有符合条件的运行记录</div>
+            )}
+          </div>
+        </div>
+        <div className="pt-2">
+          <Pagination
+            page={page}
+            pageCount={Math.max(1, data.pages)}
+            onChange={(next) => onPage(next)}
+            summary={`${rangeLabel}共 ${data.total} 次运行 · 当前显示 ${data.rows.length} 条`}
+          />
         </div>
       </Card>
 
-      <Notice icon={Info} title="执行耗时与等待时长分开记录">额度不足期间不计入执行耗时；同一次运行可多次等待和恢复，重试会生成新的运行记录。</Notice>
-      <p className="text-[11px] text-jolu-muted">时间按 {localZone()} 展示；Token 缺失显示 —，不以 0 代替。</p>
+      <Banner tone="info">
+        <span className="font-semibold">执行耗时与等待时长分开记录</span>：额度不足期间不计入执行耗时；同一次运行可多次等待和恢复，重试会生成新的运行记录。
+      </Banner>
+      <p className="text-[11px] text-jn-text-3">时间按 {localZone()} 展示；Token 缺失显示 —，不以 0 代替。</p>
     </>
   )
 }

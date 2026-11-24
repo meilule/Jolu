@@ -1,80 +1,99 @@
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { activityLevel, calendarWeeks, formatMinutes, formatTokens, monthLabels } from "@/lib/usageStats"
 import type { StatsActivityDto } from "@/lib/api"
 import { Tip } from "@/components/ui/Tip"
 import { ContentTransition, LoadingSurface } from "@/components/ui/LoadingSurface"
 import { Card } from "./usageControls"
+import { Tabs } from "@/ui"
 
-/** 画板 32 的五档活跃色；0 档用侧栏底色，浅深色相同 */
-const LEVEL_COLORS = ["var(--jolu-side)", "#D8F2E5", "#99DAB9", "#40C88A", "#099A56"] as const
+/** R1-C 热力格五档活跃色：0 档用轨道色，其余按主色深浅渐变，不画边框 */
+const LEVEL_COLORS = ["var(--jn-track)", "var(--jn-mint-2)", "var(--jn-mint)", "var(--jn-primary)", "var(--jn-primary-ink)"] as const
 
-/** 本机活跃趋势 · 全年日历（画板 32）：按周分列，周一在上 */
+type ActivityMetric = "tokens" | "requests"
+
+/** 本机活跃趋势 · 全年日历（R1-23）：支持按 Token / 请求次数切换着色，按周分列，周一在上 */
 export function ActivityCalendar({ activity, error }: { error?: string | null; activity: StatsActivityDto | null }) {
+  const [metric, setMetric] = useState<ActivityMetric>("tokens")
+
   const view = useMemo(() => {
     if (!activity) return null
     const weeks = calendarWeeks(activity.first_date, activity.last_date)
     const byDate = new Map(activity.days.map((d) => [d.date, d]))
-    const sorted = activity.days.map((d) => d.tokens).filter((t) => t > 0).sort((a, b) => a - b)
+    const sorted = activity.days
+      .map((d) => (metric === "tokens" ? d.tokens : d.requests))
+      .filter((v) => v > 0)
+      .sort((a, b) => a - b)
     return { weeks, labels: monthLabels(weeks), byDate, sorted }
-  }, [activity])
+  }, [activity, metric])
 
   return (
-    <Card className="flex flex-col gap-2.5 p-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-[15px] font-semibold text-jolu-text">本机活跃趋势</h3>
-        <span className="text-[11px] text-jolu-muted">近一年 · 本机记录</span>
+    <Card className="flex flex-col gap-3 p-5">
+      <div className="flex flex-wrap items-center gap-2.5">
+        <h3 className="text-[15px] font-semibold text-jn-text">全年活跃</h3>
+        <span className="text-xs text-jn-text-3">近一年 · 本机记录</span>
+        <span className="min-w-0 flex-1" />
+        <Tabs
+          style="segment"
+          value={metric}
+          onChange={setMetric}
+          items={[
+            { key: "tokens", label: "Token" },
+            { key: "requests", label: "请求" },
+          ]}
+        />
       </div>
       <ContentTransition identity={view ? "ready" : error ? "error" : "loading"}>
-      {view ? (
-        <div className="flex flex-col gap-2">
-          <div className="relative h-4">
-            {view.labels.map((l) => (
-              <span key={`${l.column}-${l.label}`} className="absolute text-xs text-jolu-muted" style={{ left: `${(l.column / view.weeks.length) * 100}%` }}>{l.label}</span>
-            ))}
+        {view ? (
+          <div className="flex flex-col gap-2">
+            <div className="relative h-4">
+              {view.labels.map((l) => (
+                <span key={`${l.column}-${l.label}`} className="absolute text-xs text-jn-text-3" style={{ left: `${(l.column / view.weeks.length) * 100}%` }}>{l.label}</span>
+              ))}
+            </div>
+            <div className="grid gap-x-[1.4px]" style={{ gridTemplateColumns: `repeat(${view.weeks.length}, minmax(0, 1fr))` }}>
+              {view.weeks.map((week, column) => (
+                <div key={column} className="flex flex-col gap-[3px]">
+                  {week.map((key, row) => {
+                    if (!key) return <span key={row} className="h-[19px]" />
+                    const day = view.byDate.get(key)
+                    const val = day ? (metric === "tokens" ? day.tokens : day.requests) : 0
+                    const level = activityLevel(val, view.sorted)
+                    return (
+                      <Tip key={key} side="top" className="min-w-[190px] rounded-xl px-3.5 py-3" label={
+                        <span className="flex flex-col gap-2">
+                          <span className="tnum border-b border-jn-line pb-2 text-xs font-semibold">{key}</span>
+                          <span className="flex items-center justify-between gap-6"><span className="text-jn-text-3">Token 用量</span><span className="tnum font-medium">{day ? formatTokens(day.tokens) : "无记录"}</span></span>
+                          <span className="flex items-center justify-between gap-6"><span className="text-jn-text-3">调用次数</span><span className="tnum font-medium">{day ? `${day.requests} 次` : "无记录"}</span></span>
+                        </span>
+                      }>
+                        <span
+                          tabIndex={0}
+                          aria-label={day ? `${key}，${formatTokens(day.tokens)} Token，${day.requests} 次调用` : `${key}，无记录`}
+                          className="h-[19px] rounded-[3px] outline-none transition-[background-color,box-shadow] duration-200 hover:ring-2 hover:ring-jn-primary focus-visible:ring-2 focus-visible:ring-jn-primary"
+                          style={{ background: LEVEL_COLORS[level] }}
+                        />
+                      </Tip>
+                    )
+                  })}
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="grid gap-x-[1.4px]" style={{ gridTemplateColumns: `repeat(${view.weeks.length}, minmax(0, 1fr))` }}>
-            {view.weeks.map((week, column) => (
-              <div key={column} className="flex flex-col gap-[3px]">
-                {week.map((key, row) => {
-                  if (!key) return <span key={row} className="h-[19px]" />
-                  const day = view.byDate.get(key)
-                  const level = activityLevel(day?.tokens ?? 0, view.sorted)
-                  return (
-                    <Tip key={key} side="top" className="min-w-[190px] rounded-xl px-3.5 py-3" label={
-                      <span className="flex flex-col gap-2">
-                        <span className="tnum border-b border-jolu-border pb-2 text-xs font-semibold">{key}</span>
-                        <span className="flex items-center justify-between gap-6"><span className="text-jolu-muted">Token 用量</span><span className="tnum font-medium">{day ? formatTokens(day.tokens) : "无记录"}</span></span>
-                        <span className="flex items-center justify-between gap-6"><span className="text-jolu-muted">调用次数</span><span className="tnum font-medium">{day ? `${day.requests} 次` : "无记录"}</span></span>
-                      </span>
-                    }>
-                      <span
-                        tabIndex={0}
-                        aria-label={day ? `${key}，${formatTokens(day.tokens)} Token，${day.requests} 次调用` : `${key}，无记录`}
-                        className="h-[19px] rounded-[3px] outline-none transition-[box-shadow] hover:ring-2 hover:ring-jolu-on focus-visible:ring-2 focus-visible:ring-jolu-on"
-                        style={{ background: LEVEL_COLORS[level] }}
-                      />
-                    </Tip>
-                  )
-                })}
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : (
-        error ? <span className="text-xs text-jolu-muted">活跃趋势暂不可用，请重试。</span> : <LoadingSurface layout="calendar" label="正在读取活跃趋势" />
-      )}
+        ) : (
+          error ? <span className="text-xs text-jn-text-3">活跃趋势暂不可用，请重试。</span> : <LoadingSurface layout="calendar" label="正在读取活跃趋势" />
+        )}
       </ContentTransition>
-      <div className="flex h-[18px] items-center justify-end gap-[5px] text-[11px] text-jolu-muted">
+      <div className="flex h-[18px] items-center justify-end gap-[5px] text-[11px] text-jn-text-3">
         少
         {LEVEL_COLORS.map((color) => <span key={color} aria-hidden className="size-2.5 rounded-sm" style={{ background: color }} />)}
         多
       </div>
-      <span className="h-px bg-jolu-border" />
-      <div className="flex h-[49px] items-center gap-6">
+      <span className="h-px bg-jn-line" />
+      <div className="flex flex-wrap items-center gap-6">
         <Summary width={192} label="今日活跃时长（估算）" value={activity ? formatMinutes(activity.today_active_minutes) : "—"} />
-        <span className="h-9 w-px bg-jolu-border" />
+        <span className="hidden h-9 w-px bg-jn-line sm:block" />
         <Summary width={148} label="本周活跃天数" value={activity ? `${activity.week_active_days} 天` : "—"} />
-        <span className="h-9 w-px bg-jolu-border" />
+        <span className="hidden h-9 w-px bg-jn-line sm:block" />
         <Summary width={148} label="本月活跃天数" value={activity ? `${activity.month_active_days} 天` : "—"} />
       </div>
     </Card>
@@ -83,10 +102,9 @@ export function ActivityCalendar({ activity, error }: { error?: string | null; a
 
 function Summary({ width, label, value }: { width: number; label: string; value: string }) {
   return (
-    <div className="flex flex-col gap-1.5" style={{ width }}>
-      <span className="text-[12px] text-jolu-muted">{label}</span>
-      <span className="tnum text-[17px] font-semibold text-jolu-text">{value}</span>
+    <div className="flex flex-col gap-1" style={{ width }}>
+      <span className="text-xs text-jn-text-3">{label}</span>
+      <span className="tnum font-mono text-[17px] font-bold text-jn-text">{value}</span>
     </div>
   )
 }
-

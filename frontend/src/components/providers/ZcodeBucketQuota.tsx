@@ -123,10 +123,10 @@ export function ZcodeBucketQuota({
       data-zcode-plan={plan ?? undefined}
     >
       <div className="flex min-w-0 items-baseline justify-between gap-2">
-        <span className={cn("min-w-0 truncate font-medium text-jolu-text", density.header)} title={plan ?? undefined}>
+        <span className={cn("min-w-0 truncate font-medium text-jn-text", density.header)} title={plan ?? undefined}>
           日额度{plan ? ` · ${plan}` : ""}
         </span>
-        <span className={cn("shrink-0 tabular-nums text-jolu-muted", density.headerReset)}>{resetLabel(view.reset)}</span>
+        <span className={cn("shrink-0 tabular-nums text-jn-text-3", density.headerReset)}>{resetLabel(view.reset)}</span>
       </div>
       <div className={cn("grid min-w-0", density.grid, cols === 1 ? "grid-cols-1" : "grid-cols-2")}>
         {view.buckets.map((bucket) => {
@@ -140,26 +140,26 @@ export function ZcodeBucketQuota({
             <div
               key={bucket.key}
               data-quota-bucket={bucket.key}
-              className={cn("flex min-w-0 flex-col border border-jolu-border bg-jolu-side", density.card)}
+              className={cn("flex min-w-0 flex-col border border-jn-line bg-jn-surface", density.card)}
             >
               <div className="flex min-w-0 items-baseline justify-between gap-1.5">
-                <span className={cn("min-w-0 truncate text-jolu-muted", density.name)} title={bucket.name}>{bucket.name}</span>
-                <span className={cn("shrink-0 font-semibold tabular-nums", density.value, bucket.tone === "danger" ? "text-jolu-danger" : "text-jolu-text")}>
+                <span className={cn("min-w-0 truncate text-jn-text-3", density.name)} title={bucket.name}>{bucket.name}</span>
+                <span className={cn("shrink-0 font-semibold tabular-nums", density.value, bucket.tone === "danger" ? "text-jn-danger" : "text-jn-text")}>
                   {value}
                 </span>
               </div>
               {bucket.usedTotal && bucket.value !== bucket.usedTotal && (
-                <span className={cn("truncate tabular-nums text-jolu-muted", density.detail)} title={bucket.usedTotal}>{bucket.usedTotal}</span>
+                <span className={cn("truncate tabular-nums text-jn-text-3", density.detail)} title={bucket.usedTotal}>{bucket.usedTotal}</span>
               )}
               {remainingBar !== null && (
-                <div className={cn("overflow-hidden rounded-[3px] bg-jolu-track", density.track)}>
+                <div className={cn("overflow-hidden rounded-[3px] bg-jn-track", density.track)}>
                   <div
-                    className={cn("motion-quota-bar h-full rounded-[3px]", bucket.tone === "danger" ? "bg-jolu-danger" : "bg-jolu-accent")}
+                    className={cn("motion-quota-bar h-full rounded-[3px]", bucket.tone === "danger" ? "bg-jn-danger" : "bg-jn-primary")}
                     style={{ width: `${remainingBar}%` }}
                   />
                 </div>
               )}
-              <span className={cn("truncate tabular-nums text-jolu-muted", density.detail)}>{bucket.remaining ? `剩 ${bucket.remaining}` : "剩 —"}</span>
+              <span className={cn("truncate tabular-nums text-jn-text-3", density.detail)}>{bucket.remaining ? `剩 ${bucket.remaining}` : "剩 —"}</span>
             </div>
           )
         })}

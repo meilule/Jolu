@@ -190,9 +190,9 @@ export function OpsSection() {
                 onChange={(event) => setHourDraft(event.target.value)}
                 inputMode="numeric"
                 aria-label="warm-up 触发小时"
-                className="h-8 w-[64px] rounded-lg border border-jolu-border bg-jolu-bg px-2 text-center text-[12px] text-jolu-text outline-none focus:border-jolu-accent"
+                className="h-8 w-[64px] rounded-lg border border-jn-line bg-jn-surface px-2 text-center text-[12px] text-jn-text outline-none focus:border-jn-primary"
               />
-              <span className="text-[11px] text-jolu-muted">点</span>
+              <span className="text-[11px] text-jn-text-3">点</span>
               <ActionButton disabled={disabled || busy === "hour"} onClick={() => void saveHour()}>保存</ActionButton>
             </div>
           }
@@ -215,7 +215,7 @@ export function OpsSection() {
                 onChange={(event) => setEndpointDraft(event.target.value)}
                 placeholder="http://localhost:4318"
                 aria-label="OTLP 端点"
-                className="h-8 w-[220px] rounded-lg border border-jolu-border bg-jolu-bg px-2 text-[12px] text-jolu-text outline-none focus:border-jolu-accent"
+                className="h-8 w-[220px] rounded-lg border border-jn-line bg-jn-surface px-2 text-[12px] text-jn-text outline-none focus:border-jn-primary"
               />
               <ActionButton disabled={disabled || busy === "endpoint"} onClick={() => void saveEndpoint()}>保存</ActionButton>
             </div>
@@ -240,36 +240,36 @@ export function OpsSection() {
         title="Agent 版本"
         desc="只读检测各 CLI 的版本，给出对应的更新命令，不会自动升级。"
       >
-        <div className="flex flex-col gap-2 border-t border-jolu-border py-3.5">
+        <div className="flex flex-col gap-2 border-t border-jn-line py-3.5">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] text-jolu-muted">
+            <span className="text-[11px] text-jn-text-3">
               {versions === null ? "尚未检测" : `已检测 ${versions.length} 个命令`}
             </span>
             <ActionButton disabled={disabled} onClick={loadVersions}>{versions === null ? "检测版本" : "重新检测"}</ActionButton>
           </div>
           {versionsError && (
-            <div className="rounded-lg bg-jolu-status-error-bg px-2.5 py-2 text-[9px] text-jolu-danger">
+            <div className="rounded-lg bg-jn-danger-soft px-2.5 py-2 text-[9px] text-jn-danger">
               检测失败：{versionsError}
             </div>
           )}
           {versions !== null && (
-            <div className="overflow-hidden rounded-lg border border-jolu-border">
-              <div className="grid grid-cols-[minmax(0,1fr)_110px_minmax(0,1.6fr)] items-center gap-2 bg-jolu-side px-2.5 py-1.5 text-[9px] font-medium text-jolu-muted">
+            <div className="overflow-hidden rounded-lg border border-jn-line">
+              <div className="grid grid-cols-[minmax(0,1fr)_110px_minmax(0,1.6fr)] items-center gap-2 bg-jn-surface px-2.5 py-1.5 text-[9px] font-medium text-jn-text-3">
                 <span>Agent</span><span>版本</span><span>升级方式</span>
               </div>
               {versions.map((row) => (
                 <div
                   key={row.agent}
-                  className="grid grid-cols-[minmax(0,1fr)_110px_minmax(0,1.6fr)] items-center gap-2 border-t border-jolu-border px-2.5 py-1.5 text-[11px]"
+                  className="grid grid-cols-[minmax(0,1fr)_110px_minmax(0,1.6fr)] items-center gap-2 border-t border-jn-line px-2.5 py-1.5 text-[11px]"
                 >
-                  <span className="truncate text-jolu-text" title={row.name}>{row.name}</span>
-                  <span className={row.found ? "text-jolu-text" : "text-jolu-muted"}>{versionLabel(row)}</span>
+                  <span className="truncate text-jn-text" title={row.name}>{row.name}</span>
+                  <span className={row.found ? "text-jn-text" : "text-jn-text-3"}>{versionLabel(row)}</span>
                   {hasRunnableUpdate(row) ? (
-                    <code className="truncate font-mono text-[9px] text-jolu-text" title={row.update_command ?? ""}>
+                    <code className="truncate font-mono text-[9px] text-jn-text" title={row.update_command ?? ""}>
                       {row.update_command}
                     </code>
                   ) : (
-                    <span className="truncate text-[9px] text-jolu-muted" title={row.update_note}>{row.update_note}</span>
+                    <span className="truncate text-[9px] text-jn-text-3" title={row.update_note}>{row.update_note}</span>
                   )}
                 </div>
               ))}

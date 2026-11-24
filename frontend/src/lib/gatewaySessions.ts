@@ -231,7 +231,7 @@ export function sourceSummary(views: SessionView[], connectionId: string): Sourc
   return { sessions, model: latest?.model ?? null }
 }
 
-/** 来源配色：按来源顺序循环（Jolu.pen `jolu-accent` / `jolu-gateway-*`） */
+/** 来源配色：按来源顺序循环（Jolu.pen `jn-primary` / `jolu-gateway-*`） */
 export const SOURCE_TONES = ["green", "blue", "purple", "amber"] as const
 export type SourceTone = (typeof SOURCE_TONES)[number]
 export const sourceTone = (index: number): SourceTone => SOURCE_TONES[((index % 4) + 4) % 4]

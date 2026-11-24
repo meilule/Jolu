@@ -1,5 +1,17 @@
 @import "tailwindcss";
 
+/* 新版设计稿（docs/ui/jolu-new.pen）的令牌与动效变量。
+ *
+ * 这两个文件是新界面替换的地基：令牌由 scripts/dev/extract-pen-tokens.py 从
+ * 设计稿生成，动效时长/曲线与 motion/tokens.ts 同值。
+ *
+ * 现在就引入、但**不改动任何现有样式**——jn-* 是一组新变量名，与现有
+ * jolu-* 并存；页面在替换前继续用旧类名。这样令牌与工具类先可用，
+ * 新组件可以随时开始写，旧页面不受影响。 */
+@import "./theme/tokens.css";
+@import "./theme/motion.css";
+@import "./theme/states.css";
+
 /* 设计稿字体离线分发，不依赖系统安装或运行时联网。
    只保留拉丁、标点、箭头与数学符号子集（woff2）；中文与子集外字符按字形回退到系统字体。 */
 @font-face {
@@ -618,10 +630,9 @@
   color: var(--text-tertiary);
 }
 
-/* 动效提案 20/21：同一节奏用于双主题，避免 transition: all。 */
+/* 动效变量保留给独立窗口与尚未迁移的遗留动效类；--motion-feedback 由 theme/motion.css 唯一提供。 */
 :root {
   --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --motion-feedback: 120ms;
   --motion-switch: 180ms;
 }
 
@@ -631,7 +642,7 @@
       border-color var(--motion-feedback) ease, color var(--motion-feedback) ease;
   }
   button:focus-visible, summary:focus-visible {
-    outline: 2px solid var(--accent-blue);
+    outline: 2px solid var(--jn-focus);
     outline-offset: 2px;
   }
 }
@@ -715,85 +726,9 @@ html.reduce-motion .motion-toast { transform: none; transition: none; }
 .motion-select-chevron { transition: transform 160ms var(--motion-ease); }
 [data-state="open"] > .motion-select-chevron { transform: rotate(180deg); }
 
-/* ── 共享滑块选择（SelectField 的 glide 模式）──────────────────
-   菜单里只有一个绝对定位的滑块，靠 translateY 在行间平移；
-   一次只有一个物体在动，所以读起来是「一个滑块在移动」，
-   而不是「两块底色交替淡入淡出」（React Bits GlideSelect 的思路）。
-   定位与键盘导航仍由 Radix 负责，这里只画滑块和行。 */
-.jolu-select-glide {
-  position: relative;
-  /* 滑块的位置 / 高度 / 可见性由 JS 写到这三个变量上。
-     不用内联 style 是因为滑块是 React 渲染的节点，重渲染会把内联样式清回 CSS 默认值。 */
-  --gs-pill-y: 0px;
-  --gs-pill-h: 34px;
-  --gs-pill-x: 0px;
-  --gs-pill-w: 100%;
-  --gs-pill-o: 0;
-}
-/* 行容器：滑块是它的兄弟节点（绝对定位在 .jolu-select-glide 上） */
-.jolu-select-glide__rows {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.jolu-select-glide__pill {
-  position: absolute;
-  top: 0;
-  left: var(--gs-pill-x, 0px);
-  width: var(--gs-pill-w, 100%);
-  height: var(--gs-pill-h, 34px);
-  border-radius: 7px;
-  /* 底色用 surface-3：它在 <html> 根上定义，Portal 里的菜单也能取到。
-     --jolu-* 是主窗口作用域的别名，在 Portal 里解析不到会退化成白色。 */
-  background: var(--surface-3);
-  z-index: 0;
-  opacity: var(--gs-pill-o, 0);
-  pointer-events: none;
-  transform: translateY(var(--gs-pill-y, 0px));
-  transition:
-    transform var(--gs-glide-dur, 220ms) var(--motion-ease),
-    height 160ms var(--motion-ease),
-    width 160ms var(--motion-ease),
-    left 160ms var(--motion-ease),
-    opacity 150ms ease;
-}
-/* 瞬移模式（打开菜单 / 键盘导航）：位移不过渡，避免连续按键时动画排队 */
-.jolu-select-glide[data-jump] .jolu-select-glide__pill {
-  transition-duration: 0ms, 0ms, 0ms, 0ms, 150ms;
-}
-.jolu-select-glide__row {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  min-height: 28px;
-  cursor: default;
-  user-select: none;
-  align-items: center;
-  gap: 8px;
-  border-radius: 6px;
-  padding: 4px 28px 4px 12px;
-  font-size: 12px;
-  outline: none;
-}
-/* 选中行的底色沿用项目原来的（--jolu-selected 绿色 + --jolu-on 文字）。
-   全局规则本来就给了这个底色，这里不要再覆盖 —— 上一版为了让位给滑块
-   涂成了 transparent，观感上和项目其它下拉不一致。
-   滑块只在「悬停到别的行」时露出来并滑过去；回到选中行时滑块隐藏，
-   底下就是原来的绿色选中底。 */
-.jolu-select-glide__row[data-disabled] { opacity: 0.4; }
-/* 悬停/键盘高亮的行不涂底色：靠滑块表达 */
-html:not(.island-window) .jolu-select-glide .jolu-select-glide__row[data-highlighted]:not([data-disabled]):not([data-state="checked"]) {
-  background: transparent;
-}
-/* 选中行的勾沿用原来的继承色（--jolu-on），不再单独染色 */
-.jolu-select-glide__row[data-state="checked"] > :last-child { color: inherit; }
 /* 减少动效：滑块只淡入淡出，不做位移 */
 @media (prefers-reduced-motion: reduce) {
-  .jolu-select-glide__pill { transition: opacity 150ms ease; }
 }
-html.reduce-motion .jolu-select-glide__pill { transition: opacity 150ms ease; }
 
 /* ── 上下文组成条（会话观察 V10-05）────────────────────────────
    动效取自 Bencho 的 Context meter（MIT），只搬技术、不搬组件：
@@ -845,80 +780,6 @@ html.reduce-motion .ctx-bar > .ctx-seg { transition-duration: 1ms; }
 html.reduce-motion .ctx-bar[data-wave] > .ctx-seg { animation: none; }
 
 /* Agent V8：卡片保留在底层，详情从右侧抽屉进入，减少列表跳动并让「详细」与接入开关职责分明。 */
-.agent-card {
-  transition: transform 180ms var(--motion-ease), border-color 180ms ease,
-    box-shadow 180ms ease, background-color 180ms ease;
-}
-.agent-card:hover {
-  transform: translateY(-2px);
-  border-color: color-mix(in srgb, var(--jolu-accent) 42%, var(--jolu-border));
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--jolu-text) 7%, transparent);
-}
-.agent-card-selected {
-  border-color: var(--jolu-accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--jolu-accent) 22%, transparent),
-    0 8px 24px color-mix(in srgb, var(--jolu-accent) 9%, transparent);
-}
-.agent-card-summary { transition: background-color 160ms ease, transform 160ms var(--motion-ease); }
-.agent-card-summary:hover { background-color: color-mix(in srgb, var(--jolu-side) 78%, var(--jolu-accent)); }
-@keyframes agent-grid-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-.agent-card-grid { animation: agent-grid-in 180ms var(--motion-ease) both; }
-.agent-drawer-layer {
-  position: absolute;
-  inset: 0;
-  z-index: 30;
-  pointer-events: none;
-}
-.agent-drawer-layer[data-state="open"] { pointer-events: auto; }
-.agent-drawer-backdrop {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  border: 0;
-  background: color-mix(in srgb, var(--jolu-text) 5%, transparent);
-  opacity: 1;
-  cursor: default;
-  transition: opacity 220ms ease;
-}
-.agent-drawer-layer[data-state="closed"] .agent-drawer-backdrop { opacity: 0; }
-.agent-drawer-panel {
-  position: absolute;
-  inset-block: 0;
-  right: 0;
-  width: min(900px, 54vw);
-  min-width: 620px;
-  overflow: hidden;
-  background: var(--jolu-bg);
-  border-left: 1px solid var(--jolu-border);
-  box-shadow: -18px 0 42px color-mix(in srgb, var(--jolu-text) 10%, transparent);
-  transform: translateX(0);
-  opacity: 1;
-  transition: transform 240ms var(--motion-ease), opacity 180ms ease;
-}
-.agent-drawer-layer[data-state="closed"] .agent-drawer-panel { transform: translateX(24px); opacity: 0; }
-.agent-detail-drawer-content { max-width: none; }
-@media (max-width: 960px) {
-  .agent-drawer-panel { width: min(760px, 92vw); min-width: 0; }
-}
-html.reduce-motion .agent-card,
-html.reduce-motion .agent-card-summary,
-html.reduce-motion .agent-drawer-backdrop,
-html.reduce-motion .agent-drawer-panel { transition: none; }
-html.reduce-motion .agent-card-grid { animation: none; }
-html.reduce-motion .agent-card:hover { transform: none; }
-@media (prefers-reduced-motion: reduce) {
-  .agent-card,
-  .agent-card-summary,
-  .agent-drawer-backdrop,
-  .agent-drawer-panel { transition: none; }
-  .agent-card:hover { transform: none; }
-  .agent-card-grid { animation: none; }
-}
-
 /* 统一网关：复制成功对勾的弹出（沿用模型入口旧稿 OX4b7 的 pop 曲线）。
    gw-pop / gw-pop-out 成对：弹层进入 160ms 淡入上移，退出 120ms 反向下沉淡出——
    退出期间内容仍在 DOM（调用方延迟卸载），动画 fill 保持终态避免闪一下。
@@ -934,49 +795,8 @@ html.reduce-motion .agent-card:hover { transform: none; }
 }
 .gw-pop-out { animation: gw-pop-out 120ms var(--motion-ease) both; }
 
-/* 统一网关 · 来源直连最近会话（画板 J6-03）：
-   运行中 2.4px 主线 + 柔光，结束 220ms 淡为 1.4px；悬停 140ms / 退出 100ms；展开 240ms，箭头 160ms。
-   位移与淡入只用 transform / opacity，不做全属性过渡；减少动效时停止流光与过渡。 */
-.gw6-scroll { scrollbar-width: thin; scrollbar-color: var(--jolu-track) var(--jolu-stage); overflow-anchor: none; }
-.gw6-scroll::-webkit-scrollbar { width: 4px; }
-.gw6-scroll::-webkit-scrollbar-track { background: var(--jolu-stage); border-radius: 2px; }
-.gw6-scroll::-webkit-scrollbar-thumb { background: var(--jolu-track); border-radius: 2px; }
-.gw6-dots {
-  background-image: radial-gradient(circle, var(--jolu-border) 1px, transparent 1.2px);
-  background-size: 28px 28px;
-  background-position: 0 0;
-}
-.gw6-line {
-  transition: stroke-width 220ms var(--motion-ease), opacity var(--gw6-hover-ms, 100ms) var(--motion-ease);
-}
-.gw6-glow { transition: opacity 220ms var(--motion-ease); }
-.gw6-card {
-  transition: border-color 220ms var(--motion-ease), box-shadow 220ms var(--motion-ease), opacity var(--gw6-hover-ms, 100ms) var(--motion-ease);
-}
-.gw6-expand {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 240ms var(--motion-ease);
-}
-.gw6-expand.open { grid-template-rows: 1fr; }
-.gw6-expand > div { overflow: hidden; min-height: 0; }
-.gw6-chevron { transition: transform 160ms var(--motion-ease); }
-.gw6-copied { animation: gw-pop 160ms var(--motion-ease) both; }
-html.reduce-motion .gw6-flow { display: none; }
-html.reduce-motion .gw6-line,
-html.reduce-motion .gw6-glow,
-html.reduce-motion .gw6-card,
-html.reduce-motion .gw6-expand,
-html.reduce-motion .gw6-chevron { transition: none; }
-html.reduce-motion .gw6-copied { animation: none; }
-@media (prefers-reduced-motion: reduce) {
-  .gw6-flow { display: none; }
-  .gw6-line, .gw6-glow, .gw6-card, .gw6-expand, .gw6-chevron { transition: none; }
-  .gw6-copied { animation: none; }
-}
-
 /* 主题只渐变静态背景，避免全树重绘或覆盖控件的 transform/opacity 过渡。 */
-.theme-transition :where(.bg-bg, .bg-surface, .bg-surface-2, .bg-surface-3):not(button):not(.motion-dialog):not(.motion-popover):not(.motion-indicator) {
+.theme-transition :where(.bg-jn-stage, .bg-jn-surface, .bg-jn-well, .bg-jn-primary-wash, .bg-bg, .bg-surface, .bg-surface-2, .bg-surface-3):not(button):not(.motion-dialog):not(.motion-popover):not(.jn-popover):not(.motion-indicator) {
   transition: background-color 180ms ease, border-color 180ms ease;
 }
 
@@ -1061,8 +881,8 @@ html.reduce-motion [data-icon-motion][aria-busy="true"] > svg { animation: none;
 @keyframes skeleton-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .skeleton-content { opacity: 1; }
 .skeleton-bar {
-  background-color: var(--jolu-side);
-  background-image: linear-gradient(100deg, transparent 20%, var(--jolu-track) 50%, transparent 80%);
+  background-color: var(--jn-well);
+  background-image: linear-gradient(100deg, transparent 20%, var(--jn-track) 50%, transparent 80%);
   background-size: 200% 100%;
   animation: skeleton-shimmer 1500ms ease-in-out infinite;
 }
@@ -1070,29 +890,27 @@ html.reduce-motion [data-icon-motion][aria-busy="true"] > svg { animation: none;
 @keyframes skeleton-calendar-pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
 .skeleton-calendar { animation: skeleton-calendar-pulse 1600ms ease-in-out infinite; }
 .skeleton-calendar .skeleton-bar { animation: none; background-image: none; }
-html:not(.island-window) :where(button, [role="tab"], [role="menuitem"], [role="option"], a) {
-  transition-property: background-color, border-color, color, opacity, box-shadow, filter;
-  transition-duration: 140ms;
-  transition-timing-function: ease-out;
+/* 遗留对话框进出动画：合并为单一定义，避免重复覆盖导致进退时长不一致。 */
+.motion-dialog {
+  transition: opacity var(--motion-dialog) var(--motion-ease-standard), transform var(--motion-dialog) var(--motion-ease-standard);
 }
-html:not(.island-window) .motion-button { transition-property: transform, background-color, border-color, color, opacity, box-shadow, filter; }
-html:not(.island-window) .motion-button:not(:disabled):active { transform: scale(0.98); }
-/* Radix 对话框由 animation 生命周期保留退出帧，现有自管弹层继续使用 transition。 */
-.motion-dialog[data-state="closed"] { opacity: 0; transform: scale(0.98); animation: motion-presence 140ms linear; }
+.motion-dialog[data-state="closed"] {
+  opacity: 0;
+  transform: scale(0.98);
+  transition-duration: 140ms;
+  animation: motion-presence 140ms linear;
+}
 .motion-overlay[data-state="closed"] { animation: motion-presence 140ms linear; }
-.motion-dialog { transition: opacity 180ms ease, transform 180ms var(--motion-ease); }
 @media (prefers-reduced-motion: reduce) {
   .skeleton-content { animation: none; }
   .skeleton-bar { animation: none; background-image: none; }
   .skeleton-calendar { animation: none; }
-  html:not(.island-window) .motion-button:not(:disabled):active { transform: none; }
+  .motion-button:not(:disabled):active { transform: none; }
 }
 html.reduce-motion .skeleton-content { animation: none; }
 html.reduce-motion .skeleton-bar { animation: none; background-image: none; }
 html.reduce-motion .skeleton-calendar { animation: none; }
 html.reduce-motion .motion-button:not(:disabled):active { transform: none; }
-
-.motion-dialog[data-state="closed"] { transition-duration: 140ms; }
 
 /* 主窗口统一滚动条；透明轨道不形成分隔线，8px 命中区内绘制 4px 圆角滑块。 */
 html:not(.island-window) { --scroll-thumb: #72727752; --scroll-thumb-hover: #72727785; }
@@ -1127,35 +945,6 @@ html:not(.island-window), html:not(.island-window) * {
   html:not(.island-window) *::-webkit-scrollbar-corner { background: transparent; }
 }
 
-/* 共享选择器在主窗口跟随 Jolu 主题，浮动灵动岛继续使用独立主题。 */
-html:not(.island-window) .jolu-select-trigger {
-  border-color: var(--jolu-border);
-  background: var(--jolu-cc-surface);
-  color: var(--jolu-text);
-}
-html:not(.island-window) .jolu-select-trigger:not(:disabled):hover { background: var(--jolu-side); }
-html:not(.island-window) .jolu-select-trigger:is(:focus-visible, [data-state="open"]) {
-  border-color: var(--jolu-accent);
-  box-shadow: 0 0 0 2px var(--jolu-selected);
-}
-html:not(.island-window) .jolu-select-trigger svg { color: var(--jolu-muted); }
-/* ── 共享滑块（useGlidePill）─────────────────────────────────
-   调用方的菜单类名一字不改，只由这个 hook 往菜单里插一个滑块。
-   行自己的 data-highlighted 底色要让位 —— 否则滑块后面还有一块，
-   看起来是「两层高亮」。选中行（data-state=checked）保留它原来的底色，
-   hook 会让滑块在那行隐身。 */
-/* 悬停行让位给滑块：只在「不是选中行」时清掉自己的高亮底色。
-   RadioItem 用 data-state="checked" 标记选中；ProviderMenu 这类普通 Item
-   是在 className 里挂 bg-jolu-selected，没有 data-state —— 所以再排掉
-   「已经有选中底色」的情况交给 JS 判断（见 useGlidePill 的 place()）。
-   这里只处理 RadioItem，普通 Item 由 hook 在悬停时临时加 data-glide-active。 */
-/* 行必须自带层叠上下文：滑块是 z-index:0 的背景层，
-   行没有 position 时（ProviderMenu 的行就是 static）文字会被滑块盖住。
-   给行 position:relative + z-index:1，保证文字永远在滑块之上。 */
-[data-glide-menu] :is([role="menuitemradio"], [role="menuitem"]) {
-  position: relative;
-  z-index: 1;
-}
 
 [data-glide-menu] [role="menuitemradio"][data-highlighted]:not([data-state="checked"]) {
   background: transparent;
@@ -1168,63 +957,12 @@ html:not(.island-window) .jolu-select-trigger svg { color: var(--jolu-muted); }
   background: transparent !important;
 }
 
-/* filter 变体去壳：外层 label 负责画框，触发器自己不能有任何边框 / 底色 / 焦点环。
-   上面的全局规则（border-color / background / box-shadow）权重比 Tailwind 的
-   border-0 / bg-transparent 更高，必须在这里逐条压回，否则会出现「框里套框」
-   —— 外层 label 一圈 + 触发器自己再一圈（打开时那圈还是绿的）。 */
-html:not(.island-window) .jolu-select-trigger.jolu-select-trigger--filter {
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  padding: 0 0.25rem 0 0;   /* pr-1；左侧留白由外层 label 的 pl 提供 */
-}
-html:not(.island-window) .jolu-select-trigger.jolu-select-trigger--filter:not(:disabled):hover {
-  background: transparent;
-}
-html:not(.island-window) .jolu-select-trigger.jolu-select-trigger--filter:is(:focus-visible, [data-state="open"]) {
-  border-color: transparent;
-  box-shadow: none;
-  outline: none;
-}
-/* 展开态的可感知反馈交给外层 label（focus-within / 边框变化），
-   这里不再画任何东西。 */
-html:not(.island-window) .jolu-select-menu {
-  border-color: var(--jolu-border);
-  background: var(--jolu-cc-surface);
-  color: var(--jolu-text);
-  padding: 2px;
-}
-html:not(.island-window) .jolu-select-menu [title] { color: var(--jolu-muted); }
-/* 各模块保留自身布局，单选/多选共享选中、焦点和边界反馈。 */
-html:not(.island-window) [role="menu"] {
-  border-radius: 12px;
-  overscroll-behavior: contain;
-  box-shadow: 0 10px 24px var(--jolu-cc-popup-shadow);
-}
 html.dark:not(.island-window) [role="menu"] { box-shadow: 0 10px 24px var(--jolu-cc-popup-shadow); }
-html:not(.island-window) :is([role="menuitemradio"], [role="menuitemcheckbox"]) {
-  min-height: 34px;
-  border-radius: 7px;
-  transition: background-color 140ms ease-out, color 140ms ease-out;
-}
-html:not(.island-window) :is([role="menuitemradio"], [role="menuitemcheckbox"])[data-highlighted]:not([data-disabled]) {
-  background: var(--jolu-side);
-}
-html:not(.island-window) :is([role="menuitemradio"], [role="menuitemcheckbox"])[data-state="checked"] {
-  background: var(--jolu-selected);
-  color: var(--jolu-on);
-}
-html:not(.island-window) :is([role="menuitemradio"], [role="menuitemcheckbox"])[data-state="checked"][data-highlighted] {
-  background: var(--jolu-pressed);
-}
-html:not(.island-window) :is([role="menuitemradio"], [role="menuitemcheckbox"])[data-disabled] { cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) {
-  html:not(.island-window) :is([role="menuitemradio"], [role="menuitemcheckbox"]) { transition: none; }
 }
-html.reduce-motion :is([role="menuitemradio"], [role="menuitemcheckbox"]) { transition: none; }
 
 /* 主窗口开关：2px 等距留白、细内描边、轻浮起的圆点。 */
-.jolu-switch {
+.jn-switch {
   --switch-width: 36px;
   --switch-height: 20px;
   --switch-thumb: 16px;
@@ -1241,21 +979,21 @@ html.reduce-motion :is([role="menuitemradio"], [role="menuitemcheckbox"]) { tran
   cursor: pointer;
   outline: none;
 }
-.jolu-switch[data-size="compact"] { --switch-width: 30px; --switch-height: 18px; --switch-thumb: 14px; height: 28px; }
-.jolu-switch[aria-checked="true"] { --switch-offset: calc(var(--switch-width) - var(--switch-thumb) - 4px); }
-.jolu-switch-track {
+.jn-switch[data-size="compact"] { --switch-width: 30px; --switch-height: 18px; --switch-thumb: 14px; height: 28px; }
+.jn-switch[aria-checked="true"] { --switch-offset: calc(var(--switch-width) - var(--switch-thumb) - 4px); }
+.jn-switch-track {
   display: block;
   width: var(--switch-width);
   height: var(--switch-height);
   padding: 2px;
   border-radius: 999px;
-  background: var(--jolu-track);
+  background: var(--jn-track);
   box-shadow: inset 0 0 0 1px #0000000a;
   transition: background-color 180ms ease, box-shadow 180ms ease;
 }
-.dark .jolu-switch-track { box-shadow: inset 0 0 0 1px #ffffff0a; }
-.jolu-switch[aria-checked="true"] .jolu-switch-track { background: var(--jolu-accent); }
-.jolu-switch-thumb {
+.dark .jn-switch-track { box-shadow: inset 0 0 0 1px #ffffff0a; }
+.jn-switch[aria-checked="true"] .jn-switch-track { background: var(--jn-primary); }
+.jn-switch-thumb {
   display: block;
   width: var(--switch-thumb);
   height: var(--switch-thumb);
@@ -1265,19 +1003,19 @@ html.reduce-motion :is([role="menuitemradio"], [role="menuitemcheckbox"]) { tran
   transform: translateX(var(--switch-offset));
   transition: transform 180ms var(--motion-ease);
 }
-.jolu-switch:not(:disabled):hover .jolu-switch-track { box-shadow: inset 0 0 0 20px #0000000a; }
-.dark .jolu-switch:not(:disabled):hover .jolu-switch-track { box-shadow: inset 0 0 0 20px #ffffff0d; }
-.jolu-switch:not(:disabled):active .jolu-switch-thumb { transform: translateX(var(--switch-offset)) scale(0.92); }
-.jolu-switch:focus-visible { outline: 2px solid var(--jolu-accent); outline-offset: 3px; }
-.jolu-switch:disabled { cursor: not-allowed; opacity: 0.45; }
+.jn-switch:not(:disabled):hover .jn-switch-track { box-shadow: inset 0 0 0 20px #0000000a; }
+.dark .jn-switch:not(:disabled):hover .jn-switch-track { box-shadow: inset 0 0 0 20px #ffffff0d; }
+.jn-switch:not(:disabled):active .jn-switch-thumb { transform: translateX(var(--switch-offset)) scale(0.92); }
+.jn-switch:focus-visible { outline: 3px solid var(--jn-focus); outline-offset: 2px; }
+.jn-switch:disabled { cursor: not-allowed; opacity: 0.45; }
 @media (prefers-reduced-motion: reduce) {
-  .jolu-switch-track, .jolu-switch-thumb { transition: none; }
-  .jolu-switch:not(:disabled):active .jolu-switch-thumb { transform: translateX(var(--switch-offset)); }
+  .jn-switch-track, .jn-switch-thumb { transition: none; }
+  .jn-switch:not(:disabled):active .jn-switch-thumb { transform: translateX(var(--switch-offset)); }
 }
-html.reduce-motion .jolu-switch-track, html.reduce-motion .jolu-switch-thumb { transition: none; }
-html.reduce-motion .jolu-switch:not(:disabled):active .jolu-switch-thumb { transform: translateX(var(--switch-offset)); }
+html.reduce-motion .jn-switch-track, html.reduce-motion .jn-switch-thumb { transition: none; }
+html.reduce-motion .jn-switch:not(:disabled):active .jn-switch-thumb { transform: translateX(var(--switch-offset)); }
 
-/* ── 液态开关（jolu-switch--liquid）────────────────────────────
+/* ── 液态开关（jn-switch--liquid）────────────────────────────
    动效来自 Liquid toggle（Bencho，MIT）。取的是「一个本体靠形变表达弹性」：
    滑块沿移动方向拉长、垂直方向收窄，面积守恒，伸长量由实时速度驱动。
 
@@ -1289,7 +1027,7 @@ html.reduce-motion .jolu-switch:not(:disabled):active .jolu-switch-thumb { trans
      3. 轨道用 `overflow: visible`（默认已是），滑块拉长时可以稍微越出轨道边 ——
         这是液态感的来源，裁掉就没味道了。 */
 
-.jolu-switch--liquid .jolu-switch-thumb {
+.jn-switch--liquid .jn-switch-thumb {
   /* transform 归 Framer 独管 */
   transition: background-color 420ms ease, box-shadow 300ms ease;
   /* transform-origin 必须在中心：拉长是绕自身中心，不是绕左边缘 */
@@ -1303,183 +1041,12 @@ html.reduce-motion .jolu-switch:not(:disabled):active .jolu-switch-thumb { trans
 
 /* 减少动效：形变保留（它是位置的一部分），但把速度驱动的放大关掉 */
 @media (prefers-reduced-motion: reduce) {
-  .jolu-switch--liquid .jolu-switch-thumb {
+  .jn-switch--liquid .jn-switch-thumb {
     transition: background-color 160ms ease;
   }
 }
-html.reduce-motion .jolu-switch--liquid .jolu-switch-thumb {
+html.reduce-motion .jn-switch--liquid .jn-switch-thumb {
   transition: background-color 160ms ease;
 }
 
 /* 明确由组件选择材质；不推测所有 div/button 的用途。 */
-@layer components {
-  .jolu-card { box-shadow: 0 4px 5px var(--jolu-cc-shadow); }
-  .jolu-control { box-shadow: 0 1px 2px var(--jolu-cc-control-shadow); }
-  .jolu-control:disabled { box-shadow: none; }
-  .jolu-control:not(:disabled):active { box-shadow: inset 0 1px 2px var(--jolu-cc-inset); }
-  .jolu-tablist {
-    display: flex;
-    width: fit-content;
-    max-width: 100%;
-    flex-shrink: 0;
-    gap: 4px;
-    padding: 4px;
-    border-radius: 12px;
-    background: var(--jolu-cc-track);
-  }
-  .jolu-tab {
-    display: inline-flex;
-    min-width: 0;
-    flex-shrink: 0;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 0 12px;
-    border: 0;
-    border-radius: 8px;
-    color: var(--jolu-muted);
-    outline: none;
-    transition: background-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
-  }
-  .jolu-tab:is([aria-selected="true"], [aria-checked="true"]) {
-    background: var(--jolu-cc-surface);
-    color: var(--jolu-text);
-    font-weight: 600;
-    box-shadow: 0 2px 4px var(--jolu-cc-control-shadow);
-  }
-  .jolu-tab:not([aria-selected="true"]):not([aria-checked="true"]):hover { color: var(--jolu-text); }
-  .jolu-tab:focus-visible { outline: 2px solid var(--jolu-accent); outline-offset: -2px; }
-
-  /* ─────────────────────────────────────────────────────────────────────
-     交互态公共层（2026-11-22 样式收敛）
-     目的：把「当前项」「悬停」「按下」「禁用」「菜单面板」这些到处重写的
-     状态收敛到一组类名。以前同一语义有 7 种底色（见 docs/frontend-ui-guide.md），
-     其中 4 种在浅色主题下与背景同为 #ffffff，等于没有选中反馈。
-
-     只准用这几条，禁止再在组件里手写 bg-jolu-selected / hover:bg-jolu-side。
-     ───────────────────────────────────────────────────────────────────── */
-
-  /* 行级「当前项」：下拉菜单选中行、列表选中行、树节点、分段当前项 */
-  .jolu-row-selected {
-    background: var(--jolu-selected);
-    color: var(--jolu-on);
-  }
-  /* 行级「当前悬停」：必须有可见反馈。浅色主题 --jolu-side 与 bg 同为白，
-     所以悬停一律用 --jolu-stage（#f4f4f5），不能用 side。 */
-  .jolu-row-hover:hover,
-  .jolu-row-hover[data-highlighted] {
-    background: var(--jolu-stage);
-  }
-  /* 选中行被悬停时加深而不是换成悬停色，否则选中态被冲掉 */
-  .jolu-row-selected.jolu-row-hover:hover,
-  .jolu-row-selected.jolu-row-hover[data-highlighted] {
-    background: color-mix(in srgb, var(--jolu-selected) 78%, var(--jolu-accent) 22%);
-  }
-  /* 按下 */
-  .jolu-row-pressed:active { background: var(--jolu-pressed); }
-
-  /* 菜单面板：圆角、边框、表面、阴影、内边距一处定义。
-     以前有 rounded-[8px] / rounded-lg / rounded-xl / rounded-md 四档与
-     bg-jolu-bg / bg-jolu-cc-surface / bg-surface 三种表面。 */
-  .jolu-menu {
-    border: 1px solid var(--jolu-border);
-    border-radius: 12px;
-    background: var(--jolu-cc-surface);
-    box-shadow: 0 10px 24px var(--jolu-cc-popup-shadow);
-    padding: 4px;
-  }
-  .jolu-menu-lg { padding: 8px; }
-  /* 菜单行：高度只留两档（普通 32 / 带副标题 44），半径统一 8 */
-  .jolu-menu-item {
-    display: flex;
-    min-height: 32px;
-    align-items: center;
-    gap: 8px;
-    border-radius: 8px;
-    padding: 0 8px;
-    outline: none;
-    color: var(--jolu-text);
-    transition: background-color 120ms ease, color 120ms ease;
-  }
-  .jolu-menu-item-lg { min-height: 44px; }
-  .jolu-menu-item:is([data-disabled], [disabled]) { opacity: 0.45; pointer-events: none; }
-  /* 菜单内搜索框 */
-  .jolu-menu-search {
-    display: flex;
-    height: 32px;
-    align-items: center;
-    gap: 8px;
-    border-radius: 8px;
-    background: var(--jolu-stage);
-    padding: 0 8px;
-  }
-
-  /* 分段控件轨道（页签、币种、筛选 chips 共用；浅色下必须与卡片不同色） */
-  .jolu-segment {
-    display: inline-flex;
-    flex-shrink: 0;
-    align-items: center;
-    gap: 2px;
-    border-radius: 10px;
-    background: var(--jolu-track);
-    padding: 3px;
-  }
-  /* 分段里的当前项：白底 + 阴影，与 .jolu-tab 的选中态同源 */
-  .jolu-segment-item {
-    display: inline-flex;
-    height: 28px;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    border-radius: 8px;
-    padding: 0 10px;
-    color: var(--jolu-muted);
-    outline: none;
-    transition: background-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
-  }
-  .jolu-segment-item:is([aria-selected="true"], [aria-checked="true"], [aria-pressed="true"]) {
-    background: var(--jolu-cc-surface);
-    color: var(--jolu-text);
-    font-weight: 500;
-    box-shadow: 0 2px 4px var(--jolu-cc-control-shadow);
-  }
-  .jolu-segment-item:not([aria-selected="true"]):not([aria-checked="true"]):not([aria-pressed="true"]):hover {
-    color: var(--jolu-text);
-  }
-
-  /* 输入框：以前有 5 个 INPUT 常量（h-8/9/10、rounded-lg/[8px]、bg-jolu-bg/bg-transparent） */
-  .jolu-input {
-    height: 34px;
-    border: 1px solid var(--jolu-border);
-    border-radius: 8px;
-    background: var(--jolu-bg);
-    padding: 0 10px;
-    color: var(--jolu-text);
-    outline: none;
-  }
-  .jolu-input:focus { border-color: var(--jolu-accent); }
-  .jolu-input::placeholder { color: var(--jolu-muted); }
-  .jolu-input-lg { height: 38px; }
-
-  /* 表头行 */
-  .jolu-table-head {
-    background: var(--jolu-side);
-    color: var(--jolu-muted);
-    font-size: 12px;
-  }
-
-  /* 徽章：以前 14 处 Chip + 22 处内联胶囊 */
-  .jolu-badge {
-    display: inline-flex;
-    flex-shrink: 0;
-    align-items: center;
-    border-radius: 6px;
-    padding: 0 6px;
-    font-size: 11px;
-    font-weight: 500;
-    line-height: 20px;
-  }
-  .jolu-badge-on { background: var(--jolu-selected); color: var(--jolu-on); }
-  .jolu-badge-muted { background: var(--jolu-stage); color: var(--jolu-muted); }
-  .jolu-badge-danger { background: var(--jolu-danger-soft); color: var(--jolu-danger); }
-}

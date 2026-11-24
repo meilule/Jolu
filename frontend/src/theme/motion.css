@@ -1,0 +1,136 @@
+/* 动效令牌（CSS 层）。JS 侧同值定义在 frontend/src/motion/tokens.ts。
+ *
+ * ## 为什么有两份
+ *
+ * 即时反馈（悬停变色的 120ms transition）用 CSS 写最省，进出场 / 布局变化 /
+ * 弹簧用 Motion 写最稳。两套运行时，但**数值必须同源**——分开写就会漂移，
+ * 于是同一类交互在不同组件上快慢不一。`motion/tokens.test.mjs` 读两边比对，
+ * 改一处忘了另一处会被测出来。
+ */
+
+:root {
+  /* 时长：与 motion/tokens.ts 的 DURATION 一一对应 */
+  --motion-feedback: 120ms; /* 悬停、按下、颜色切换 */
+  --motion-pop: 160ms; /* 菜单、下拉、Tooltip 进场 */
+  --motion-pop-out: 120ms; /* 同上退场 */
+  --motion-dialog: 180ms; /* 弹窗 */
+  --motion-slide: 220ms; /* 抽屉、面板滑入 */
+
+  /* 曲线：与 motion/tokens.ts 的 EASE 一一对应 */
+  --motion-ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+}
+
+/* 弹出层（Select / Menu / Tooltip）统一进出场动画。
+ * Radix 通过 animation 生命周期延迟卸载，视觉插值走 transition + @starting-style。 */
+@keyframes jn-presence {
+  from { visibility: visible; }
+  to { visibility: visible; }
+}
+
+.jn-popover {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transform-origin: var(--radix-dropdown-menu-content-transform-origin, var(--radix-tooltip-content-transform-origin, top center));
+  transition:
+    opacity var(--motion-pop) var(--motion-ease-standard),
+    transform var(--motion-pop) var(--motion-ease-standard);
+}
+
+.jn-popover[data-side="top"] { --jn-pop-y: 4px; }
+.jn-popover[data-side="bottom"] { --jn-pop-y: -4px; }
+.jn-popover[data-side="left"] { --jn-pop-y: 0px; }
+.jn-popover[data-side="right"] { --jn-pop-y: 0px; }
+
+.jn-popover[data-state="closed"] {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(var(--jn-pop-y, -4px)) scale(0.98);
+  transition-duration: var(--motion-pop-out);
+  transition-timing-function: var(--motion-ease-exit);
+  animation: jn-presence var(--motion-pop-out) linear;
+}
+
+@starting-style {
+  .jn-popover {
+    opacity: 0;
+    transform: translateY(var(--jn-pop-y, -4px)) scale(0.98);
+  }
+}
+
+/* 下拉箭头随菜单开合旋转 180° */
+.jn-chevron {
+  transition: transform var(--motion-pop) var(--motion-ease-standard);
+}
+[data-state="open"] > .jn-chevron,
+[aria-expanded="true"] > .jn-chevron {
+  transform: rotate(180deg);
+}
+
+/* 进度条 / 额度环弧长过渡 */
+.jn-meter-fill {
+  transition:
+    width 360ms var(--motion-ease-standard),
+    stroke-dasharray 420ms var(--motion-ease-standard),
+    background-color 240ms ease,
+    stroke 240ms ease;
+}
+
+/* 花瓣主开关运行中缓慢自转（R1-00：20s 一圈） */
+@keyframes jn-petal-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.jn-petal-spin {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: jn-petal-spin 20s linear infinite;
+}
+
+/* 折线 / 额度环首屏描线（R1-00：600ms，后续刷新走 transition 不重画） */
+@keyframes jn-stroke-draw {
+  from { stroke-dashoffset: var(--jn-stroke-start, 1); }
+  to { stroke-dashoffset: 0; }
+}
+
+.jn-stroke-draw {
+  animation: jn-stroke-draw 600ms var(--motion-ease-standard) both;
+}
+
+/* 减少动效的统一 CSS 兜底：同时覆盖系统偏好与 Jolu 的「减少动效」设置。
+ * 只压时长、不彻底归零：0.01ms 仍是一次状态切换，hover / focus 反馈不会消失。 */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-feedback: 0.01ms;
+    --motion-pop: 0.01ms;
+    --motion-pop-out: 0.01ms;
+    --motion-dialog: 0.01ms;
+    --motion-slide: 0.01ms;
+  }
+  .jn-popover,
+  .jn-chevron,
+  .jn-meter-fill,
+  .jn-petal-spin,
+  .jn-stroke-draw {
+    transition-duration: 0.01ms;
+    animation: none;
+  }
+}
+
+html.reduce-motion {
+  --motion-feedback: 0.01ms;
+  --motion-pop: 0.01ms;
+  --motion-pop-out: 0.01ms;
+  --motion-dialog: 0.01ms;
+  --motion-slide: 0.01ms;
+}
+
+html.reduce-motion .jn-popover,
+html.reduce-motion .jn-chevron,
+html.reduce-motion .jn-meter-fill,
+html.reduce-motion .jn-petal-spin,
+html.reduce-motion .jn-stroke-draw {
+  transition-duration: 0.01ms;
+  animation: none;
+}

@@ -63,18 +63,18 @@ function AppContent() {
     }
     // 主面板窗口：铺满整个窗口，不要预览里的固定宽度与外边距
     return (
-      <div className="h-dvh w-full overflow-hidden bg-bg">
+      <div className="h-dvh w-full overflow-hidden bg-jn-stage">
         <MainPanelWindow embedded />
       </div>
     )
   }
 
   return (
-    <div className="min-h-full w-full bg-surface-2">
-      <header className="sticky top-0 z-20 flex w-full items-center gap-3 border-b bg-surface px-5 py-2.5">
+    <div className="min-h-full w-full bg-jn-well">
+      <header className="sticky top-0 z-20 flex w-full items-center gap-3 border-b border-jn-line bg-jn-surface px-5 py-2.5">
         <AppIcon size={18} />
-        <span className="text-sm font-semibold text-text-primary">Jolu</span>
-        <span className="text-[12px] text-text-tertiary">前端预览 · 数据均为设计示例</span>
+        <span className="text-sm font-semibold text-jn-text">Jolu</span>
+        <span className="text-[12px] text-jn-text-3">前端预览 · 数据均为设计示例</span>
         <span className="flex-1" />
         {(
           [
@@ -87,8 +87,8 @@ function AppContent() {
             type="button"
             onClick={() => setView(v)}
             className={cn(
-              "rounded-[8px] border px-3 py-1.5 text-xs",
-              view === v ? "border-accent-blue bg-accent-blue-soft font-semibold text-accent-blue" : "bg-surface text-text-secondary",
+              "jn-interactive rounded-full border px-3 py-1.5 text-xs font-medium",
+              view === v ? "border-jn-primary bg-jn-primary-soft font-semibold text-jn-primary-ink" : "border-jn-line bg-jn-surface text-jn-text-2 hover:bg-jn-well",
             )}
           >
             {l}
@@ -97,10 +97,10 @@ function AppContent() {
         <button
           type="button"
           onClick={() => setDark(!dark)}
-          className="grid size-8 place-items-center rounded-[8px] border bg-surface"
+          className="jn-interactive grid size-8 place-items-center rounded-full border border-jn-line bg-jn-surface text-jn-text-2 hover:bg-jn-well"
           aria-label="切换主题"
         >
-          {dark ? <Sun className="size-3.5 text-text-secondary" /> : <Moon className="size-3.5 text-text-secondary" />}
+          {dark ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
         </button>
       </header>
 

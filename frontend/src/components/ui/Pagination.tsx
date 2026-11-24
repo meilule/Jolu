@@ -21,7 +21,7 @@ export function Pagination({ page, pageCount, pageSize, busy = false, summary, o
 }) {
   const [draft, setDraft] = useState("")
   const [error, setError] = useState<string | null>(null)
-  const box = "grid size-8 place-items-center rounded-lg border text-xs outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-45"
+  const box = "grid size-8 place-items-center rounded-lg border text-xs outline-none focus-visible:outline-2 focus-visible:outline-jn-primary disabled:cursor-not-allowed disabled:opacity-45"
   const go = (target: number) => {
     if (busy || target === page || target < 1 || target > pageCount) return
     onPage(target)
@@ -37,22 +37,22 @@ export function Pagination({ page, pageCount, pageSize, busy = false, summary, o
   return (
     <div className="flex h-[60px] items-center gap-2 px-4" aria-busy={busy}>
       {/* 页码输入有误时，这里临时换成错误提示 */}
-      <span role={error ? "alert" : undefined} className={cn("text-[12px]", error ? "text-jolu-danger" : "text-jolu-muted")}>
+      <span role={error ? "alert" : undefined} className={cn("text-[12px]", error ? "text-jn-danger" : "text-jn-text-3")}>
         {error ?? summary ?? `每页 ${pageSize} 条 · 共 ${pageCount} 页`}
       </span>
       <span className="flex-1" />
       {pageCount > 0 && (
         <>
-          <button type="button" aria-label="上一页" disabled={busy || page <= 1} onClick={() => go(page - 1)} className={cn(box, "border-jolu-border bg-jolu-bg text-jolu-muted hover:bg-jolu-stage")}><ChevronLeft aria-hidden className="size-3.5" /></button>
+          <button type="button" aria-label="上一页" disabled={busy || page <= 1} onClick={() => go(page - 1)} className={cn(box, "border-jn-line bg-jn-surface text-jn-text-3 hover:bg-jn-stage")}><ChevronLeft aria-hidden className="size-3.5" /></button>
           {pageWindow(page, pageCount).map((p, index) => p === "…"
-            ? <span key={`gap-${index}`} className="grid h-8 w-6 place-items-center text-xs text-jolu-muted">…</span>
+            ? <span key={`gap-${index}`} className="grid h-8 w-6 place-items-center text-xs text-jn-text-3">…</span>
             : (
               <button key={p} type="button" aria-current={p === page ? "page" : undefined} disabled={busy && p !== page} onClick={() => go(p)}
-                className={cn(box, p === page ? "border-jolu-accent bg-jolu-accent font-semibold text-[#071B10] disabled:opacity-100" : "border-jolu-border bg-jolu-bg font-medium text-jolu-text hover:bg-jolu-stage")}>
+                className={cn(box, p === page ? "border-jn-primary bg-jn-primary font-semibold text-[#071B10] disabled:opacity-100" : "border-jn-line bg-jn-surface font-medium text-jn-text hover:bg-jn-stage")}>
                 {p}
               </button>
             ))}
-          <button type="button" aria-label="下一页" disabled={busy || page >= pageCount} onClick={() => go(page + 1)} className={cn(box, "border-jolu-border bg-jolu-bg text-jolu-muted hover:bg-jolu-stage")}><ChevronRight aria-hidden className="size-3.5" /></button>
+          <button type="button" aria-label="下一页" disabled={busy || page >= pageCount} onClick={() => go(page + 1)} className={cn(box, "border-jn-line bg-jn-surface text-jn-text-3 hover:bg-jn-stage")}><ChevronRight aria-hidden className="size-3.5" /></button>
           <input
             value={draft}
             inputMode="numeric"
@@ -61,9 +61,9 @@ export function Pagination({ page, pageCount, pageSize, busy = false, summary, o
             aria-invalid={!!error}
             onChange={(event) => { setDraft(event.target.value); setError(null) }}
             onKeyDown={(event) => event.key === "Enter" && jump()}
-            className={cn("h-8 w-[76px] rounded-lg border bg-jolu-bg px-3 text-xs text-jolu-text outline-none placeholder:text-jolu-muted focus-visible:border-jolu-accent", error ? "border-jolu-danger" : "border-jolu-border")}
+            className={cn("h-8 w-[76px] rounded-lg border bg-jn-surface px-3 text-xs text-jn-text outline-none placeholder:text-jn-text-3 focus-visible:border-jn-primary", error ? "border-jn-danger" : "border-jn-line")}
           />
-          <button type="button" disabled={busy} onClick={jump} className="jolu-control h-8 w-[54px] rounded-lg border border-jolu-border bg-jolu-bg text-xs font-medium text-jolu-text outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-45">跳转</button>
+          <button type="button" disabled={busy} onClick={jump} className="jn-interactive h-8 w-[54px] rounded-lg border border-jn-line bg-jn-surface text-xs font-medium text-jn-text outline-none hover:bg-jn-stage focus-visible:outline-2 focus-visible:outline-jn-primary disabled:cursor-not-allowed disabled:opacity-45">跳转</button>
         </>
       )}
     </div>

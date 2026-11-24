@@ -1,9 +1,11 @@
 import { ContentTransition, LoadingSurface } from "@/components/ui/LoadingSurface"
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Bell, CircleAlert, CircleDot, Database, Info, LoaderCircle, Network, Palette, SlidersHorizontal, type LucideIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SAVE_STATE_LABEL, SETTINGS_TABS, saveState, tabForSection, type SettingsTab } from "@/lib/settingsPage"
 import { useSettings } from "@/hooks/useSettings"
+import { Icon, type IconName } from "@/icons"
+import { SlideIndicator } from "@/motion"
+import { Banner, Button } from "@/ui"
 import { GeneralSection } from "@/components/settings/GeneralSection"
 import { AppearanceSection } from "@/components/settings/AppearanceSection"
 import { NetworkSection } from "@/components/settings/NetworkSection"
@@ -17,17 +19,22 @@ import { DataSection } from "@/components/settings/DataSection"
 import { NotificationSection } from "@/components/settings/NotificationSection"
 import { AboutSection } from "@/components/settings/AboutSection"
 
-const ICONS: Record<SettingsTab, LucideIcon> = {
-  general: SlidersHorizontal,
-  appearance: Palette,
-  network: Network,
-  data: Database,
-  notifications: Bell,
-  about: Info,
+const ICONS: Record<SettingsTab, IconName> = {
+  general: "navSettings",
+  appearance: "light",
+  network: "external",
+  data: "database",
+  notifications: "bell",
+  about: "info",
 }
 
 /**
- * 设置（Jolu.pen 模块 G · 画板 86–103）：页头保存状态 + 左侧 168 宽分类导航 + 当前分类内容。
+ * 设置 —— 设计稿 R1-12～17（常规 / 外观 / 网络与代理 / 数据与存储 / 通知 / 关于与更新）。
+ *
+ * 左侧 200 宽的分区卡（白底、6 个 38 高行、选中项浅绿底 + 主色图标），
+ * 右侧内容按组排列（`settingsUi` 的 `SettingsGroup` / `SettingsRow`）。
+ * 页面标题由主窗口页头给出，这里不再重复 h1 / h2。
+ *
  * `section` 来自托盘 / 菜单的跳转意图（旧分区 id），每次 navigationRequest 变化时重新定位。
  */
 export function SettingsPage({ section, navigationRequest, onOpenSkills }: {
@@ -58,78 +65,69 @@ export function SettingsPage({ section, navigationRequest, onOpenSkills }: {
   const current = SETTINGS_TABS.find((t) => t.id === tab) ?? SETTINGS_TABS[0]
 
   return (
-    <div ref={rootRef} className="flex w-full flex-col gap-6 py-1">
-      <header className="flex min-h-14 items-center justify-between gap-4">
-        <div className="flex flex-col gap-[7px]">
-          <h1 className="text-2xl font-semibold text-jolu-text">设置</h1>
-        </div>
+    <div ref={rootRef} className="flex w-full flex-col gap-3">
+      <div className="flex min-h-6 items-center justify-end gap-3">
         <SaveStatus state={state} />
-      </header>
+      </div>
 
       {cfg.error && (
-        <div role="alert" className="-mt-2 flex items-center justify-between gap-3 rounded-[9px] bg-jolu-danger-soft px-3.5 py-2.5 text-[12px] text-jolu-danger">
-          <span className="flex items-center gap-2"><CircleAlert aria-hidden className="size-4 shrink-0" />{cfg.error}。已保留原值。</span>
-          <button type="button" disabled={cfg.loading || cfg.saving} onClick={() => void cfg.reload()} className="shrink-0 rounded-md px-2 py-1 font-medium outline-none hover:bg-jolu-danger-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent">
-            重新读取
-          </button>
-        </div>
+        <Banner tone="danger" action={
+          <Button kind="ghost" size="sm" disabled={cfg.loading || cfg.saving} onClick={() => void cfg.reload()}>重新读取</Button>
+        }>
+          {cfg.error}。已保留原值。
+        </Banner>
       )}
 
-      <div className="flex min-h-[560px] gap-7">
-        <nav aria-label="设置分类" className="sticky top-0 flex w-[168px] shrink-0 flex-col gap-1.5 self-start">
-          {SETTINGS_TABS.map((t) => {
-            const Icon = ICONS[t.id]
-            const active = t.id === tab
+      <div className="flex min-h-[560px] items-start gap-4">
+        <nav aria-label="设置分类" className="sticky top-0 flex w-[200px] shrink-0 flex-col gap-0.5 rounded-[20px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface">
+          {SETTINGS_TABS.map((entry) => {
+            const active = entry.id === tab
             return (
               <button
-                key={t.id}
+                key={entry.id}
                 type="button"
                 aria-current={active ? "page" : undefined}
-                onClick={() => setTab(t.id)}
+                onClick={() => setTab(entry.id)}
                 className={cn(
-                  "flex h-[42px] items-center gap-2.5 rounded-lg px-3 text-left text-[13px] outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent",
-                  active ? "bg-jolu-selected font-semibold text-jolu-on" : "text-jolu-text hover:bg-jolu-side",
+                  "jn-interactive relative isolate flex h-[38px] items-center gap-2.5 rounded-[13px] px-3 text-left text-[13px]",
+                  active ? "font-semibold text-jn-primary-ink" : "text-jn-text hover:bg-jn-well",
                 )}
               >
-                <Icon aria-hidden className={cn("size-[17px]", active ? "text-jolu-on" : "text-jolu-muted")} />
-                {t.label}
+                {active && <SlideIndicator layoutId="jn-settings-nav-active" className="-z-10 bg-jn-primary-wash" />}
+                <Icon name={ICONS[entry.id]} size="md" className={active ? "text-jn-primary" : "text-jn-text-2"} />
+                {entry.label}
               </button>
             )
           })}
         </nav>
 
-        <section aria-label={current.label} className="flex min-w-0 flex-1 flex-col gap-4">
-          <h2 className="text-[22px] font-semibold text-jolu-text">{current.label}</h2>
-          <ContentTransition identity={`${tab}-${cfg.ready}`} className="flex flex-col gap-4">
-          {cfg.loading && !cfg.ready ? <LoadingSurface layout="settings" label="正在读取设置" /> : <>
-          {tab === "general" && <GeneralSection cfg={cfg} />}
-          {tab === "appearance" && <AppearanceSection cfg={cfg} />}
-          {tab === "network" && (
-            <>
-              <NetworkSection cfg={cfg} setDirty={setDirty} />
-              {/* 待确认：隐私脱敏在 Jolu.pen 模块 G 没有画板，暂挂「网络与代理」页尾 */}
-              <PrivacySection />
-              {/* 待确认：联网搜索与搜索插件在 Jolu.pen 模块 G 没有画板，暂挂「网络与代理」页尾（搜索走应用联网方式） */}
-              <SearchSection />
-            </>
-          )}
-          {tab === "data" && (
-            <>
-              <DataSection cfg={cfg} onOpenSkills={onOpenSkills} />
-              {/* 待确认：批次 G 运维项（保持唤醒 / warm-up / OTLP / Agent 版本）在 Jolu.pen 模块 G 没有画板，
-                  暂挂「数据与存储」页尾——这四项都跟本机运行与数据外发相关 */}
-              <OpsSection />
-              {/* 待确认：Library 5.1 共享指令与子代理没有画板，同挂「数据与存储」页尾 */}
-              <LibrarySharedSection />
-              {/* 待确认：5.6 WSL 接线没有画板，同挂「数据与存储」页尾 */}
-              <WslWiringSection />
-              {/* 待确认：5.10 成本调优建议没有画板，同挂「数据与存储」页尾 */}
-              <TuneSection />
-            </>
-          )}
-          {tab === "notifications" && <NotificationSection cfg={cfg} setDirty={setDirty} />}
-          {tab === "about" && <AboutSection />}
-          </>}
+        <section aria-label={current.label} className="flex min-w-0 flex-1 flex-col gap-3.5">
+          <ContentTransition identity={`${tab}-${cfg.ready}`} className="flex flex-col gap-3.5">
+            {cfg.loading && !cfg.ready ? <LoadingSurface layout="settings" label="正在读取设置" /> : <>
+              {tab === "general" && <GeneralSection cfg={cfg} />}
+              {tab === "appearance" && <AppearanceSection cfg={cfg} />}
+              {tab === "network" && (
+                <>
+                  <NetworkSection cfg={cfg} setDirty={setDirty} />
+                  {/* 待确认：隐私脱敏在 Jolu.pen 模块 G 没有画板，暂挂「网络与代理」页尾 */}
+                  <PrivacySection />
+                  {/* 待确认：联网搜索与搜索插件在 Jolu.pen 模块 G 没有画板，暂挂「网络与代理」页尾 */}
+                  <SearchSection />
+                </>
+              )}
+              {tab === "data" && (
+                <>
+                  <DataSection cfg={cfg} onOpenSkills={onOpenSkills} />
+                  {/* 待确认：下列运维项都没有画板，同挂「数据与存储」页尾 */}
+                  <OpsSection />
+                  <LibrarySharedSection />
+                  <WslWiringSection />
+                  <TuneSection />
+                </>
+              )}
+              {tab === "notifications" && <NotificationSection cfg={cfg} setDirty={setDirty} />}
+              {tab === "about" && <AboutSection />}
+            </>}
           </ContentTransition>
         </section>
       </div>
@@ -137,16 +135,13 @@ export function SettingsPage({ section, navigationRequest, onOpenSkills }: {
   )
 }
 
-/** 页头保存状态（画板 86 / 100 / 102） */
+/** 保存状态（R1-12 画板未画，沿用旧行为：保存中 / 未保存 / 失败时显示）。 */
 function SaveStatus({ state }: { state: ReturnType<typeof saveState> }) {
   if (state === "saved") return null
-  const Icon = state === "saving" ? LoaderCircle : state === "dirty" ? CircleDot : CircleAlert
+  const icon: IconName = state === "saving" ? "loading" : state === "dirty" ? "info" : "danger"
   return (
-    <span role="status" className={cn(
-      "flex items-center gap-1.5 text-[12px]",
-      state === "failed" ? "text-jolu-danger" : "text-jolu-muted",
-    )}>
-      <Icon aria-hidden className={cn("size-3.5", state === "saving" && "animate-spin")} />
+    <span role="status" className={cn("flex items-center gap-1.5 text-[12px]", state === "failed" ? "text-jn-danger" : "text-jn-text-3")}>
+      <Icon name={icon} size="sm" className={state === "saving" ? "animate-spin" : undefined} />
       {SAVE_STATE_LABEL[state]}
     </span>
   )

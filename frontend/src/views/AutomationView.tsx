@@ -1,15 +1,13 @@
 import { ContentTransition } from "@/components/ui/LoadingSurface"
 import { useEffect, useMemo, useState } from "react"
-import { Plus } from "lucide-react"
 import { isTauri, type SessionItemDto } from "@/lib/api"
 import { automationApi, type RunFilterDto, type TaskAction, type TaskInputDto, type TaskItemDto } from "@/lib/automationApi"
 import { useConnections } from "@/hooks/useConnections"
 import { useAutomationQuery, useNow } from "@/hooks/useAutomationQuery"
 import { demoAccounts, demoOverview, demoRunDetail, demoRuns, demoTaskDetail } from "@/mock/automation"
 import { useToast } from "@/components/ui/Toast"
-import { JoluButton } from "@/components/ui/JoluButton"
 import { ErrorNotice, LoadingCard } from "@/components/usage/usageControls"
-import { AutomationTabs } from "@/components/automation/automationParts"
+import { Button, PageActions, PageTabs, Tabs } from "@/ui"
 import { TaskList, type AccountRef } from "@/components/automation/TaskList"
 import { TaskDetail } from "@/components/automation/TaskDetail"
 import { RunList } from "@/components/automation/RunList"
@@ -134,15 +132,6 @@ export function AutomationView({ active, prefill, target, onTargetHandled, onOpe
     refreshAll()
   }
 
-  const header = (title: string) => (
-    <div className="flex min-h-12 items-center gap-2.5">
-      <div className="flex min-w-0 flex-1">
-        <h2 className="truncate text-[22px] font-semibold text-jolu-text">{title}</h2>
-      </div>
-      <JoluButton size="sm" variant="primary" onClick={() => setDialog({ mode: "create", nonce: Date.now() })}><Plus aria-hidden />新建任务</JoluButton>
-    </div>
-  )
-
   let body: React.ReactNode
   if (route.kind === "task") {
     body = task.error && !task.data ? <ErrorNotice error={task.error} stale={false} onRetry={task.refresh} />
@@ -184,10 +173,6 @@ export function AutomationView({ active, prefill, target, onTargetHandled, onOpe
   } else {
     body = (
       <>
-        {tab === "tasks"
-          ? header("任务")
-          : header("运行记录")}
-        <AutomationTabs value={tab} onChange={setTab} />
         {tab === "tasks" ? (
           <>
             {overview.error && <ErrorNotice error={overview.error} stale={!!overview.data} onRetry={overview.refresh} />}
@@ -204,7 +189,7 @@ export function AutomationView({ active, prefill, target, onTargetHandled, onOpe
                 onDelete={setDeleting}
               />
             ) : !overview.error && <LoadingCard title="正在读取任务" layout="tasks" />}
-            <p className="text-[11px] text-jolu-muted">{isTauri ? "" : "示例数据 · "}后台关闭或电脑休眠时暂停调度，重新打开后会继续检查。</p>
+            <p className="text-[11px] text-jn-text-3">{isTauri ? "" : "示例数据 · "}后台关闭或电脑休眠时暂停调度，重新打开后会继续检查。</p>
           </>
         ) : (
           <>
@@ -231,6 +216,23 @@ export function AutomationView({ active, prefill, target, onTargetHandled, onOpe
 
   return (
     <div className="flex flex-col gap-3.5">
+      <PageTabs>
+        <Tabs
+          value={tab}
+          onChange={(next) => { setTab(next); setRoute({ kind: "list" }) }}
+          items={[
+            { key: "tasks", label: "任务", icon: "listChecks" },
+            { key: "runs", label: "运行记录", icon: "clock" },
+          ]}
+        />
+      </PageTabs>
+      {route.kind === "list" && (
+        <PageActions>
+          <Button kind="primary" size="sm" icon="add" onClick={() => setDialog({ mode: "create", nonce: Date.now() })}>
+            新建任务
+          </Button>
+        </PageActions>
+      )}
       <ContentTransition identity={`${tab}-${route.kind}-${route.kind === "task" ? taskId : route.kind === "run" ? runId : "list"}-${route.kind === "task" ? !!task.data : route.kind === "run" ? !!run.data : tab === "tasks" ? !!overview.data : !!runs.data}`} className="flex flex-col gap-3.5">{body}</ContentTransition>
       {dialog && (
         <TaskDialog

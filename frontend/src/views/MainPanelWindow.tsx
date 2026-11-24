@@ -1,23 +1,26 @@
-import { useContentMotion, useExitPresence } from "@/lib/motion"
+import { useContentMotion } from "@/lib/motion"
 import { EVENTS } from "@/lib/events"
-import { useCallback, useEffect, useId, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { api, isTauri, listenEvent, openUrl, type MainIntentDto } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import { pageForIntent, pageLabel, readSidebarCollapsed, resolveOpenPage, writeSidebarCollapsed, type MainPage } from "@/lib/mainNavigation"
+import { PRIMARY_PAGES, SETTINGS_PAGE, pageForIntent, pageLabel, readSidebarCollapsed, resolveOpenPage, writeSidebarCollapsed, type MainPage } from "@/lib/mainNavigation"
 import { settingsApi } from "@/lib/settingsApi"
 import { applyAppearance, normalizeDensity } from "@/lib/appearance"
 import { useSettings } from "@/hooks/useSettings"
-import { usesOwnScroll } from "@/components/panel/PanelPage"
+import { Icon } from "@/icons"
+import { MotionProvider } from "@/motion"
+import { Button, Dialog, NavItem, PageActionsProvider, PageHeader, SHELL_HEIGHT, SHELL_WIDTH, Sidebar, Tooltip, WindowShell, usesOwnScroll } from "@/ui"
+import { Wordmark } from "@/components/brand/Wordmark"
+import { NAV_ICONS } from "@/ui/shell/navIcons"
 import { AppIcon } from "@/components/brand/AppIcon"
 import { ToastProvider, ToastViewport } from "@/components/ui/Toast"
 import { PrivacyFirstNotice } from "@/components/settings/PrivacyRecordsDialog"
 import { TipProvider } from "@/components/ui/Tip"
-import { PANEL_HEIGHT, PANEL_WIDTH, TitleBar } from "@/components/panel/Chrome"
-import { PageHeader, REPO_URL } from "@/components/panel/PageHeader"
+import { HeaderActions, REPO_URL } from "@/components/panel/HeaderActions"
+import { SidebarIslandCard } from "@/components/panel/SidebarIslandCard"
 import { AppNotices } from "@/components/panel/AppNotices"
 import type { NoticeTarget } from "@/lib/appNotices"
 import { dateKey } from "@/lib/usageStats"
-import { SideNav } from "@/components/panel/SideNav"
 import { UpdateProvider } from "@/components/panel/UpdateContext"
 import { UpdateDialog } from "@/components/panel/UpdateDialog"
 import { createLazyPage } from "@/components/panel/lazyPage"
@@ -33,8 +36,8 @@ const SessionsView = createLazyPage(() => import("./SessionsView").then((m) => (
 const AutomationView = createLazyPage(() => import("./AutomationView").then((m) => ({ default: m.AutomationView })), "自动化", "tasks")
 const SkillsView = createLazyPage(() => import("./SkillsView").then((m) => ({ default: m.SkillsView })), "Skills 管理", "table")
 const UsageView = createLazyPage(() => import("./UsageView").then((m) => ({ default: m.UsageView })), "用量统计", "stats")
-const GatewayView = createLazyPage(() => import("./GatewayView").then((m) => ({ default: m.GatewayView })), "模型路由", "settings")
-const AgentsView = createLazyPage(() => import("./AgentsView").then((m) => ({ default: m.AgentsView })), "Agent", "settings")
+const GatewayView = createLazyPage(() => import("./GatewayView").then((m) => ({ default: m.GatewayView })), "模型路由", "settings", true)
+const AgentsView = createLazyPage(() => import("./AgentsView").then((m) => ({ default: m.AgentsView })), "Agent", "settings", true)
 const SettingsPage = createLazyPage(() => import("./SettingsPage").then((m) => ({ default: m.SettingsPage })), "设置", "settings")
 
 /**
@@ -64,7 +67,7 @@ export function MainPanelWindow({
   /** 会话线程「创建自动化」带入自动化新建页的会话（画板 72） */
   const [automationPrefill, setAutomationPrefill] = useState<AutomationPrefill | null>(null)
   const [automationTarget, setAutomationTarget] = useState<AutomationTarget | null>(null)
-  const [accountTarget, setAccountTarget] = useState<{ connectionId: string; nonce: number } | null>(null)
+  const [accountTarget, setAccountTarget] = useState<{ connectionId: string | null; nonce: number } | null>(null)
   const clearAccountTarget = useCallback(() => setAccountTarget(null), [])
   const [deferredNotice, setDeferredNotice] = useState<NoticeTarget | null>(null)
   const clearDeferredNotice = useCallback(() => setDeferredNotice(null), [])
@@ -85,7 +88,6 @@ export function MainPanelWindow({
   const scrollPositions = useRef(new Map<MainPage, number>())
   // 页面包含 fixed 弹窗，避免祖先 transform 改变弹窗的定位参照。
   const pageMotion = useContentMotion(page, 220, 0, true)
-  const aboutPresence = useExitPresence(about)
   /** 设置 · 外观（画板 88）：列表密度与减少动效挂在 <html> 上；缩放由后端对 main 窗口 set_zoom */
   const { list_density: listDensity, reduce_motion: reduceMotion } = useSettings().settings
 
@@ -242,6 +244,7 @@ export function MainPanelWindow({
   }
 
   return (
+    <MotionProvider reduced={reduceMotion}>
     <ToastProvider>
     <PrivacyFirstNotice />
     <AppNotices
@@ -256,27 +259,66 @@ export function MainPanelWindow({
       data-panel-opening={opening}
       className={
         embedded
-          ? "desktop-panel-entry relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-jolu-bg"
-          : "relative flex flex-col overflow-hidden rounded-2xl border border-jolu-border bg-jolu-bg shadow-window"
+          ? "desktop-panel-entry relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-jn-stage"
+          : "relative flex flex-col overflow-hidden rounded-[14px] bg-jn-stage"
       }
-      style={embedded ? undefined : { width: PANEL_WIDTH, height: PANEL_HEIGHT, maxWidth: "100%" }}
+      style={embedded ? undefined : { width: SHELL_WIDTH, height: SHELL_HEIGHT, maxWidth: "100%" }}
     >
-      <TitleBar />
-      <div className="flex min-h-0 flex-1">
-        <SideNav page={page} collapsed={collapsed} onNavigate={navigate} />
-        <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-          <PageHeader title={pageLabel(page)} collapsed={collapsed} onToggleSidebar={toggleSidebar} />
-          {/* 自带滚动的页面（Agent / 模型路由 / 供应商）用 PanelPage 钉住可视区，外层不滚。
-              判断收在 usesOwnScroll 一处，新增同类页面在那里登记即可。 */}
+      {/* 外壳按 jolu-new.pen R1-C：侧栏（216/72，Logo 与收起按钮在侧栏顶）+ 页头（72，窗口按钮并入右端）+ 页面区。 */}
+      <PageActionsProvider>
+      <WindowShell
+        sidebar={
+          <Sidebar
+            collapsed={collapsed}
+            logo={<span className={collapsed ? "text-jn-text" : "flex items-center gap-2.5 text-jn-text"}>{collapsed ? <AppIcon size={30} /> : <><AppIcon size={30} /><Wordmark /></>}</span>}
+            toggle={
+              <Tooltip content={collapsed ? "展开侧栏" : "收起侧栏"} side="right">
+                <button
+                  type="button"
+                  onClick={toggleSidebar}
+                  aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
+                  aria-expanded={!collapsed}
+                  className="jn-interactive flex size-8 shrink-0 items-center justify-center rounded-[10px] text-jn-text-3 hover:bg-jn-surface/70 hover:text-jn-text"
+                >
+                  <Icon name="sidebarToggle" size="md" />
+                </button>
+              </Tooltip>
+            }
+            footer={
+              <>
+                <SidebarIslandCard collapsed={collapsed} onOpenIsland={() => navigate("island")} />
+                <NavItem
+                  label={SETTINGS_PAGE.label}
+                  icon={NAV_ICONS.settings}
+                  active={page === SETTINGS_PAGE.id}
+                  collapsed={collapsed}
+                  onClick={() => navigate(SETTINGS_PAGE.id)}
+                />
+              </>
+            }
+          >
+            {PRIMARY_PAGES.map((entry) => (
+              <NavItem
+                key={entry.id}
+                label={entry.label}
+                icon={NAV_ICONS[entry.id]}
+                active={page === entry.id}
+                collapsed={collapsed}
+                onClick={() => navigate(entry.id)}
+              />
+            ))}
+          </Sidebar>
+        }
+        header={<PageHeader title={pageLabel(page)} globalActions={<HeaderActions />} />}
+      >
+          {/* 自带滚动的页面（Agent / 模型路由 / 供应商）用 flex-col + h-full 钉住可视区，外层不滚；
+              其余页面用普通块级纵向滚动容器，不让 flex-col 压扁子内容。 */}
           <div ref={scrollRef} data-panel-scroll className={cn(
             "relative min-h-0 min-w-0 flex-1",
-            usesOwnScroll(page) ? "overflow-hidden" : "overflow-auto",
+            usesOwnScroll(page) ? "flex flex-col overflow-hidden" : "overflow-y-auto overflow-x-hidden",
           )}>
             <div ref={pageMotion} className={cn(
-              // R2 / V5：Agent 与模型路由是贴边的「清单 + 详情」双栏，不留内容区内边距。
-              // 这三页自带滚动与右侧抽屉：外层容器 overflow-hidden，这一层必须同时给
-              // 高度（h-full）与 flex 伸展（flex-1），否则抽屉 absolute 的参照会缩成内容高。
-              usesOwnScroll(page) ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "px-8 py-5",
+              usesOwnScroll(page) ? "flex h-full min-h-0 flex-1 flex-col overflow-hidden" : "min-w-0 px-0.5 pb-4 pt-0.5",
             )}>
               {page === "island" && <IslandView />}
               {page === "usage" && (
@@ -306,7 +348,7 @@ export function MainPanelWindow({
               {page === "providers" && <ProvidersView accountTarget={accountTarget} onAccountTargetHandled={clearAccountTarget} />}
               {checkinVisited.current && <div hidden={page !== "checkin"}><CheckinView active={page === "checkin" && panelActive} /></div>}
               {page === "agents" && <AgentsView onNavigate={navigate} />}
-              {page === "gateway" && <GatewayView onNavigate={navigate} onOpenConnection={(connectionId) => { navigate("providers"); setAccountTarget({ connectionId, nonce: Date.now() }) }} />}
+              {page === "gateway" && <GatewayView onNavigate={navigate} onOpenConnection={(connectionId) => { navigate("providers"); setAccountTarget({ connectionId: connectionId ?? null, nonce: Date.now() }) }} />}
               {page === "settings" && <SettingsPage section={settingsSection} navigationRequest={navigationRequest} onOpenSkills={() => navigate("skills")} />}
               {/* 模块 E · 自动化 */}
               {page === "automation" && (
@@ -326,90 +368,42 @@ export function MainPanelWindow({
               {page === "skills" && <SkillsView active={panelActive} />}
             </div>
           </div>
-        </main>
-      </div>
+      </WindowShell>
+      </PageActionsProvider>
 
       {/* 操作通知固定在主窗口右上角，不随页面滚动或侧栏宽度变化。 */}
       <ToastViewport />
-      {aboutPresence.rendered && <AboutDialog version={aboutPresence.rendered} exiting={aboutPresence.exiting} onClose={() => setAbout(null)} />}
-      <UpdateDialog onViewTasks={() => navigate("automation")} />
-    </div>
-    </TipProvider>
-    </UpdateProvider>
-    </ToastProvider>
-  )
-}
-
-/** 关于（§2.6）：版本号与仓库链接 */
-function AboutDialog({ version, onClose, exiting }: { version: string; onClose: () => void; exiting: boolean }) {
-  const titleId = useId()
-  const dialogRef = useRef<HTMLDivElement>(null)
-  const closeRef = useRef(onClose)
-  closeRef.current = onClose
-  useEffect(() => {
-    if (exiting) return
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const dialog = dialogRef.current
-    if (!dialog) return
-    const items = () => Array.from(dialog.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
-    ))
-    ;(items()[0] ?? dialog).focus()
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault()
-        closeRef.current()
-        return
-      }
-      if (event.key !== "Tab") return
-      const focusable = items()
-      if (!focusable.length) return event.preventDefault()
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener("keydown", onKeyDown)
-    return () => {
-      document.removeEventListener("keydown", onKeyDown)
-      previous?.focus()
-    }
-  }, [exiting])
-  return (
-    <div inert={exiting} data-state={exiting ? "closed" : "open"} className="motion-overlay absolute inset-0 z-20 grid place-items-center bg-black/25 p-8">
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} className="motion-dialog flex w-[380px] max-w-full flex-col gap-4 rounded-xl border border-jolu-border bg-jolu-cc-surface p-5 shadow-dialog">
-        <div className="flex items-center gap-2.5">
-          <AppIcon size={32} />
-          <div className="flex flex-col">
-            <span id={titleId} className="text-[13px] font-semibold text-text-primary">Jolu</span>
-            <span className="tnum font-mono text-[12px] text-text-tertiary">v{version}</span>
-          </div>
-        </div>
-        <p className="text-[12px] leading-[1.6] text-text-tertiary">
+      <Dialog
+        open={Boolean(about)}
+        onOpenChange={(open) => { if (!open) setAbout(null) }}
+        title={
+          <span className="flex items-center gap-2.5">
+            <AppIcon size={28} />
+            <span className="flex flex-col">
+              <span className="text-[15px] font-bold text-jn-text">Jolu</span>
+              {about && <span className="tnum font-mono text-[11px] font-normal text-jn-text-3">v{about}</span>}
+            </span>
+          </span>
+        }
+        width="sm"
+        actions={<Button kind="ghost" size="sm" onClick={() => setAbout(null)}>关闭</Button>}
+      >
+        <p className="text-xs leading-relaxed text-jn-text-2">
           在本机运行的 AI 编程工具管理器。统计来自本地会话记录与服务商接口，凭证只保存在本机。
         </p>
         <button
           type="button"
           onClick={() => void openUrl(REPO_URL)}
-          className="self-start text-[12px] text-accent-blue underline"
+          className="jn-interactive self-start rounded text-xs font-medium text-jn-primary-ink underline"
         >
           {REPO_URL}
         </button>
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-[8px] border bg-surface px-4 py-2 text-xs text-text-primary"
-          >
-            关闭
-          </button>
-        </div>
-      </div>
+      </Dialog>
+      <UpdateDialog onViewTasks={() => navigate("automation")} />
     </div>
+    </TipProvider>
+    </UpdateProvider>
+    </ToastProvider>
+    </MotionProvider>
   )
 }

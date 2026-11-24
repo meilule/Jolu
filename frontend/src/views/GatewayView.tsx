@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Activity, GitFork, Layers, ListFilter, MoreHorizontal, Network } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { api, invoke, isTauri, listenEvent } from "@/lib/api"
+import { api, invoke, isTauri, listenEvent, type StatsOverviewDto } from "@/lib/api"
+import { dateKey, rangeToMillis, todayRange, type DateRange } from "@/lib/usageStats"
 import { EVENTS } from "@/lib/events"
 import { useLatestGate } from "@/hooks/useLatestGate"
 import {
-  gatewayApi, type AgentDiscoveryDto, type CatalogModelDto, type DayOverviewDto, type GatewayGroupsDto,
-  type ContextSessionRowDto, type GatewayStatusDto, type RouteLogDto, type SourceCapabilityDto,
+  gatewayApi, type AgentDiscoveryDto, type CatalogModelDto, type DayOverviewDto,
+  type ContextSessionRowDto, type GatewayStatusDto, type RouteLogDto,
 } from "@/lib/gatewayApi"
 import type { RoutingGroupDto } from "@/components/gateway/routingGroups"
 import { agentLabel, canEscape, wiredCount } from "@/lib/gatewayPage"
@@ -17,49 +17,45 @@ import type { MainPage } from "@/lib/mainNavigation"
 import { useConnections } from "@/hooks/useConnections"
 import { useGatewaySessions } from "@/hooks/useGatewaySessions"
 import { useToast } from "@/components/ui/Toast"
-import { ConfirmDialog as ActionConfirmDialog } from "@/components/ui/ConfirmDialog"
+import { Button, ConfirmDialog, IconButton, PageActions, PageTabs, StatusPill, Tabs } from "@/ui"
+import { Icon, type IconName } from "@/icons"
 import { RouteLogPanel } from "@/components/gateway/RouteLogPanel"
-import { PanelPage } from "@/components/panel/PanelPage"
-import { RubberSegment } from "@/components/ui/RubberSegment"
 import { OverviewPanel, type AttentionItem } from "@/components/gateway/OverviewPanel"
 import { SessionObservation } from "@/components/gateway/SessionObservation"
 import { GroupsPanel } from "@/components/gateway/GroupsPanel"
 import { PoolPanel } from "@/components/gateway/PoolPanel"
 import { AccessPanel } from "@/components/gateway/AccessPanel"
 import { MiddlewarePanel } from "@/components/gateway/MiddlewarePanel"
-import { CatalogDialog, RenameDialog } from "@/components/gateway/GatewayDialogs"
-import { SourceManageDialog } from "@/components/gateway/SourceManageDialog"
-import type { Connection } from "@/types"
 
 /**
- * 模型路由（原「统一网关」；Jolu.pen「统一网关 · R2 重设计」V6）：
- * 顶部「本机路由」状态条（地址、运行 pill、N 个工具已接入、停止中转、更多）+
- * 六个页签：概览（cb7KY/Cktyu）、路由流水（无画板，沿用 V5 面板）、路由分组（fgm9F）、
- * 模型池（gaGlT）、对外访问（RMna2）、中间件（wEsPa）。
- * 工具的接入与档位在「Agent」页；模型池只读，加入 / 移出与前缀在供应商（V5-5）。
+ * 模型路由（设计稿 jolu-new.pen R1-01/02 概览、R1-18 路由流水、R1-19 路由分组、
+ * R1-20 模型池、R1-21 对外访问、R1-22 中间件）。
+ *
+ * 外壳按画板拆成三层：
+ * 1. **六个页签在页头**（R1 的「页签」槽），内容区不再重复一行页签；
+ * 2. **概览**用一张大「本机路由」卡（地址、状态、运行数据、停止 / 开启圆钮）；
+ *    其余五个页签共用 56px 紧凑状态条（R1-18～22 顶部的「路由状态条」）；
+ * 3. 页面操作（如中间件「添加规则」）通过 `PageActions` 送进页头。
+ *
+ * 工具的接入与档位在「Agent」页；模型池只读，加入 / 移出与前缀在供应商。
  */
 
 type Tab = "overview" | "log" | "groups" | "pool" | "access" | "middleware"
 
-const TABS: readonly { id: Tab; label: string; icon: React.ElementType }[] = [
-  { id: "overview", label: "概览", icon: Activity },
-  { id: "log", label: "路由流水", icon: ListFilter },
-  { id: "groups", label: "路由分组", icon: GitFork },
-  { id: "pool", label: "模型池", icon: Layers },
-  { id: "access", label: "对外访问", icon: Network },
-  { id: "middleware", label: "中间件", icon: SlidersIcon },
+const TABS: readonly { id: Tab; label: string; icon: IconName }[] = [
+  { id: "overview", label: "概览", icon: "activity" },
+  { id: "log", label: "路由流水", icon: "file" },
+  { id: "groups", label: "路由分组", icon: "blocks" },
+  { id: "pool", label: "模型池", icon: "shield" },
+  { id: "access", label: "对外访问", icon: "external" },
+  { id: "middleware", label: "中间件", icon: "navSettings" },
 ]
 
 type Dialog =
-  | { kind: "manage" }
-  | { kind: "rename"; connection: Connection }
-  | { kind: "catalog"; models?: CatalogModelDto[] }
   | { kind: "confirm"; title: string; description: string; label: string; danger?: boolean; work: () => Promise<boolean | void> }
   | null
 
-const EMPTY_GROUPS: GatewayGroupsDto = { sources: [], agents: [] }
 const RECENT_ROWS = 240
-const PIN_KEY = "jolu:gateway:pinned"
 /** 已经提示过的「发现新工具」（只提示一次） */
 const SEEN_KEY = "jolu:gateway:seen-tools"
 
@@ -76,42 +72,53 @@ function writeJson(key: string, value: unknown) {
   try { localStorage.setItem(key, JSON.stringify(value)) } catch { /* 本地偏好存不进去只影响下次 */ }
 }
 
-/** 中间件页签的图标（lucide 没有贴近的滑杆图形，自绘） */
-function SlidersIcon({ className }: { className?: string }) {
-  return (
-    <svg aria-hidden viewBox="0 0 16 16" className={cn("size-4", className)} fill="none" stroke="currentColor" strokeWidth="1.5">
-      <path d="M3 5h6M11.5 5H13M3 11h1.5M7 11h6" strokeLinecap="round" />
-      <circle cx="10" cy="5" r="1.6" /><circle cx="5.5" cy="11" r="1.6" />
-    </svg>
-  )
+function statsRangeForOverview(id: OverviewRange["id"]): DateRange {
+  const now = new Date()
+  if (id === "today") return todayRange(now)
+  const shift = (days: number) => {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + days)
+    return dateKey(d)
+  }
+  if (id === "yesterday") {
+    const y = shift(-1)
+    return { start: y, end: y }
+  }
+  return { start: shift(id === "7d" ? -6 : -29), end: dateKey(now) }
 }
 
-export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (page: MainPage) => void; onOpenConnection?: (connectionId: string) => void }) {
+export interface MoreItem {
+  label: string
+  danger?: boolean
+  onClick: () => void
+}
+
+export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (page: MainPage) => void; onOpenConnection?: (connectionId?: string) => void }) {
   const toast = useToast()
   const { connections, reload } = useConnections()
   const sessions = useGatewaySessions()
   const [tab, setTab] = useState<Tab>("overview")
   const [status, setStatus] = useState<GatewayStatusDto | null>(null)
-  const [groups, setGroups] = useState<GatewayGroupsDto>(EMPTY_GROUPS)
   const [routingGroups, setRoutingGroups] = useState<RoutingGroupDto[]>([])
-  const [capabilities, setCapabilities] = useState<SourceCapabilityDto[]>([])
   const [catalog, setCatalog] = useState<CatalogModelDto[]>([])
   const [day, setDay] = useState<DayOverviewDto | null>(null)
+  const [todayStats, setTodayStats] = useState<StatsOverviewDto | null>(null)
+  const [activeMiddlewares, setActiveMiddlewares] = useState<number | null>(null)
   const [logRows, setLogRows] = useState<RouteLogDto[]>([])
-  /** 每个会话最近一次上下文快照（V10-01）；读取失败为 null，与「还没有快照」的空数组分开 */
+  /** 每个会话最近一次上下文快照；读取失败为 null，与「还没有快照」的空数组分开 */
   const [contexts, setContexts] = useState<ContextSessionRowDto[] | null>([])
-  /** 概览里正在观察的会话（V10-03）；null = 看运行概览 */
+  /** 概览里正在观察的会话；null = 看运行概览 */
   const [observing, setObserving] = useState<{ platform: string; sessionId: string } | null>(null)
   const [sharedLan, setSharedLan] = useState(false)
   const [busy, setBusy] = useState(false)
   const [tick, setTick] = useState(0)
   const [updatedAt, setUpdatedAt] = useState<number | null>(null)
-  const [pinned, setPinned] = useState<string[]>(() => readJson<string[]>(PIN_KEY, []))
   const [seenTools, setSeenTools] = useState<string[]>(() => readJson<string[]>(SEEN_KEY, []))
   const [discovery, setDiscovery] = useState<AgentDiscoveryDto[]>([])
   const [dialog, setDialog] = useState<Dialog>(null)
+  /** 中间件「添加规则」在页头；用序号通知面板打开新建表单 */
+  const [middlewareAdd, setMiddlewareAdd] = useState(0)
   const operationLock = useRef(false)
-  /** 概览页的时间范围（V10-01 右上「今天」下拉）：切了就重新拉日概览，轮询沿用同一个值 */
+  /** 概览页的时间范围：切了就重新拉日概览，轮询沿用同一个值 */
   const [dayRange, setDayRange] = useState<OverviewRange["id"]>("today")
   const dayRangeRef = useRef<OverviewRange["id"]>("today")
   dayRangeRef.current = dayRange
@@ -121,29 +128,30 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
   const refresh = useCallback(async () => {
     if (!isTauri) return
     const isLatest = refreshGate.begin()
-    // 范围是用户当前选的那个：切到「近 7 天」后，5 秒轮询也要继续取 7 天，不能落回今天。
-    // 用 ref 而不是把 range 放进依赖：放进去会让 useCallback 重建、轮询定时器跟着重装。
     const range = dayRangeRef.current
     try {
-      const [nextStatus, nextGroups, nextCatalog, nextCapabilities, nextSettings, nextDay, nextRows, nextContexts, nextRouting] = await Promise.all([
-        gatewayApi.status(), gatewayApi.groups(), gatewayApi.catalog(), gatewayApi.sourceCapabilities(),
+      const statsWindow = rangeToMillis(statsRangeForOverview(range))
+      const [nextStatus, nextCatalog, nextSettings, nextDay, nextRows, nextContexts, nextRouting, nextMiddlewares, nextStats] = await Promise.all([
+        gatewayApi.status(), gatewayApi.catalog(),
         invoke<{ gateway_shared_lan?: boolean }>("get_settings").catch(() => null),
         gatewayApi.dayOverview(range).catch(() => null),
         gatewayApi.routeLogPage(1, RECENT_ROWS, null).catch(() => null),
         gatewayApi.contextSessions().catch(() => null),
         gatewayApi.groupList().catch(() => [] as RoutingGroupDto[]),
+        gatewayApi.middlewares().catch(() => null),
+        api.statsOverview({ ...statsWindow, platform: null, connections: [] }).catch(() => null),
       ])
       if (!isLatest()) return
       if (nextSettings) setSharedLan(Boolean(nextSettings.gateway_shared_lan))
       setStatus(nextStatus)
-      setGroups(nextGroups)
       setCatalog(nextCatalog)
-      setCapabilities(nextCapabilities)
       setDay(nextDay)
       if (nextRows) setLogRows(nextRows.rows)
       setContexts(nextContexts)
       setUpdatedAt(Date.now())
       setRoutingGroups(nextRouting)
+      setActiveMiddlewares(nextMiddlewares ? nextMiddlewares.filter((item) => item.enabled).length : null)
+      setTodayStats(nextStats)
     } catch (error) {
       if (isLatest()) toast.danger("读取模型路由失败", String(error))
     }
@@ -161,9 +169,9 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
     let disposed = false
     const offs: Array<() => void> = []
     const keep = (off: () => void) => { if (disposed) off(); else offs.push(off) }
-    const reload = () => { void refresh() }
-    void listenEvent(EVENTS.GATEWAY_CATALOG_CHANGED, reload).then(keep)
-    void listenEvent(EVENTS.CONNECTIONS_CHANGED, reload).then(keep)
+    const onReload = () => { void refresh() }
+    void listenEvent(EVENTS.GATEWAY_CATALOG_CHANGED, onReload).then(keep)
+    void listenEvent(EVENTS.CONNECTIONS_CHANGED, onReload).then(keep)
     return () => { window.clearInterval(timer); disposed = true; offs.forEach((off) => off()) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -201,7 +209,7 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
 
   const goAgents = () => onNavigate?.("agents")
 
-  /** 需要关注：工具不再经过模型路由、新装的工具、来源返回限流（V6 概览画板「需要关注」卡） */
+  /** 需要关注：工具不再经过模型路由、新装的工具、来源返回限流（R1-01「需要关注」卡） */
   const attention: AttentionItem[] = useMemo(() => {
     const items: AttentionItem[] = []
     for (const entry of agents) {
@@ -244,7 +252,6 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
         onAction: () => setTab("log"),
       })
     }
-    // 上下文接近模型窗口的会话（V10-01「需要关注」）：排在最前
     const risks = contextRisks(activeSessionRows(sessions.views, contexts ?? []), agentLabel).map((risk): AttentionItem => ({
       ...risk,
       kind: "context",
@@ -275,56 +282,38 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
     void run(() => gatewayApi.setSharedLan(on), on ? "已开启局域网共享（重启接入后监听生效）" : "已关闭局域网共享", true).then((ok) => { if (!ok) setSharedLan(!on) }).catch(() => setSharedLan(!on))
   }
 
-  const togglePin = (key: string) => {
-    setPinned((current) => {
-      const next = current.includes(key) ? current.filter((item) => item !== key) : [...current, key]
-      writeJson(PIN_KEY, next)
-      return next
-    })
+  const openSources = () => {
+    if (onOpenConnection) onOpenConnection()
+    else onNavigate?.("providers")
   }
 
   if (!isTauri) {
-    return <div className="flex h-full items-center justify-center text-meta text-jolu-muted">模型路由需要在桌面端使用</div>
+    return <div className="flex h-full items-center justify-center text-[12px] text-jn-text-3">模型路由需要在桌面端使用</div>
   }
 
-  return (
-    <PanelPage className="flex-col">
-      {/* 状态条（V6：所有页签共用） */}
-      <div className="flex shrink-0 flex-col gap-3 px-8 pt-5">
-        <div className="flex items-center gap-3.5">
-          <span className={cn("flex size-11 shrink-0 items-center justify-center rounded-[11px]", running ? "bg-jolu-selected" : "bg-jolu-side")}>
-            <RouteGlyph className={running ? "text-jolu-on" : "text-jolu-muted"} />
-          </span>
-          <span className="text-[15px] font-semibold text-jolu-text">本机路由</span>
-          <span className="font-mono text-meta text-jolu-muted">{`127.0.0.1:${status?.port ?? "—"}`}</span>
-          <span className={cn(
-            "flex h-7 items-center gap-1.5 rounded-full px-2.5 text-note font-semibold",
-            running ? "bg-jolu-selected text-jolu-on" : "bg-jolu-track text-jolu-muted",
-          )}>
-            <span aria-hidden className={cn("size-1.5 rounded-full", running ? "bg-jolu-on" : "bg-jolu-muted")} />
-            {running ? "正在中转" : "已停止"}
-          </span>
-          <span className="flex-1" />
-          <span className="shrink-0 text-meta text-jolu-muted">{wired} 个工具已接入</span>
-          <button type="button" disabled={busy} onClick={() => toggleRunning(!running)}
-            className="motion-button flex h-10 shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap rounded-lg border border-jolu-border bg-jolu-bg px-4 text-meta font-medium text-jolu-text outline-none hover:bg-jolu-stage active:bg-jolu-cc-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
-            <StopGlyph on={running} />
-            {running ? "停止中转" : "开启中转"}
-          </button>
-          <div className="relative shrink-0">
-            <MoreMenu
-              items={[
-                { label: "管理来源", onClick: () => setDialog({ kind: "manage" }) },
-                { label: "去 Agent 页接入工具", onClick: goAgents },
-                ...(canEscape(status) ? [{ label: "紧急切回直连", danger: true, onClick: escape }] : []),
-              ]}
-            />
-          </div>
-        </div>
-        <TabBar tab={tab} onTab={setTab} />
-      </div>
+  const moreItems: MoreItem[] = [
+    { label: "管理来源", onClick: openSources },
+    { label: "去 Agent 页接入工具", onClick: goAgents },
+    ...(canEscape(status) ? [{ label: "紧急切回直连", danger: true, onClick: escape }] : []),
+  ]
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto [&>*]:shrink-0">
+  return (
+    <>
+      <PageTabs wide>
+        <Tabs
+          value={tab}
+          onChange={setTab}
+          iconMode="active"
+          items={TABS.map(({ id, label, icon }) => ({ key: id, label, icon }))}
+        />
+      </PageTabs>
+      {tab === "middleware" && (
+        <PageActions>
+          <Button kind="primary" size="sm" icon="add" disabled={busy} onClick={() => setMiddlewareAdd((value) => value + 1)}>添加规则</Button>
+        </PageActions>
+      )}
+
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3.5 overflow-y-auto px-0.5 pb-2 pt-0.5 [&>*]:shrink-0">
         {tab === "overview" && observing && (
           <SessionObservation
             key={`${observing.platform}:${observing.sessionId}`}
@@ -337,11 +326,17 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
         )}
         {tab === "overview" && !observing && (
           <OverviewPanel
+            status={status}
+            running={running}
+            wired={wired}
             day={day}
+            todayStats={todayStats}
+            activeMiddlewares={activeMiddlewares}
+            connections={connections}
+            defaultConnection={status?.default_connection ?? null}
             range={dayRange}
             onRange={(next) => {
               setDayRange(next)
-              // 立即拉一次，不等 5 秒轮询；轮询随后沿用新范围
               dayRangeRef.current = next
               void refresh()
             }}
@@ -353,147 +348,119 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
             sources={serving.length}
             models={poolModels}
             groups={routingGroups.length}
+            routingGroups={routingGroups}
             attention={attention}
             busy={busy}
+            sharedLan={sharedLan}
+            onSharedLan={setShared}
+            onSelectStrategy={(group, nextStrategy) => {
+              if (nextStrategy === "intent" && !group.intent?.classifier) {
+                setTab("groups")
+                return
+              }
+              void run(
+                () => gatewayApi.groupUpdate(group.slug, { strategy: nextStrategy, members: group.members }),
+                `已将 group/${group.slug} 切换为「${nextStrategy === "usage" ? "额度优先" : nextStrategy === "order" ? "按顺序" : "按意图"}」`,
+              )
+            }}
+            onToggleRunning={() => toggleRunning(!running)}
+            onOpenQuota={(connectionId) => {
+              if (connectionId && onOpenConnection) onOpenConnection(connectionId)
+              else onNavigate?.("providers")
+            }}
+            onOpenMiddleware={() => setTab("middleware")}
+            onOpenGroups={() => setTab("groups")}
             onRefresh={() => void refresh()}
             onOpenLog={() => setTab("log")}
             onOpenContext={(platform, sessionId) => setObserving({ platform, sessionId })}
           />
         )}
-        {tab === "log" && (
-          <div className="flex min-w-0 flex-1 flex-col gap-4 px-8 pb-8 pt-2">
-            <h2 className="text-[20px] font-semibold text-jolu-text">路由流水</h2>
-            <RouteLogPanel desktop={isTauri} connections={connections} tick={tick} />
-          </div>
+        {tab !== "overview" && (
+          <GatewayStatusBar
+            port={status?.port ?? null}
+            running={running}
+            wired={wired}
+            busy={busy}
+            onToggleRunning={() => toggleRunning(!running)}
+            moreItems={moreItems}
+          />
         )}
+        {tab === "log" && <RouteLogPanel desktop={isTauri} connections={connections} tick={tick} />}
         {tab === "groups" && (
-          <GroupsPanel catalog={catalog} busy={busy} run={(work, title, throwOnFailure) => run(work, title, throwOnFailure)} onChanged={() => void refresh()} />
+          <GroupsPanel catalog={catalog} connections={connections} busy={busy} run={(work, title, throwOnFailure) => run(work, title, throwOnFailure)} onChanged={() => void refresh()} />
         )}
         {tab === "pool" && (
-          <PoolPanel connections={connections} catalog={catalog} defaultConnection={status?.default_connection ?? null}
-            onOpenConnection={(id) => onOpenConnection?.(id)} onManage={() => setDialog({ kind: "manage" })} />
+          <PoolPanel
+            connections={connections}
+            catalog={catalog}
+            defaultConnection={status?.default_connection ?? null}
+            busy={busy}
+            run={run}
+            onOpenConnection={(id) => onOpenConnection?.(id)}
+            onManage={openSources}
+          />
         )}
         {tab === "access" && (
           <AccessPanel port={status?.port ?? 0} shared={sharedLan} busy={busy} onSharedChange={setShared} run={(work, title) => run(work, title)} models={modelIds} />
         )}
         {tab === "middleware" && (
-          <MiddlewarePanel busy={busy} run={(work, title) => run(work, title)} onOpenPrivacy={() => onNavigate?.("settings")} />
+          <MiddlewarePanel busy={busy} addSignal={middlewareAdd} run={(work, title) => run(work, title)} onOpenPrivacy={() => onNavigate?.("settings")} />
         )}
       </div>
 
-      {dialog?.kind === "manage" && (
-        <SourceManageDialog connections={connections} capabilities={capabilities} catalog={catalog} groups={groups} agents={agents}
-          pinned={pinned} busy={busy} run={run} onClose={() => setDialog(null)}
-          onRename={(connection) => setDialog({ kind: "rename", connection })}
-          onShowModels={(models) => setDialog({ kind: "catalog", models })}
-          onTogglePin={togglePin}
-          onWire={goAgents} onUnwire={goAgents} onAccept={goAgents} />
+      {dialog?.kind === "confirm" && (
+        <ConfirmDialog
+          open
+          onOpenChange={(open) => { if (!open) setDialog(null) }}
+          title={dialog.title}
+          description={dialog.description}
+          confirmText={dialog.label}
+          kind={dialog.danger ? "danger" : "primary"}
+          loading={busy}
+          onConfirm={() => { const current = dialog; setDialog(null); void current.work() }}
+        />
       )}
-      {dialog?.kind === "rename" && (
-        <RenameDialog connection={dialog.connection} busy={busy} onClose={() => setDialog({ kind: "manage" })} onSave={async (name, slug) => {
-          const ok = await run(async () => {
-            if (name !== dialog.connection.baseName) await api.renameConnection(dialog.connection.id, name)
-            if (slug && slug !== dialog.connection.slug) await gatewayApi.setSlug(dialog.connection.id, slug)
-          }, "已保存")
-          if (ok) setDialog({ kind: "manage" })
-        }} />
-      )}
-      {dialog?.kind === "catalog" && <CatalogDialog models={dialog.models ?? catalog} onClose={() => setDialog({ kind: "manage" })} />}
-      {dialog?.kind === "confirm" && <ActionConfirmDialog title={dialog.title} description={dialog.description} confirmLabel={dialog.label} danger={dialog.danger} onClose={() => setDialog(null)} onConfirm={dialog.work} />}
-    </PanelPage>
+    </>
   )
 }
 
-/**
- * 页签条 —— 橡皮滑块分段控件（React Bits RubberSegment 的零依赖移植，见 components/ui/RubberSegment.tsx）。
- *
- * 改动前是「选中项自己加白底 + 边框」，切页签时两块色块交替淡入淡出。
- * 现在是一个共享滑块在槽位间滑动：点选先向两侧膨胀覆盖「旧槽 + 新槽」，
- * 再收缩落位，落点后缘还有一点点压缩回弹；按住滑块可直接拖、快速甩动会带惯性。
- *
- * 外观仍是 V6 画板的浅底圆角容器 + 白底滑块，只是把「换底」换成了「移动一个物体」。
- */
-function TabBar({ tab, onTab }: { tab: Tab; onTab: (tab: Tab) => void }) {
+/** 五页签共用的紧凑状态条（R1-18～22「路由状态条」：56 高、圆角 20）。 */
+function GatewayStatusBar({ port, running, wired, busy, onToggleRunning, moreItems }: {
+  port: number | null
+  running: boolean
+  wired: number
+  busy: boolean
+  onToggleRunning: () => void
+  moreItems: MoreItem[]
+}) {
   return (
-    <RubberSegment
-      className="w-full"
-      aria-label="模型路由"
-      size="md"
-      radius={12}
-      inset={4}
-      equalSlots
-      stretch={100}
-      squash={3}
-      glide={75}
-      draggable
-      value={tab}
-      onChange={(next) => onTab(next as Tab)}
-      items={TABS.map(({ id, label, icon: Icon }) => ({
-        value: id,
-        label: (
-          <>
-            {id === "middleware" ? <SlidersIcon className="size-3.5" /> : <Icon aria-hidden className="size-3.5" />}
-            {label}
-          </>
-        ),
-      }))}
-    />
+    <section className="flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-[20px] border border-jn-line bg-jn-surface py-2 pr-3.5 pl-2.5 shadow-jn-surface">
+      <span className="flex size-[34px] shrink-0 items-center justify-center rounded-[12px] bg-jn-primary-soft">
+        <Icon name="navGateway" size="md" className="text-jn-primary" />
+      </span>
+      <span className="shrink-0 text-[14px] font-bold text-jn-text">本机路由</span>
+      <span className="shrink-0 font-mono text-[12.5px] font-medium text-jn-text-2">127.0.0.1:{port ?? "—"}</span>
+      <StatusPill tone={running ? "success" : "neutral"}>{running ? "正在中转" : "已停止"}</StatusPill>
+      <span className="min-w-0 flex-1" />
+      <span className="shrink-0 text-[12px] text-jn-text-3">{wired} 个工具已接入</span>
+      <Button kind={running ? "ghost" : "primary"} icon={running ? "pause" : "play"} disabled={busy} onClick={onToggleRunning}>
+        {running ? "停止中转" : "开启中转"}
+      </Button>
+      <MoreMenu items={moreItems} />
+    </section>
   )
 }
 
-function RouteGlyph({ className }: { className?: string }) {
-  return (
-    <svg aria-hidden viewBox="0 0 20 20" className={cn("size-5", className)} fill="none" stroke="currentColor" strokeWidth="1.5">
-      <circle cx="5" cy="5" r="2.2" /><circle cx="15" cy="10" r="2.2" /><circle cx="5" cy="15" r="2.2" />
-      <path d="M7 6.2L12.9 9M7 13.8L12.9 11" strokeLinecap="round" />
-    </svg>
-  )
-}
-
-function StopGlyph({ on }: { on: boolean }) {
-  return on ? (
-    <svg aria-hidden viewBox="0 0 14 14" className="size-3.5 text-jolu-muted" fill="none" stroke="currentColor" strokeWidth="1.5">
-      <rect x="3" y="3" width="8" height="8" rx="1.5" />
-    </svg>
-  ) : (
-    <svg aria-hidden viewBox="0 0 14 14" className="size-3.5 text-jolu-muted" fill="none" stroke="currentColor" strokeWidth="1.5">
-      <path d="M4 2.5L11.5 7L4 11.5V2.5z" strokeLinejoin="round" />
-    </svg>
-  )
-}
-
-interface MoreMenuItem {
-  label: string
-  danger?: boolean
-  onClick: () => void
-}
-
-function MoreMenu({ items }: { items: MoreMenuItem[] }) {
+/** 「更多」菜单：点外 / Escape 关闭，不使用旧 `.jolu-menu` 与 `gw-pop`。 */
+export function MoreMenu({ items }: { items: MoreItem[] }) {
   const [open, setOpen] = useState(false)
-  /** 退出动画期间保持渲染，120ms 后真正卸载（gw-pop-out 时长，与范围下拉一致） */
-  const [closing, setClosing] = useState(false)
-  const closeTimer = useRef<number | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
-  const close = () => {
-    if (!open) return
-    setClosing(true)
-    if (closeTimer.current) window.clearTimeout(closeTimer.current)
-    closeTimer.current = window.setTimeout(() => {
-      setOpen(false)
-      setClosing(false)
-      closeTimer.current = null
-    }, 120)
-  }
-  useEffect(() => () => { if (closeTimer.current) window.clearTimeout(closeTimer.current) }, [])
-  // 点外与 Escape 关闭（automation/SkillPicker 同款）；菜单进入 gw-pop / 退出 gw-pop-out
   useEffect(() => {
     if (!open) return
     const onDown = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) close()
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
     }
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close()
-    }
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false) }
     document.addEventListener("mousedown", onDown)
     document.addEventListener("keydown", onKey)
     return () => {
@@ -502,23 +469,13 @@ function MoreMenu({ items }: { items: MoreMenuItem[] }) {
     }
   }, [open])
   return (
-    <div ref={rootRef} className="relative shrink-0">
-      <button type="button" aria-label="更多操作" aria-expanded={open} data-open={open} onClick={() => (open ? close() : setOpen(true))}
-        className={cn(
-          // 悬停用 jolu-stage：浅色主题 jolu-side 与 jolu-bg 同为 #ffffff，白上白无反馈。
-          // 宽度用 px 而不是固定 w-11：按钮里是「图标 + 文字」两段，
-          // 固定 44px 装不下（文字会被压扁/溢出）。h-10 与旁边「开启中转」按钮同高。
-          "motion-button flex h-10 shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent",
-          open ? "border-jolu-accent/45 bg-jolu-side" : "border-jolu-border bg-jolu-bg hover:bg-jolu-stage active:bg-jolu-cc-pressed",
-        )}>
-        <MoreHorizontal aria-hidden className="size-4 shrink-0 text-jolu-muted" />
-        <span className="text-meta font-medium text-jolu-text">更多</span>
-      </button>
+    <div ref={rootRef} className="relative shrink-0" data-open={open}>
+      <IconButton icon="more" label="更多操作" kind="surface" aria-expanded={open} onClick={() => setOpen((value) => !value)} />
       {open && (
-        <div role="menu" className={cn("absolute right-0 top-12 z-20 w-48 rounded-lg border border-jolu-border bg-jolu-bg p-1 shadow-[0_10px_24px_var(--jolu-cc-popup-shadow)]", closing ? "gw-pop-out" : "gw-pop")}>
+        <div role="menu" className="absolute top-10 right-0 z-20 w-48 rounded-[14px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface">
           {items.map((item) => (
-            <button key={item.label} type="button" role="menuitem" onClick={() => { close(); item.onClick() }}
-              className={cn("w-full cursor-pointer rounded-md px-2.5 py-1.5 text-left text-meta transition-colors hover:bg-jolu-stage active:bg-jolu-cc-pressed", item.danger ? "text-jolu-danger" : "text-jolu-text")}>
+            <button key={item.label} type="button" role="menuitem" onClick={() => { setOpen(false); item.onClick() }}
+              className={cn("w-full rounded-[10px] px-2.5 py-1.5 text-left text-[12px] hover:bg-jn-well", item.danger ? "text-jn-danger" : "text-jn-text")}>
               {item.label}
             </button>
           ))}

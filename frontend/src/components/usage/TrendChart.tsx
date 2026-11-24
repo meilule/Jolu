@@ -1,27 +1,27 @@
-import { useEffect, useId, useRef, useState } from "react"
-import { axisTicks, hitIndex, labelEvery, seriesMax, smoothPath, xAt, yAt, type Series } from "@/lib/chartGeometry"
+/**
+ * TrendChart / TrendLegend —— 设计稿 `docs/ui/jolu-new.pen` R1-04（用量统计 · 概览）。
+ *
+ * 按画板做**堆叠柱图**：
+ * - Token 模式下按 `jn-viz-1..4` 堆叠（输入、输出、缓存读取、缓存写入）；
+ * - 请求 / 费用模式下为单柱（`jn-viz-1`）；
+ * - 悬停某柱时，其余柱压暗到 32% 不透明，并弹出 `ChartTooltip`；
+ * - 点击柱子下钻到对应时间段的调用明细。
+ */
+import { useState } from "react"
+import { cn } from "@/lib/utils"
+import { axisTicks, labelEvery } from "@/lib/chartGeometry"
 import { formatTokens, formatUsd } from "@/lib/usageStats"
 import type { StatsTrendBucketDto } from "@/lib/api"
+import { ChartTooltip, Legend, VIZ_BG, type ChartTooltipRow, type VizSeries } from "@/ui"
 
 export type TrendMode = "tokens" | "requests" | "cost"
 
-/** 画板 30 的四条折线颜色；浅深色相同 */
-const TOKEN_SERIES = [
-  { key: "fresh_input", label: "输入", color: "#059669" },
-  { key: "output", label: "输出", color: "#34C88A" },
-  { key: "cache_read", label: "缓存读取", color: "#87BFA8" },
-  { key: "cache_write", label: "缓存写入", color: "#748C82" },
-] as const
-
-const HEIGHT = 154
-const AXIS_W = 40
-const LABEL_H = 18
-
-function seriesFor(points: StatsTrendBucketDto[], mode: TrendMode): (Series & { color: string })[] {
-  if (mode === "tokens") return TOKEN_SERIES.map((s) => ({ key: s.key, label: s.label, colorVar: "", color: s.color, values: points.map((p) => p[s.key]) }))
-  if (mode === "requests") return [{ key: "requests", label: "请求", colorVar: "", color: "#059669", values: points.map((p) => p.requests) }]
-  return [{ key: "cost", label: "估算费用", colorVar: "", color: "#059669", values: points.map((p) => p.cost) }]
-}
+const TOKEN_SERIES: readonly { key: "fresh_input" | "output" | "cache_read" | "cache_write"; label: string; series: VizSeries }[] = [
+  { key: "fresh_input", label: "输入", series: 1 },
+  { key: "output", label: "输出", series: 2 },
+  { key: "cache_read", label: "缓存读取", series: 3 },
+  { key: "cache_write", label: "缓存写入", series: 4 },
+]
 
 /** 轴刻度去掉多余小数：1 M、500 K、2.5 M */
 function axisLabel(value: number, mode: TrendMode): string {
@@ -29,7 +29,7 @@ function axisLabel(value: number, mode: TrendMode): string {
   if (mode === "requests") return String(Math.round(value))
   if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(1))} M`
   if (value >= 1_000) return `${Number((value / 1_000).toFixed(1))} K`
-  return String(value)
+  return String(Math.round(value))
 }
 
 function tooltipTitle(point: StatsTrendBucketDto, bucket: "2h" | "day" | "week"): string {
@@ -39,127 +39,156 @@ function tooltipTitle(point: StatsTrendBucketDto, bucket: "2h" | "day" | "week")
   return bucket === "week" ? `${day}起一周` : day
 }
 
-export function TrendLegend({ mode }: { mode: TrendMode }) {
-  const items = mode === "tokens" ? TOKEN_SERIES : [{ label: mode === "requests" ? "请求" : "估算费用", color: "#059669" }]
-  return (
-    <div className="flex h-4 items-center gap-[18px]">
-      {items.map((item) => (
-        <span key={item.label} className="flex items-center gap-1.5 text-[11px] text-jolu-muted">
-          <span aria-hidden className="h-[3px] w-3.5 rounded-sm" style={{ background: item.color }} />
-          {item.label}
-        </span>
-      ))}
-    </div>
-  )
+function pointTotal(point: StatsTrendBucketDto, mode: TrendMode): number {
+  if (mode === "requests") return point.requests
+  if (mode === "cost") return point.cost ?? 0
+  return (point.fresh_input ?? 0) + (point.output ?? 0) + (point.cache_read ?? 0) + (point.cache_write ?? 0)
 }
 
-/** 平滑折线趋势：悬浮看分项，点击数据点下钻到对应时段的调用明细（画板 38） */
+export function TrendLegend({ mode }: { mode: TrendMode }) {
+  const items =
+    mode === "tokens"
+      ? TOKEN_SERIES.map((s) => ({ key: s.key, label: s.label, series: s.series }))
+      : [{ key: mode, label: mode === "requests" ? "请求次数" : "估算费用", series: 1 as VizSeries }]
+  return <Legend items={items} />
+}
+
 export function TrendChart({ points, bucket, mode, onDrill }: {
   points: StatsTrendBucketDto[]
   bucket: "2h" | "day" | "week"
   mode: TrendMode
   onDrill: (point: StatsTrendBucketDto) => void
 }) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [width, setWidth] = useState(560)
   const [hover, setHover] = useState(-1)
-  const gradientId = useId()
-
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const observer = new ResizeObserver(([entry]) => setWidth(Math.max(120, entry.contentRect.width - AXIS_W)))
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [])
-
-  const series = seriesFor(points, mode)
-  const ticks = axisTicks(seriesMax(series), 3)
-  const top = ticks[0] ?? 0
-  const plot = { width, height: HEIGHT - LABEL_H - 6 }
+  const totals = points.map((p) => pointTotal(p, mode))
+  const maxVal = Math.max(0, ...totals)
+  const ticks = axisTicks(maxVal, 3)
+  const top = ticks[0] || 1
   const every = labelEvery(points.length, 7)
-  const latest = (values: Array<number | null>) => {
-    for (let i = values.length - 1; i >= 0; i--) if (values[i] !== null) return i
-    return -1
-  }
-  const point = hover >= 0 ? points[hover] : null
+  const hovered = hover >= 0 ? points[hover] ?? null : null
+
+  const tooltipRows: ChartTooltipRow[] = hovered
+    ? mode === "tokens"
+      ? [
+          { label: "普通输入", value: formatTokens(hovered.fresh_input), series: 1 },
+          { label: "输出", value: formatTokens(hovered.output), series: 2 },
+          { label: "缓存读取", value: formatTokens(hovered.cache_read), series: 3 },
+          { label: "缓存写入", value: formatTokens(hovered.cache_write), series: 4 },
+        ]
+      : [
+          {
+            label: mode === "requests" ? "请求次数" : "估算费用",
+            value: mode === "requests" ? `${hovered.requests} 次` : formatUsd(hovered.cost),
+            series: 1,
+          },
+        ]
+    : []
+
+  const tooltipFooter = hovered
+    ? mode === "tokens"
+      ? `总 Token · ${formatTokens(hovered.total)}`
+      : "点击柱子查看此时段调用明细"
+    : undefined
 
   return (
-    <div ref={ref} className="relative h-[154px] w-full select-none">
-      {ticks.map((tick) => {
-        const y = yAt(tick, top, plot.height) + 3
-        return (
-          <div key={tick} className="pointer-events-none absolute inset-x-0" style={{ top: y }}>
-            <span className="tnum absolute left-0 -translate-y-1/2 text-[9px] text-jolu-muted">{axisLabel(tick, mode)}</span>
-            <span className="absolute right-0 h-px bg-jolu-border" style={{ left: AXIS_W }} />
-          </div>
-        )
-      })}
-      <svg
-        role="img"
-        aria-label="用量趋势"
-        className="absolute top-[3px] cursor-pointer overflow-visible"
-        style={{ left: AXIS_W }}
-        width={plot.width}
-        height={plot.height}
-        onMouseMove={(event) => setHover(hitIndex(event.nativeEvent.offsetX, points.length, plot.width))}
-        onMouseLeave={() => setHover(-1)}
-        onClick={() => point && onDrill(point)}
-      >
-        <defs>
-          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#06C167" stopOpacity={0.08} />
-            <stop offset="1" stopColor="#06C167" stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        {series[0] && (() => {
-          const line = smoothPath(series[0].values, top, plot)
-          const first = series[0].values.findIndex((v) => v !== null)
-          const last = latest(series[0].values)
-          if (!line || first < 0 || last === first) return null
-          const base = plot.height.toFixed(2)
-          return <path d={`${line} L${xAt(last, points.length, plot.width).toFixed(2)},${base} L${xAt(first, points.length, plot.width).toFixed(2)},${base} Z`} fill={`url(#${gradientId})`} />
-        })()}
-        {point && <line x1={xAt(hover, points.length, plot.width)} x2={xAt(hover, points.length, plot.width)} y1={0} y2={plot.height} stroke="var(--jolu-border)" strokeDasharray="3 3" />}
-        {series.map((s) => (
-          <path key={s.key} d={smoothPath(s.values, top, plot)} fill="none" stroke={s.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-        ))}
-        {series.map((s) => {
-          const index = hover >= 0 && s.values[hover] !== null ? hover : latest(s.values)
-          const value = index >= 0 ? s.values[index] : null
-          if (value === null) return null
-          return <circle key={s.key} cx={xAt(index, points.length, plot.width)} cy={yAt(value, top, plot.height)} r={3.5} fill={s.color} stroke="var(--jolu-bg)" strokeWidth={1.5} />
-        })}
-      </svg>
-      {points.map((p, index) => (index % every === 0 ? (
-        <span key={p.start} className="tnum pointer-events-none absolute bottom-0 -translate-x-1/2 text-[9px] text-jolu-muted" style={{ left: AXIS_W + xAt(index, points.length, plot.width) }}>
-          {p.label}
-        </span>
-      ) : null))}
-      {point && (
-        <div
-          role="tooltip"
-          className="pointer-events-none absolute top-0 z-10 flex w-[200px] flex-col gap-2 rounded-xl border border-jolu-border bg-jolu-cc-surface p-3 shadow-popover"
-          style={xAt(hover, points.length, plot.width) > plot.width / 2
-            ? { right: plot.width - xAt(hover, points.length, plot.width) + 12 }
-            : { left: AXIS_W + xAt(hover, points.length, plot.width) + 12 }}
-        >
-          <span className="text-[13px] font-semibold text-jolu-text">{tooltipTitle(point, bucket)}</span>
-          {mode === "tokens" ? (
-            <>
-              {[["普通输入", point.fresh_input], ["输出", point.output], ["缓存读取", point.cache_read], ["缓存写入", point.cache_write]].map(([label, value]) => (
-                <span key={label as string} className="flex justify-between text-xs"><span className="text-jolu-muted">{label}</span><span className="tnum text-jolu-text">{formatTokens(value as number | null)}</span></span>
-              ))}
-              <span className="flex items-center justify-between text-xs"><span className="text-jolu-text">总 Token</span><span className="tnum text-base font-semibold text-jolu-on">{formatTokens(point.total)}</span></span>
-              {[point.fresh_input, point.output, point.cache_read, point.cache_write].some(value=>value===null) && <span className="text-[11px] text-jolu-muted">此时段部分数据未提供，折线跨过缺失点连接。</span>}
-            </>
-          ) : (
-            <span className="flex items-center justify-between text-xs">
-              <span className="text-jolu-text">{mode === "requests" ? "请求" : "估算费用"}</span>
-              <span className="tnum text-base font-semibold text-jolu-on">{mode === "requests" ? `${point.requests} 次` : formatUsd(point.cost)}</span>
-            </span>
-          )}
+    <div
+      className="relative flex h-[170px] w-full flex-col select-none"
+      onMouseLeave={() => setHover(-1)}
+    >
+      {/* 主绘图区（左侧刻度 + 右侧柱区） */}
+      <div className="relative flex min-h-0 flex-1 items-stretch">
+        {/* 网格线与 Y 轴刻度 */}
+        <div className="pointer-events-none absolute inset-0 flex flex-col justify-between">
+          {ticks.map((tick) => (
+            <div key={tick} className="flex items-center gap-2">
+              <span className="tnum w-10 shrink-0 text-right font-mono text-[10px] text-jn-text-3">
+                {axisLabel(tick, mode)}
+              </span>
+              <span className="h-px flex-1 bg-jn-viz-grid" />
+            </div>
+          ))}
         </div>
+
+        {/* 堆叠柱组 */}
+        <div
+          role="img"
+          aria-label="用量趋势柱图"
+          className="relative z-[1] ml-12 flex flex-1 items-end gap-1.5 pt-2 pb-1"
+        >
+          {points.map((point, index) => {
+            const sum = totals[index]
+            const heightPct = top > 0 && sum > 0 ? Math.max(3, (sum / top) * 100) : 0
+            const dimmed = hover >= 0 && hover !== index
+            const active = hover === index
+
+            const segments =
+              mode === "tokens"
+                ? TOKEN_SERIES.map((s) => ({
+                    key: s.key,
+                    series: s.series,
+                    value: point[s.key] ?? 0,
+                  })).filter((seg) => seg.value > 0)
+                : sum > 0
+                  ? [{ key: mode, series: 1 as VizSeries, value: sum }]
+                  : []
+
+            return (
+              <button
+                key={point.start}
+                type="button"
+                aria-label={`${tooltipTitle(point, bucket)}：${mode === "requests" ? `${point.requests} 次` : mode === "cost" ? formatUsd(point.cost) : formatTokens(point.total)}`}
+                onMouseEnter={() => setHover(index)}
+                onFocus={() => setHover(index)}
+                onClick={() => onDrill(point)}
+                className="group relative flex h-full min-w-0 flex-1 cursor-pointer flex-col justify-end outline-none"
+              >
+                <span
+                  className={cn(
+                    "mx-auto flex w-full max-w-[34px] flex-col-reverse overflow-hidden rounded-t-[6px] transition-[opacity,transform] duration-[var(--motion-feedback)]",
+                    dimmed && "opacity-30",
+                    active && "brightness-[1.04]",
+                  )}
+                  style={{ height: `${heightPct}%` }}
+                >
+                  {segments.map((seg) => (
+                    <span
+                      key={seg.key}
+                      className={cn("w-full shrink-0", VIZ_BG[seg.series])}
+                      style={{ height: `${sum > 0 ? (seg.value / sum) * 100 : 0}%` }}
+                    />
+                  ))}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* X 轴标签 */}
+      <div className="ml-12 flex h-5 items-center gap-1.5 pt-1">
+        {points.map((p, index) => (
+          <span
+            key={p.start}
+            className="tnum min-w-0 flex-1 truncate text-center font-mono text-[10px] text-jn-text-3"
+          >
+            {index % every === 0 ? p.label : ""}
+          </span>
+        ))}
+      </div>
+
+      {/* 悬停气泡提示（R1-04 / R1-C ChartTooltip） */}
+      {hovered && (
+        <ChartTooltip
+          title={tooltipTitle(hovered, bucket)}
+          rows={tooltipRows}
+          footer={tooltipFooter}
+          className="absolute top-1 z-10"
+          style={
+            hover >= points.length / 2
+              ? { left: 56 }
+              : { right: 8 }
+          }
+        />
       )}
     </div>
   )

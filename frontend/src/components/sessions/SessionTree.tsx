@@ -1,14 +1,15 @@
 import { useRef, type KeyboardEvent } from "react"
-import { ChevronDown, ChevronRight, Folder, FolderOpen, RotateCcw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { listTime, sessionKey, sessionTitle, statusLabel, visibleRows, type ProjectGroup } from "@/lib/sessionThreads"
 import { PlatformLogo } from "@/components/brand/PlatformLogo"
 import { providerName } from "@/lib/providerCatalog"
-import { Card, ToolButton } from "@/components/usage/usageControls"
+import { Card } from "@/components/usage/usageControls"
 import type { PlatformId } from "@/types"
+import { Icon } from "@/icons"
+import { Button } from "@/ui"
 
 /**
- * 项目 → 会话两级列表（画板 40 / 42）。左右键展开收起，上下键移动，Enter 查看（画板 46）。
+ * 项目 → 会话两级列表（R1-05）。左右键展开收起，上下键移动，Enter 查看。
  * 列表独立滚动；切换会话不改变筛选与展开状态。
  */
 export function SessionTree({ groups, expanded, selected, searching, total, onToggle, onSelect, onClear }: {
@@ -54,10 +55,10 @@ export function SessionTree({ groups, expanded, selected, searching, total, onTo
   }
 
   return (
-    <Card className="flex h-full w-[320px] shrink-0 flex-col gap-1 p-2.5">
-      <div className="flex items-center justify-between px-0.5 pb-1">
-        <h3 className="text-sm font-semibold text-jolu-text">{searching ? "匹配的项目与会话" : "项目与会话"}</h3>
-        <span className="text-[11px] text-jolu-muted">{groups.length} 项目 · {total} 条</span>
+    <Card className="flex h-full w-[320px] shrink-0 flex-col gap-1.5 p-3">
+      <div className="flex items-center justify-between px-1 pb-1">
+        <h3 className="text-sm font-semibold text-jn-text">{searching ? "匹配的项目与会话" : "项目与会话"}</h3>
+        <span className="tnum text-[11px] text-jn-text-3">{groups.length} 项目 · {total} 条</span>
       </div>
       <div ref={listRef} role="tree" aria-label="项目与会话" onKeyDown={onKeyDown} className="-mx-1 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-1">
         {groups.map((g) => {
@@ -70,15 +71,15 @@ export function SessionTree({ groups, expanded, selected, searching, total, onTo
                 role="treeitem"
                 aria-expanded={open}
                 onClick={() => onToggle(g.key)}
-                className="flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-jolu-side px-1.5 text-left outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent"
+                className="jn-interactive flex h-8 shrink-0 items-center gap-1.5 rounded-[10px] px-2 text-left outline-none hover:bg-jn-well"
               >
-                {open ? <ChevronDown aria-hidden className="size-3 text-jolu-muted" /> : <ChevronRight aria-hidden className="size-3 text-jolu-muted" />}
-                {open ? <FolderOpen aria-hidden className="size-[15px] text-jolu-muted" /> : <Folder aria-hidden className="size-[15px] text-jolu-muted" />}
-                <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-jolu-text" title={g.path ?? undefined}>{g.name}</span>
-                <span className="tnum text-[11px] text-jolu-muted">{g.sessions.length}</span>
+                <Icon name={open ? "expand" : "next"} size="xs" className="shrink-0 text-jn-text-3" />
+                <Icon name={open ? "openFolder" : "folder"} size="sm" className="shrink-0 text-jn-text-3" />
+                <span className="min-w-0 flex-1 truncate text-xs font-semibold text-jn-text" title={g.path ?? undefined}>{g.name}</span>
+                <span className="tnum rounded-full bg-jn-well px-1.5 py-0.5 text-[10.5px] font-medium text-jn-text-3">{g.sessions.length}</span>
               </button>
               {open && (
-                <div className="ml-[7px] flex flex-col gap-0.5 border-l border-jolu-border pl-[7px]">
+                <div className="ml-2.5 flex flex-col gap-0.5 border-l border-jn-line pl-2">
                   {g.sessions.map((s) => {
                     const key = sessionKey(s)
                     const active = key === selected
@@ -91,18 +92,18 @@ export function SessionTree({ groups, expanded, selected, searching, total, onTo
                         aria-selected={active}
                         onClick={() => onSelect(key)}
                         className={cn(
-                          "flex h-9 shrink-0 flex-col justify-center gap-0.5 rounded-md px-1.5 text-left [.density-compact_&]:h-8 outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent",
-                          active ? "bg-jolu-selected" : "hover:bg-jolu-side",
+                          "jn-interactive flex h-10 shrink-0 flex-col justify-center gap-0.5 rounded-[10px] px-2 text-left outline-none [.density-compact_&]:h-9",
+                          active ? "bg-jn-primary-wash" : "hover:bg-jn-well",
                         )}
                       >
                         <span className="flex w-full items-center gap-1.5">
-                          <PlatformLogo platform={s.platform as PlatformId} size={12} />
-                          <span className={cn("min-w-0 flex-1 truncate text-[12px]", active ? "font-semibold text-jolu-on" : "text-jolu-text")}>{sessionTitle(s)}</span>
-                          <span className="tnum shrink-0 text-[9px] text-jolu-muted">{listTime(s.last_ts)}</span>
+                          <PlatformLogo platform={s.platform as PlatformId} size={13} />
+                          <span className={cn("min-w-0 flex-1 truncate text-xs", active ? "font-semibold text-jn-primary-ink" : "text-jn-text")}>{sessionTitle(s)}</span>
+                          <span className="tnum shrink-0 text-[10px] text-jn-text-3">{listTime(s.last_ts)}</span>
                         </span>
-                        <span className="flex gap-2 pl-[18px] text-[9px]">
-                          <span className="text-jolu-muted">{providerName(s.platform)}</span>
-                          <span className={s.status === "running" ? "text-jolu-on" : s.status === "failed" ? "text-jolu-danger" : "text-jolu-muted"}>{statusLabel(s.status)}</span>
+                        <span className="flex gap-2 pl-[19px] text-[10.5px]">
+                          <span className="text-jn-text-3">{providerName(s.platform)}</span>
+                          <span className={s.status === "running" ? "text-jn-primary-ink" : s.status === "failed" ? "text-jn-danger" : "text-jn-text-3"}>{statusLabel(s.status)}</span>
                         </span>
                       </button>
                     )
@@ -115,11 +116,11 @@ export function SessionTree({ groups, expanded, selected, searching, total, onTo
       </div>
       {searching ? (
         <div className="flex flex-col items-start gap-2 pt-1">
-          <span className="text-[11px] text-jolu-muted">仅显示匹配会话，自动展开对应项目。</span>
-          <ToolButton bordered icon={<RotateCcw />} onClick={onClear}>清除搜索与筛选</ToolButton>
+          <span className="text-[11px] text-jn-text-3">仅显示匹配会话，自动展开对应项目。</span>
+          <Button kind="ghost" size="sm" icon="retry" onClick={onClear}>清除搜索与筛选</Button>
         </div>
       ) : (
-        <span className="pt-1 text-[9px] text-jolu-muted">已展开 {shown} 条会话 · 点击项目展开更多</span>
+        <span className="px-1 pt-1 text-[10.5px] text-jn-text-3">已展开 {shown} 条会话 · 点击项目展开更多</span>
       )}
     </Card>
   )

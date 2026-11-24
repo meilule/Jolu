@@ -13,7 +13,7 @@ import { ActionButton, Notice, SelectButton, SettingsGroup, SettingsRow } from "
  * 待确认：`Jolu.pen` 没有这块的画板，按既有 `SettingsGroup` 布局挂在「数据与存储」页尾；
  * 只接 Claude Code / Codex / OpenCode。NAT 网络下只在用户自己开了局域网共享时接，Jolu 不替用户打开。
  */
-const TONE = { ok: "text-jolu-green", warn: "text-jolu-amber", muted: "text-jolu-muted" } as const
+const TONE = { ok: "text-jn-primary", warn: "text-jn-warning", muted: "text-jn-text-3" } as const
 
 export function WslWiringSection() {
   const toast = useToast()
@@ -60,7 +60,7 @@ export function WslWiringSection() {
   const summary = state ? netSummary(state) : null
   return (
     <SettingsGroup icon={Server} title="WSL 里的工具（待确认）" desc="把 WSL 发行版里的 Claude Code、Codex、OpenCode 接到模型路由；写的是发行版里的配置文件，断开时按快照还原">
-      {probeError && <div className="border-t border-jolu-border py-3"><Notice tone="danger">{probeError}</Notice></div>}
+      {probeError && <div className="border-t border-jn-line py-3"><Notice tone="danger">{probeError}</Notice></div>}
       {distros && distros.length > 0 && (
         <SettingsRow title="发行版" desc={summary ? <span className={TONE[summary.tone]}>{summary.text}</span> : loading ? "正在读取发行版的网络情况…" : undefined}
           control={<SelectButton label="发行版" value={distro} options={distros.map((d) => ({ value: d, label: d }))} onChange={setDistro} disabled={!isTauri || busy !== null} />} />

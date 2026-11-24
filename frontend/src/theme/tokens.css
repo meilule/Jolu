@@ -1,0 +1,166 @@
+/* 由 scripts/dev/extract-pen-tokens.py 从 docs/ui/jolu-new.pen 生成，请勿手改。
+ *
+ * 改颜色的正确做法：改设计稿 → 重跑脚本。手改这里会在下次生成时被覆盖，
+ * 而且设计稿与代码会立刻不一致。
+ *
+ * 变量命名：设计稿里是 jn-*（Jolu New）。Tailwind 侧通过 @theme inline 暴露成
+ * --color-jn-* / --radius-jn-* / --spacing-jn-* / --font-jn*，页面只用类名，
+ * 不直接写 var(--jn-*)，更不写十六进制色值。
+ *
+ * 浅 / 深两套：:root 是浅色，.dark 覆盖同名变量。深色值逐项取自设计稿，
+ * 不用滤镜或亮度推导——设计稿给的深色不是浅色的机械变暗。
+ */
+
+:root {
+  --jn-area-end: #16A86200;
+  --jn-area-top: #16A86233;
+  --jn-card-line: #FFFFFF00;
+  --jn-danger: #E0484D;
+  --jn-danger-soft: #FCEBEB;
+  --jn-focus: #16A86259;
+  --jn-glow: #16A86238;
+  --jn-info: #2F7BD9;
+  --jn-info-soft: #E6F0FC;
+  --jn-inverse: #1B2320;
+  --jn-inverse-chip: #FFFFFF14;
+  --jn-line: #E6EAE8;
+  --jn-logo-claude: #D97757;
+  --jn-logo-codex: #0D0D0D;
+  --jn-logo-gemini: #1A73E8;
+  --jn-logo-qwen: #615CED;
+  --jn-mint: #8EDBB0;
+  --jn-mint-2: #C6ECD5;
+  --jn-on-inverse: #F1F5F3;
+  --jn-on-primary: #FFFFFF;
+  --jn-primary: #16A862;
+  --jn-primary-hover: #12955A;
+  --jn-primary-ink: #0B7A44;
+  --jn-primary-press: #0F854F;
+  --jn-primary-soft: #DCF3E5;
+  --jn-primary-wash: #EDF8F1;
+  --jn-shadow: #0F2A1C12;
+  --jn-stage: #F1F4F2;
+  --jn-surface: #FFFFFF;
+  --jn-text: #101513;
+  --jn-text-2: #5B6560;
+  --jn-text-3: #929B97;
+  --jn-track: #E5EBE8;
+  --jn-viz-1: #16A862;
+  --jn-viz-2: #2A78D6;
+  --jn-viz-3: #EB6834;
+  --jn-viz-4: #6250D6;
+  --jn-viz-grid: #EEF1EF;
+  --jn-viz-other: #B8C1BC;
+  --jn-warning: #D98E0B;
+  --jn-warning-soft: #FCF2DF;
+  --jn-well: #F3F6F4;
+  --jn-font: "Inter", sans-serif;
+  --jn-gap-card: 14px;
+  --jn-mono: "JetBrains Mono", monospace;
+  --jn-r-block: 16px;
+  --jn-r-card: 24px;
+}
+
+/* 深色主题：只覆盖颜色，几何与字体不随主题变化。 */
+.dark {
+  --jn-area-end: #3DD68C00;
+  --jn-area-top: #3DD68C38;
+  --jn-card-line: #FFFFFF0D;
+  --jn-danger: #FF6B6F;
+  --jn-danger-soft: #3A1A1C;
+  --jn-focus: #3DD68C66;
+  --jn-glow: #3DD68C2E;
+  --jn-info: #7CB2F5;
+  --jn-info-soft: #16263B;
+  --jn-inverse: #E4ECE8;
+  --jn-inverse-chip: #0000000F;
+  --jn-line: #252B28;
+  --jn-logo-claude: #E08A6D;
+  --jn-logo-codex: #F0F0F0;
+  --jn-logo-gemini: #7CA9F5;
+  --jn-logo-qwen: #615CED;
+  --jn-mint: #2C8A5A;
+  --jn-mint-2: #1D4630;
+  --jn-on-inverse: #101513;
+  --jn-on-primary: #03150B;
+  --jn-primary: #3DD68C;
+  --jn-primary-hover: #5BE0A0;
+  --jn-primary-ink: #7BE3AD;
+  --jn-primary-press: #2FC27C;
+  --jn-primary-soft: #163423;
+  --jn-primary-wash: #112319;
+  --jn-shadow: #00000059;
+  --jn-stage: #0B0E0D;
+  --jn-surface: #151917;
+  --jn-text: #ECF1EE;
+  --jn-text-2: #9CA6A1;
+  --jn-text-3: #6A746F;
+  --jn-track: #262D2A;
+  --jn-viz-1: #1FAE6B;
+  --jn-viz-2: #3987E5;
+  --jn-viz-3: #D95926;
+  --jn-viz-4: #9085E9;
+  --jn-viz-grid: #222825;
+  --jn-viz-other: #4A524E;
+  --jn-warning: #F5B83D;
+  --jn-warning-soft: #3A2C12;
+  --jn-well: #1C211F;
+}
+
+/* 表面投影（设计稿里引用 223 次）：卡片、列表行、输入框共用。 */
+:root {
+  --jn-shadow-surface: 0 1px 3px var(--jn-shadow);
+}
+
+/* 以下把变量接进 Tailwind 4 的 @theme：页面用 bg-jn-primary / rounded-jn-card /
+ * gap-jn-card 这类类名，不写 var()。inline 表示值在运行时解析，主题切换即时生效。 */
+@theme inline {
+  --color-jn-area-end: var(--jn-area-end);
+  --color-jn-area-top: var(--jn-area-top);
+  --color-jn-card-line: var(--jn-card-line);
+  --color-jn-danger: var(--jn-danger);
+  --color-jn-danger-soft: var(--jn-danger-soft);
+  --color-jn-focus: var(--jn-focus);
+  --color-jn-glow: var(--jn-glow);
+  --color-jn-info: var(--jn-info);
+  --color-jn-info-soft: var(--jn-info-soft);
+  --color-jn-inverse: var(--jn-inverse);
+  --color-jn-inverse-chip: var(--jn-inverse-chip);
+  --color-jn-line: var(--jn-line);
+  --color-jn-logo-claude: var(--jn-logo-claude);
+  --color-jn-logo-codex: var(--jn-logo-codex);
+  --color-jn-logo-gemini: var(--jn-logo-gemini);
+  --color-jn-logo-qwen: var(--jn-logo-qwen);
+  --color-jn-mint: var(--jn-mint);
+  --color-jn-mint-2: var(--jn-mint-2);
+  --color-jn-on-inverse: var(--jn-on-inverse);
+  --color-jn-on-primary: var(--jn-on-primary);
+  --color-jn-primary: var(--jn-primary);
+  --color-jn-primary-hover: var(--jn-primary-hover);
+  --color-jn-primary-ink: var(--jn-primary-ink);
+  --color-jn-primary-press: var(--jn-primary-press);
+  --color-jn-primary-soft: var(--jn-primary-soft);
+  --color-jn-primary-wash: var(--jn-primary-wash);
+  --color-jn-shadow: var(--jn-shadow);
+  --color-jn-stage: var(--jn-stage);
+  --color-jn-surface: var(--jn-surface);
+  --color-jn-text: var(--jn-text);
+  --color-jn-text-2: var(--jn-text-2);
+  --color-jn-text-3: var(--jn-text-3);
+  --color-jn-track: var(--jn-track);
+  --color-jn-viz-1: var(--jn-viz-1);
+  --color-jn-viz-2: var(--jn-viz-2);
+  --color-jn-viz-3: var(--jn-viz-3);
+  --color-jn-viz-4: var(--jn-viz-4);
+  --color-jn-viz-grid: var(--jn-viz-grid);
+  --color-jn-viz-other: var(--jn-viz-other);
+  --color-jn-warning: var(--jn-warning);
+  --color-jn-warning-soft: var(--jn-warning-soft);
+  --color-jn-well: var(--jn-well);
+  --font-jn: var(--jn-font);
+  --spacing-jn-card: var(--jn-gap-card);
+  --font-jn-mono: var(--jn-mono);
+  --radius-jn-block: var(--jn-r-block);
+  --radius-jn-card: var(--jn-r-card);
+  --shadow-jn-surface: var(--jn-shadow-surface);
+}

@@ -39,8 +39,15 @@ export interface AgentRow {
   group: AgentGroup
   /** Jolu 有这条工具的接线实现（可开关接入）；false = 只探测到、暂不支持（画板 V8「暂不支持」卡） */
   supported: boolean
-  /** 列表第二行 */
+  /** 列表第二行：已接入时是主模型 / 重开提示，未接入时是当前来源说明 */
   subtitle: string
+  /**
+   * 卡片底部的状态胶囊文案（R1-08）。
+   *
+   * 与 `subtitle` 分开：已接入时 `subtitle` 放的是主模型（`zcode/glm-5.3`），
+   * 那是一个值，不是状态；拿它当状态胶囊会显示成「zcode/glm-5.3」。
+   */
+  status: string
   /** 第二行语气：normal / warn（琥珀）/ danger */
   tone: "normal" | "warn" | "danger"
   /** 开关：已接入为开、可接入为关，暂时不能接入时不显示 */
@@ -78,25 +85,26 @@ export function agentRow(agent: string, wiring: WiringStatusDto | null, discover
     // 画板 V5-1：「重开后生效」与主模型被换过用琥珀色，配置被改动用红色
     const tone = wiring.drift === "model_changed" || restart ? "warn" : wiring.drift ? "danger" : "normal"
     const subtitle = drift ?? (model || (restart ? "重开后生效" : "已接入"))
-    return { agent, name, group: "wired", supported, subtitle, tone, toggle: wiring.wired ? "on" : null, wiring, discovery }
+    const status = drift ?? (restart ? "重开后生效" : "已接入 · 配置一致")
+    return { agent, name, group: "wired", supported, subtitle, status, tone, toggle: wiring.wired ? "on" : null, wiring, discovery }
   }
   if (discovery && discovery.state === "not_found") {
-    return { agent, name, group: "blocked", supported, subtitle: "本机没有检测到", tone: "normal", toggle: null, wiring, discovery }
+    return { agent, name, group: "blocked", supported, subtitle: "本机没有检测到", status: "暂不能接入", tone: "normal", toggle: null, wiring, discovery }
   }
   // 对齐 magpie：配置在就算已装、可接入——Jolu 的接线只写配置文件，不调用 CLI。
   // CLI 不在 PATH 只作提示（OpenCode / Kimi / Continue 用 bun 或独立安装器装，命令不在
   // PATH 是常态）；真卸载的残留已由后端 agent_dir_has_content 过滤，不会走到这里。
   // 没有专用接线的仍标「暂不支持」，不给点了会失败的开关。
   if (discovery && discovery.state === "cli_missing") {
-    return { agent, name, group: "available", supported, subtitle: "检测到配置 · CLI 未在 PATH（不影响接入）", tone: "warn", toggle: supported ? "off" : null, wiring, discovery }
+    return { agent, name, group: "available", supported, subtitle: "检测到配置 · CLI 未在 PATH（不影响接入）", status: "可接入", tone: "warn", toggle: supported ? "off" : null, wiring, discovery }
   }
   if (wiring?.reason) {
-    return { agent, name, group: "blocked", supported, subtitle: wiring.reason, tone: "normal", toggle: null, wiring, discovery }
+    return { agent, name, group: "blocked", supported, subtitle: wiring.reason, status: "暂不能接入", tone: "normal", toggle: null, wiring, discovery }
   }
   // V8：探测到但 Jolu 没有专用接线的（Qoder / Trae 等 8 家）＝「暂不支持」卡——
   // 在栅格里、开关禁用、详细可点（走通用接入），不算「暂不能接入」（那是没装 / 残留）。
   const subtitle = supported ? AVAILABLE_SUBTITLES[agent] ?? "可以接入" : "已检测到 · 暂无专用接入"
-  return { agent, name, group: "available", supported, subtitle, tone: "normal", toggle: supported ? "off" : null, wiring, discovery }
+  return { agent, name, group: "available", supported, subtitle, status: supported ? "可接入" : "暂不支持", tone: "normal", toggle: supported ? "off" : null, wiring, discovery }
 }
 
 /** 后端状态按注册表返回可接入工具，发现结果补充尚未支持的工具。 */
@@ -185,10 +193,10 @@ export function customAgentRow(agent: CustomAgentDto): AgentRow {
   const base = { agent: agent.id, name: agent.name, supported: true, wiring: null, discovery: null }
   if (agent.wired || agent.drift) {
     const drift = agent.drift === "removed" ? "配置文件被删除，未经路由" : agent.drift ? "配置被改动，未经路由" : null
-    return { ...base, group: "wired", subtitle: drift ?? (agent.model || "已接入 · 自定义"), tone: drift ? "danger" : "normal", toggle: agent.wired ? "on" : null }
+    return { ...base, group: "wired", subtitle: drift ?? (agent.model || "已接入 · 自定义"), status: drift ?? "已接入 · 配置一致", tone: drift ? "danger" : "normal", toggle: agent.wired ? "on" : null }
   }
-  if (!agent.installed) return { ...base, group: "blocked", subtitle: "配置所在的目录不存在", tone: "normal", toggle: null }
-  return { ...base, group: "available", subtitle: `自定义 · ${agent.format.toUpperCase()}`, tone: "normal", toggle: "off" }
+  if (!agent.installed) return { ...base, group: "blocked", subtitle: "配置所在的目录不存在", status: "暂不能接入", tone: "normal", toggle: null }
+  return { ...base, group: "available", subtitle: `自定义 · ${agent.format.toUpperCase()}`, status: "可接入", tone: "normal", toggle: "off" }
 }
 
 export function isCustomAgent(id: string): boolean {

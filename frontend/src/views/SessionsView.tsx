@@ -7,7 +7,6 @@ import { HandoffPreview } from '@/components/sessions/HandoffPreview'
 import { handoffApi } from '@/lib/handoffApi'
 import type { HandoffResult, HandoffState } from '@/lib/sessionHandoff'
 import { useEffect, useMemo, useState } from "react"
-import { ArrowDownLeft, ArrowDownWideNarrow, ArrowUpRight, Database, Files, Layers, MessagesSquare, RefreshCw, RotateCcw, Search, Target } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api, isTauri, type SessionItemDto } from "@/lib/api"
 import {
@@ -24,7 +23,9 @@ import { SessionDetail } from "@/components/sessions/SessionDetail"
 import { SessionTree } from "@/components/sessions/SessionTree"
 import { AutomationConfirmDialog, ContinueDialog } from "@/components/sessions/sessionDialogs"
 import { providerName } from "@/lib/providerCatalog"
-import { ALL, ErrorNotice, MenuFilter, ToolButton, providerOptions } from "@/components/usage/usageControls"
+import { ALL, ErrorNotice, MenuFilter, providerOptions } from "@/components/usage/usageControls"
+import { Icon, type IconName } from "@/icons"
+import { Banner, Button, EmptyState, IconButton, Input, PageActions } from "@/ui"
 import type { PlatformId } from "@/types"
 
 export interface SessionTarget {
@@ -165,77 +166,102 @@ export function SessionsView({ active, target, onDrillUsage, onCreateAutomation 
   const minutes = Math.floor((Date.now() - syncedAt) / 60_000)
 
   return (
-    <div className="relative flex w-full flex-col gap-3">
-      {/* 窄窗口（最小 900）时第五张合并卡放不下：整行折行，合并卡按内容宽换到下一行（B5 桌面端检查发现原先挤成竖排、撑出横向滚动） */}
-      <div className="flex flex-wrap gap-2">
-        <Stat selected icon={<MessagesSquare />} label="线程" value={known ? String(totals.threads) : "—"} note="筛选内去重会话" />
-        <Stat icon={<Layers />} label="消耗 Token" value={known ? formatTokens(totals.consumption) : "—"} note={totals.unknown ? `输入 + 输出 · ${totals.unknown} 条未知` : "输入 + 输出"} />
-        <Stat icon={<Target />} label="缓存命中" value={known ? formatPercent(totals.hitRate) : "—"} note="缓存读取占输入" />
-        <Stat icon={<Files />} label="记录文件" value={query.data ? String(query.data.files) : "—"} note="去重来源文件" />
-        <div className="flex h-[92px] flex-1 items-center rounded-[10px] border border-jolu-border bg-jolu-bg">
-          <Stat bare icon={<ArrowDownLeft />} label="输入 Token" value={known ? formatTokens(totals.input) : "—"} note="含缓存输入" />
-          <span className="h-14 w-px bg-jolu-border" />
-          <Stat bare icon={<Database />} label="缓存输入" value={known ? formatTokens(totals.cache) : "—"} note="已包含于输入" />
-          <span className="h-14 w-px bg-jolu-border" />
-          <Stat bare icon={<ArrowUpRight />} label="输出 Token" value={known ? formatTokens(totals.output) : "—"} note="生成 Token" />
-        </div>
-      </div>
+    <div className="relative flex w-full flex-col gap-3.5">
+      {/* 同步状态与刷新进页头操作槽（R1-05） */}
+      <PageActions>
+        <span className="whitespace-nowrap text-xs text-jn-text-3">{minutes < 1 ? "刚刚同步" : `${minutes} 分钟前同步`}</span>
+        <IconButton
+          icon={scanning || query.refreshing ? "loading" : "refresh"}
+          label="刷新会话"
+          kind="surface"
+          size="md"
+          disabled={scanning || query.refreshing}
+          className={scanning || query.refreshing ? "[&_svg]:animate-spin" : undefined}
+          onClick={() => void rescan()}
+        />
+      </PageActions>
 
-      <div className="flex min-h-[38px] flex-wrap items-center gap-x-2.5 gap-y-2">
-        <label className="jolu-control flex h-[38px] w-full min-w-0 max-w-[360px] flex-1 items-center gap-2 rounded-lg border border-jolu-border bg-jolu-bg px-3 focus-within:border-jolu-accent">
-          <Search aria-hidden className="size-4 shrink-0 text-jolu-muted" />
-          <input
-            value={searchDraft}
-            onChange={(event) => {
-              setSearchDraft(event.target.value)
-              if (!event.target.value) setSearch("")
-            }}
-            onKeyDown={(event) => event.key === "Enter" && setSearch(searchDraft)}
-            placeholder="搜索标题、会话 ID 或可用正文"
-            aria-label="搜索会话"
-            className="min-w-0 flex-1 bg-transparent text-xs text-jolu-text outline-none placeholder:text-jolu-muted"
-          />
-        </label>
-        <span className="hidden flex-1 sm:block" />
-        <span className="whitespace-nowrap text-[12px] text-jolu-muted">{minutes < 1 ? "刚刚同步" : `${minutes} 分钟前同步`}</span>
-        <ToolButton icon={<RefreshCw />} busy={scanning || query.refreshing} disabled={scanning || query.refreshing} onClick={() => void rescan()}>刷新</ToolButton>
-      </div>
-
-      <div className="flex min-h-[34px] flex-wrap items-center gap-2">
-        <MenuFilter label="供应商筛选" value={platform ?? ALL} options={providerOptions()} onChange={(v) => {
+      {/* 工具条：搜索 + 全部筛选 + 排序（R1-05） */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          size="md"
+          icon="search"
+          value={searchDraft}
+          onChange={(event) => {
+            setSearchDraft(event.target.value)
+            if (!event.target.value) setSearch("")
+          }}
+          onKeyDown={(event) => event.key === "Enter" && setSearch(searchDraft)}
+          placeholder="搜索标题、会话 ID 或可用正文"
+          aria-label="搜索会话"
+          className="w-[240px] shrink-0 bg-jn-surface shadow-jn-surface"
+        />
+        <MenuFilter trailingChevron label="供应商筛选" value={platform ?? ALL} options={providerOptions()} onChange={(v) => {
           const next = v === ALL ? null : (v as PlatformId)
           setPlatform(next)
           if (account && account !== UNATTRIBUTED_ACCOUNT && !accountsFor(conn.connections, next).some((c) => c.id === account)) setAccount(null)
         }} />
-        <MenuFilter label="账号筛选" value={account ?? ALL} options={accountOptions} onChange={(v) => setAccount(v === ALL ? null : v)} />
+        <MenuFilter trailingChevron label="账号筛选" value={account ?? ALL} options={accountOptions} onChange={(v) => setAccount(v === ALL ? null : v)} />
         <MenuFilter
+          trailingChevron
           label="项目筛选"
           value={project === null ? ALL : project || "__unknown__"}
           options={[{ value: ALL, label: "全部项目" }, ...projects.map(([key, name]) => ({ value: key || "__unknown__", label: key ? name : UNKNOWN_PROJECT }))]}
           onChange={(v) => setProject(v === ALL ? null : v === "__unknown__" ? "" : v)}
         />
-        <MenuFilter label="时间筛选" value={time} options={TIME_PRESETS} onChange={(v) => setTime(v as TimePreset)} />
-        <span className="flex-1" />
+        <MenuFilter trailingChevron label="时间筛选" value={time} options={TIME_PRESETS} onChange={(v) => setTime(v as TimePreset)} />
+        <span className="min-w-0 flex-1" />
         <MenuFilter
+          trailingChevron
           label="排序"
           value={sort}
-          options={[{ value: "recent", label: "最近更新", icon: <ArrowDownWideNarrow className="size-4 text-jolu-muted" /> }, { value: "tokens", label: "消耗最多", icon: <ArrowDownWideNarrow className="size-4 text-jolu-muted" /> }]}
+          options={[{ value: "recent", label: "最近更新", icon: <Icon name="filter" size="xs" className="text-jn-text-3" /> }, { value: "tokens", label: "消耗最多", icon: <Icon name="filter" size="xs" className="text-jn-text-3" /> }]}
           onChange={(v) => setSort(v as SessionSort)}
         />
       </div>
 
+      {/* 汇总条（R1-05：圆角 20 白卡一行汇总，窄屏可折行） */}
+      <div className="flex flex-wrap items-center gap-2 rounded-[20px] border border-jn-line bg-jn-surface px-4 py-3 shadow-jn-surface">
+        <Stat selected icon="navSessions" label="线程" value={known ? String(totals.threads) : "—"} note="去重会话" />
+        <span className="h-9 w-px bg-jn-line" />
+        <Stat icon="layers" label="消耗 Token" value={known ? formatTokens(totals.consumption) : "—"} note={totals.unknown ? `${totals.unknown} 条未知` : "输入 + 输出"} />
+        <span className="h-9 w-px bg-jn-line" />
+        <Stat icon="spark" label="缓存命中" value={known ? formatPercent(totals.hitRate) : "—"} note="缓存占输入" />
+        <span className="h-9 w-px bg-jn-line" />
+        <Stat icon="download" label="输入" value={known ? formatTokens(totals.input) : "—"} note="含缓存" />
+        <span className="h-9 w-px bg-jn-line" />
+        <Stat icon="database" label="缓存输入" value={known ? formatTokens(totals.cache) : "—"} note="已复用" />
+        <span className="h-9 w-px bg-jn-line" />
+        <Stat icon="upload" label="输出" value={known ? formatTokens(totals.output) : "—"} note="生成" />
+        <span className="h-9 w-px bg-jn-line" />
+        <Stat icon="fileText" label="来源文件" value={query.data ? String(query.data.files) : "—"} note="去重文件" />
+      </div>
+
       {query.error && <ErrorNotice error={query.error} stale={query.data !== null} onRetry={query.refresh} />}
-      {/* 待确认：采集失败提示无画板，最小版（P4 审计 D13） */}
-      {collectionNote && <div role="status" className="rounded-[10px] bg-jolu-danger-soft px-4 py-2.5 text-xs text-jolu-danger">{collectionNote}</div>}
+      {collectionNote && <Banner tone="warning">{collectionNote}</Banner>}
 
       {/* 详情面板最小宽 420：更窄的窗口整行横向滚动（列表 + 详情一起拖），内容不再被裁破版 */}
       <div ref={listMotion} className="flex h-[630px] gap-4 overflow-x-auto pb-1 [scrollbar-width:thin]">
         {!query.data ? (
           !query.error && <LoadingSurface layout="sessions" label="正在读取本机会话" />
         ) : !all.length && !filtered ? (
-          <Placeholder icon={<MessagesSquare />} title="还没有本机会话" note="先在支持的工具中开始会话，再回来重新扫描。" action={<ToolButton icon={<RefreshCw />} busy={scanning} onClick={() => void rescan()}>重新扫描</ToolButton>} />
+          <div className="flex flex-1 items-center justify-center rounded-jn-card border border-jn-line bg-jn-surface p-8 shadow-jn-surface">
+            <EmptyState
+              icon="navSessions"
+              title="还没有本机会话"
+              reason="先在支持的工具中开始会话，再回来重新扫描。"
+              action={<Button kind="soft" size="sm" icon="refresh" loading={scanning} onClick={() => void rescan()}>重新扫描</Button>}
+            />
+          </div>
         ) : !sessions.length ? (
-          <Placeholder icon={<Search />} title="没有找到匹配的会话" note="尝试缩短关键词，或清除供应商、项目与日期筛选。" action={<ToolButton icon={<RotateCcw />} onClick={clearAll}>清除筛选</ToolButton>} />
+          <div className="flex flex-1 items-center justify-center rounded-jn-card border border-jn-line bg-jn-surface p-8 shadow-jn-surface">
+            <EmptyState
+              icon="search"
+              title="没有找到匹配的会话"
+              reason="尝试缩短关键词，或清除供应商、项目与日期筛选。"
+              action={<Button kind="ghost" size="sm" icon="retry" onClick={clearAll}>清除筛选</Button>}
+            />
+          </div>
         ) : (
           <>
             <SessionTree
@@ -289,28 +315,20 @@ export function SessionsView({ active, target, onDrillUsage, onCreateAutomation 
   )
 }
 
-function Stat({ icon, label, value, note, selected, bare }: { icon: React.ReactNode; label: string; value: string; note: string; selected?: boolean; bare?: boolean }) {
+function Stat({ icon, label, value, note, selected }: { icon: IconName; label: string; value: string; note: string; selected?: boolean }) {
   return (
-    <div className={cn(
-      "flex min-w-0 flex-col justify-center gap-2 px-3",
-      bare ? "flex-1" : "h-[92px] w-[136px] shrink-0 rounded-[10px] border",
-      !bare && (selected ? "border-transparent bg-jolu-selected" : "border-jolu-border bg-jolu-bg"),
-    )}>
-      <span className={cn("flex h-3.5 items-center gap-[5px] whitespace-nowrap text-[12px] [&_svg]:size-3.5", selected ? "text-jolu-on" : "text-jolu-muted")}>{icon}{label}</span>
-      <span className={cn("tnum truncate text-[22px] font-semibold leading-none", selected ? "text-jolu-on" : "text-jolu-text")}>{value}</span>
-      <span className="truncate text-[9px] text-jolu-muted">{note}</span>
-    </div>
-  )
-}
-
-function Placeholder({ icon, title, note, action, loading }: { icon?: React.ReactNode; title: string; note: string; action?: React.ReactNode; loading?: boolean }) {
-  return (
-    <div className="jolu-card flex flex-1 flex-col items-start gap-3 rounded-xl border border-jolu-border bg-jolu-cc-surface p-4">
-      {icon && <span className="text-jolu-muted [&_svg]:size-7">{icon}</span>}
-      <span className={cn("font-semibold text-jolu-text", loading ? "text-sm" : "text-base")}>{title}</span>
-      {loading && [230, 285, 190].map((w) => <span key={w} className="h-6 animate-pulse rounded-[5px] bg-jolu-track" style={{ width: w }} />)}
-      <span className="text-xs text-jolu-muted">{note}</span>
-      {action}
+    <div
+      title={note}
+      className={cn(
+        "flex min-w-[92px] flex-1 flex-col justify-center gap-1 rounded-[14px] px-2.5 py-1",
+        selected && "bg-jn-primary-wash",
+      )}
+    >
+      <span className={cn("flex items-center gap-1.5 whitespace-nowrap text-[11px] font-medium", selected ? "text-jn-primary-ink" : "text-jn-text-3")}>
+        <Icon name={icon} size="xs" />
+        {label}
+      </span>
+      <span className={cn("tnum truncate font-mono text-[18px] font-bold leading-none", selected ? "text-jn-primary-ink" : "text-jn-text")}>{value}</span>
     </div>
   )
 }

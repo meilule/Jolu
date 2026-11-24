@@ -17,9 +17,9 @@ import { ActionButton, Segmented, SettingsGroup, SettingsRow, Switch } from "./s
 type Cfg = ReturnType<typeof useSettings>
 type SetDirty = (key: string, dirty: boolean) => void
 
-const INPUT = "jolu-control h-[34px] rounded-lg border border-jolu-border bg-jolu-bg px-3 text-xs text-jolu-text outline-none placeholder:text-jolu-muted focus-visible:border-jolu-accent disabled:opacity-45"
+const INPUT = "jn-interactive h-[34px] rounded-lg border border-jn-line bg-jn-surface px-3 text-xs text-jn-text outline-none placeholder:text-jn-text-3 focus-visible:border-jn-primary disabled:opacity-45"
 
-const TONE_TEXT: Record<Tone, string> = { ok: "text-jolu-on", danger: "text-jolu-danger", muted: "text-jolu-muted" }
+const TONE_TEXT: Record<Tone, string> = { ok: "text-jn-primary-ink", danger: "text-jn-danger", muted: "text-jn-text-3" }
 
 /** 网络与代理（画板 90 / 102）：应用联网方式、CLI 本地代理与连接诊断 */
 export function NetworkSection({ cfg, setDirty }: { cfg: Cfg; setDirty: SetDirty }) {
@@ -63,15 +63,15 @@ export function NetworkSection({ cfg, setDirty }: { cfg: Cfg; setDirty: SetDirty
   return (
     <>
       <SettingsGroup icon={Globe} title="应用联网" desc="用于 Jolu 的额度查询与更新，不修改 CLI 配置。">
-        <div className="flex h-12 items-center gap-3 border-t border-jolu-border">
-          <span className="flex-1 text-[13px] font-medium text-jolu-text">连接方式</span>
+        <div className="flex h-12 items-center gap-3 border-t border-jn-line">
+          <span className="flex-1 text-[13px] font-medium text-jn-text">连接方式</span>
           <Segmented label="连接方式" value={mode} disabled={disabled} items={NETWORK_MODES} onChange={choose} />
         </div>
         {mode === "manual" ? (
           <div className="flex flex-col gap-2 pt-2 pb-3.5">
             <div className="flex items-center gap-2">
-              <label className={cn("flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg border border-jolu-border px-2.5 focus-within:border-jolu-accent", urlError && "border-jolu-danger")}>
-                <Link aria-hidden className="size-[15px] shrink-0 text-jolu-muted" />
+              <label className={cn("flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg border border-jn-line px-2.5 focus-within:border-jn-primary", urlError && "border-jn-danger")}>
+                <Link aria-hidden className="size-[15px] shrink-0 text-jn-text-3" />
                 <input
                   aria-label="代理地址"
                   value={urlDraft}
@@ -81,17 +81,17 @@ export function NetworkSection({ cfg, setDirty }: { cfg: Cfg; setDirty: SetDirty
                   spellCheck={false}
                   onChange={(e) => setUrlDraft(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") saveManual() }}
-                  className="min-w-0 flex-1 bg-transparent text-xs text-jolu-text outline-none placeholder:text-jolu-muted disabled:opacity-45"
+                  className="min-w-0 flex-1 bg-transparent text-xs text-jn-text outline-none placeholder:text-jn-text-3 disabled:opacity-45"
                 />
               </label>
               <ActionButton tone="soft" disabled={!canSaveManual} onClick={saveManual}>保存配置</ActionButton>
             </div>
             {urlError
-              ? <span role="alert" className="text-[11px] text-jolu-danger">{urlError}</span>
-              : <span className="text-[11px] text-jolu-muted">{urlDraft.trim() === "" ? "填写代理服务地址，仅支持 http:// 或 https://" : networkStatusLine(mode, s, urlDraft)}</span>}
+              ? <span role="alert" className="text-[11px] text-jn-danger">{urlError}</span>
+              : <span className="text-[11px] text-jn-text-3">{urlDraft.trim() === "" ? "填写代理服务地址，仅支持 http:// 或 https://" : networkStatusLine(mode, s, urlDraft)}</span>}
           </div>
         ) : (
-          <div className="flex h-[42px] items-center gap-2 border-t border-jolu-border text-[12px] text-jolu-muted">
+          <div className="flex h-[42px] items-center gap-2 border-t border-jn-line text-[12px] text-jn-text-3">
             <Monitor aria-hidden className="size-3.5" />
             <span className="flex-1">{networkStatusLine(mode, s, urlDraft)}</span>
             <span className="text-[11px]">切换后自动保存</span>
@@ -103,7 +103,7 @@ export function NetworkSection({ cfg, setDirty }: { cfg: Cfg; setDirty: SetDirty
 
       <DiagnosisPanel mode={mode} proxyUrl={mode === "manual" ? urlDraft.trim() : null} draft={draft} blocked={!!(mode === "manual" && proxyUrlError(urlDraft))} />
 
-      <p className="text-[11px] text-jolu-muted">官方订阅直连保持原方式；缺少延迟数据时显示「—」。</p>
+      <p className="text-[11px] text-jn-text-3">官方订阅直连保持原方式；缺少延迟数据时显示「—」。</p>
     </>
   )
 }
@@ -130,12 +130,12 @@ function DiagnosisPanel({ mode, proxyUrl, draft, blocked }: { mode: NetworkMode;
   }
 
   return (
-    <div className="flex flex-col gap-2.5 rounded-xl bg-jolu-side p-4">
+    <div className="flex flex-col gap-2.5 rounded-xl bg-jn-surface p-4">
       <div className="flex items-center gap-2.5">
-        <Activity aria-hidden className="size-[18px] shrink-0 text-jolu-on" />
+        <Activity aria-hidden className="size-[18px] shrink-0 text-jn-primary-ink" />
         <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="text-[13px] font-medium text-jolu-text">连接诊断</span>
-          <span className="text-[12px] text-jolu-muted">检查当前网络配置和已连接供应商的连通性。</span>
+          <span className="text-[13px] font-medium text-jn-text">连接诊断</span>
+          <span className="text-[12px] text-jn-text-3">检查当前网络配置和已连接供应商的连通性。</span>
         </span>
         <ActionButton
           icon={<Activity aria-hidden className="size-3.5" />}
@@ -147,13 +147,13 @@ function DiagnosisPanel({ mode, proxyUrl, draft, blocked }: { mode: NetworkMode;
         </ActionButton>
       </div>
       {state.phase === "idle" && (
-        <div className="flex items-center gap-3 text-[12px] text-jolu-muted">
+        <div className="flex items-center gap-3 text-[12px] text-jn-text-3">
           <span>尚未检测</span>
           <span className="text-[11px]">检测不会发送模型请求</span>
         </div>
       )}
-      {state.phase === "running" && <div role="status" className="text-[12px] text-jolu-muted">正在检测…</div>}
-      {state.phase === "error" && <div role="alert" className="text-[12px] text-jolu-danger">检测失败：{state.message}</div>}
+      {state.phase === "running" && <div role="status" className="text-[12px] text-jn-text-3">正在检测…</div>}
+      {state.phase === "error" && <div role="alert" className="text-[12px] text-jn-danger">检测失败：{state.message}</div>}
       {state.phase === "done" && <DiagnosisResult result={state.result} draft={state.draft} />}
     </div>
   )
@@ -166,24 +166,24 @@ function DiagnosisResult({ result, draft }: { result: NetworkDiagnosisDto; draft
   return (
     <div role="status" className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
-        <StatusIcon aria-hidden className={cn("size-3.5", allOk ? "text-jolu-on" : "text-jolu-danger")} />
+        <StatusIcon aria-hidden className={cn("size-3.5", allOk ? "text-jn-primary-ink" : "text-jn-danger")} />
         {summary.map((item) => <span key={item.text} className={TONE_TEXT[item.tone]}>{item.text}</span>)}
-        {result.proxy && !result.proxy.ok && result.proxy.error && <span className="text-jolu-muted">{result.proxy.error}</span>}
-        <span className="text-[11px] text-jolu-muted">{draft ? "草稿检测" : "当前配置"}</span>
+        {result.proxy && !result.proxy.ok && result.proxy.error && <span className="text-jn-text-3">{result.proxy.error}</span>}
+        <span className="text-[11px] text-jn-text-3">{draft ? "草稿检测" : "当前配置"}</span>
       </div>
       {/* 待确认：画板 102 只画了摘要行；逐个连接的结果按「名称 · 状态 · 延迟」一行一个列出 */}
       {result.endpoints.length > 0 && (
-        <ul className="flex flex-col border-t border-jolu-border">
+        <ul className="flex flex-col border-t border-jn-line">
           {result.endpoints.map((row, index) => {
             const status = probeStatus(row.probe)
             return (
-              <li key={`${row.connection_name}-${index}`} className="flex h-8 items-center gap-3 border-b border-jolu-border text-[12px] last:border-b-0">
-                <span className="min-w-0 flex-1 truncate text-xs text-jolu-text">
+              <li key={`${row.connection_name}-${index}`} className="flex h-8 items-center gap-3 border-b border-jn-line text-[12px] last:border-b-0">
+                <span className="min-w-0 flex-1 truncate text-xs text-jn-text">
                   {row.connection_name}
-                  <span className="ml-2 text-[12px] text-jolu-muted">{platformName(row.platform)}</span>
+                  <span className="ml-2 text-[12px] text-jn-text-3">{platformName(row.platform)}</span>
                 </span>
                 <span className={cn("max-w-[45%] truncate", TONE_TEXT[status.tone])}>{status.text}</span>
-                <span className="w-14 shrink-0 text-right tabular-nums text-jolu-muted">{latencyText(row.probe)}</span>
+                <span className="w-14 shrink-0 text-right tabular-nums text-jn-text-3">{latencyText(row.probe)}</span>
               </li>
             )
           })}
@@ -262,17 +262,17 @@ function ProxyGroup({ cfg, setDirty }: { cfg: Cfg; setDirty: SetDirty }) {
         className="min-h-[60px]"
         title="启用本地代理"
         desc={runningNote}
-        descClassName={status?.fallback_reason && s.proxy_enabled ? "text-jolu-danger" : undefined}
+        descClassName={status?.fallback_reason && s.proxy_enabled ? "text-jn-danger" : undefined}
         control={<Switch liquid label="启用本地代理" on={s.proxy_enabled} disabled={disabled} onChange={(on) => apply({ enabled: on })} />}
       />
-      <div className="flex flex-col gap-1.5 border-t border-jolu-border py-3">
+      <div className="flex flex-col gap-1.5 border-t border-jn-line py-3">
         <div className="flex items-center gap-5">
           <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <span className="text-[13px] font-medium text-jolu-text">监听端口</span>
-            <span className="text-[12px] text-jolu-muted">
+            <span className="text-[13px] font-medium text-jn-text">监听端口</span>
+            <span className="text-[12px] text-jn-text-3">
               仅监听本机 127.0.0.1
               {portSwitched && (
-                <span className="text-jolu-danger">
+                <span className="text-jn-danger">
                   {` · 端口 ${s.proxy_port} 被占用，实际使用 ${status.port}`}
                 </span>
               )}
@@ -285,7 +285,7 @@ function ProxyGroup({ cfg, setDirty }: { cfg: Cfg; setDirty: SetDirty }) {
             disabled={disabled}
             aria-invalid={!!error}
             onChange={(e) => setPortDraft(e.target.value.replace(/[^\d]/g, ""))}
-            className={cn(INPUT, "w-[100px]", error && "border-jolu-danger")}
+            className={cn(INPUT, "w-[100px]", error && "border-jn-danger")}
           />
           <ActionButton
             disabled={disabled || !changed || !!error}
@@ -294,7 +294,7 @@ function ProxyGroup({ cfg, setDirty }: { cfg: Cfg; setDirty: SetDirty }) {
             {s.proxy_enabled ? "应用并重启" : "保存端口"}
           </ActionButton>
         </div>
-        {error && changed && <span role="alert" className="text-right text-[12px] text-jolu-danger">{error}</span>}
+        {error && changed && <span role="alert" className="text-right text-[12px] text-jn-danger">{error}</span>}
       </div>
       <SettingsRow
         className="min-h-[60px]"
@@ -303,11 +303,11 @@ function ProxyGroup({ cfg, setDirty }: { cfg: Cfg; setDirty: SetDirty }) {
         control={<Switch liquid label="失败自动回退直连" on={s.proxy_fallback_direct} disabled={disabled} onChange={(on) => apply({ fallback: on })} />}
       />
       {s.proxy_enabled && status && (
-        <div className="flex flex-col gap-1.5 border-t border-jolu-border py-3">
-          <span className="text-[12px] text-jolu-muted">当前接管</span>
+        <div className="flex flex-col gap-1.5 border-t border-jn-line py-3">
+          <span className="text-[12px] text-jn-text-3">当前接管</span>
           <TakeoverRow name="Claude Code" taken={status.claude_taken_over} reason={status.claude_taken_over ? `转发到 ${status.claude_upstream ?? "原上游"}` : "官方直连或环境变量上游暂不支持接管"} />
           <TakeoverRow name="Codex" taken={status.codex_taken_over} reason={status.codex_taken_over ? `转发到 ${status.codex_upstream ?? "原上游"}` : "官方订阅暂不支持接管"} />
-          {status.last_error && <span role="status" className="text-[12px] text-jolu-danger">最近转发错误：{status.last_error}</span>}
+          {status.last_error && <span role="status" className="text-[12px] text-jn-danger">最近转发错误：{status.last_error}</span>}
         </div>
       )}
     </SettingsGroup>
@@ -317,11 +317,11 @@ function ProxyGroup({ cfg, setDirty }: { cfg: Cfg; setDirty: SetDirty }) {
 function TakeoverRow({ name, taken, reason }: { name: string; taken: boolean; reason: string }) {
   return (
     <div className="flex h-6 items-center gap-2 text-xs">
-      <span className="flex-1 text-jolu-text">{name}</span>
-      <span className={cn("text-[12px]", taken ? "text-jolu-on" : "text-jolu-muted")}>{taken ? "已接管" : "未接管"}</span>
+      <span className="flex-1 text-jn-text">{name}</span>
+      <span className={cn("text-[12px]", taken ? "text-jn-primary-ink" : "text-jn-text-3")}>{taken ? "已接管" : "未接管"}</span>
       <Tip label={reason}>
-        <span tabIndex={0} aria-label={reason} className="grid size-6 place-items-center rounded-md outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent">
-          {taken ? <CircleCheck aria-hidden className="size-3.5 text-jolu-on" /> : <Info aria-hidden className="size-3.5 text-jolu-muted" />}
+        <span tabIndex={0} aria-label={reason} className="grid size-6 place-items-center rounded-md outline-none focus-visible:outline-2 focus-visible:outline-jn-primary">
+          {taken ? <CircleCheck aria-hidden className="size-3.5 text-jn-primary-ink" /> : <Info aria-hidden className="size-3.5 text-jn-text-3" />}
         </span>
       </Tip>
     </div>

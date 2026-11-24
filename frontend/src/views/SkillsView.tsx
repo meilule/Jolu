@@ -2,7 +2,6 @@ import { queryCache } from "@/lib/queryCache"
 import { useContentMotion } from "@/lib/motion"
 import { LoadingSurface } from "@/components/ui/LoadingSurface"
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Blocks, Check, CircleCheck, Copy, Download, FolderCog, FolderOpen, Pause, Plus, RefreshCw, RotateCcw, Search, TriangleAlert, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { isTauri } from "@/lib/api"
 import { skillsApi, type SkillItemDto, type SkillsOverviewDto } from "@/lib/skillsApi"
@@ -11,9 +10,10 @@ import {
   toggleBlocked, type ScopeFilter, type SkillFilters, type StatusFilter,
 } from "@/lib/skillsManager"
 import { demoSkillsOverview } from "@/mock/skills"
-import { JoluButton } from "@/components/ui/JoluButton"
 import { useToast } from "@/components/ui/Toast"
 import { MenuFilter } from "@/components/usage/usageControls"
+import { Icon, type IconName } from "@/icons"
+import { BatchAction, BatchBar, Button, Input, PageActions } from "@/ui"
 import { SkillDetail } from "@/components/skills/SkillDetail"
 import { SkillEditor, type EditorTarget } from "@/components/skills/SkillEditor"
 import { SkillsTable, skillKey } from "@/components/skills/SkillsTable"
@@ -27,8 +27,7 @@ function errorText(reason: unknown): string {
 }
 
 /**
- * Skills 管理（Jolu.pen 模块 F，画板 74–85）：按供应商浏览本机 Skills，查看详情与文件、新建 / 编辑、导入、复制、启停与移除。
- * 已核对目录规则的只有 Claude Code 与 Codex；其他供应商标「待接入」。导入支持本地目录与 Git 仓库（本机 git 浅克隆）。
+ * Skills 管理（R1-11 / R1-30 / R1-31）：按供应商浏览本机 Skills，查看详情与文件、新建 / 编辑、导入、复制、启停与移除。
  */
 export function SkillsView({ active }: { active: boolean }) {
   const toast = useToast()
@@ -38,7 +37,6 @@ export function SkillsView({ active }: { active: boolean }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
-  /** 「扫描目录」时连会话记录里的项目目录一起重读，其余刷新用缓存 */
   const [force, setForce] = useState(false)
   const [filters, setFilters] = useState<SkillFilters>(EMPTY_FILTERS)
   const [searchDraft, setSearchDraft] = useState("")
@@ -125,7 +123,6 @@ export function SkillsView({ active }: { active: boolean }) {
     }
   }
 
-  /** 批量启停：逐项反馈，只读或格式异常项跳过不改（画板 84 · 02） */
   const batchToggle = async (enabled: boolean) => {
     const targets = selectedItems.filter((i) => !toggleBlocked(i))
     const skipped = selectedItems.length - targets.length
@@ -200,23 +197,23 @@ export function SkillsView({ active }: { active: boolean }) {
   if (mode.kind === "editor") {
     return (
       <div ref={contentMotion} className="min-w-0">
-      <SkillEditor
-        key={mode.target.mode === "edit" ? mode.target.item.path : "new"}
-        target={mode.target}
-        items={items}
-        platforms={data?.platforms ?? []}
-        projects={targets}
-        onCancel={() => setMode(mode.back ? { kind: "detail", item: mode.back } : { kind: "list" })}
-        onSaved={(path, savedPlatform) => {
-          refresh()
-          const back = mode.back
-          if (back && back.path === path) setMode({ kind: "detail", item: { ...back } })
-          else {
-            if (platform !== "all" && savedPlatform !== platform) setPlatform(savedPlatform)
-            setMode({ kind: "list" })
-          }
-        }}
-      />
+        <SkillEditor
+          key={mode.target.mode === "edit" ? mode.target.item.path : "new"}
+          target={mode.target}
+          items={items}
+          platforms={data?.platforms ?? []}
+          projects={targets}
+          onCancel={() => setMode(mode.back ? { kind: "detail", item: mode.back } : { kind: "list" })}
+          onSaved={(path, savedPlatform) => {
+            refresh()
+            const back = mode.back
+            if (back && back.path === path) setMode({ kind: "detail", item: { ...back } })
+            else {
+              if (platform !== "all" && savedPlatform !== platform) setPlatform(savedPlatform)
+              setMode({ kind: "list" })
+            }
+          }}
+        />
       </div>
     )
   }
@@ -224,28 +221,27 @@ export function SkillsView({ active }: { active: boolean }) {
   const nothingDetected = !!data && !data.roots.some((r) => r.exists) && items.length === 0
 
   return (
-    <div ref={contentMotion} className="flex w-full flex-col gap-4">
-      <div className="flex h-12 items-center justify-between gap-4">
-        <div className="flex flex-col gap-[5px]">
-          <h2 className="text-[22px] font-semibold text-jolu-text">我的 Skills</h2>
-          <p className="text-xs text-jolu-muted">把常用工作方法，交给每个 AI 工具。</p>
-        </div>
-        <div className="flex gap-2">
-          <JoluButton variant="outline" className="h-[34px]" disabled={scanning} onClick={rescan}>
-            <RefreshCw aria-hidden className={cn(scanning && "animate-spin")} />扫描目录
-          </JoluButton>
-          <JoluButton variant="outline" className="h-[34px]" onClick={() => setDialog({ kind: "import" })}><Download aria-hidden />导入 Skill</JoluButton>
-          <JoluButton variant="primary" className="h-[34px]" onClick={() => setMode({ kind: "editor", target: { mode: "new", platform }, back: null })}><Plus aria-hidden />新建 Skill</JoluButton>
-        </div>
-      </div>
+    <div ref={contentMotion} className="flex w-full flex-col gap-3.5">
+      <PageActions>
+        <Button kind="ghost" size="sm" icon="refresh" loading={scanning} disabled={scanning} onClick={rescan}>
+          扫描目录
+        </Button>
+        <Button kind="ghost" size="sm" icon="download" onClick={() => setDialog({ kind: "import" })}>
+          导入 Skill
+        </Button>
+        <Button kind="primary" size="sm" icon="add" onClick={() => setMode({ kind: "editor", target: { mode: "new", platform }, back: null })}>
+          新建 Skill
+        </Button>
+      </PageActions>
 
-      <div className="flex h-[38px] items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <ProviderMenu value={platform} platforms={data?.platforms ?? []} onChange={changePlatform} />
         <MenuFilter trailingChevron label="作用范围筛选" value={filters.scope} options={scopeOptions(items, scanned)} onChange={(v) => setFilters((f) => ({ ...f, scope: v as ScopeFilter }))} />
         <MenuFilter trailingChevron label="状态筛选" value={filters.status} options={STATUS_OPTIONS} onChange={(v) => setFilters((f) => ({ ...f, status: v as StatusFilter }))} />
-        <label className="jolu-control flex h-[38px] min-w-0 flex-1 items-center gap-2 rounded-lg border border-jolu-border bg-jolu-bg px-3 focus-within:border-jolu-accent">
-          <Search aria-hidden className="size-4 shrink-0 text-jolu-muted" />
-          <input
+        <div className="relative min-w-[200px] flex-1">
+          <Input
+            size="md"
+            icon="search"
             value={searchDraft}
             onChange={(e) => {
               setSearchDraft(e.target.value)
@@ -253,65 +249,76 @@ export function SkillsView({ active }: { active: boolean }) {
             }}
             placeholder="搜索名称、描述或路径"
             aria-label="搜索 Skills"
-            className="min-w-0 flex-1 bg-transparent text-xs text-jolu-text outline-none placeholder:text-jolu-muted"
+            className="bg-jn-surface shadow-jn-surface"
           />
           {searchDraft && (
-            <button type="button" aria-label="清除搜索" onClick={() => { setSearchDraft(""); setFilters((f) => ({ ...f, search: "" })) }} className="grid size-5 place-items-center rounded text-jolu-muted hover:text-jolu-text">
-              <X aria-hidden className="size-3.5" />
+            <button
+              type="button"
+              aria-label="清除搜索"
+              onClick={() => { setSearchDraft(""); setFilters((f) => ({ ...f, search: "" })) }}
+              className="absolute top-1/2 right-2.5 grid size-5 -translate-y-1/2 place-items-center rounded-full text-jn-text-3 hover:bg-jn-well hover:text-jn-text"
+            >
+              <Icon name="close" size="xs" />
             </button>
           )}
-        </label>
-        <JoluButton variant="outline" className="h-[34px]" disabled={!data} onClick={() => setDialog({ kind: "dirs" })}><FolderCog aria-hidden />目录设置</JoluButton>
+        </div>
+        <Button kind="ghost" size="sm" icon="folderConfig" disabled={!data} onClick={() => setDialog({ kind: "dirs" })}>
+          目录设置
+        </Button>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
-        <Stat icon={<Blocks />} value={data ? stats.installed : null} label="已安装" note={platform === "all" ? "全部供应商 · 已检测目录" : "当前供应商 · 已检测目录"} />
-        <Stat icon={<CircleCheck />} value={data ? stats.enabled : null} label="已启用" note="新会话可用 · 依工具加载规则" />
-        <Stat icon={<TriangleAlert />} value={data ? stats.conflicts + stats.invalid : null} label="待处理" note={data ? `${stats.conflicts} 项同名冲突 · ${stats.invalid} 项配置异常` : "扫描完成后显示"} />
+      <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
+        <Stat icon="blocks" value={data ? stats.installed : null} label="已安装" note={platform === "all" ? "全部供应商 · 已检测目录" : "当前供应商 · 已检测目录"} />
+        <Stat icon="success" value={data ? stats.enabled : null} label="已启用" note="新会话可用 · 依工具加载规则" />
+        <Stat icon="warning" value={data ? stats.conflicts + stats.invalid : null} label="待处理" note={data ? `${stats.conflicts} 项同名冲突 · ${stats.invalid} 项配置异常` : "扫描完成后显示"} warn={Boolean(data && stats.conflicts + stats.invalid > 0)} />
       </div>
 
-      <div className="flex h-9 items-center gap-2 rounded-lg bg-jolu-side px-3">
-        <FolderOpen aria-hidden className="size-4 shrink-0 text-jolu-muted" />
-        <span className="min-w-0 truncate text-[12px] text-jolu-text">{data ? scanLocation(scanned) : "正在读取目录…"}</span>
-        {!!data?.errors.length && <span className="shrink-0 text-[12px] text-jolu-danger" title={data.errors.map((e) => `${e.path}：${e.reason}`).join("\n")}>· {data.errors.length} 个目录扫描失败</span>}
+      <div className="flex min-h-10 items-center gap-2 rounded-[14px] border border-jn-line bg-jn-surface px-3.5 shadow-jn-surface">
+        <Icon name="openFolder" size="sm" className="shrink-0 text-jn-text-3" />
+        <span className="min-w-0 truncate text-xs text-jn-text">{data ? scanLocation(scanned) : "正在读取目录…"}</span>
+        {!!data?.errors.length && <span className="shrink-0 text-xs text-jn-danger" title={data.errors.map((e) => `${e.path}：${e.reason}`).join("\n")}>· {data.errors.length} 个目录扫描失败</span>}
         <span className="flex-1" />
-        <span className="shrink-0 text-[11px] text-jolu-muted">{data ? scannedLabel(data.scanned_at, now) : ""}{!isTauri && " · 示例数据"}</span>
+        <span className="shrink-0 text-[11px] text-jn-text-3">{data ? scannedLabel(data.scanned_at, now) : ""}{!isTauri && " · 示例数据"}</span>
       </div>
 
       {error && (
-        <div role="alert" className="flex items-center justify-between gap-3 rounded-[10px] bg-jolu-danger-soft px-4 py-2.5 text-xs text-jolu-danger">
+        <div role="alert" className="flex items-center justify-between gap-3 rounded-[14px] bg-jn-danger-soft px-4 py-2.5 text-xs text-jn-danger">
           <span className="min-w-0 truncate">{data ? `扫描失败，暂时显示上次结果：${error}` : `扫描失败：${error}`}</span>
-          <JoluButton size="sm" variant="danger-soft" onClick={refresh}>重试</JoluButton>
+          <Button size="sm" kind="danger" onClick={refresh}>重试</Button>
         </div>
       )}
 
       {selectedItems.length > 0 && (
-        <div className="jolu-card flex flex-wrap items-center gap-2 rounded-xl border border-jolu-border bg-jolu-cc-surface px-4 py-2.5">
-          <span className="text-xs font-semibold text-jolu-text">已选择 {selectedItems.length} 个 Skill</span>
-          <JoluButton variant="soft" size="sm" onClick={() => void batchToggle(true)}><Check aria-hidden />启用</JoluButton>
-          <JoluButton variant="neutral" size="sm" onClick={() => void batchToggle(false)}><Pause aria-hidden />停用</JoluButton>
-          <JoluButton variant="neutral" size="sm" onClick={() => setDialog({ kind: "copy", items: selectedItems })}><Copy aria-hidden />复制</JoluButton>
-          <JoluButton variant="outline" size="sm" onClick={() => { setSelected(new Set()); setBatch(null) }}>取消选择</JoluButton>
-          {batch && <span className="text-xs text-jolu-on">{batch}</span>}
-        </div>
+        <BatchBar
+          summary={`已选 ${selectedItems.length} 项`}
+          note={batch ?? undefined}
+          onClose={() => { setSelected(new Set()); setBatch(null) }}
+          actions={
+            <>
+              <BatchAction icon="check" onClick={() => void batchToggle(true)}>启用</BatchAction>
+              <BatchAction icon="pause" onClick={() => void batchToggle(false)}>停用</BatchAction>
+              <BatchAction icon="copy" onClick={() => setDialog({ kind: "copy", items: selectedItems })}>复制</BatchAction>
+            </>
+          }
+        />
       )}
 
       {!data && loading ? (
         <LoadingSurface layout="table" label="正在扫描 Skills 目录" />
       ) : nothingDetected ? (
-        <section className="jolu-card flex flex-col items-start gap-3 rounded-xl border border-jolu-border bg-jolu-cc-surface p-5">
-          <span className="text-[13px] font-semibold text-jolu-text">没有检测到 Skills 目录</span>
-          <span className="text-[12px] text-jolu-muted">可以添加项目目录，或新建 / 导入一个 Skill；未检测到目录不代表工具不支持 Skills。</span>
+        <section className="flex flex-col items-start gap-3 rounded-jn-card border border-jn-line bg-jn-surface p-5 shadow-jn-surface">
+          <span className="text-[13px] font-semibold text-jn-text">没有检测到 Skills 目录</span>
+          <span className="text-xs text-jn-text-3">可以添加项目目录，或新建 / 导入一个 Skill；未检测到目录不代表工具不支持 Skills。</span>
           <div className="flex gap-2">
-            <JoluButton variant="soft" size="sm" onClick={() => setDialog({ kind: "dirs" })}><FolderOpen aria-hidden />选择目录</JoluButton>
-            <JoluButton variant="neutral" size="sm" onClick={refresh}><RefreshCw aria-hidden />重新扫描</JoluButton>
+            <Button kind="soft" size="sm" icon="openFolder" onClick={() => setDialog({ kind: "dirs" })}>选择目录</Button>
+            <Button kind="ghost" size="sm" icon="refresh" onClick={refresh}>重新扫描</Button>
           </div>
         </section>
       ) : visible.length === 0 && data ? (
-        <section className="jolu-card flex flex-col items-start gap-3 rounded-xl border border-jolu-border bg-jolu-cc-surface p-5">
-          <span className="text-[13px] font-semibold text-jolu-text">{filtered ? "没有匹配的 Skill" : "这个供应商还没有 Skill"}</span>
-          <span className="text-[12px] text-jolu-muted">{filtered ? "调整范围、状态或搜索条件后再试。" : "新建或导入一个 Skill 开始使用。"}</span>
-          {filtered && <JoluButton variant="neutral" size="sm" onClick={clearFilters}><RotateCcw aria-hidden />清空筛选</JoluButton>}
+        <section className="flex flex-col items-start gap-3 rounded-jn-card border border-jn-line bg-jn-surface p-5 shadow-jn-surface">
+          <span className="text-[13px] font-semibold text-jn-text">{filtered ? "没有匹配的 Skill" : "这个供应商还没有 Skill"}</span>
+          <span className="text-xs text-jn-text-3">{filtered ? "调整范围、状态或搜索条件后再试。" : "新建或导入一个 Skill 开始使用。"}</span>
+          {filtered && <Button kind="ghost" size="sm" icon="retry" onClick={clearFilters}>清空筛选</Button>}
         </section>
       ) : (
         <SkillsTable
@@ -337,23 +344,25 @@ export function SkillsView({ active }: { active: boolean }) {
         />
       )}
 
-      <p className="text-[12px] text-jolu-muted">启用仅控制工具是否加载 Skill，不会立即执行；操作能力以所选工具适配结果为准。</p>
+      <p className="text-xs text-jn-text-3">启用仅控制工具是否加载 Skill，不会立即执行；操作能力以所选工具适配结果为准。</p>
       {dialogs}
     </div>
   )
 }
 
-/** value 为 null 表示尚未扫描完成，显示「—」而不是 0 */
-function Stat({ icon, value, label, note }: { icon: React.ReactNode; value: number | null; label: string; note: string }) {
+/** value 为 null 表示尚未扫描完成，显示「—」而不是 0（R1-11） */
+function Stat({ icon, value, label, note, warn }: { icon: IconName; value: number | null; label: string; note: string; warn?: boolean }) {
   return (
-    <section className="flex h-[82px] items-center gap-3 rounded-[10px] border border-jolu-border bg-jolu-bg p-3.5">
-      <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-jolu-selected text-jolu-on [&_svg]:size-[18px]">{icon}</span>
+    <section className="flex min-h-[88px] items-center gap-3.5 rounded-jn-card border border-jn-line bg-jn-surface px-[18px] py-3.5 shadow-jn-surface">
+      <span aria-hidden className={cn("grid size-10 shrink-0 place-items-center rounded-[12px]", warn ? "bg-jn-warning-soft text-jn-warning" : "bg-jn-primary-wash text-jn-primary-ink")}>
+        <Icon name={icon} size="lg" />
+      </span>
       <span className="flex min-w-0 flex-col gap-1">
         <span className="flex items-baseline gap-2.5">
-          <span className="tnum text-2xl font-semibold leading-none text-jolu-text">{value ?? "—"}</span>
-          <span className="text-xs text-jolu-muted">{label}</span>
+          <span className={cn("tnum font-mono text-2xl font-bold leading-none", warn ? "text-jn-warning" : "text-jn-text")}>{value ?? "—"}</span>
+          <span className="text-xs font-medium text-jn-text-2">{label}</span>
         </span>
-        <span className="truncate text-[11px] text-jolu-muted">{note}</span>
+        <span className="truncate text-[11px] text-jn-text-3">{note}</span>
       </span>
     </section>
   )

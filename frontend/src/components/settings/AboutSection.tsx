@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react"
-import { ChevronRight, ExternalLink, RefreshCw } from "lucide-react"
+import { ChevronRight, CircleHelp, ExternalLink, RefreshCw } from "lucide-react"
 import { openUrl } from "@/lib/api"
+import { Button, Input, Select, StatusPill, Tag } from "@/ui"
 import { settingsApi } from "@/lib/settingsApi"
 import { UPDATES_ENABLED, progressPercent } from "@/lib/updateState"
+import { REPO_URL } from "@/components/panel/HeaderActions"
 import { AppIcon } from "@/components/brand/AppIcon"
-import { Wordmark } from "@/components/brand/Wordmark"
-import { SelectField } from "@/components/ui/SelectField"
-import { REPO_URL } from "@/components/panel/PageHeader"
 import { useSettings } from "@/hooks/useSettings"
 import { useUpdate } from "@/components/panel/UpdateContext"
 import { useToast } from "@/components/ui/Toast"
@@ -30,16 +29,9 @@ export function AboutSection() {
 
   return (
     <>
-      <div className="flex h-[152px] items-center gap-5 rounded-xl bg-jolu-side px-6">
-        <AppIcon size={72} />
-        <div className="flex min-w-0 flex-col gap-2">
-          <Wordmark width={81} height={33} />
-          <span className="text-[13px] text-jolu-muted">起名寓意：Join + Loop，把 AI 工具连接成环</span>
-          <span className="text-[12px] text-jolu-muted">{versionText} · Windows</span>
-        </div>
-      </div>
+      <BrandHeroCard versionText={versionText} />
 
-      <SettingsGroup title="应用更新">
+      <SettingsGroup icon={RefreshCw} title="应用更新">
         {UPDATES_ENABLED ? <UpdateRow versionText={versionText} /> : (
           <SettingsRow
             className="min-h-[72px]"
@@ -66,23 +58,6 @@ export function AboutSection() {
             />
           }
         />
-      </SettingsGroup>
-
-      {cfg.error && <p role="alert" className="text-xs text-jolu-danger">{cfg.error}</p>}
-
-      <SettingsGroup title="帮助与项目">
-        <SettingsRow
-          className="min-h-[72px]"
-          title="问题反馈"
-          desc="提交 Issue"
-          control={<ActionButton tone="soft" onClick={() => void openUrl(`${REPO_URL}/issues`)}>提交 Issues<ExternalLink aria-hidden className="size-3.5" /></ActionButton>}
-        />
-        <SettingsRow
-          className="min-h-[72px]"
-          title="GitHub"
-          desc="源代码与问题反馈"
-          control={<ActionButton tone="soft" onClick={() => void openUrl(REPO_URL)}>访问项目<ChevronRight aria-hidden className="size-3.5" /></ActionButton>}
-        />
         <SettingsRow
           className="min-h-[72px]"
           title="更新日志"
@@ -91,9 +66,79 @@ export function AboutSection() {
         />
       </SettingsGroup>
 
+      {cfg.error && <p role="alert" className="text-xs text-jn-danger">{cfg.error}</p>}
+
+      <SettingsGroup icon={CircleHelp} title="帮助与项目">
+        <SettingsRow
+          className="min-h-[72px]"
+          title="GitHub"
+          desc="源代码与问题反馈"
+          control={<ActionButton tone="soft" onClick={() => void openUrl(REPO_URL)}>访问项目<ChevronRight aria-hidden className="size-3.5" /></ActionButton>}
+        />
+        <SettingsRow
+          className="min-h-[72px]"
+          title="问题反馈"
+          desc="提交 Issue"
+          control={<ActionButton tone="soft" onClick={() => void openUrl(`${REPO_URL}/issues`)}>提交 Issues<ExternalLink aria-hidden className="size-3.5" /></ActionButton>}
+        />
+      </SettingsGroup>
+
       <CapabilitySection />
 
     </>
+  )
+}
+
+/** R1-17 顶部品牌卡片：Logo、版本号、定位文案与更新主动作 */
+function BrandHeroCard({ versionText }: { versionText: string }) {
+  const toast = useToast()
+  const { phase, info, progress, checkNow, openUpdate } = useUpdate()
+  const checking = phase === "checking"
+  const hasUpdate = UPDATES_ENABLED && !!info && phase !== "ready"
+  const percent = progressPercent(progress.downloaded, progress.total)
+  const available = info ? `v${info.availableVersion}` : ""
+
+  const check = () => {
+    void checkNow()
+      .then((found) => toast.success(found ? "发现新版本，正在后台下载" : "已是最新版本"))
+      .catch((reason) => toast.danger("检查更新失败", String(reason)))
+  }
+
+  return (
+    <section className="flex flex-wrap items-center gap-4 rounded-jn-card border border-jn-line bg-jn-surface px-[22px] py-[18px] shadow-jn-surface">
+      <span className="grid size-12 shrink-0 place-items-center rounded-[14px] bg-jn-well">
+        <AppIcon size={34} />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[18px] font-bold text-jn-text">Jolu</span>
+          <Tag>{versionText}</Tag>
+          {hasUpdate && (
+            <StatusPill tone={phase === "downloadError" ? "danger" : "success"}>
+              {phase === "downloaded"
+                ? `${available} 已下载`
+                : phase === "downloading"
+                  ? `下载中${percent === null ? "" : ` ${percent}%`}`
+                  : phase === "downloadError"
+                    ? `${available} 下载失败`
+                    : `发现 ${available}`}
+            </StatusPill>
+          )}
+        </div>
+        <span className="text-xs text-jn-text-3">Windows 桌面 AI 工具管理器</span>
+      </div>
+      {UPDATES_ENABLED && (
+        hasUpdate ? (
+          <Button kind="primary" size="sm" icon="update" loading={phase === "installing"} onClick={openUpdate}>
+            {phase === "downloaded" || phase === "installing" ? "重启并安装" : phase === "downloading" ? "查看下载" : phase === "downloadError" ? "重试下载" : `下载 ${available}`}
+          </Button>
+        ) : (
+          <Button kind="soft" size="sm" icon="refresh" loading={checking} disabled={checking} onClick={check}>
+            {checking ? "检查中…" : "检查更新"}
+          </Button>
+        )
+      )}
+    </section>
   )
 }
 
@@ -169,7 +214,7 @@ function UpdateIntervalPicker({
   if (custom) {
     return (
       <div className="flex items-center gap-2">
-        <input
+        <Input
           type="number"
           min={5}
           max={1440}
@@ -179,26 +224,27 @@ function UpdateIntervalPicker({
           onChange={(event) => setDraft(event.target.value)}
           onBlur={commit}
           onKeyDown={(event) => { if (event.key === "Enter") commit() }}
-          className="jolu-control h-8 w-24 rounded-lg border border-jolu-border bg-jolu-bg px-2 text-xs text-jolu-text outline-none disabled:opacity-45"
+          className="h-8 w-24"
         />
-        <span className="text-meta text-jolu-muted">分钟</span>
+        <span className="text-[12px] text-jn-text-3">分钟</span>
       </div>
     )
   }
 
   return (
-    <SelectField label="检查间隔" value={preset ? String(value) : "custom"} disabled={disabled}
-      onValueChange={(next) => {
-        if (next === "custom") {
-          setCustom(true)
-          return
-        }
-        onCommit(Number(next))
-      }}
-      className="h-8 rounded-[10px]"
-      options={[
-        ...PRESET_INTERVALS.map((minutes) => ({ value: String(minutes), label: formatInterval(minutes) })),
-        { value: "custom", label: "自定义…" },
-      ]} />
+    <div className="w-[150px]">
+      <Select variant="filter" width="full" label="检查间隔" value={preset ? String(value) : "custom"} disabled={disabled}
+        onChange={(next) => {
+          if (next === "custom") {
+            setCustom(true)
+            return
+          }
+          onCommit(Number(next))
+        }}
+        options={[
+          ...PRESET_INTERVALS.map((minutes) => ({ value: String(minutes), label: formatInterval(minutes) })),
+          { value: "custom", label: "自定义…" },
+        ]} />
+    </div>
   )
 }

@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils"
 import { useSettings } from "@/hooks/useSettings"
 import { useSystemReducedMotion } from "@/hooks/useSystemReducedMotion"
 import { DENSITY_LABEL, ZOOM_STEPS, appearancePreview, normalizeDensity, normalizeZoom, reduceMotionHint, type Density } from "@/lib/appearance"
-import { Segmented, SelectButton, SettingsGroup, SettingsRow, Switch } from "./settingsUi"
+import { Segmented, SettingsGroup, SettingsRow, Switch } from "./settingsUi"
 
 type Cfg = ReturnType<typeof useSettings>
 type Theme = "light" | "dark" | "system"
@@ -39,22 +39,22 @@ export function AppearanceSection({ cfg }: { cfg: Cfg }) {
                 disabled={disabled || cfg.isSaving("theme")}
                 onClick={() => void cfg.setTheme(t.value)}
                 className={cn(
-                  "flex min-w-0 flex-col gap-2.5 rounded-[10px] border p-2.5 text-left outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed",
-                  active ? "border-jolu-accent bg-jolu-selected" : "border-jolu-border bg-jolu-bg hover:bg-jolu-stage",
+                  "flex min-w-0 flex-col gap-2.5 rounded-[10px] border p-2.5 text-left outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jn-primary disabled:cursor-not-allowed",
+                  active ? "border-jn-primary bg-jn-primary-wash" : "border-jn-line bg-jn-surface hover:bg-jn-stage",
                 )}
               >
                 <span aria-hidden className="flex h-[72px] gap-2 rounded-md p-2" style={{ background: t.bg }}>
                   <span className="w-6 rounded-[3px]" style={{ background: t.side }} />
                   <span className="flex flex-1 flex-col gap-[7px]">
-                    <span className="h-4 rounded-[3px] bg-[#06C167]" />
+                    <span className="h-4 rounded-[3px] bg-jn-primary" />
                     <span className="h-2 rounded-sm" style={{ background: t.line }} />
                     <span className="h-2 rounded-sm" style={{ background: t.line }} />
                   </span>
                 </span>
                 <span className="flex items-center gap-[7px]">
-                  <Icon aria-hidden className={cn("size-4", active ? "text-jolu-on" : "text-jolu-muted")} />
-                  <span className="flex-1 text-xs text-jolu-text">{t.label}</span>
-                  <CircleCheck aria-hidden className={cn("size-[15px]", active ? "text-jolu-on" : "text-transparent")} />
+                  <Icon aria-hidden className={cn("size-4", active ? "text-jn-primary-ink" : "text-jn-text-3")} />
+                  <span className="flex-1 text-xs text-jn-text">{t.label}</span>
+                  <CircleCheck aria-hidden className={cn("size-[15px]", active ? "text-jn-primary-ink" : "text-transparent")} />
                 </span>
               </button>
             )
@@ -67,12 +67,12 @@ export function AppearanceSection({ cfg }: { cfg: Cfg }) {
           title="界面缩放"
           desc="灵动岛保持独立大小"
           control={
-            <SelectButton
+            <Segmented<string>
               label="界面缩放"
               value={String(zoom)}
-              options={ZOOM_STEPS.map((step) => ({ value: String(step), label: `${step}%` }))}
               disabled={disabled || cfg.isSaving("main_zoom")}
               onChange={(value) => void cfg.setAppearance({ main_zoom: Number(value) })}
+              items={ZOOM_STEPS.map((step) => ({ value: String(step), label: `${step}%` }))}
             />
           }
         />
@@ -89,17 +89,17 @@ export function AppearanceSection({ cfg }: { cfg: Cfg }) {
             />
           }
         />
-        <div className="mb-4 flex flex-col rounded-lg bg-jolu-side px-3.5 py-3">
-          <div className="flex h-[26px] items-center justify-between text-[11px] text-jolu-muted">
+        <div className="mb-4 flex flex-col rounded-[14px] bg-jn-well px-3.5 py-3">
+          <div className="flex h-[26px] items-center justify-between text-[11px] text-jn-text-3">
             <span>效果预览</span>
             <span>{appearancePreview(zoom, density)}</span>
           </div>
           {/* 紧凑态行高 40px → 32px（D-22，画板 88 未画紧凑态，待确认） */}
           {[["优化登录流程", "12.8K Token"], ["整理接口文档", "8.4K Token"]].map(([title, tokens]) => (
-            <div key={title} className="flex h-10 items-center gap-2 border-t border-jolu-border [.density-compact_&]:h-8">
-              <MessageSquare aria-hidden className="size-3.5 text-jolu-muted" />
-              <span className="flex-1 text-xs text-jolu-text">{title}</span>
-              <span className="text-[12px] text-jolu-on">{tokens}</span>
+            <div key={title} className="flex h-10 items-center gap-2 border-t border-jn-line [.density-compact_&]:h-8">
+              <MessageSquare aria-hidden className="size-3.5 text-jn-text-3" />
+              <span className="flex-1 text-xs text-jn-text">{title}</span>
+              <span className="text-[12px] text-jn-primary-ink">{tokens}</span>
             </div>
           ))}
         </div>

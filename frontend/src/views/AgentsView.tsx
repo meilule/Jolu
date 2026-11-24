@@ -1,35 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { api, invoke, isTauri, listenEvent } from "@/lib/api"
+import { invoke, isTauri, listenEvent } from "@/lib/api"
 import { EVENTS } from "@/lib/events"
 import { useLatestGate } from "@/hooks/useLatestGate"
 import { gatewayApi, type AgentDiscoveryDto, type CatalogModelDto, type CustomAgentDto, type CustomAgentInputDto, type GatewayStatusDto, type ProfileDto, type WiringPreviewDto } from "@/lib/gatewayApi"
 import type { RoutingGroupDto } from "@/components/gateway/routingGroups"
 import { settingsApi, type AgentVersionRow } from "@/lib/settingsApi"
-import { skillsApi } from "@/lib/skillsApi"
-import { automationApi } from "@/lib/automationApi"
-import { AGENT_PLATFORM, buildAgentRows, customAgentRow, isCustomAgent, readHidden, writeHidden, type AgentRow } from "@/lib/agentPage"
+import { buildAgentRows, customAgentRow, isCustomAgent, readHidden, writeHidden, type AgentRow } from "@/lib/agentPage"
 import { emptyTierDraft, tierDraftFrom, tierModelsFrom, type TierDraft } from "@/lib/tierModels"
 import type { MainPage } from "@/lib/mainNavigation"
 import { useToast } from "@/components/ui/Toast"
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
-import { PanelPage } from "@/components/panel/PanelPage"
+import { useContentMotion } from "@/lib/motion"
+import { Button, ConfirmDialog, PageActions } from "@/ui"
 import { AgentDirectory } from "@/components/agents/AgentList"
-import { AgentDetail, type AgentCounts, type AgentLink } from "@/components/agents/AgentDetail"
+import { AgentDetail } from "@/components/agents/AgentDetail"
 import { CustomAgentDialog, CustomAgentPanel } from "@/components/agents/CustomAgentPanel"
-import { useExitPresence } from "@/lib/motion"
 
 /**
- * Agent 页（Jolu.pen「统一网关 · R2 重设计」V6：画板 Ck1N5 列表态 / iTvRW 详情态）。
+ * Agent 页（设计稿 jolu-new.pen R1-08 列表 / R1-09 详情 / R1-32 高级 / R1-33 写入改动）。
  *
  * 管工具：自动检测本机工具、接入 / 断开、档位、模型菜单、方案、改动与还原。
- * 列表态保留在底层，详情以右侧抽屉打开；请求怎么走（路由分组、流水、对外访问）
- * 在「模型路由」页。
+ * 列表与详情是**整页切换**（R1-09 带「← 全部工具」）；请求怎么走（路由分组、
+ * 流水、对外访问）在「模型路由」页。
+ *
+ * 页头的「重新检测 / 添加工具」通过 `PageActions` 送进页头——这是 R1-08 的
+ * 「页面操作」槽，不在页面内容里多占一行。
  */
 
 type Applied = { model: string | null; subagent_model: string | null; tiers: import("@/lib/gatewayApi").TierModels | null }
 type Confirm = { title: string; description: string; label: string; danger?: boolean; work: () => Promise<boolean | void> }
-
-const EMPTY_COUNTS: AgentCounts = { skills: null, sessions: null, automation: null, routes: null }
 
 /**
  * 跨挂载记住上次的探测与版本结果（T7）：切走页面会卸载组件，切回来先显示上次的结果，
@@ -57,7 +55,6 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
   const [busy, setBusy] = useState(false)
   const [preview, setPreview] = useState<WiringPreviewDto | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
-  const [counts, setCounts] = useState<AgentCounts>(EMPTY_COUNTS)
   const [applied, setApplied] = useState<Applied | null>(null)
   const [mainModel, setMainModel] = useState("")
   const [subagent, setSubagent] = useState("")
@@ -137,11 +134,12 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
   }, [status, discovery, applied, customs])
   const row = rows.find((entry) => entry.agent === selected) ?? null
   const wiredState = row?.group === "wired"
-  const detailPresence = useExitPresence(selected, 220)
-  const drawerSelected = detailPresence.rendered
-  const drawerCustom = drawerSelected && isCustomAgent(drawerSelected) ? customs.find((entry) => entry.id === drawerSelected) ?? null : null
-  const drawerRow = rows.find((entry) => entry.agent === drawerSelected) ?? null
-  const drawerReady = Boolean(drawerCustom || drawerRow)
+  /** 详情是整页切换：选中自定义工具走通用接入面板，其余走内置工具详情 */
+  const detailCustom = selected && isCustomAgent(selected) ? customs.find((entry) => entry.id === selected) ?? null : null
+  const detailRow = selected && !detailCustom ? row : null
+  const detailReady = Boolean(detailCustom || detailRow)
+  /** 列表 ↔ 详情的整页切换淡入（不位移，避免固定弹窗定位参照变化） */
+  const contentMotion = useContentMotion(selected ?? "list", 220)
 
   /** 模型 id → 来源说明（画板 iTvRW「来源：工作账号 · 订阅连接」） */
   const sourceNotes = useMemo(() => {
@@ -186,21 +184,6 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
       .catch((error) => { if (alive) { setPreview(null); setPreviewError(String(error)) } })
     return () => { alive = false }
   }, [selected, row?.group, previewModel, customModel, status, customs])
-
-  useEffect(() => {
-    if (!isTauri || !selected || isCustomAgent(selected)) return
-    const platform = AGENT_PLATFORM[selected]
-    let alive = true
-    setCounts({ ...EMPTY_COUNTS, routes: routesByAgent ? routesByAgent[selected] ?? 0 : null })
-    void Promise.all([
-      skillsApi.overview(platform).then((value) => value.items.filter((item) => item.platform === platform && item.enabled).length).catch(() => null),
-      api.sessionsList({ platform, connection: null, project: null, since: null, search: null }).then((value) => value.sessions.length).catch(() => null),
-      automationApi.overview().then((value) => value.tasks.filter((task) => task.platform === platform).length).catch(() => null),
-    ]).then(([skills, sessions, automation]) => {
-      if (alive) setCounts({ skills, sessions, automation, routes: routesByAgent ? routesByAgent[selected] ?? 0 : null })
-    })
-    return () => { alive = false }
-  }, [selected, routesByAgent])
 
   useEffect(() => {
     if (!selected) return
@@ -345,73 +328,86 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
     writeHidden(next)
   }
 
-  const link = (target: AgentLink) => onNavigate(target === "routes" ? "gateway" : target)
-
   const redetect = () => {
     setBusy(true)
     void Promise.all([detect(true), loadCore()]).finally(() => setBusy(false))
   }
 
   if (!isTauri) {
-    return <div className="flex h-full items-center justify-center text-meta text-jolu-muted">Agent 页需要在桌面端使用</div>
+    return <div className="flex h-full items-center justify-center text-[12px] text-jn-text-3">Agent 页需要在桌面端使用</div>
   }
 
+  const modelIds = modelsOf(catalog, groups)
+  /** 选中的工具在刷新后可能已经消失（自定义工具被删）：此时退回列表，不留空白页 */
+  const showList = !selected || !detailReady
   return (
-    <PanelPage>
-      <AgentDirectory rows={rows} selected={selected} modelsCount={modelsOf(catalog, groups).length} tierCount={6} busy={busy} search={search} onSearch={setSearch}
-        hidden={hidden} showHidden={showHidden} onShowHidden={setShowHidden} onSelect={setSelected} onRedetect={redetect}
-        onToggle={(target) => target.toggle === "on" ? unwire(target.agent) : wire(target.agent)}
-        onAddCustom={() => setAdding(true)} />
-
-      {drawerReady && (
-        <div className="agent-drawer-layer" data-state={detailPresence.exiting ? "closed" : "open"}>
-          <button type="button" aria-label="关闭工具详情" className="agent-drawer-backdrop" onClick={() => setSelected(null)} />
-          <div className="agent-drawer-panel" role="dialog" aria-label={`${drawerCustom?.name ?? drawerRow?.name ?? "工具"}详情`}>
-            {drawerCustom ? (
-              <CustomAgentPanel drawer agent={drawerCustom} models={modelsOf(catalog, groups)} routing={routing} preview={preview} previewError={previewError} busy={busy}
-                model={customModel} onModel={setCustomModel} onBack={() => setSelected(null)} onWire={() => customWire(drawerCustom.id)} onUnwire={() => customUnwire(drawerCustom.id)} onRemove={() => customRemove(drawerCustom.id)} />
-            ) : drawerRow ? (
-              <AgentDetail
-                drawer
-                row={drawerRow}
-                version={versions.find((entry) => entry.agent === drawerRow.agent && entry.found) ?? null}
-                routing={routing}
-                preview={preview}
-                previewError={previewError}
-                counts={counts}
-                models={modelsOf(catalog, groups)}
-                sourceNotes={sourceNotes}
-                mainModel={mainModel}
-                onMainModel={setMainModel}
-                subagent={subagent}
-                onSubagent={setSubagent}
-                draft={draft}
-                onDraft={setDraft}
-                longContext={longContext}
-                onLongContext={saveLongContext}
-                profiles={profiles}
-                hidden={hidden.includes(drawerRow.agent)}
-                busy={busy}
-                onBack={() => setSelected(null)}
-                onWire={() => wire(drawerRow.agent)}
-                onUnwire={() => unwire(drawerRow.agent)}
-                onApplyTiers={applyTiers}
-                onAccept={accept}
-                onRewire={rewire}
-                onFollowConfig={followConfig}
-                onProfileApply={profileApply}
-                onProfileSave={profileSave}
-                onProfileDelete={profileDelete}
-                onToggleHidden={toggleHidden}
-                onLink={link}
-              />
-            ) : null}
-          </div>
-        </div>
+    <>
+      {/* 只在列表态显示页头操作：详情里页面操作换成了工具头（R1-09） */}
+      {showList && (
+        <PageActions>
+          <Button kind="ghost" size="sm" icon="refresh" disabled={busy} onClick={redetect}>重新检测</Button>
+          <Button kind="primary" size="sm" icon="add" disabled={busy} onClick={() => setAdding(true)}>添加工具</Button>
+        </PageActions>
       )}
+      <div ref={contentMotion} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {showList ? (
+          <AgentDirectory rows={rows} selected={selected} modelsCount={modelIds.length} tierCount={6} busy={busy} search={search} onSearch={setSearch}
+            hidden={hidden} showHidden={showHidden} onShowHidden={setShowHidden} onSelect={setSelected}
+            onToggle={(target) => target.toggle === "on" ? unwire(target.agent) : wire(target.agent)} />
+        ) : detailCustom ? (
+          <CustomAgentPanel agent={detailCustom} models={modelIds} routing={routing} preview={preview} previewError={previewError} busy={busy}
+            model={customModel} onModel={setCustomModel} onBack={() => setSelected(null)}
+            onWire={() => customWire(detailCustom.id)} onUnwire={() => customUnwire(detailCustom.id)} onRemove={() => customRemove(detailCustom.id)} />
+        ) : detailReady && detailRow ? (
+          <AgentDetail
+            row={detailRow}
+            version={versions.find((entry) => entry.agent === detailRow.agent && entry.found) ?? null}
+            routing={routing}
+            preview={preview}
+            previewError={previewError}
+            todayRoutes={routesByAgent ? (routesByAgent[detailRow.agent] ?? 0) : null}
+            models={modelIds}
+            sourceNotes={sourceNotes}
+            mainModel={mainModel}
+            onMainModel={setMainModel}
+            subagent={subagent}
+            onSubagent={setSubagent}
+            draft={draft}
+            onDraft={setDraft}
+            longContext={longContext}
+            onLongContext={saveLongContext}
+            profiles={profiles}
+            hidden={hidden.includes(detailRow.agent)}
+            busy={busy}
+            onBack={() => setSelected(null)}
+            onWire={() => wire(detailRow.agent)}
+            onUnwire={() => unwire(detailRow.agent)}
+            onApplyTiers={applyTiers}
+            onAccept={accept}
+            onRewire={rewire}
+            onFollowConfig={followConfig}
+            onProfileApply={profileApply}
+            onProfileSave={profileSave}
+            onProfileDelete={profileDelete}
+            onToggleHidden={toggleHidden}
+            onOpenModels={() => onNavigate("gateway")}
+          />
+        ) : null}
+      </div>
       {adding && <CustomAgentDialog busy={busy} onClose={() => setAdding(false)} onSave={customAdd} />}
-      {confirm && <ConfirmDialog title={confirm.title} description={confirm.description} confirmLabel={confirm.label} danger={confirm.danger} onClose={() => setConfirm(null)} onConfirm={confirm.work} />}
-    </PanelPage>
+      {confirm && (
+        <ConfirmDialog
+          open
+          onOpenChange={(open) => { if (!open) setConfirm(null) }}
+          title={confirm.title}
+          description={confirm.description}
+          confirmText={confirm.label}
+          kind={confirm.danger ? "danger" : "primary"}
+          loading={busy}
+          onConfirm={() => { const current = confirm; setConfirm(null); void current.work() }}
+        />
+      )}
+    </>
   )
 }
 

@@ -11,7 +11,7 @@ export function skillKey(item: Pick<SkillItemDto, "platform" | "path">): string 
 }
 
 const COLS = "grid grid-cols-[32px_minmax(0,330fr)_minmax(0,120fr)_minmax(0,120fr)_minmax(0,126fr)_90px_102px] items-center gap-2.5"
-const MENU_ITEM = "flex h-8 cursor-default select-none items-center gap-2 rounded-md px-2 text-xs text-jolu-text outline-none data-[highlighted]:bg-jolu-side data-[disabled]:opacity-40"
+const MENU_ITEM = "flex h-8 cursor-pointer select-none items-center gap-2 rounded-[10px] px-2.5 text-xs text-jn-text outline-none data-[highlighted]:bg-jn-well data-[disabled]:opacity-40"
 
 /** Skills 表格（画板 74）：勾选、名称描述、作用范围、来源、状态、启停与操作 */
 export function SkillsTable({ items, total, selected, busy, showPlatform, onSelect, onSelectAll, onToggle, onOpen, onEdit, onCopy, onRemove, onOpenDir }: {
@@ -32,10 +32,10 @@ export function SkillsTable({ items, total, selected, busy, showPlatform, onSele
   const picked = items.filter((i) => selected.has(skillKey(i))).length
   const HeadBox = picked === 0 ? Square : picked === items.length ? SquareCheck : SquareMinus
   return (
-    <section className="jolu-card overflow-hidden rounded-xl border border-jolu-border bg-jolu-cc-surface">
-      <div className={cn(COLS, "h-10 bg-jolu-side px-3.5 text-[12px] font-medium text-jolu-muted")}>
-        <button type="button" aria-label={picked ? "取消全选" : "全选当前结果"} onClick={() => onSelectAll(picked === 0)} className="grid size-5 place-items-center rounded outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent">
-          <HeadBox aria-hidden className={cn("size-3.5", picked ? "text-jolu-on" : "text-jolu-muted")} />
+    <section className="rounded-jn-card shadow-jn-surface overflow-hidden border border-jn-line bg-jn-surface">
+      <div className={cn(COLS, "h-10 bg-jn-surface px-3.5 text-[12px] font-medium text-jn-text-3")}>
+        <button type="button" aria-label={picked ? "取消全选" : "全选当前结果"} onClick={() => onSelectAll(picked === 0)} className="grid size-5 place-items-center rounded outline-none focus-visible:outline-2 focus-visible:outline-jn-focus">
+          <HeadBox aria-hidden className={cn("size-3.5", picked ? "text-jn-primary-ink" : "text-jn-text-3")} />
         </button>
         <span>Skill / 描述</span>
         <span>作用范围</span>
@@ -51,22 +51,22 @@ export function SkillsTable({ items, total, selected, busy, showPlatform, onSele
         return (
           <div
             key={key}
-            className={cn(COLS, "h-[55px] border-t border-jolu-border px-3.5 [.density-compact_&]:h-[44px] transition-colors hover:bg-jolu-stage", checked && "bg-jolu-selected hover:bg-jolu-selected")}
+            className={cn(COLS, "h-[56px] border-t border-jn-line px-3.5 [.density-compact_&]:h-[44px] transition-colors hover:bg-jn-well", checked && "bg-jn-primary-wash hover:bg-jn-primary-wash")}
           >
-            <button type="button" role="checkbox" aria-checked={checked} aria-label={`选择 ${item.name}`} onClick={() => onSelect(item)} className="grid size-5 place-items-center rounded outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent">
-              {checked ? <SquareCheck aria-hidden className="size-3.5 text-jolu-on" /> : <Square aria-hidden className="size-3.5 text-jolu-muted" />}
+            <button type="button" role="checkbox" aria-checked={checked} aria-label={`选择 ${item.name}`} onClick={() => onSelect(item)} className="grid size-5 place-items-center rounded outline-none focus-visible:outline-2 focus-visible:outline-jn-focus">
+              {checked ? <SquareCheck aria-hidden className="size-3.5 text-jn-primary-ink" /> : <Square aria-hidden className="size-3.5 text-jn-text-3" />}
             </button>
-            <button type="button" onClick={() => onOpen(item)} className="flex min-w-0 items-center gap-2.5 rounded-md text-left outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent">
+            <button type="button" onClick={() => onOpen(item)} className="flex min-w-0 items-center gap-2.5 rounded-md text-left outline-none focus-visible:outline-2 focus-visible:outline-jn-focus">
               <SkillIcon item={item} />
               <span className="flex min-w-0 flex-col gap-1">
-                <span className="truncate text-xs font-semibold text-jolu-text">{item.name}</span>
-                <span className="truncate text-[11px] text-jolu-muted" title={item.issue ?? item.description ?? undefined}>
+                <span className="truncate text-xs font-semibold text-jn-text">{item.name}</span>
+                <span className="truncate text-[11px] text-jn-text-3" title={item.issue ?? item.description ?? undefined}>
                   {showPlatform && `${providerName(item.platform)} · `}{item.issue ?? item.description ?? "没有描述"}
                 </span>
               </span>
             </button>
             <span className="min-w-0"><Tag title={item.project ?? undefined}>{scopeLabel(item)}</Tag></span>
-            <span className="truncate text-[12px] text-jolu-muted">{sourceLabel(item.source)}</span>
+            <span className="truncate text-[12px] text-jn-text-3">{sourceLabel(item.source)}</span>
             <span className="min-w-0">
               <Tag tone={item.status === "enabled" ? "on" : (item.status === "disabled" || item.status === "unknown") ? "muted" : "danger"} title={item.issue ?? undefined}>{statusLabel(item.status)}</Tag>
             </span>
@@ -79,21 +79,21 @@ export function SkillsTable({ items, total, selected, busy, showPlatform, onSele
               />
             </span>
             <span className="flex items-center gap-1.5">
-              <button type="button" onClick={() => onOpen(item)} className="inline-flex h-7 items-center gap-1 rounded-lg bg-jolu-selected px-2 text-xs font-medium text-jolu-on outline-none hover:bg-jolu-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent">
+              <button type="button" onClick={() => onOpen(item)} className="jn-interactive inline-flex h-7 items-center gap-1 rounded-full bg-jn-primary-soft px-2.5 text-xs font-semibold text-jn-primary-ink outline-none hover:brightness-95">
                 详情
-                <ChevronRight aria-hidden className="size-4" />
+                <ChevronRight aria-hidden className="size-3.5" />
               </button>
               <Menu.Root modal={false}>
-                <Menu.Trigger aria-label={`${item.name} 更多操作`} className="jolu-control grid h-7 w-6 place-items-center rounded-lg border border-jolu-border bg-jolu-bg text-jolu-text outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent data-[state=open]:bg-jolu-stage">
+                <Menu.Trigger aria-label={`${item.name} 更多操作`} className="jn-interactive grid size-7 place-items-center rounded-full bg-jn-well text-jn-text-2 outline-none hover:bg-jn-track hover:text-jn-text data-[state=open]:bg-jn-track">
                   <Ellipsis aria-hidden className="size-4" />
                 </Menu.Trigger>
                 <Menu.Portal>
-                  <Menu.Content align="end" sideOffset={6} collisionPadding={12} className="motion-popover z-[100] w-[176px] rounded-xl border border-jolu-border bg-jolu-cc-surface p-1.5 shadow-popover">
-                    <Menu.Item className={MENU_ITEM} onSelect={() => onOpenDir(item)}><FolderOpen aria-hidden className="size-4 text-jolu-muted" />打开目录</Menu.Item>
-                    <Menu.Item className={MENU_ITEM} disabled={item.readonly} onSelect={() => onEdit(item)}><Pencil aria-hidden className="size-4 text-jolu-muted" />编辑 Skill</Menu.Item>
-                    <Menu.Item className={MENU_ITEM} onSelect={() => onCopy(item)}><Copy aria-hidden className="size-4 text-jolu-muted" />复制到供应商</Menu.Item>
-                    <Menu.Separator className="my-1 h-px bg-jolu-border" />
-                    <Menu.Item className={cn(MENU_ITEM, "text-jolu-danger")} disabled={item.readonly} onSelect={() => onRemove(item)}><Trash2 aria-hidden className="size-4" />移除 Skill</Menu.Item>
+                  <Menu.Content align="end" sideOffset={6} collisionPadding={12} className="jn-popover z-[140] w-[176px] rounded-[14px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface">
+                    <Menu.Item className={MENU_ITEM} onSelect={() => onOpenDir(item)}><FolderOpen aria-hidden className="size-4 text-jn-text-3" />打开目录</Menu.Item>
+                    <Menu.Item className={MENU_ITEM} disabled={item.readonly} onSelect={() => onEdit(item)}><Pencil aria-hidden className="size-4 text-jn-text-3" />编辑 Skill</Menu.Item>
+                    <Menu.Item className={MENU_ITEM} onSelect={() => onCopy(item)}><Copy aria-hidden className="size-4 text-jn-text-3" />复制到供应商</Menu.Item>
+                    <Menu.Separator className="my-1 h-px bg-jn-line" />
+                    <Menu.Item className={cn(MENU_ITEM, "text-jn-danger")} disabled={item.readonly} onSelect={() => onRemove(item)}><Trash2 aria-hidden className="size-4" />移除 Skill</Menu.Item>
                   </Menu.Content>
                 </Menu.Portal>
               </Menu.Root>
@@ -101,7 +101,7 @@ export function SkillsTable({ items, total, selected, busy, showPlatform, onSele
           </div>
         )
       })}
-      <div className="flex h-11 items-center justify-between border-t border-jolu-border px-4 text-[12px] text-jolu-muted">
+      <div className="flex h-11 items-center justify-between border-t border-jn-line px-4 text-[12px] text-jn-text-3">
         <span>共 {total} 个安装项{items.length !== total && ` · 当前显示 ${items.length} 个`} · 按目录区分同名 Skill</span>
         <span>{picked ? `已选择 ${picked} 个` : "勾选后可批量管理"}</span>
       </div>

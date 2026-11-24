@@ -1,0 +1,65 @@
+/* 交互态层。所有可点元素共用同一套「悬停加深 / 按下缩 / 聚焦圈 / 禁用」表达。
+ *
+ * ## 为什么单独一个文件
+ *
+ * 设计稿只给了 primary 的 hover / press 两个令牌（`jn-primary-hover` /
+ * `jn-primary-press`）。soft / ghost / danger 三种按钮的「加深」没有专门令牌，
+ * 如果为每一对状态再造一对令牌，深色主题下要再挑八个数——设计稿没给，就是在编。
+ *
+ * 这里用「在自身底色上叠一层当前文字色」表达加深：`currentColor` 天然与该 kind
+ * 的前景一致（primary 白字、danger 红字），混 6% 就得到既不过火也不偏色的加深。
+ * 一处定义，四种 kind 自动适用，深浅主题各自正确。
+ *
+ * ## 类名约定
+ *
+ * `jn-interactive` 负责按下与聚焦，`jn-hover-tint` 负责悬停加深。
+ * 组件在变体表里拼这两个类名，页面不直接用。
+ */
+
+/* 悬停加深：叠一层 6% 的当前文字色。用 background-image 而不是 background-color，
+   这样不改动变体表里已经设好的底色，也不用为每个 kind 重写一遍颜色。 */
+.jn-hover-tint:hover:not(:disabled):not([aria-disabled="true"]) {
+  background-image: linear-gradient(
+    color-mix(in oklab, currentColor 6%, transparent),
+    color-mix(in oklab, currentColor 6%, transparent)
+  );
+}
+
+/* 按下：轻微缩小。0.97 是设计稿给的数值。
+   transition 只挂 transform，颜色变化由各变体的 transition-colors 负责。 */
+.jn-interactive {
+  transition-property: transform, background-color, border-color, color, opacity;
+  transition-duration: var(--motion-feedback);
+  transition-timing-function: var(--motion-ease-standard);
+}
+.jn-interactive:active:not(:disabled):not([aria-disabled="true"]) {
+  transform: scale(0.97);
+}
+
+/* 聚焦：3px 绿色外圈。用 outline 而不是 ring，避免 ring 的 offset 影响布局。 */
+.jn-interactive:focus-visible {
+  outline: 3px solid var(--jn-focus);
+  outline-offset: 1px;
+}
+
+/* 禁用：45% 不透明，并且不响应悬停与按下（上面的 :not(:disabled) 已经挡住）。 */
+.jn-interactive:disabled,
+.jn-interactive[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 悬停时不该出现手型的地方用这个（例如已经是当前页的导航项）。 */
+.jn-interactive[aria-current="page"] {
+  cursor: default;
+}
+
+/* 减少动效时取消按下缩放，保留颜色反馈。 */
+@media (prefers-reduced-motion: reduce) {
+  .jn-interactive:active:not(:disabled):not([aria-disabled="true"]) {
+    transform: none;
+  }
+}
+html.reduce-motion .jn-interactive:active:not(:disabled):not([aria-disabled="true"]) {
+  transform: none;
+}

@@ -59,7 +59,7 @@ export function GeneralSection({ cfg }: { cfg: Cfg }) {
         <SettingsRow
           title="开机启动"
           desc={autostartError ?? undefined}
-          descClassName={autostartError ? "text-jolu-danger" : undefined}
+          descClassName={autostartError ? "text-jn-danger" : undefined}
           control={<Switch liquid label="开机启动" on={autostart ?? false} disabled={autostartBusy || autostart === null} onChange={toggleAutostart} />}
         />
         <SettingsRow

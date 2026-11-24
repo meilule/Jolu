@@ -16,12 +16,12 @@ export function Wordmark({ width = 54, height = 22 }: { width?: number; height?:
       strokeLinejoin="round"
       className="shrink-0"
     >
-      <g stroke="var(--jolu-text)" strokeWidth={2.6} vectorEffect="non-scaling-stroke">
+      <g stroke="var(--jn-text)" strokeWidth={2.6} vectorEffect="non-scaling-stroke">
         <path d="M4 4h11v12c0 9-12 9-12 1" vectorEffect="non-scaling-stroke" />
         <path d="M44 3l-4 15q-1 6 5 4" vectorEffect="non-scaling-stroke" />
         <path d="M51 11l-2 7q-1 6 5 5 5-1 7-12m0 0l-2 10q0 3 4 1" vectorEffect="non-scaling-stroke" />
       </g>
-      <path d="M29 10c-9 0-11 13-3 13 9 0 12-13 3-13z" stroke="var(--jolu-accent)" strokeWidth={2.6} vectorEffect="non-scaling-stroke" />
+      <path d="M29 10c-9 0-11 13-3 13 9 0 12-13 3-13z" stroke="var(--jn-primary)" strokeWidth={2.6} vectorEffect="non-scaling-stroke" />
     </svg>
   )
 }

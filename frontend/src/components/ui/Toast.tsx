@@ -1,7 +1,7 @@
-import { AlertTriangle, ArrowUpRight, Check, Info, LoaderCircle, Wallet, X } from "lucide-react"
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { cn } from "@/lib/utils"
+import { Icon, type IconName } from "@/icons"
 import { formatNoticeAmount } from "@/lib/appNotices"
 import { PLATFORMS } from "@/lib/platforms"
 import {
@@ -150,14 +150,14 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   )
 }
 
-const TONE: Record<ToastTone, { icon: typeof Check; className: string }> = {
-  success: { icon: Check, className: "bg-success-soft text-jolu-accent" },
-  info: { icon: Info, className: "bg-accent-blue-soft text-accent-blue" },
-  warn: { icon: AlertTriangle, className: "bg-warn-soft text-warn" },
-  danger: { icon: X, className: "bg-danger-soft text-danger" },
+const TONE: Record<ToastTone, { icon: IconName; className: string }> = {
+  success: { icon: "check", className: "bg-jn-primary-soft text-jn-primary-ink" },
+  info: { icon: "info", className: "bg-jn-info-soft text-jn-info" },
+  warn: { icon: "warning", className: "bg-jn-warning-soft text-jn-warning" },
+  danger: { icon: "close", className: "bg-jn-danger-soft text-jn-danger" },
 }
 
-/** 右上角公共通知区；卡片能接收指针，其余区域继续透传给页面。 */
+/** 右下角公共通知区（R1-C）；卡片能接收指针，其余区域继续透传给页面。 */
 export function ToastViewport({ className }: { className?: string }) {
   const toast = useToast()
   const state = useContext(ToastStateContext)
@@ -216,19 +216,19 @@ export function ToastViewport({ className }: { className?: string }) {
     <div
       ref={viewport}
       popover={dialog ? "manual" : undefined}
-      style={dialog ? { position: "fixed", top: (bounds?.top ?? 0) + 110, right: window.innerWidth - (bounds?.right ?? window.innerWidth) + 20, left: "auto", bottom: "auto", margin: 0, border: 0, background: "transparent" } : undefined}
+      style={dialog ? { position: "fixed", bottom: Math.max(20, window.innerHeight - (bounds?.bottom ?? window.innerHeight) + 20), right: Math.max(20, window.innerWidth - (bounds?.right ?? window.innerWidth) + 20), left: "auto", top: "auto", margin: 0, border: 0, background: "transparent" } : undefined}
       role="region"
       aria-label="操作通知"
       aria-live="polite"
       aria-relevant="additions text"
       className={cn(
-        "pointer-events-none absolute right-5 top-[110px] z-[60] flex max-h-[calc(100dvh-130px)] w-[360px] max-w-[calc(100%-32px)] flex-col gap-2.5 bg-transparent p-1 shadow-none",
+        "pointer-events-none absolute right-5 bottom-5 z-[60] flex max-h-[calc(100dvh-110px)] w-[360px] max-w-[calc(100%-32px)] flex-col-reverse gap-2.5 bg-transparent p-1 shadow-none",
         scrollable ? "overflow-y-auto overscroll-contain" : "overflow-visible",
         className,
       )}
     >
       {visibleToasts(state.items).map(item => <ToastCard key={item.id} item={item} pause={state.pause} />)}
-      {state.items.length > 3 && <p className="px-2 text-right text-[12px] text-jolu-muted">另有 {state.items.length - 3} 条提示等待显示</p>}
+      {state.items.length > 3 && <p className="px-2 text-right text-[12px] text-jn-text-3">另有 {state.items.length - 3} 条提示等待显示</p>}
     </div>
   ) : null
   // 手动 Popover 只提升绘制层级，不抢焦点；避免表单 transform 裁切或挪动通知。
@@ -242,7 +242,7 @@ function ToastCard({ item, pause }: { item: ToastItem; pause: ToastState["pause"
   const [acting, setActing] = useState(false)
   const detail = useRef<HTMLParagraphElement>(null)
   const tone = TONE[item.tone]
-  const Icon = item.balance ? Wallet : tone.icon
+  const iconName: IconName = item.balance ? "wallet" : tone.icon
   useEffect(() => {
     const element = detail.current
     if (!element || expanded) return
@@ -271,41 +271,41 @@ function ToastCard({ item, pause }: { item: ToastItem; pause: ToastState["pause"
       data-balance-notice={item.balance ? "true" : undefined}
       data-state={item.exiting ? "closed" : "open"}
       role={item.tone === "danger" ? "alert" : undefined}
-      className={cn("motion-toast pointer-events-auto relative flex shrink-0 items-start gap-3 rounded-xl border border-jolu-border bg-jolu-cc-surface p-3.5 text-jolu-text shadow-popover", item.balance && "flex-wrap p-5")}
+      className={cn("motion-toast pointer-events-auto relative flex shrink-0 items-start gap-3 rounded-xl border border-jn-line bg-jn-surface p-3.5 text-jn-text shadow-jn-surface", item.balance && "flex-wrap p-5")}
       onPointerEnter={() => pause(item.id, "pointer", true)}
       onPointerLeave={() => pause(item.id, "pointer", false)}
       onFocusCapture={() => pause(item.id, "focus", true)}
       onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) pause(item.id, "focus", false) }}
     >
       <span className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-full", tone.className, item.balance && "size-[34px]")}>
-        <Icon aria-hidden className="size-4" strokeWidth={1.8} />
+        <Icon name={iconName} size="md" />
       </span>
       <div className="min-w-0 flex-1 py-0.5">
         <div className="flex min-w-0 items-center gap-2">
           <p className="min-w-0 truncate text-[13px] font-semibold leading-5" title={item.title}>{item.title}</p>
-          {item.count > 1 && <span className="shrink-0 rounded-md bg-jolu-stage px-1.5 text-[11px] leading-[18px] text-jolu-muted" aria-label={`重复 ${item.count} 次`}>×{item.count}</span>}
+          {item.count > 1 && <span className="shrink-0 rounded-md bg-jn-stage px-1.5 text-[11px] leading-[18px] text-jn-text-3" aria-label={`重复 ${item.count} 次`}>×{item.count}</span>}
         </div>
-        {item.balance && <p className="mt-1 truncate text-xs text-jolu-muted" title={item.balance.connectionName}>{item.balance.connectionName} · {PLATFORMS.find(platform => platform.id === item.balance?.platform)?.name ?? "API Key"}</p>}
-        {item.detail && <p ref={detail} id={`toast-detail-${item.id}`} className={cn("mt-1 whitespace-pre-wrap text-xs leading-[1.6] text-jolu-muted [overflow-wrap:anywhere]", !expanded && "line-clamp-2")}>{item.detail}</p>}
+        {item.balance && <p className="mt-1 truncate text-xs text-jn-text-3" title={item.balance.connectionName}>{item.balance.connectionName} · {PLATFORMS.find(platform => platform.id === item.balance?.platform)?.name ?? "API Key"}</p>}
+        {item.detail && <p ref={detail} id={`toast-detail-${item.id}`} className={cn("mt-1 whitespace-pre-wrap text-xs leading-[1.6] text-jn-text-3 [overflow-wrap:anywhere]", !expanded && "line-clamp-2")}>{item.detail}</p>}
         {!item.balance && (overflow || item.action) && <div className="mt-2 flex flex-wrap items-center gap-3">
-          {item.action && <button type="button" disabled={acting} onClick={() => void act()} className="flex min-h-7 items-center gap-1 rounded-md text-xs font-medium text-jolu-accent outline-none hover:underline focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-50">
-            {acting && <LoaderCircle aria-hidden className="size-3 animate-spin" />}{item.action.label}
+          {item.action && <button type="button" disabled={acting} onClick={() => void act()} className="flex min-h-7 items-center gap-1 rounded-md text-xs font-medium text-jn-primary outline-none hover:underline focus-visible:outline-2 focus-visible:outline-jn-primary disabled:opacity-50">
+            {acting && <Icon name="loading" size="xs" className="animate-spin" />}{item.action.label}
           </button>}
-          {overflow && <button type="button" aria-expanded={expanded} aria-controls={`toast-detail-${item.id}`} onClick={() => setExpanded(value => !value)} className="min-h-7 rounded-md text-xs text-jolu-muted outline-none hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent">{expanded ? "收起原因" : "展开原因"}</button>}
+          {overflow && <button type="button" aria-expanded={expanded} aria-controls={`toast-detail-${item.id}`} onClick={() => setExpanded(value => !value)} className="min-h-7 rounded-md text-xs text-jn-text-3 outline-none hover:text-jn-text focus-visible:outline-2 focus-visible:outline-jn-primary">{expanded ? "收起原因" : "展开原因"}</button>}
         </div>}
       </div>
-      <button type="button" aria-label={`关闭提示：${item.title}`} onClick={() => toast.dismiss(item.id)} className="-mr-1 -mt-1 grid size-7 shrink-0 place-items-center rounded-lg text-jolu-muted outline-none transition-colors hover:bg-jolu-stage hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent">
-        <X aria-hidden className="size-3.5" strokeWidth={1.7} />
+      <button type="button" aria-label={`关闭提示：${item.title}`} onClick={() => toast.dismiss(item.id)} className="-mr-1 -mt-1 grid size-7 shrink-0 place-items-center rounded-lg text-jn-text-3 outline-none transition-colors hover:bg-jn-stage hover:text-jn-text focus-visible:outline-2 focus-visible:outline-jn-primary">
+        <Icon name="close" size="sm" />
       </button>
       {item.balance && <div className="mt-2 min-w-0 basis-full">
-        <p className="text-xs text-jolu-muted">剩余余额</p>
+        <p className="text-xs text-jn-text-3">剩余余额</p>
         <p className="mt-1 flex flex-wrap items-baseline gap-2 font-mono text-[30px] font-semibold leading-10 tracking-tight" data-balance-amount>
-          {formatNoticeAmount(item.balance.remaining, item.balance.currency)}<span className="font-sans text-xs font-normal tracking-normal text-jolu-muted">{item.balance.currency}</span>
+          {formatNoticeAmount(item.balance.remaining, item.balance.currency)}<span className="font-sans text-xs font-normal tracking-normal text-jn-text-3">{item.balance.currency}</span>
         </p>
-        <p className="mt-1 text-xs leading-5 text-jolu-muted">已低于设置的 <span className="text-warn">{formatNoticeAmount(item.balance.threshold, item.balance.currency)} {item.balance.currency}</span> 提醒阈值</p>
-        {item.action && <div className="mt-4 flex justify-end border-t border-jolu-border pt-3">
-          <button type="button" disabled={acting} onClick={() => void act()} className="flex min-h-8 items-center gap-1.5 rounded-lg bg-success-soft px-3 text-xs font-medium text-jolu-on outline-none hover:bg-jolu-selected focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-50">
-            {acting ? <LoaderCircle aria-hidden className="size-3.5 animate-spin" /> : null}{item.action.label}<ArrowUpRight aria-hidden className="size-3.5" />
+        <p className="mt-1 text-xs leading-5 text-jn-text-3">已低于设置的 <span className="text-jn-warning">{formatNoticeAmount(item.balance.threshold, item.balance.currency)} {item.balance.currency}</span> 提醒阈值</p>
+        {item.action && <div className="mt-4 flex justify-end border-t border-jn-line pt-3">
+          <button type="button" disabled={acting} onClick={() => void act()} className="flex min-h-8 items-center gap-1.5 rounded-lg bg-jn-primary-soft px-3 text-xs font-medium text-jn-primary-ink outline-none hover:bg-jn-primary-wash focus-visible:outline-2 focus-visible:outline-jn-primary disabled:opacity-50">
+            {acting ? <Icon name="loading" size="sm" className="animate-spin" /> : null}{item.action.label}<Icon name="external" size="sm" />
           </button>
         </div>}
       </div>}

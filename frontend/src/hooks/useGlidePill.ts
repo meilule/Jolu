@@ -92,14 +92,14 @@ export function useGlidePill() {
 
     /* 选中行自己有底色，滑块让位。两种菜单的选中标记不同：
          RadioItem（MenuFilter）：data-state="checked"
-         ProviderMenu 的普通 Item：className 里挂 bg-jolu-selected
+         ProviderMenu 的普通 Item：className 里挂 bg-jn-primary-wash
        不能用「计算背景色」判断 —— 高亮行的底色会被 CSS 清成 transparent，循环依赖。
        ⚠️ 曾经还加过「行尾有 svg 就算选中」，但 Skills 的供应商菜单每行都渲染了
        PlatformLogo（SVG），每一行都会被误判成选中行、滑块永远隐身。
        只认属性与类名，不猜结构。 */
     const isChecked = row.getAttribute("data-state") === "checked"
       || row.getAttribute("aria-checked") === "true"   // 手写菜单（RangePicker）用这个
-      || /bg-jolu-selected/.test(row.className)
+      || /bg-jn-primary-wash/.test(row.className)
     pill.style.opacity = isChecked ? "0" : "1"
   }, [])
 
@@ -136,7 +136,7 @@ export function useGlidePill() {
         "z-index:0",
         // 与行自己的 data-highlighted 底色一致：菜单是浅底时它才看得见。
         // （之前用 --jolu-side，浅色主题是 #fafafa，与 #ffffff 菜单几乎无差别）
-        "background:var(--jolu-stage)",
+        "background:var(--jn-stage)",
         "opacity:0",
         // 只写 transition-property / timing-function，时长全部由 place() 每次显式写，
         // 避免「简写 + duration 覆盖」两套来源互相打架
@@ -161,7 +161,7 @@ export function useGlidePill() {
         ?? node.querySelector<HTMLElement>(ROW_SELECTOR + '[aria-checked="true"]')
       const first = node.querySelector<HTMLElement>(ROW_SELECTOR)
       place(checked ?? first, true)
-      // 打开时滑块隐身：选中行自己有底色（ProviderMenu 用的是 bg-jolu-selected）
+      // 打开时滑块隐身：选中行自己有底色（ProviderMenu 用的是 bg-jn-primary-wash）
       if (pill) pill.style.opacity = "0"
     })
 

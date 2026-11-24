@@ -1,11 +1,22 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react"
-import { Info, LoaderCircle, type LucideIcon } from "lucide-react"
+import type { LucideIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { SelectField, type SelectOption } from "@/components/ui/SelectField"
+import { Icon } from "@/icons"
+import { Banner, Button, Select, Switch as JnSwitch, Tag, Tabs } from "@/ui"
 
-/** 设置分组卡片（画板 86）：左右 20 内边距、圆角 12；有图标时标题行 66 高。
- *  `desc` 只留给状态与条件说明（读取中、不可用原因），标语不要放进来。 */
-export function SettingsGroup({ icon: Icon, title, desc, children, className }: {
+/**
+ * 设置页的公共壳 —— 设计稿 R1-12～17 的「设置组 / 设置行」。
+ *
+ * 所有分区都从这五个导出组合，不再各写一套类：
+ * - `SettingsGroup`：圆角 24 的白卡，组标题 50 高（图标底 30 + 14/700）；
+ * - `SettingsRow`：54/62 高，标题 13.5/600 + 说明 12，控件靠右，行间 1px 分隔；
+ * - `Switch`：46×28 新开关（保留旧的 `on` 参数名）；
+ * - `SelectButton`：R1-C 的下拉（旧调用传 `description`，这里映射成 `hint`）；
+ * - `ActionButton` / `Segmented` / `PendingBadge` / `Notice`：按钮、分段、待接入、提示。
+ */
+
+/** 设置分组卡片：左右 20 内边距、圆角 24、组标题 50 高。 */
+export function SettingsGroup({ icon: Glyph, title, desc, children, className }: {
   icon?: LucideIcon
   title: string
   desc?: string
@@ -13,16 +24,16 @@ export function SettingsGroup({ icon: Icon, title, desc, children, className }: 
   className?: string
 }) {
   return (
-    <section className={cn("jolu-card flex w-full flex-col rounded-xl border border-jolu-border bg-jolu-cc-surface px-5", className)}>
-      <header className={cn("flex items-center gap-2.5", Icon ? "h-[66px]" : "pb-3.5 pt-[18px]")}>
-        {Icon && (
-          <span className="grid size-[30px] shrink-0 place-items-center rounded-lg bg-jolu-selected">
-            <Icon aria-hidden className="size-4 text-jolu-on" />
+    <section className={cn("flex w-full flex-col rounded-jn-card border border-jn-line bg-jn-surface px-5 shadow-jn-surface", className)}>
+      <header className="flex h-[50px] items-center gap-2.5">
+        {Glyph && (
+          <span className="flex size-[30px] shrink-0 items-center justify-center rounded-[10px] bg-jn-primary-wash">
+            <Glyph aria-hidden className="size-[15px] text-jn-primary" />
           </span>
         )}
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <h3 className="text-sm font-semibold text-jolu-text">{title}</h3>
-          {desc && <span className="text-[12px] text-jolu-muted">{desc}</span>}
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <h3 className="truncate text-[14px] font-bold text-jn-text">{title}</h3>
+          {desc && <span className="truncate text-[12px] text-jn-text-3">{desc}</span>}
         </span>
       </header>
       {children}
@@ -30,8 +41,7 @@ export function SettingsGroup({ icon: Icon, title, desc, children, className }: 
   )
 }
 
-/** 设置行：标题 13/500 + 说明 11，控件靠右；行之间是上边框。
- *  `desc` 只用于状态与条件说明（当前是否生效、为何不可用），标语请直接去掉。 */
+/** 设置行：标题 13.5/600 + 说明 12；行之间是上边框，第一行不画。 */
 export function SettingsRow({ title, desc, control, className, descClassName }: {
   title: ReactNode
   desc?: ReactNode
@@ -40,75 +50,82 @@ export function SettingsRow({ title, desc, control, className, descClassName }: 
   descClassName?: string
 }) {
   return (
-    <div className={cn("flex min-h-[66px] items-center gap-5 border-t border-jolu-border py-3", className)}>
-      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-        <span className="text-[13px] font-medium text-jolu-text">{title}</span>
-        {desc && <span className={cn("text-[12px] text-jolu-muted", descClassName)}>{desc}</span>}
+    <div className={cn("flex min-h-[62px] items-center gap-3.5 border-t border-jn-line py-3 first:border-t-0", className)}>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="text-[13.5px] font-semibold text-jn-text">{title}</span>
+        {desc && <span className={cn("text-[12px] leading-relaxed text-jn-text-3", descClassName)}>{desc}</span>}
       </div>
       {control && <div className="flex shrink-0 items-center gap-2">{control}</div>}
     </div>
   )
 }
 
-export { JoluSwitch as Switch } from "@/components/ui/JoluSwitch"
+/** 开关（保留旧的 `on` / `liquid` 参数名，内部走 R1-C 的 46×28 开关）。 */
+export function Switch({ on, onChange, label, disabled, liquid }: {
+  on: boolean
+  onChange: (on: boolean) => void
+  label: string
+  disabled?: boolean
+  liquid?: boolean
+}) {
+  void liquid
+  return <JnSwitch checked={on} onChange={onChange} label={label} disabled={disabled} />
+}
 
-/** 160×34 的下拉按钮（「上次访问的页面」「5 分钟」等） */
-export function SelectButton({ value, options, onChange, label, disabled, className, triggerLabel }: {
+/** 170 宽的下拉；旧调用传的 `description` 作为菜单行副标题。 */
+export function SelectButton({ value, options, onChange, label, disabled, className }: {
   value: string
-  options: SelectOption[]
+  options: { value: string; label: ReactNode; description?: string; disabled?: boolean }[]
   onChange: (value: string) => void
   label: string
   disabled?: boolean
   className?: string
+  /** 旧参数：旧 SelectField 的自定义触发器内容，新组件不需要 */
   triggerLabel?: ReactNode
 }) {
   return (
-    <SelectField
+    <Select
+      width="full"
       label={label}
       value={value}
-      options={options}
       disabled={disabled}
-      triggerLabel={triggerLabel}
-      onValueChange={onChange}
-      className={cn("jolu-control h-[34px] w-40 rounded-lg border-jolu-border bg-jolu-bg px-3 text-xs font-medium text-jolu-text hover:bg-jolu-stage", className)}
+      onChange={onChange}
+      className={cn("w-[170px]", className)}
+      options={options.map((option) => ({ value: option.value, label: option.label, hint: option.description, disabled: option.disabled }))}
     />
   )
 }
 
 type Tone = "secondary" | "soft" | "accent" | "danger"
 
-const TONES: Record<Tone, string> = {
-  secondary: "border border-jolu-border bg-jolu-bg text-jolu-text hover:bg-jolu-stage",
-  soft: "border border-jolu-border bg-jolu-cc-surface text-jolu-on hover:bg-jolu-stage",
-  accent: "bg-jolu-accent text-[#071B10] hover:brightness-95",
-  danger: "bg-jolu-danger-soft text-jolu-danger hover:bg-jolu-danger-pressed",
-}
+const KIND = { secondary: "ghost", soft: "soft", accent: "primary", danger: "danger" } as const
 
-/** 34 高的操作按钮；busy 时显示旋转图标并禁用，防止重复点击 */
+/** 操作按钮；`busy` 时转圈并禁用。旧 34 高统一到新 Button 的 md（40）。 */
 export function ActionButton({ tone = "secondary", icon, busy, children, className, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & {
   tone?: Tone
   icon?: ReactNode
   busy?: boolean
 }) {
   return (
-    <button
-      type="button"
-      {...props}
-      disabled={props.disabled || busy}
+    <Button
+      kind={KIND[tone]}
+      size="md"
+      loading={busy}
+      className={className}
+      disabled={props.disabled}
+      onClick={props.onClick as (() => void) | undefined}
+      title={props.title}
+      aria-label={props["aria-label"]}
       aria-busy={busy || undefined}
-      className={cn(
-        "jolu-control motion-button inline-flex h-[34px] shrink-0 items-center gap-[7px] rounded-lg px-3 text-xs font-medium outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-45",
-        TONES[tone],
-        className,
-      )}
+      type={props.type ?? "button"}
     >
-      {busy ? <LoaderCircle aria-hidden className="size-3.5 animate-spin" /> : icon}
+      {!busy && icon}
       {children}
-    </button>
+    </Button>
   )
 }
 
-/** 分段选择（连接方式、列表密度）：底色 side，选中项白底描边 */
+/** 分段选择（联网方式、列表密度、缩放）：R1-C 的白滑块分段。 */
 export function Segmented<T extends string>({ items, value, onChange, label, disabled }: {
   items: { value: T; label: string }[]
   value: T
@@ -117,42 +134,21 @@ export function Segmented<T extends string>({ items, value, onChange, label, dis
   disabled?: boolean
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex shrink-0 gap-1 rounded-lg bg-jolu-side p-[3px]">
-      {items.map((item) => {
-        const active = item.value === value
-        return (
-          <button
-            key={item.value}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            disabled={disabled || !onChange}
-            onClick={() => onChange?.(item.value)}
-            className={cn(
-              "h-[30px] rounded-lg border px-3 text-xs font-medium outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed",
-              active ? "border-jolu-border bg-jolu-bg text-jolu-on" : "border-transparent text-jolu-text hover:text-jolu-on",
-              disabled && !active && "opacity-60",
-            )}
-          >
-            {item.label}
-          </button>
-        )
-      })}
+    <div className={cn(disabled && "pointer-events-none opacity-60")} title={label}>
+      <Tabs style="segment" value={value} onChange={(next) => onChange?.(next)}
+        items={items.map((item) => ({ key: item.value, label: item.label }))} />
     </div>
   )
 }
 
-/** 画了但暂未接入的能力：入口旁标注「待接入」 */
+/** 画了但暂未接入的能力：入口旁标注「待接入」。 */
 export function PendingBadge({ children = "待接入" }: { children?: ReactNode }) {
-  return <span className="inline-flex h-5 shrink-0 items-center rounded-[5px] bg-jolu-side px-1.5 text-[11px] font-normal text-jolu-muted">{children}</span>
+  return <Tag>{children}</Tag>
 }
 
-/** 说明提示：side 底、圆角 9、内边距 14 */
+/** 说明提示。 */
 export function Notice({ children, tone = "info", className }: { children: ReactNode; tone?: "info" | "danger"; className?: string }) {
-  return (
-    <div className={cn("flex items-start gap-2.5 rounded-[9px] p-3.5 text-[12px]", tone === "danger" ? "bg-jolu-danger-soft text-jolu-danger" : "bg-jolu-side text-jolu-muted", className)}>
-      <Info aria-hidden className="mt-px size-4 shrink-0" />
-      <div className="min-w-0 flex-1">{children}</div>
-    </div>
-  )
+  return <Banner tone={tone === "danger" ? "danger" : "info"} className={className}>{children}</Banner>
 }
+
+export { Icon }

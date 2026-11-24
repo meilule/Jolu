@@ -1,4 +1,3 @@
-import { ChevronRight } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { DASH, callStatus, effortLabel, formatMoney, formatSeconds, formatTokens, modelDisplayName, outputTps } from "@/lib/usageStats"
 import { convertFromUsd, type FxState } from "@/lib/costCurrency"
@@ -6,7 +5,7 @@ import type { StatsCallPageDto, StatsCallRowDto } from "@/lib/api"
 import { PlatformLogo } from "@/components/brand/PlatformLogo"
 import type { PlatformId } from "@/types"
 import { Card } from "./usageControls"
-import { Pagination } from "@/components/ui/Pagination"
+import { Button, Pagination, StatusPill } from "@/ui"
 
 /** 画板 34 表头列宽 */
 const COLUMNS = [
@@ -38,40 +37,44 @@ export function CallsPanel({ data, selectedId, fx, onSelect, onPage, onOpenSessi
   const selected = data.rows.find((r) => r.id === selectedId) ?? null
   return (
     <>
-      <Card className="flex flex-col overflow-hidden">
-        <div className="flex h-[42px] items-center justify-between px-4">
-          <span className="text-[13px] font-semibold text-jolu-text">{data.total_count} 条调用记录</span>
-          <span className="text-[12px] text-jolu-muted">总成本为估算 · {fx.currency} · {data.unpriced_count} 条未计价</span>
+      <Card className="flex flex-col gap-1 p-3">
+        <div className="flex items-center justify-between px-2 py-1">
+          <span className="text-[13px] font-semibold text-jn-text">{data.total_count} 条调用记录</span>
+          <span className="text-xs text-jn-text-3">总成本为估算 · {fx.currency} · {data.unpriced_count} 条未计价</span>
         </div>
         {/* 列宽固定且总宽超过容器时横向滚动：内容不再被右侧裁掉 */}
         <div className="overflow-x-auto">
-          <div className="min-w-[1000px]">
-            <div className="flex h-9 items-center gap-1.5 border-y border-jolu-border bg-jolu-side px-4">
-              {COLUMNS.map(([label, width]) => <span key={label} className={cn("shrink-0 text-[12px] font-medium text-jolu-muted", width)}>{label}</span>)}
+          <div className="flex min-w-[1000px] flex-col gap-0.5">
+            <div className="flex h-8 items-center gap-1.5 px-3">
+              {COLUMNS.map(([label, width]) => <span key={label} className={cn("shrink-0 text-[11.5px] font-medium text-jn-text-3", width)}>{label}</span>)}
             </div>
-            {data.rows.map((row) => <CallRow key={row.id} row={row} active={row.id === selectedId} fx={fx} onSelect={() => onSelect(row.id)} />)}
-            {!data.rows.length && <div className="px-4 py-8 text-center text-xs text-jolu-muted">没有符合筛选条件的调用</div>}
+            {data.rows.map((row, index) => <CallRow key={row.id} row={row} striped={index % 2 === 0} active={row.id === selectedId} fx={fx} onSelect={() => onSelect(row.id)} />)}
+            {!data.rows.length && <div className="px-4 py-8 text-center text-xs text-jn-text-3">没有符合筛选条件的调用</div>}
           </div>
         </div>
-        <Pagination page={data.page} pageCount={data.page_count} pageSize={data.page_size} onPage={onPage} />
+        {data.page_count > 1 && (
+          <div className="pt-2">
+            <Pagination page={data.page} pageCount={data.page_count} onChange={onPage} summary={`共 ${data.total_count} 条 · 每页 ${data.page_size} 条`} />
+          </div>
+        )}
       </Card>
       {selected && <CallDetail row={selected} fx={fx} onOpenSession={onOpenSession} />}
-      <p className="text-[11px] text-jolu-muted" title="导出遵循当前筛选，不包含 API Key 或对话正文。">— 表示未取得或未计价 · 失败请求不默认免费</p>
+      <p className="text-[11px] text-jn-text-3" title="导出遵循当前筛选，不包含 API Key 或对话正文。">— 表示未取得或未计价 · 失败请求不默认免费</p>
     </>
   )
 }
 
 function Num({ value, className }: { value: number | null; className?: string }) {
-  return <span className={cn("tnum text-[12px]", value === null ? "text-jolu-muted" : "text-jolu-text", className)}>{formatTokens(value)}</span>
+  return <span className={cn("tnum text-[12px]", value === null ? "text-jn-text-3" : "text-jn-text", className)}>{formatTokens(value)}</span>
 }
 
-function CallRow({ row, active, fx, onSelect }: { row: StatsCallRowDto; active: boolean; fx: FxState; onSelect: () => void }) {
+function CallRow({ row, striped, active, fx, onSelect }: { row: StatsCallRowDto; striped: boolean; active: boolean; fx: FxState; onSelect: () => void }) {
   const status = callStatus(row)
   const tps = outputTps(row)
   const metric = (label: string, value: string, known: boolean) => (
     <span className="flex h-3.5 items-center gap-1.5">
-      <span className="text-[11px] text-jolu-muted">{label}</span>
-      <span className={cn("tnum text-[11.5px] font-medium", known ? "text-jolu-on" : "text-jolu-muted")}>{value}</span>
+      <span className="text-[11px] text-jn-text-3">{label}</span>
+      <span className={cn("tnum text-[11.5px] font-medium", known ? "text-jn-primary-ink" : "text-jn-text-3")}>{value}</span>
     </span>
   )
   return (
@@ -80,75 +83,91 @@ function CallRow({ row, active, fx, onSelect }: { row: StatsCallRowDto; active: 
       aria-pressed={active}
       onClick={onSelect}
       className={cn(
-        "flex h-[54px] w-full items-center [.density-compact_&]:h-[44px] gap-1.5 border-b border-jolu-table-divider px-4 text-left outline-none focus-visible:bg-jolu-table-active",
-        active ? "bg-jolu-table-active" : "bg-jolu-bg hover:bg-jolu-side",
+        "jn-interactive flex h-[54px] w-full items-center gap-1.5 rounded-[12px] border px-3 text-left outline-none [.density-compact_&]:h-[44px]",
+        active
+          ? "border-jn-primary-soft bg-jn-primary-wash"
+          : striped
+            ? "border-transparent bg-jn-well hover:bg-jn-primary-wash/50"
+            : "border-transparent bg-transparent hover:bg-jn-well",
       )}
     >
-      <span className="tnum w-[76px] shrink-0 text-[11px] text-jolu-muted">{time(row.ts)}</span>
+      <span className="tnum w-[76px] shrink-0 font-mono text-[11.5px] text-jn-text-2">{time(row.ts)}</span>
       <span className="flex w-[188px] shrink-0 items-center gap-2" title={row.model ?? undefined}>
         <span className="grid size-5 place-items-center"><PlatformLogo platform={row.platform as PlatformId} size={16} /></span>
-        <span className="truncate text-xs font-medium text-jolu-text">{modelDisplayName(row.model)}</span>
+        <span className="truncate font-mono text-xs font-medium text-jn-text">{modelDisplayName(row.model)}</span>
       </span>
       <Num value={row.fresh_input} className="w-[72px] shrink-0" />
       <Num value={sumKnown(row.cache_read, row.cache_write)} className="w-[72px] shrink-0" />
       <Num value={row.output} className="w-[72px] shrink-0" />
       <Num value={row.total} className="w-[80px] shrink-0 font-semibold" />
-      <span className={cn("tnum w-[84px] shrink-0 text-xs", row.cost === null ? "text-jolu-muted" : "font-semibold text-jolu-on")}>{formatMoney(convertFromUsd(row.cost, fx), fx.currency)}</span>
+      <span className={cn("tnum w-[84px] shrink-0 text-xs", row.cost === null ? "text-jn-text-3" : "font-semibold text-jn-primary-ink")}>{formatMoney(convertFromUsd(row.cost, fx), fx.currency)}</span>
       <span className="flex w-[132px] shrink-0 items-center gap-[7px]">
-        <span className="h-11 w-[3px] rounded-sm bg-jolu-accent" />
+        <span className="h-10 w-[3px] rounded-full bg-jn-viz-2" />
         <span className="flex flex-col gap-px">
           {metric("首字", formatSeconds(row.first_token_ms), row.first_token_ms !== null)}
           {metric("总耗时", formatSeconds(row.duration_ms), row.duration_ms !== null)}
           {metric("输出 TPS", tps === null ? DASH : `${tps.toFixed(1)} tok/s`, false)}
         </span>
       </span>
-      <span className={cn("w-[72px] shrink-0 text-[12px]", row.effort ? "text-jolu-text" : "text-jolu-muted")}>{effortLabel(row.effort)}</span>
+      <span className={cn("w-[72px] shrink-0 text-[12px]", row.effort ? "text-jn-text" : "text-jn-text-3")}>{effortLabel(row.effort)}</span>
       <span className="w-[74px] shrink-0">
-        <span className={cn("inline-flex h-6 items-center rounded-full px-3 text-[12px] font-medium",
-          status.tone === "ok" ? "bg-jolu-status-success-bg text-jolu-on"
-            : status.tone === "error" ? "bg-jolu-status-error-bg text-jolu-danger"
-            : "bg-jolu-track text-jolu-muted")}>
+        <StatusPill tone={status.tone === "ok" ? "success" : status.tone === "error" ? "danger" : "neutral"}>
           {status.label}
-        </span>
+        </StatusPill>
       </span>
     </button>
   )
 }
 
 function CallDetail({ row, fx, onOpenSession }: { row: StatsCallRowDto; fx: FxState; onOpenSession: (target: { platform: string; sessionId: string }) => void }) {
+  const tps = outputTps(row)
+  const latencyItems: [string, string, boolean][] = [
+    ["首字", formatSeconds(row.first_token_ms), row.first_token_ms !== null],
+    ["总耗时", formatSeconds(row.duration_ms), row.duration_ms !== null],
+    ["输出 TPS", tps === null ? DASH : `${tps.toFixed(1)} tok/s`, tps !== null],
+  ]
   const items: [string, number | null][] = [
     ["普通输入", row.fresh_input], ["输出", row.output], ["缓存读取", row.cache_read], ["缓存写入", row.cache_write], ["合计", row.total],
   ]
   return (
-    <Card className="flex flex-col gap-2 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-jolu-text">调用详情 · {time(row.ts)}</h3>
-        <span className="truncate text-[11px] text-jolu-muted" title={row.call_id}>{monthDay(row.ts)} · {row.call_id}</span>
+    <Card className="flex flex-col gap-3 p-5">
+      <div className="flex items-center gap-3">
+        <span className="grid size-9 shrink-0 place-items-center rounded-[12px] bg-jn-well">
+          <PlatformLogo platform={row.platform as PlatformId} size={20} />
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <h3 className="text-sm font-semibold text-jn-text">调用详情 · {time(row.ts)}</h3>
+          <span className="truncate text-xs text-jn-text-3" title={row.call_id}>
+            来源：本机日志 · {monthDay(row.ts)} · {row.call_id} · {row.cost === null ? "未计价" : `估算 ${formatMoney(convertFromUsd(row.cost, fx), fx.currency)}`}
+          </span>
+        </div>
+        <Button
+          kind="soft"
+          size="sm"
+          icon="external"
+          disabled={!row.session_id}
+          onClick={() => row.session_id && onOpenSession({ platform: row.platform, sessionId: row.session_id })}
+        >
+          打开会话
+        </Button>
       </div>
-      <div className="flex gap-6">
+      <div className="grid grid-cols-3 gap-2.5">
+        {latencyItems.map(([label, value, known]) => (
+          <div key={label} className="flex min-w-0 flex-col gap-1 rounded-[14px] bg-jn-well px-3.5 py-2.5">
+            <span className="text-[11px] text-jn-text-3">{label}</span>
+            <span className={cn("tnum font-mono text-[15px] font-bold", known ? "text-jn-primary-ink" : "text-jn-text-3")}>{value}</span>
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-5 gap-3 rounded-[16px] bg-jn-well p-3.5">
         {items.map(([label, value]) => (
-          <div key={label} className="flex min-w-0 flex-1 flex-col gap-[5px]">
-            <span className="text-[11px] text-jolu-muted">{label}</span>
-            <span className={cn("tnum text-lg font-semibold", value === null ? "text-jolu-muted" : "text-jolu-text")}>{formatTokens(value)}</span>
+          <div key={label} className="flex min-w-0 flex-col gap-1">
+            <span className="text-[11px] text-jn-text-3">{label}</span>
+            <span className={cn("tnum font-mono text-base font-bold", value === null ? "text-jn-text-3" : "text-jn-text")}>{formatTokens(value)}</span>
           </div>
         ))}
       </div>
       <CostBreakdown row={row} fx={fx} />
-      <div className="flex items-center gap-4">
-        <span className="min-w-0 truncate text-[12px] text-jolu-muted">
-          来源：本机日志 · {row.cost === null ? "未计价" : `估算 ${formatMoney(convertFromUsd(row.cost, fx), fx.currency)}`}
-        </span>
-        <span className="flex-1" />
-        <button
-          type="button"
-          disabled={!row.session_id}
-          onClick={() => row.session_id && onOpenSession({ platform: row.platform, sessionId: row.session_id })}
-          className="inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-lg bg-jolu-selected px-3 text-xs font-medium text-jolu-on outline-none hover:bg-jolu-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          打开会话
-          <ChevronRight aria-hidden className="size-3.5" />
-        </button>
-      </div>
     </Card>
   )
 }
@@ -162,7 +181,7 @@ function CostBreakdown({ row, fx }: { row: StatsCallRowDto; fx: FxState }) {
   const p = row.price
   if (!p || row.cost === null) {
     return (
-      <div className="rounded-lg bg-jolu-side px-3 py-2 text-meta text-jolu-muted">
+      <div className="rounded-[14px] bg-jn-well px-3.5 py-2.5 text-meta text-jn-text-3">
         {row.model ? `「${row.model}」未收录价目，无法估算费用` : "该记录没有模型信息，无法估算费用"}
       </div>
     )
@@ -176,28 +195,28 @@ function CostBreakdown({ row, fx }: { row: StatsCallRowDto; fx: FxState }) {
   ].filter((line) => (line.tokens ?? 0) > 0 && line.unit > 0)
 
   return (
-    <div className="flex flex-col gap-1.5 rounded-lg bg-jolu-side px-3 py-2">
+    <div className="flex flex-col gap-1.5 rounded-[14px] bg-jn-well px-3.5 py-2.5">
       <div className="flex items-center gap-2">
-        <span className="text-meta font-medium text-jolu-text">费用拆解</span>
+        <span className="text-meta font-medium text-jn-text">费用拆解</span>
         {p.long_context && <Tag tone="warn">长上下文加价</Tag>}
         {p.off_peak && <Tag tone="on">谷时半价</Tag>}
         <span className="flex-1" />
-        <span className="text-note text-jolu-muted">{shortSource(p.source)}</span>
+        <span className="text-note text-jn-text-3">{shortSource(p.source)}</span>
       </div>
       {lines.map((line) => (
         <div key={line.label} className="flex items-baseline gap-2 text-note">
-          <span className="w-12 shrink-0 text-jolu-muted">{line.label}</span>
-          <span className="tnum w-16 shrink-0 text-right text-jolu-text">{formatTokens(line.tokens)}</span>
-          <span className="text-jolu-muted">×</span>
-          <span className="tnum w-20 shrink-0 text-right text-jolu-text">${line.unit.toFixed(3)}/M</span>
-          <span className="text-jolu-muted">=</span>
-          <span className="tnum text-jolu-text">{formatMoney(convertFromUsd(((line.tokens ?? 0) * line.unit) / 1_000_000, fx), fx.currency)}</span>
+          <span className="w-12 shrink-0 text-jn-text-3">{line.label}</span>
+          <span className="tnum w-16 shrink-0 text-right text-jn-text">{formatTokens(line.tokens)}</span>
+          <span className="text-jn-text-3">×</span>
+          <span className="tnum w-20 shrink-0 text-right text-jn-text">${line.unit.toFixed(3)}/M</span>
+          <span className="text-jn-text-3">=</span>
+          <span className="tnum text-jn-text">{formatMoney(convertFromUsd(((line.tokens ?? 0) * line.unit) / 1_000_000, fx), fx.currency)}</span>
         </div>
       ))}
-      <div className="flex items-baseline gap-2 border-t border-jolu-border pt-1.5 text-meta">
-        <span className="w-12 shrink-0 text-jolu-muted">合计</span>
+      <div className="flex items-baseline gap-2 border-t border-jn-line pt-1.5 text-meta">
+        <span className="w-12 shrink-0 text-jn-text-3">合计</span>
         <span className="flex-1" />
-        <span className="tnum font-semibold text-jolu-on">{formatMoney(convertFromUsd(row.cost, fx), fx.currency)}</span>
+        <span className="tnum font-semibold text-jn-primary-ink">{formatMoney(convertFromUsd(row.cost, fx), fx.currency)}</span>
       </div>
     </div>
   )
@@ -207,7 +226,7 @@ function Tag({ tone, children }: { tone: "warn" | "on"; children: React.ReactNod
   return (
     <span className={cn(
       "rounded px-1.5 py-0.5 text-note",
-      tone === "warn" ? "bg-jolu-status-error-bg text-jolu-danger" : "bg-jolu-selected text-jolu-on",
+      tone === "warn" ? "bg-jn-danger-soft text-jn-danger" : "bg-jn-primary-wash text-jn-primary-ink",
     )}>
       {children}
     </span>

@@ -140,12 +140,12 @@ function ModelCountLine({ account, models, groups }: { account: Connection; mode
   }
   return (
     <div className="flex min-w-0 items-center gap-1.5">
-      <code className="shrink-0 rounded-[5px] bg-jolu-track px-1.5 py-px font-mono text-[11px] text-jolu-text">{account.slug || "—"}/</code>
+      <code className="shrink-0 rounded-[5px] bg-jn-track px-1.5 py-px font-mono text-[11px] text-jn-text">{account.slug || "—"}/</code>
       <button type="button" onClick={() => void refresh()} disabled={busy || !isTauri}
         aria-label={models ? `重新拉取模型清单，当前 ${models} 个` : "拉取模型清单"}
         className={cn(
-          "group flex min-w-0 items-center gap-1 truncate rounded px-1 text-[11px] outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-jolu-accent disabled:opacity-50",
-          models ? "text-jolu-muted hover:text-jolu-text" : "text-jolu-warn hover:brightness-95",
+          "group flex min-w-0 items-center gap-1 truncate rounded px-1 text-[11px] outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-jn-focus disabled:opacity-50",
+          models ? "text-jn-text-3 hover:text-jn-text" : "text-jn-warning hover:brightness-95",
         )}>
         {busy
           ? <LoaderCircle aria-hidden className="size-3 shrink-0 animate-spin" />
@@ -162,7 +162,7 @@ function ModelCountLine({ account, models, groups }: { account: Connection; mode
 function RouteSwitch({ on, busy, label, onClick }: { on: boolean; busy: boolean; label: string; onClick: () => void }) {
   return (
     <button type="button" role="switch" aria-checked={on} aria-label={label} disabled={busy || !isTauri} onClick={onClick}
-      className={cn("flex h-4 w-7 shrink-0 items-center rounded-full p-0.5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent disabled:opacity-45", on ? "justify-end bg-jolu-accent" : "justify-start bg-jolu-track")}>
+      className={cn("flex h-4 w-7 shrink-0 items-center rounded-full p-0.5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jn-focus disabled:opacity-45", on ? "justify-end bg-jn-primary" : "justify-start bg-jn-track")}>
       <span className="size-3 rounded-full bg-white shadow-sm" />
     </button>
   )
@@ -193,15 +193,15 @@ export function ZcodeChannelRow({ account, onChanged }: { account: Connection; o
     }
   }
   return (
-    <div className="flex shrink-0 items-center gap-2 rounded-lg bg-jolu-side px-2.5 py-2" data-channel-row>
-      <span className="shrink-0 text-[11px] text-jolu-muted">订阅通道</span>
+    <div className="flex shrink-0 items-center gap-2 rounded-lg bg-jn-surface px-2.5 py-2" data-channel-row>
+      <span className="shrink-0 text-[11px] text-jn-text-3">订阅通道</span>
       <div className="ml-auto flex items-center gap-1">
         {([["auto", "自动"], ["start-plan", "Start Plan"], ["coding-plan", "Coding Plan"]] as const).map(([channel, label]) => (
           <button key={channel} type="button" disabled={busy || !isTauri} aria-pressed={current === channel}
             onClick={() => void setChannel(channel)}
             className={cn(
-              "rounded-md px-1.5 py-0.5 text-[11px] outline-none transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-jolu-accent disabled:opacity-50",
-              current === channel ? "bg-jolu-track font-medium text-jolu-text" : "text-jolu-muted hover:bg-jolu-track/60 hover:text-jolu-text",
+              "rounded-md px-1.5 py-0.5 text-[11px] outline-none transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-jn-focus disabled:opacity-50",
+              current === channel ? "bg-jn-track font-medium text-jn-text" : "text-jn-text-3 hover:bg-jn-track/60 hover:text-jn-text",
             )}>
             {label}
           </button>
@@ -218,10 +218,10 @@ export function RoutingCardRow({ account, index, readOnly, onChanged }: { accoun
   const groups = slug ? index.groupsBySlug.get(slug)?.length ?? 0 : 0
   const { busy, toggle } = useServeToggle(account, () => { index.reload(); onChanged() }, () => models > 0)
   return (
-    <div className="flex shrink-0 flex-col gap-1 rounded-lg bg-jolu-side px-2.5 py-2" data-routing-row>
+    <div className="flex shrink-0 flex-col gap-1 rounded-lg bg-jn-surface px-2.5 py-2" data-routing-row>
       <div className="flex items-center gap-1.5">
-        <Route aria-hidden className="size-3.5 shrink-0 text-jolu-muted" />
-        <span className="flex-1 text-[12px] text-jolu-text">模型路由</span>
+        <Route aria-hidden className="size-3.5 shrink-0 text-jn-text-3" />
+        <span className="flex-1 text-[12px] text-jn-text">模型路由</span>
         <RouteSwitch on={account.serve_enabled} busy={busy || !!readOnly} label={account.serve_enabled ? "移出模型池" : "加入模型池"} onClick={() => void toggle()} />
       </div>
       {account.serve_enabled && <ModelCountLine account={account} models={models} groups={groups} />}
@@ -272,16 +272,16 @@ export function RoutingEditSection({ account, onChanged }: { account: Connection
   // 折叠摘要：前缀与模型数，开关关着时说明它不在池里
   const summary = !account.serve_enabled ? "未加入模型池" : models.length ? `${slug || "—"} · ${models.length} 个模型` : "已加入 · 还没有模型清单"
   return (
-    <section className="flex flex-col gap-3 rounded-xl border border-jolu-border p-3.5" aria-label="模型路由">
+    <section className="flex flex-col gap-3 rounded-xl border border-jn-line p-3.5" aria-label="模型路由">
       <div className="flex items-center gap-2.5">
-        <Route aria-hidden className="size-4 shrink-0 text-jolu-muted" />
+        <Route aria-hidden className="size-4 shrink-0 text-jn-text-3" />
         <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded text-left outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent">
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded text-left outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jn-focus">
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="text-[13px] font-semibold text-jolu-text">模型路由</span>
-            <span className="truncate text-[12px] text-jolu-muted">{open ? "加入模型池后，接入的 Agent 可以用这个账号的模型" : summary}</span>
+            <span className="text-[13px] font-semibold text-jn-text">模型路由</span>
+            <span className="truncate text-[12px] text-jn-text-3">{open ? "加入模型池后，接入的 Agent 可以用这个账号的模型" : summary}</span>
           </span>
-          <ChevronDown aria-hidden className={cn("size-3.5 shrink-0 text-jolu-muted transition-transform", open && "rotate-180")} />
+          <ChevronDown aria-hidden className={cn("size-3.5 shrink-0 text-jn-text-3 transition-transform", open && "rotate-180")} />
         </button>
         <RouteSwitch on={account.serve_enabled} busy={busy} label={account.serve_enabled ? "移出模型池" : "加入模型池"} onClick={() => void toggle()} />
       </div>
@@ -290,10 +290,10 @@ export function RoutingEditSection({ account, onChanged }: { account: Connection
           <Field label="菜单前缀">
             <form className="flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); const next = prefix.trim(); if (next && next !== slug) void act(() => gatewayApi.setSlug(account.id, next), "已更新菜单前缀") }}>
               <input value={prefix} onChange={(event) => setPrefix(event.target.value)} aria-label="菜单前缀" spellCheck={false}
-                className="h-9 min-w-0 flex-1 rounded-lg border border-jolu-border bg-jolu-bg px-2.5 font-mono text-[12px] text-jolu-text outline-none focus:border-jolu-accent" />
+                className="h-9 min-w-0 flex-1 rounded-lg border border-jn-line bg-jn-stage px-2.5 font-mono text-[12px] text-jn-text outline-none focus:border-jn-primary" />
               <JoluButton size="sm" variant="neutral" type="submit" disabled={busy || !prefix.trim() || prefix.trim() === slug} className="h-9 shrink-0">保存</JoluButton>
             </form>
-            <span className="text-[11px] text-jolu-muted">Agent 里显示为 <code className="font-mono">{prefix.trim() || slug}/{firstModel}</code>；改前缀后旧名称继续可用</span>
+            <span className="text-[11px] text-jn-text-3">Agent 里显示为 <code className="font-mono">{prefix.trim() || slug}/{firstModel}</code>；改前缀后旧名称继续可用</span>
           </Field>
           <Field label="提供的模型">
             {/* 单列清单框：模型名动辄 30 字符，散落的 chip 换行后间隙不齐、看着像一堆文字；
@@ -302,23 +302,23 @@ export function RoutingEditSection({ account, onChanged }: { account: Connection
                 按名字排序，同一模型的 -thinking 变体紧跟主模型。
                 Qoder 这类来源的 key 是内部 id（gmodel…），官方 display_name 在主位、
                 key 右侧小字保留——Agent 里调用的仍是 `前缀/key`。 */}
-            <div className="max-h-[88px] overflow-y-auto rounded-lg border border-jolu-border bg-jolu-bg py-1" role="list" aria-label={`提供的模型，共 ${models.length} 个`}>
-              {models.length === 0 && <span className="block px-2.5 py-1 text-[12px] text-jolu-muted">还没有拉到模型清单</span>}
+            <div className="max-h-[88px] overflow-y-auto rounded-lg border border-jn-line bg-jn-stage py-1" role="list" aria-label={`提供的模型，共 ${models.length} 个`}>
+              {models.length === 0 && <span className="block px-2.5 py-1 text-[12px] text-jn-text-3">还没有拉到模型清单</span>}
               {[...models].sort((a, b) => (labels.get(a) ?? a).localeCompare(labels.get(b) ?? b)).map((model) => {
                 const label = labels.get(model)
                 return (
                   <div key={model} role="listitem" title={label ? `调用 id：${slug}/${model}` : model}
-                    className="flex min-w-0 items-center gap-2 px-2.5 py-[2px] text-[11px] leading-4 odd:bg-jolu-side/40">
-                    <span className="min-w-0 flex-1 truncate text-jolu-text">{label ?? model}</span>
-                    {label && <code className="shrink-0 font-mono text-[10px] text-jolu-muted">{model}</code>}
+                    className="flex min-w-0 items-center gap-2 px-2.5 py-[2px] text-[11px] leading-4 odd:bg-jn-surface/40">
+                    <span className="min-w-0 flex-1 truncate text-jn-text">{label ?? model}</span>
+                    {label && <code className="shrink-0 font-mono text-[10px] text-jn-text-3">{model}</code>}
                   </div>
                 )
               })}
             </div>
             <div className="flex items-center gap-2">
-              {models.length > 0 && <span className="text-[11px] tabular-nums text-jolu-muted">共 {models.length} 个</span>}
+              {models.length > 0 && <span className="text-[11px] tabular-nums text-jn-text-3">共 {models.length} 个</span>}
               <button type="button" disabled={busy} onClick={() => void act(() => gatewayApi.refreshModels(account.id), "模型清单已更新")}
-                className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-jolu-muted outline-none hover:bg-jolu-side hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-jolu-accent disabled:opacity-40">
+                className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-jn-text-3 outline-none hover:bg-jn-surface hover:text-jn-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-jn-focus disabled:opacity-40">
                 <RefreshCw aria-hidden className="size-3" />按账号权限自动获取
               </button>
             </div>
@@ -326,22 +326,22 @@ export function RoutingEditSection({ account, onChanged }: { account: Connection
           {used.length > 0 && (
             <Field label="用在哪里">
               <div className="flex flex-wrap items-center gap-2">{used.map((item) => (
-                <span key={item.slug} className="flex items-center gap-1 text-[11px] text-jolu-muted">
-                  <code className="rounded-md bg-jolu-side px-1.5 py-0.5 font-mono text-jolu-text">group/{item.slug}</code>第 {item.position} 位
+                <span key={item.slug} className="flex items-center gap-1 text-[11px] text-jn-text-3">
+                  <code className="rounded-md bg-jn-surface px-1.5 py-0.5 font-mono text-jn-text">group/{item.slug}</code>第 {item.position} 位
                 </span>
               ))}</div>
             </Field>
           )}
           <Field label="默认来源">
-            <label className="flex items-center gap-2 text-[12px] text-jolu-text">
-              <input type="radio" checked={isDefault} disabled={busy} onChange={() => void act(() => gatewayApi.setDefaultSource(account.id), "已设为默认来源")} className="accent-jolu-accent" />
+            <label className="flex items-center gap-2 text-[12px] text-jn-text">
+              <input type="radio" checked={isDefault} disabled={busy} onChange={() => void act(() => gatewayApi.setDefaultSource(account.id), "已设为默认来源")} className="accent-jn-primary" />
               不带前缀的模型名落到这个账号
             </label>
             {isDefault && (
-              <button type="button" disabled={busy} onClick={() => void act(() => gatewayApi.setDefaultSource(null), "已清除默认来源")} className="self-start text-[11px] text-jolu-muted hover:text-jolu-text">清除默认来源</button>
+              <button type="button" disabled={busy} onClick={() => void act(() => gatewayApi.setDefaultSource(null), "已清除默认来源")} className="self-start text-[11px] text-jn-text-3 hover:text-jn-text">清除默认来源</button>
             )}
           </Field>
-          <div className="flex items-center gap-2 rounded-lg bg-jolu-side px-3 py-2 text-[12px] text-jolu-muted">
+          <div className="flex items-center gap-2 rounded-lg bg-jn-surface px-3 py-2 text-[12px] text-jn-text-3">
             <Activity aria-hidden className="size-3.5" />
             <span className="flex-1">{usage ? `流水保留范围内经模型路由 ${usage.requests} 次${usage.failed ? ` · 失败 ${usage.failed} 次` : ""}` : "还没有经模型路由的请求"}</span>
           </div>
@@ -358,7 +358,7 @@ const EMPTY_LABELS = new Map<string, string>()
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-1.5">
-      <span className="text-[12px] font-medium text-jolu-muted">{label}</span>
+      <span className="text-[12px] font-medium text-jn-text-3">{label}</span>
       {children}
     </label>
   )

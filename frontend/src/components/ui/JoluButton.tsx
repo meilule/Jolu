@@ -1,37 +1,39 @@
 import { forwardRef, type ButtonHTMLAttributes } from "react"
 import { cn } from "@/lib/utils"
+import { Button } from "@/ui"
 
 /**
- * Jolu.pen 画板 104「操作按钮 · 统一视觉与交互」：圆角 8 · 图文间距 6 · 常规 36 / 紧凑 32。
- *   primary 主要操作（绿底深字）· soft 实色绿字次操作 · neutral 中性实色表面 · outline 描边（取消）
- *   danger-soft 停止 / 取消任务 · danger 最终删除确认
+ * 旧版按钮兼容层 —— 统一渲染成 R1-C 的 `Button`。
+ *
+ * 调用点还保留 `variant="primary|soft|neutral|outline|danger-soft|danger"` 这套名字
+ * （134 处），这里只做映射，不再维护第二套按钮外观。新代码请直接用 `@/ui` 的
+ * `Button`（`kind` / `size` / `icon`）。
+ *
+ * 图标尺寸：旧调用常直接塞 lucide 图标（默认 24px），这里保留 `[&_svg]:size-4`
+ * 的约束，避免换壳后按钮里的图标突然变大。
  */
 export type JoluButtonVariant = "primary" | "soft" | "neutral" | "outline" | "danger-soft" | "danger"
 
-const VARIANTS: Record<JoluButtonVariant, string> = {
-  primary: "bg-jolu-accent text-[#071B10] hover:brightness-[0.96] active:brightness-[0.92]",
-  soft: "border border-jolu-border bg-jolu-cc-surface text-jolu-on hover:bg-jolu-stage active:bg-jolu-cc-pressed",
-  neutral: "border border-jolu-border bg-jolu-cc-surface text-jolu-text hover:bg-jolu-stage active:bg-jolu-cc-pressed [&_svg]:text-jolu-muted",
-  outline: "border border-jolu-border bg-jolu-cc-surface text-jolu-text hover:bg-jolu-stage active:bg-jolu-cc-pressed",
-  "danger-soft": "bg-jolu-danger-soft text-jolu-danger hover:brightness-[0.98] active:bg-jolu-danger-pressed",
-  danger: "bg-jolu-danger-solid text-white hover:brightness-[0.95] active:brightness-[0.9]",
-}
+const KIND = {
+  primary: "primary",
+  soft: "soft",
+  neutral: "ghost",
+  outline: "ghost",
+  "danger-soft": "danger",
+  danger: "danger",
+} as const
 
 export const JoluButton = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: JoluButtonVariant
   size?: "md" | "sm"
 }>(function JoluButton({ variant = "neutral", size = "md", className, type = "button", ...props }, ref) {
   return (
-    <button
+    <Button
       ref={ref}
       type={type}
-      className={cn(
-        "jolu-control motion-button inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg text-xs font-medium outline-none",
-        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent disabled:pointer-events-none disabled:opacity-45 [&_svg]:size-4 [&_svg]:shrink-0",
-        size === "md" ? "h-9 px-3.5" : "h-8 px-2.5",
-        VARIANTS[variant],
-        className,
-      )}
+      kind={KIND[variant]}
+      size={size}
+      className={cn("[&_svg]:size-4 [&_svg]:shrink-0", className)}
       {...props}
     />
   )

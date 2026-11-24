@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { ChevronRight, Info, Upload } from "lucide-react"
+import { Archive, ChevronRight, Database, Download, Info, Upload } from "lucide-react"
 import { api, isTauri, type ImportPreviewDto, type ImportSummaryDto } from "@/lib/api"
 import { settingsApi, type StorageCountsDto } from "@/lib/settingsApi"
 import { RETENTION_OPTIONS, formatBytes, formatCount, importCountsText, importDoneText } from "@/lib/settingsPage"
@@ -18,6 +18,7 @@ export function DataSection({ cfg, onOpenSkills }: { cfg: Cfg; onOpenSkills: () 
   const toast = useToast()
   const [size, setSize] = useState<Loaded<number>>({ state: "loading" })
   const [counts, setCounts] = useState<Loaded<StorageCountsDto>>({ state: "loading" })
+  const [dataPath, setDataPath] = useState<string | null>(null)
   const [dialog, setDialog] = useState<null | "export" | "cleanup">(null)
   // 选择文件并预览中 / 已有预览（确认前可重新选择文件）
   const [previewing, setPreviewing] = useState(false)
@@ -30,7 +31,7 @@ export function DataSection({ cfg, onOpenSkills }: { cfg: Cfg; onOpenSkills: () 
       setCounts({ state: "failed", reason: "浏览器预览不读取本机数据" })
       return
     }
-    api.dataInfo().then((info) => setSize({ state: "ok", value: info.size_bytes }), (reason) => setSize({ state: "failed", reason: String(reason) }))
+    api.dataInfo().then((info) => { setSize({ state: "ok", value: info.size_bytes }); setDataPath(info.path) }, (reason) => setSize({ state: "failed", reason: String(reason) }))
     settingsApi.storageCounts().then((value) => setCounts({ state: "ok", value }), (reason) => setCounts({ state: "failed", reason: String(reason) }))
   }, [])
   useEffect(load, [load])
@@ -49,58 +50,51 @@ export function DataSection({ cfg, onOpenSkills }: { cfg: Cfg; onOpenSkills: () 
   }
 
   const tile = (label: string, loaded: Loaded<unknown>, text: string | null) => (
-    <div className="flex min-w-0 flex-1 flex-col justify-center gap-1.5 rounded-[10px] bg-jolu-side px-4">
-      <span className="text-[12px] text-jolu-muted">{label}</span>
-      <span className="tnum truncate text-[22px] font-semibold text-jolu-text" title={loaded.state === "failed" ? loaded.reason : undefined}>
+    <div className="flex min-w-0 flex-1 flex-col justify-center gap-1 rounded-[14px] bg-jn-well px-3.5 py-2.5">
+      <span className="text-[12px] text-jn-text-3">{label}</span>
+      <span className="tnum truncate text-[20px] font-semibold text-jn-text" title={loaded.state === "failed" ? loaded.reason : undefined}>
         {loaded.state === "loading" ? "读取中…" : loaded.state === "failed" ? "—" : text ?? "—"}
       </span>
     </div>
   )
 
   const failure = size.state === "failed" ? size.reason : counts.state === "failed" ? counts.reason : null
+  const sizeText = size.state === "ok" ? formatBytes(size.value) : null
+  const sizeValue = sizeText ? sizeText.replace(/\s*[A-Za-z]+$/, "") : "—"
+  const sizeUnit = sizeText ? sizeText.match(/[A-Za-z]+$/)?.[0] ?? "" : size.state === "loading" ? "读取中" : "未知"
 
   return (
     <>
-      <div className="flex h-[86px] gap-3">
-        {tile("统计数据", size, size.state === "ok" ? formatBytes(size.value) : null)}
-        {tile("请求记录", counts, counts.state === "ok" ? `${formatCount(counts.value.requests)} 条` : null)}
-        {tile("会话索引", counts, counts.state === "ok" ? `${formatCount(counts.value.sessions)} 个` : null)}
-      </div>
-      {failure && isTauri && <p role="alert" className="-mt-2 text-[12px] text-jolu-danger">本地数据概览读取失败：{failure}</p>}
-
-      <SettingsGroup title="导入与导出">
-        <SettingsRow
-          title="导出本地数据"
-          control={<ActionButton disabled={!isTauri} onClick={() => setDialog("export")}>导出数据</ActionButton>}
-        />
-        <SettingsRow
-          title="导入已有数据"
-          // 有预览卡片（含确认导入进行中）时禁用，先取消或关闭卡片再重新选择文件
-          control={<ActionButton busy={previewing} disabled={!isTauri || preview !== null} onClick={pickImport}>{previewing ? "读取中…" : "导入数据"}</ActionButton>}
-        />
-        {preview && (
-          <ImportPreviewCard
-            key={preview.token}
-            preview={preview}
-            onImported={load}
-            onExpired={() => setPreview(null)}
-            onClose={() => {
-              // 释放后端暂存的备份；已导入或已过期时后端什么都不做，失败也不影响关闭
-              void api.discardImport(preview.token).catch(() => {})
-              setPreview(null)
-            }}
-          />
-        )}
-        <div className="mb-4 flex items-center gap-2.5 rounded-[9px] bg-jolu-side p-3.5 text-[12px] text-jolu-muted">
-          <Info aria-hidden className="size-4 shrink-0" />
-          导出文件不包含 API Key、登录凭证和原始会话正文。
+      <SettingsGroup icon={Database} title="存储位置">
+        <div className="flex flex-col gap-3 border-t border-jn-line py-3">
+          <div className="flex items-end gap-1.5">
+            <span className="tnum text-[26px] leading-none font-bold text-jn-text">{sizeValue}</span>
+            <span className="pb-0.5 text-[13px] font-semibold text-jn-text-2">{sizeUnit}</span>
+            <span className="min-w-0 flex-1" />
+            <span className="truncate text-[12px] font-medium text-jn-text-3" title={dataPath ?? "%LOCALAPPDATA%\Jolu"}>{dataPath ?? "%LOCALAPPDATA%\Jolu"}</span>
+          </div>
+          <div className="flex gap-3">
+            {tile("统计数据", size, sizeText)}
+            {tile("请求记录", counts, counts.state === "ok" ? `${formatCount(counts.value.requests)} 条` : null)}
+            {tile("会话索引", counts, counts.state === "ok" ? `${formatCount(counts.value.sessions)} 个` : null)}
+          </div>
+          {failure && isTauri && <p role="alert" className="text-[12px] text-jn-danger">本地数据概览读取失败：{failure}</p>}
         </div>
+        <SettingsRow
+          title="Jolu 数据目录"
+          control={<ActionButton disabled={!isTauri} onClick={() => void api.openDataDirectory().catch((reason) => toast.danger("打开数据目录失败", String(reason)))}>打开文件夹</ActionButton>}
+        />
+        <SettingsRow
+          title="Skills 扫描目录"
+          desc="项目与全局目录在 Skills 模块里改"
+          control={<ActionButton tone="soft" onClick={onOpenSkills}>前往 Skills<ChevronRight aria-hidden className="size-3.5" /></ActionButton>}
+        />
       </SettingsGroup>
 
-      <SettingsGroup title="历史数据保留">
+      <SettingsGroup icon={Archive} title="历史数据保留">
         <SettingsRow
           title="自动清理规则"
-          desc="只影响 Jolu 本地统计"
+          desc="只清理 Jolu 自己的记录，不动原始会话文件"
           control={
             <SelectButton
               label="自动清理规则"
@@ -113,20 +107,38 @@ export function DataSection({ cfg, onOpenSkills }: { cfg: Cfg; onOpenSkills: () 
         />
         <SettingsRow
           title="手动清理历史"
+          desc="清理前会列出将删除的条目"
           control={<ActionButton disabled={!isTauri} onClick={() => setDialog("cleanup")}>预览清理</ActionButton>}
         />
       </SettingsGroup>
 
-      <SettingsGroup title="存储位置">
+      <SettingsGroup icon={Upload} title="导入与导出">
         <SettingsRow
-          title="Jolu 数据目录"
-          control={<ActionButton disabled={!isTauri} onClick={() => void api.openDataDirectory().catch((reason) => toast.danger("打开数据目录失败", String(reason)))}>打开文件夹</ActionButton>}
+          title="导入已有数据"
+          desc="导入前先预览，同名账号不会被覆盖"
+          control={<ActionButton busy={previewing} disabled={!isTauri || preview !== null} onClick={pickImport}>{previewing ? "读取中…" : "导入数据"}</ActionButton>}
         />
+        {preview && (
+          <ImportPreviewCard
+            key={preview.token}
+            preview={preview}
+            onImported={load}
+            onExpired={() => setPreview(null)}
+            onClose={() => {
+              void api.discardImport(preview.token).catch(() => {})
+              setPreview(null)
+            }}
+          />
+        )}
         <SettingsRow
-          title="Skills 扫描目录"
-          desc="项目与全局目录在 Skills 模块里改"
-          control={<ActionButton tone="soft" onClick={onOpenSkills}>前往 Skills<ChevronRight aria-hidden className="size-3.5" /></ActionButton>}
+          title="导出本地数据"
+          desc="导出文件不含 API Key 和登录凭据"
+          control={<ActionButton icon={<Download aria-hidden className="size-3.5" />} disabled={!isTauri} onClick={() => setDialog("export")}>导出数据</ActionButton>}
         />
+        <div className="mb-4 flex items-center gap-2.5 rounded-[14px] bg-jn-well p-3.5 text-[12px] text-jn-text-3">
+          <Info aria-hidden className="size-4 shrink-0" />
+          导出文件不包含 API Key、登录凭证和原始会话正文。
+        </div>
       </SettingsGroup>
 
       {dialog === "export" && <ExportDialog onClose={() => setDialog(null)} />}
@@ -170,28 +182,28 @@ function ImportPreviewCard({ preview, onImported, onExpired, onClose }: {
   }
 
   return (
-    <section aria-label="导入预览" className="jolu-card mb-4 flex flex-col gap-3 rounded-xl border border-jolu-border bg-jolu-cc-surface p-4">
-      <h4 className="text-sm font-semibold text-jolu-text">导入预览</h4>
-      <p className="break-all text-[12px] leading-normal text-jolu-muted">{preview.file_name || "备份文件"} · 校验完成后才能确认。</p>
-      <p className="tnum text-xs text-jolu-text">{importCountsText(preview)}</p>
-      <p className="flex flex-wrap items-center gap-2 text-[12px] text-jolu-muted">
+    <section aria-label="导入预览" className="mb-4 flex flex-col gap-3 rounded-[16px] border border-jn-line bg-jn-well p-4">
+      <h4 className="text-sm font-semibold text-jn-text">导入预览</h4>
+      <p className="break-all text-[12px] leading-normal text-jn-text-3">{preview.file_name || "备份文件"} · 校验完成后才能确认。</p>
+      <p className="tnum text-xs text-jn-text">{importCountsText(preview)}</p>
+      <p className="flex flex-wrap items-center gap-2 text-[12px] text-jn-text-3">
         重复项跳过；无效项可查看原因。
         {preview.invalid > 0 && (
           <button type="button" aria-expanded={showReasons} onClick={() => setShowReasons((v) => !v)}
-            className="rounded text-jolu-on outline-none hover:underline focus-visible:outline-2 focus-visible:outline-jolu-accent">
+            className="rounded text-jn-primary-ink outline-none hover:underline focus-visible:outline-2 focus-visible:outline-jn-primary">
             {showReasons ? "收起原因" : "查看原因"}
           </button>
         )}
       </p>
       {showReasons && (
-        <ul className="flex flex-col gap-1 rounded-[9px] bg-jolu-side p-3 text-[12px] text-jolu-muted">
+        <ul className="flex flex-col gap-1 rounded-[12px] bg-jn-surface p-3 text-[12px] text-jn-text-3">
           {preview.invalid_reasons.map((reason, index) => <li key={index} className="break-all">{reason}</li>)}
           {preview.invalid > preview.invalid_reasons.length && <li>仅显示前 {preview.invalid_reasons.length} 条原因。</li>}
         </ul>
       )}
       {done ? (
         <div className="flex items-center gap-3">
-          <p role="status" className="flex-1 text-[12px] text-jolu-on">{importDoneText(done)}</p>
+          <p role="status" className="flex-1 text-[12px] text-jn-primary-ink">{importDoneText(done)}</p>
           <ActionButton onClick={onClose}>关闭</ActionButton>
         </div>
       ) : (

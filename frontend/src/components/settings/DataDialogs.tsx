@@ -1,53 +1,26 @@
-import { useDialogClose } from "@/hooks/useDialogClose"
-import * as Dialog from "@radix-ui/react-dialog"
-import { useEffect, useState, type ReactNode } from "react"
-import { CalendarDays, CircleAlert, Download, Square, SquareCheck, X } from "lucide-react"
+import { useEffect, useState } from "react"
 import { api, isTauri, type CleanupPreviewDto } from "@/lib/api"
 import { PLATFORMS } from "@/lib/platforms"
 import { RETENTION_OPTIONS, cleanupCutoffDate, formatCount } from "@/lib/settingsPage"
 import { rangeLabel, rangeToMillis, todayRange, type DateRange } from "@/lib/usageStats"
 import { useToast } from "@/components/ui/Toast"
 import { DateRangeDialog } from "@/components/usage/DateRangeDialog"
-import { ActionButton, SelectButton } from "./settingsUi"
+import { SelectButton } from "./settingsUi"
+import { Banner, Button, Checkbox, Dialog } from "@/ui"
 
-function Shell({ open = true, width, title, onClose, busy, children }: { open?: boolean; width: number; title: string; onClose: () => void; busy?: boolean; children: ReactNode }) {
-  return (
-    <Dialog.Root open={open} onOpenChange={(open) => !open && !busy && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="motion-overlay fixed inset-x-0 bottom-0 top-[30px] z-50 bg-black/35" />
-        <Dialog.Content
-          aria-describedby={undefined}
-          className="motion-dialog fixed left-1/2 top-[calc(50%+15px)] z-50 flex max-h-[calc(100dvh-70px)] max-w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col gap-[18px] overflow-y-auto rounded-2xl border border-jolu-border bg-jolu-cc-surface p-6 shadow-dialog outline-none"
-          style={{ width }}
-        >
-          <div className="flex items-center gap-2.5">
-            <Dialog.Title className="flex-1 text-xl font-semibold text-jolu-text">{title}</Dialog.Title>
-            <Dialog.Close aria-label="关闭" disabled={busy} className="grid size-7 place-items-center rounded-md text-jolu-muted outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
-              <X aria-hidden className="size-4" />
-            </Dialog.Close>
-          </div>
-          {children}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  )
-}
-
-/** 导出本地数据：按供应商与日期范围导出 JSON（D-27）；不选日期时导出全部 */
-export function ExportDialog({ onClose: onDismiss }: { onClose: () => void }) {
-  const { open: dialogOpen, close: onClose } = useDialogClose(onDismiss)
+/** 导出本地数据：按供应商与日期范围导出 JSON；不选日期时导出全部 */
+export function ExportDialog({ onClose }: { onClose: () => void }) {
   const toast = useToast()
   const [platform, setPlatform] = useState("all")
-  // null = 全部日期；选定后按 [开始日 0 点, 结束日次日 0 点) 导出，结束日是今天时到当前时刻
   const [range, setRange] = useState<DateRange | null>(null)
   const [picking, setPicking] = useState(false)
   const [busy, setBusy] = useState(false)
+
   const run = () => {
     setBusy(true)
     const millis = range ? rangeToMillis(range) : null
     api.exportDataFile(platform === "all" ? null : platform, millis?.start ?? null, millis?.end ?? null)
       .then((path) => {
-        // 用户在保存对话框里取消时什么都没发生，不弹提示
         if (!path) return
         toast.success("导出完成", path)
         onClose()
@@ -55,29 +28,54 @@ export function ExportDialog({ onClose: onDismiss }: { onClose: () => void }) {
       .catch((reason) => toast.danger("导出失败", String(reason)))
       .finally(() => setBusy(false))
   }
+
   return (
-    <Shell open={dialogOpen} width={460} title="导出本地数据" onClose={onClose} busy={busy}>
-      <p className="text-xs text-jolu-muted">导出统计记录与会话标题为 JSON，可在另一台设备导入。</p>
-      <div className="flex items-center gap-4">
-        <span className="flex-1 text-[13px] font-medium text-jolu-text">供应商</span>
-        <SelectButton label="导出范围" value={platform} disabled={busy} onChange={setPlatform}
-          options={[{ value: "all", label: "全部供应商" }, ...PLATFORMS.map((p) => ({ value: p.id, label: p.name }))]} />
-      </div>
-      <div className="flex items-center gap-4">
-        <span className="flex-1 text-[13px] font-medium text-jolu-text">日期范围</span>
-        {/* 「全部日期」恢复入口画板未画，待确认 */}
-        {range && <button type="button" disabled={busy} onClick={() => setRange(null)}
-          className="rounded text-xs text-jolu-muted outline-none hover:text-jolu-on focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">全部日期</button>}
-        <ActionButton title="选择导出日期范围" icon={<CalendarDays aria-hidden className="size-3.5 text-jolu-muted" />} disabled={busy} onClick={() => setPicking(true)}
-          className="w-40 justify-start">
-          {range ? rangeLabel(range) : "全部日期"}
-        </ActionButton>
-      </div>
-      <p className="rounded-[9px] bg-jolu-side p-3.5 text-[12px] text-jolu-muted">导出文件不包含 API Key、登录凭证和原始会话正文。</p>
-      <div className="flex justify-end gap-2">
-        <ActionButton disabled={busy} onClick={onClose}>取消</ActionButton>
-        <ActionButton tone="accent" icon={<Download aria-hidden className="size-3.5" />} busy={busy} disabled={!isTauri} onClick={run}>导出数据</ActionButton>
-      </div>
+    <>
+      <Dialog
+        open
+        onOpenChange={(next) => { if (!next && !busy) onClose() }}
+        preventClose={busy}
+        width="md"
+        title="导出本地数据"
+        description="导出统计记录与会话标题为 JSON，可在另一台设备导入。"
+        actions={
+          <>
+            <Button kind="ghost" size="md" disabled={busy} onClick={onClose}>取消</Button>
+            <Button kind="primary" size="md" icon="download" loading={busy} disabled={!isTauri || busy} onClick={run}>导出数据</Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3 rounded-[16px] bg-jn-well p-4">
+          <div className="flex items-center gap-4">
+            <span className="flex-1 text-[13px] font-medium text-jn-text">供应商</span>
+            <SelectButton
+              label="导出范围"
+              value={platform}
+              disabled={busy}
+              onChange={setPlatform}
+              options={[{ value: "all", label: "全部供应商" }, ...PLATFORMS.map((p) => ({ value: p.id, label: p.name }))]}
+            />
+          </div>
+          <div className="flex items-center gap-3 border-t border-jn-line pt-3">
+            <span className="flex-1 text-[13px] font-medium text-jn-text">日期范围</span>
+            {range && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setRange(null)}
+                className="text-xs text-jn-text-3 outline-none hover:text-jn-primary-ink disabled:opacity-45"
+              >
+                全部日期
+              </button>
+            )}
+            <Button kind="ghost" size="sm" icon="calendar" disabled={busy} onClick={() => setPicking(true)}>
+              {range ? rangeLabel(range) : "全部日期"}
+            </Button>
+          </div>
+        </div>
+        <Banner tone="info">导出文件不包含 API Key、登录凭证和原始会话正文。</Banner>
+      </Dialog>
+
       {picking && (
         <DateRangeDialog
           value={range ?? todayRange()}
@@ -86,18 +84,17 @@ export function ExportDialog({ onClose: onDismiss }: { onClose: () => void }) {
           onClose={() => setPicking(false)}
         />
       )}
-    </Shell>
+    </>
   )
 }
 
-/** 清理历史数据确认（画板 98）：先预览范围，勾选确认后才允许删除 */
-export function CleanupDialog({ initialDays, onClose: onDismiss, onExport, onDone }: {
+/** 清理历史数据确认（R1-38）：先预览范围，勾选确认后才允许删除 */
+export function CleanupDialog({ initialDays, onClose, onExport, onDone }: {
   initialDays: number
   onClose: () => void
   onExport: () => void
   onDone: () => void
 }) {
-  const { open: dialogOpen, close: onClose, finish } = useDialogClose(onDismiss)
   const toast = useToast()
   const [days, setDays] = useState(initialDays)
   const [preview, setPreview] = useState<CleanupPreviewDto | null>(null)
@@ -123,65 +120,82 @@ export function CleanupDialog({ initialDays, onClose: onDismiss, onExport, onDon
     api.cleanupHistory(days)
       .then((result) => {
         toast.success(`已清理 ${result.requests.toLocaleString("zh-CN")} 条请求记录`, `保留最近 ${days} 天；采集位置保留，旧日志不会重新导入`)
-        finish(onDone)
+        onDone()
       })
       .catch((reason) => toast.danger("历史清理失败", String(reason)))
       .finally(() => setBusy(false))
   }
 
   return (
-    <Shell open={dialogOpen} width={580} title="清理历史数据" onClose={onClose} busy={busy}>
-      <p className="-mt-2 text-xs text-jolu-muted">先确认范围，再删除本地统计记录。</p>
-      <section className="flex flex-col rounded-xl border border-jolu-border px-5">
-        <h3 className="pb-3.5 pt-[18px] text-sm font-semibold text-jolu-text">清理范围</h3>
-        <div className="flex min-h-[72px] items-center gap-5 border-t border-jolu-border">
-          <span className="flex flex-1 flex-col gap-1.5">
-            <span className="text-[13px] font-medium text-jolu-text">保留最近</span>
-            <span className="text-[12px] text-jolu-muted">此日期之前的数据将被清理。</span>
+    <Dialog
+      open
+      onOpenChange={(next) => { if (!next && !busy) onClose() }}
+      preventClose={busy}
+      width="lg"
+      title="清理历史数据"
+      description="先确认范围，再删除本地统计记录。"
+      footerStart={
+        <Button kind="ghost" size="sm" icon="download" disabled={busy} onClick={onExport}>
+          先导出数据
+        </Button>
+      }
+      actions={
+        <>
+          <Button kind="ghost" size="md" disabled={busy} onClick={onClose}>取消</Button>
+          <Button kind="danger" size="md" loading={busy} disabled={!confirmed || !count || busy} onClick={run}>
+            {count === null ? "清理" : count > 0 ? `清理 ${formatCount(count)} 条` : "没有可清理的记录"}
+          </Button>
+        </>
+      }
+    >
+      <section className="flex flex-col rounded-[16px] border border-jn-line px-4">
+        <div className="flex min-h-[64px] items-center gap-4">
+          <span className="flex flex-1 flex-col gap-0.5">
+            <span className="text-[13px] font-medium text-jn-text">保留最近</span>
+            <span className="text-xs text-jn-text-3">此日期之前的数据将被清理。</span>
           </span>
-          <SelectButton label="保留最近" value={String(days)} disabled={busy} onChange={(v) => setDays(Number(v))}
-            options={RETENTION_OPTIONS.map((n) => ({ value: String(n), label: `${n} 天` }))} />
+          <SelectButton
+            label="保留最近"
+            value={String(days)}
+            disabled={busy}
+            onChange={(v) => setDays(Number(v))}
+            options={RETENTION_OPTIONS.map((n) => ({ value: String(n), label: `${n} 天` }))}
+          />
         </div>
-        <div className="flex min-h-[72px] items-center gap-5 border-t border-jolu-border">
-          <span className="flex flex-1 flex-col gap-1.5">
-            <span className="text-[13px] font-medium text-jolu-text">截止日期</span>
-            <span className="text-[12px] text-jolu-muted">根据当前日期与时区计算。</span>
+        <div className="flex min-h-[64px] items-center gap-4 border-t border-jn-line">
+          <span className="flex flex-1 flex-col gap-0.5">
+            <span className="text-[13px] font-medium text-jn-text">截止日期</span>
+            <span className="text-xs text-jn-text-3">根据当前日期与时区计算。</span>
           </span>
-          <span className="tnum text-xs text-jolu-muted">{cleanupCutoffDate(days, new Date(), preview?.cutoff_ms)}</span>
+          <span className="tnum font-mono text-xs text-jn-text-2">{cleanupCutoffDate(days, new Date(), preview?.cutoff_ms)}</span>
         </div>
       </section>
-      <div className="grid grid-cols-2 gap-3 rounded-[10px] bg-jolu-side p-4">
-        <span className="flex flex-col gap-1.5">
-          <span className="text-[12px] text-jolu-muted">请求记录</span>
-          <span className="tnum text-[22px] font-semibold text-jolu-text">{count === null ? (error ? "—" : "读取中…") : `${formatCount(count)} 条`}</span>
+
+      <div className="grid grid-cols-2 gap-3 rounded-[16px] bg-jn-well p-4">
+        <span className="flex flex-col gap-1">
+          <span className="text-xs text-jn-text-3">请求记录</span>
+          <span className="tnum font-mono text-[22px] font-bold text-jn-text">{count === null ? (error ? "—" : "读取中…") : `${formatCount(count)} 条`}</span>
         </span>
-        <span className="flex flex-col gap-1.5">
-          <span className="text-[12px] text-jolu-muted">预计释放</span>
-          <span className="tnum text-[22px] font-semibold text-jolu-text">—</span>
-          <span className="text-[11px] text-jolu-muted">数据库文件不会立即缩小，释放量待确认</span>
+        <span className="flex flex-col gap-1">
+          <span className="text-xs text-jn-text-3">预计释放</span>
+          <span className="tnum font-mono text-[22px] font-bold text-jn-text">—</span>
+          <span className="text-[11px] text-jn-text-3">数据库文件不会立即缩小，释放量待确认</span>
         </span>
       </div>
-      {error && <p role="alert" className="text-[12px] text-jolu-danger">清理预览失败：{error}</p>}
-      {preview && <p className="-mt-2 text-[12px] text-jolu-muted">同时删除 {formatCount(preview.usage_events)} 条增量事件、{formatCount(preview.sessions)} 条已结束会话信息。</p>}
-      <div className="flex items-start gap-2.5 rounded-[9px] bg-jolu-danger-soft p-3.5 text-[12px] text-jolu-danger">
-        <CircleAlert aria-hidden className="size-4 shrink-0" />
-        删除后无法撤销；原始会话文件、账号与 Skills 均会保留。
+
+      {error && <Banner tone="danger"><span role="alert">清理预览失败：{error}</span></Banner>}
+      {preview && <p className="text-xs text-jn-text-3">同时删除 {formatCount(preview.usage_events)} 条增量事件、{formatCount(preview.sessions)} 条已结束会话信息。</p>}
+
+      <Banner tone="danger">
+        删除后无法撤销；原始会话文件、账号与 Skills 均会保留。采集位置会保留，旧日志不会在下一轮重新导入。
+      </Banner>
+
+      <div className="flex items-center gap-2.5 self-start">
+        <Checkbox checked={confirmed} disabled={busy || !preview} label="我已了解本次清理范围" onChange={setConfirmed} />
+        <button type="button" disabled={busy || !preview} onClick={() => setConfirmed((v) => !v)} className="text-xs font-medium text-jn-text outline-none disabled:opacity-45">
+          我已了解本次清理范围
+        </button>
       </div>
-      <p className="-mt-1 text-[12px] text-jolu-muted">采集位置会保留，旧日志不会在下一轮重新导入。</p>
-      <button type="button" role="checkbox" aria-checked={confirmed} disabled={busy || !preview} onClick={() => setConfirmed((v) => !v)}
-        className="flex items-center gap-2 self-start rounded-md text-xs text-jolu-text outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
-        {confirmed ? <SquareCheck aria-hidden className="size-4 text-jolu-on" /> : <Square aria-hidden className="size-4 text-jolu-muted" />}
-        我已了解本次清理范围
-      </button>
-      <div className="flex items-center justify-between gap-2">
-        <ActionButton icon={<Download aria-hidden className="size-3.5" />} disabled={busy} onClick={() => finish(onExport)}>先导出数据</ActionButton>
-        <div className="flex gap-2">
-          <ActionButton disabled={busy} onClick={onClose}>取消</ActionButton>
-          <ActionButton tone="danger" busy={busy} disabled={!confirmed || !count} onClick={run}>
-            {count === null ? "清理" : count > 0 ? `清理 ${formatCount(count)} 条` : "没有可清理的记录"}
-          </ActionButton>
-        </div>
-      </div>
-    </Shell>
+    </Dialog>
   )
 }

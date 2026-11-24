@@ -1,7 +1,6 @@
 import { ContentTransition } from "@/components/ui/LoadingSurface"
 import { useEffect, useState } from "react"
-import { CalendarDays, Download, Search } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { CalendarDays } from "lucide-react"
 import { api, isTauri, type StatsCallPageDto, type StatsFilterDto, type StatsModelRowDto, type StatsTrendBucketDto } from "@/lib/api"
 import { collectionWarning, dateKey, localZone, rangeLabel, rangeToMillis, todayRange, utcOffsetLabel, zoneName, type DateRange } from "@/lib/usageStats"
 import { useCostFx } from "@/lib/costCurrency"
@@ -18,16 +17,18 @@ import { CallsPanel } from "@/components/usage/CallsPanel"
 import { DateRangeDialog } from "@/components/usage/DateRangeDialog"
 import { OverviewPanel } from "@/components/usage/OverviewPanel"
 import {
-  ALL, AccountFilter, EmptyCard, ErrorNotice, FilterTrigger, LoadingCard, MenuFilter, RefreshButton, ResetButton, ToolButton, providerOptions,
+  ALL, AccountFilter, EmptyCard, ErrorNotice, FilterTrigger, LoadingCard, MenuFilter, RefreshButton, ResetButton, providerOptions,
 } from "@/components/usage/usageControls"
+import { Banner, Button, Input, PageActions, PageTabs, Tabs } from "@/ui"
+import type { IconName } from "@/icons"
 import type { PlatformId } from "@/types"
 
 export type UsageTab = "overview" | "analysis" | "calls"
 
-const TABS: { value: UsageTab; label: string }[] = [
-  { value: "overview", label: "概览" },
-  { value: "analysis", label: "用量分析" },
-  { value: "calls", label: "调用明细" },
+const TABS: { value: UsageTab; label: string; icon: IconName }[] = [
+  { value: "overview", label: "概览", icon: "activity" },
+  { value: "analysis", label: "用量分析", icon: "navUsage" },
+  { value: "calls", label: "调用明细", icon: "list" },
 ]
 
 /** 调用明细的状态筛选：成功、失败（上游错误）、已取消；三者互斥 */
@@ -179,7 +180,7 @@ export function UsageView({ active, request, onOpenSession }: {
     <FilterTrigger
       aria-label="日期范围"
       onClick={() => setPicking(true)}
-      leading={calendar ? <CalendarDays aria-hidden className="size-4 text-jolu-muted" /> : undefined}
+      leading={calendar ? <CalendarDays aria-hidden className="size-4 text-jn-text-3" /> : undefined}
       trailingChevron={calendar}
     >
       {rangeLabel(range)}
@@ -187,89 +188,84 @@ export function UsageView({ active, request, onOpenSession }: {
   )
 
   return (
-    <div className="flex w-full flex-col gap-3">
-      <div role="tablist" aria-label="用量统计" className="jolu-tablist h-[38px]">
-        {TABS.map((t) => (
-          <button
-            key={t.value}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.value}
-            onClick={() => setTab(t.value)}
-            className={cn(
-              "jolu-tab h-[30px] text-sm",
-              tab === t.value && "font-semibold",
-            )}
+    <div className="flex w-full flex-col gap-3.5">
+      <PageTabs>
+        <Tabs
+          value={tab}
+          onChange={setTab}
+          items={TABS.map((t) => ({ key: t.value, label: t.label, icon: t.icon }))}
+        />
+      </PageTabs>
+
+      {tab === "calls" && (
+        <PageActions>
+          <Button
+            kind="ghost"
+            size="sm"
+            icon="download"
+            loading={exporting}
+            disabled={exporting || !calls.data?.total_count}
+            onClick={() => void exportCsv()}
           >
-            {t.label}
-          </button>
-        ))}
-      </div>
+            {exporting ? `导出 ${calls.data?.total_count ?? 0} 条…` : "导出 CSV"}
+          </Button>
+        </PageActions>
+      )}
 
       {tab !== "calls" ? (
-        <div className="flex h-[34px] items-center gap-2">
-          {dateButton(false)}
-          <MenuFilter label="供应商筛选" value={platform ?? ALL} options={providerOptions()} onChange={(v) => changePlatform(v === ALL ? null : (v as PlatformId))} />
+        <div className="flex flex-wrap items-center gap-2">
+          {dateButton(true)}
+          <MenuFilter label="供应商筛选" trailingChevron value={platform ?? ALL} options={providerOptions()} onChange={(v) => changePlatform(v === ALL ? null : (v as PlatformId))} />
           <AccountFilter accounts={accountsFor(conn.connections, platform)} value={accounts} onChange={setAccounts} />
-          <span className="flex-1" />
+          <span className="min-w-0 flex-1" />
+          <span className="text-xs text-jn-text-3">{range.end.slice(5).replace("-", "/")} · {zone}时区</span>
           <CurrencyPicker value={costCurrency} loading={fx.loading} onChange={(next) => void cfg.setCostCurrency(next)} hint={fx} />
-          <span className="text-[12px] text-jolu-muted">{range.end.slice(5).replace("-", "/")} · {zone}时区</span>
           <RefreshButton loading={overview.refreshing} onClick={() => { overview.refresh(); if (tab === "analysis") activity.refresh() }} />
         </div>
       ) : (
-        <>
-          <div className="flex h-[34px] items-center gap-2">
-            {dateButton(true)}
-            <MenuFilter label="供应商筛选" trailingChevron value={platform ?? ALL} options={providerOptions()} onChange={(v) => changePlatform(v === ALL ? null : (v as PlatformId))} />
-            <MenuFilter
-              label="模型筛选"
-              trailingChevron
-              value={model ?? ALL}
-              options={[{ value: ALL, label: "全部模型" }, ...(calls.data?.models ?? []).map((m) => ({ value: m, label: m }))]}
-              onChange={(v) => { setModel(v === ALL ? null : v); setPage(1) }}
-            />
-            <MenuFilter
-              label="状态筛选"
-              trailingChevron
-              value={status ?? ALL}
-              options={[{ value: ALL, label: "全部状态" }, { value: "success", label: "成功" }, { value: "error", label: "失败" }, { value: "cancelled", label: "已取消" }, { value: "unknown", label: "状态未知" }]}
-              onChange={(v) => { setStatus(v === ALL ? null : (v as CallStatus)); setPage(1) }}
-            />
-            <span className="flex-1" />
-            <ResetButton onClick={resetCalls} />
-            <RefreshButton loading={calls.refreshing} onClick={calls.refresh} />
-          </div>
-          <div className="flex h-[34px] items-center gap-2">
-            <label className="jolu-control flex h-[34px] w-[360px] items-center gap-2 rounded-lg border border-jolu-border bg-jolu-bg px-3 focus-within:border-jolu-accent">
-              <Search aria-hidden className="size-4 shrink-0 text-jolu-muted" />
-              <input
-                value={searchDraft}
-                onChange={(event) => setSearchDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter") return
-                  setSearch(searchDraft)
-                  setPage(1)
-                }}
-                placeholder="搜索调用 ID / 会话 ID，按 Enter 查询"
-                aria-label="搜索调用 ID 或会话 ID"
-                className="min-w-0 flex-1 bg-transparent text-xs text-jolu-text outline-none placeholder:text-jolu-muted"
-              />
-            </label>
-            <span className="flex-1" />
-            <span className="text-[12px] text-jolu-muted">统计时区 · {zone} {utcOffsetLabel()}</span>
-            <ToolButton icon={<Download />} busy={exporting} disabled={exporting || !calls.data?.total_count} onClick={() => void exportCsv()}>
-              {exporting ? `正在导出 ${calls.data?.total_count ?? 0} 条…` : "导出 CSV"}
-            </ToolButton>
-          </div>
-        </>
+        <div className="flex flex-wrap items-center gap-2">
+          {dateButton(true)}
+          <MenuFilter label="供应商筛选" trailingChevron value={platform ?? ALL} options={providerOptions()} onChange={(v) => changePlatform(v === ALL ? null : (v as PlatformId))} />
+          <MenuFilter
+            label="模型筛选"
+            trailingChevron
+            value={model ?? ALL}
+            options={[{ value: ALL, label: "全部模型" }, ...(calls.data?.models ?? []).map((m) => ({ value: m, label: m }))]}
+            onChange={(v) => { setModel(v === ALL ? null : v); setPage(1) }}
+          />
+          <MenuFilter
+            label="状态筛选"
+            trailingChevron
+            value={status ?? ALL}
+            options={[{ value: ALL, label: "全部状态" }, { value: "success", label: "成功" }, { value: "error", label: "失败" }, { value: "cancelled", label: "已取消" }, { value: "unknown", label: "状态未知" }]}
+            onChange={(v) => { setStatus(v === ALL ? null : (v as CallStatus)); setPage(1) }}
+          />
+          <Input
+            size="md"
+            icon="search"
+            value={searchDraft}
+            onChange={(event) => setSearchDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return
+              setSearch(searchDraft)
+              setPage(1)
+            }}
+            placeholder="搜索调用 ID / 会话 ID，按 Enter 查询"
+            aria-label="搜索调用 ID 或会话 ID"
+            className="w-[260px] shrink-0 bg-jn-surface shadow-jn-surface"
+          />
+          <span className="min-w-0 flex-1" />
+          <span className="hidden text-xs text-jn-text-3 xl:inline">时区 · {zone} {utcOffsetLabel()}</span>
+          <ResetButton onClick={resetCalls} />
+          <RefreshButton loading={calls.refreshing} onClick={calls.refresh} />
+        </div>
       )}
 
       {current.error && <ErrorNotice error={current.error} stale={current.data !== null} onRetry={current.refresh} />}
-      {/* 待确认：采集失败提示无画板，最小版 */}
-      {collectionNote && <div role="status" className="rounded-[10px] bg-jolu-danger-soft px-4 py-2.5 text-xs text-jolu-danger">{collectionNote}</div>}
+      {collectionNote && <Banner tone="warning">{collectionNote}</Banner>}
 
       {tab === "analysis" && activity.error && <ErrorNotice error={activity.error} stale={!!activity.data} onRetry={activity.refresh} />}
-      <ContentTransition identity={`${tab}-${!!current.data}`} className="flex flex-col gap-4">
+      <ContentTransition identity={`${tab}-${!!current.data}`} className="flex flex-col gap-3.5">
       {tab === "calls" ? (
         calls.data ? (
           <CallsPanel data={calls.data} selectedId={selectedId} fx={fx} onSelect={setSelected} onPage={setPage} onOpenSession={onOpenSession} />
@@ -300,8 +296,7 @@ export function UsageView({ active, request, onOpenSession }: {
 }
 
 /**
- * 费用币种切换（USD / CNY）。CNY 用当日汇率换算，汇率来源显示在标题属性里，
- * 离线参考价时在按钮旁标「参考」，不把兜底价伪装成最新汇率。
+ * 费用币种切换（USD / CNY，R1-04 胶囊分段样式）。
  */
 function CurrencyPicker({ value, loading, hint, onChange }: {
   value: "USD" | "CNY"
@@ -313,24 +308,19 @@ function CurrencyPicker({ value, loading, hint, onChange }: {
     ? `1 USD ≈ ${hint.rate.toFixed(3)} CNY · ${hint.asOf}${hint.fallback ? "（离线参考价）" : ""}`
     : "费用按美元显示（基准币种）"
   return (
-    <span className="flex items-center gap-1.5" title={title}>
-      <span className="flex h-[26px] items-center rounded-md bg-jolu-track p-0.5">
-        {(["USD", "CNY"] as const).map((currency) => (
-          <button
-            key={currency}
-            type="button"
-            onClick={() => value !== currency && onChange(currency)}
-            className={cn(
-              "h-[22px] rounded px-2 text-meta transition-colors",
-              value === currency ? "bg-jolu-bg text-jolu-text shadow-sm" : "text-jolu-muted hover:text-jolu-text",
-            )}
-          >
-            {currency === "USD" ? "$ USD" : "¥ CNY"}
-          </button>
-        ))}
-      </span>
+    <span className="inline-flex items-center gap-1.5" title={title}>
+      <Tabs
+        style="segment"
+        value={value}
+        onChange={(next) => { if (next !== value) onChange(next) }}
+        className="border border-jn-line/80"
+        items={[
+          { key: "USD", label: "$ USD" },
+          { key: "CNY", label: "¥ CNY" },
+        ]}
+      />
       {value === "CNY" && (
-        <span className={cn("text-note", hint.fallback ? "text-jolu-danger" : "text-jolu-muted")}>
+        <span className={hint.fallback ? "text-[11px] text-jn-danger" : "text-[11px] text-jn-text-3"}>
           {loading ? "汇率…" : hint.fallback ? "参考" : `≈${hint.rate.toFixed(2)}`}
         </span>
       )}

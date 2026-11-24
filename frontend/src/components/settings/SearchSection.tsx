@@ -5,13 +5,13 @@ import { isTauri, listenEvent } from "@/lib/api"
 import { settingsApi } from "@/lib/settingsApi"
 import { useSettings } from "@/hooks/useSettings"
 import { useToast } from "@/components/ui/Toast"
-import { SelectField } from "@/components/ui/SelectField"
 import { cn } from "@/lib/utils"
 import {
   SEARCH_PLUGIN_NAME, agentLabel, draftsChanged, nextVendor, pluginState, pluginStateText, toDrafts, toInputs, validateDrafts,
   type LibraryAgentDto, type SearchDraft, type SearchHitDto, type SearchVendorDto,
 } from "@/lib/searchSettings"
 import { ActionButton, Notice, SettingsGroup, SettingsRow, Switch } from "./settingsUi"
+import { Select } from "@/ui"
 import { useLatestGate } from "@/hooks/useLatestGate"
 
 /**
@@ -87,24 +87,21 @@ export function SearchSection() {
       >
         {vendorError && <Notice tone="danger" className="mb-3">{vendorError}</Notice>}
         {drafts.length === 0 && (
-          <p className="border-t border-jolu-border py-3.5 text-xs text-jolu-muted">还没有搜索后端。You.com 可不填 Key 先用（每天有次数限制）。</p>
+          <p className="border-t border-jn-line py-3.5 text-xs text-jn-text-3">还没有搜索后端。You.com 可不填 Key 先用（每天有次数限制）。</p>
         )}
         {drafts.map((draft, index) => {
           const vendor = vendors.find((item) => item.id === draft.vendor)
           return (
-            <div key={index} className="flex flex-col gap-2 border-t border-jolu-border py-3.5" data-search-row>
+            <div key={index} className="flex flex-col gap-2 border-t border-jn-line py-3.5" data-search-row>
               <div className="flex items-center gap-2">
-                <span className="w-5 shrink-0 text-center text-[12px] text-jolu-muted">{index + 1}</span>
-                <SelectField
-                  label="搜索后端"
-                  value={draft.vendor}
-                  options={vendorOptions}
-                  disabled={disabled}
-                  onValueChange={(value) => update(index, { vendor: value })}
-                  className="w-[200px]"
-                />
+                <span className="w-5 shrink-0 text-center text-[12px] text-jn-text-3">{index + 1}</span>
+                <div className="w-[200px]">
+                  <Select variant="filter" width="full" label="搜索后端" value={draft.vendor}
+                    options={vendorOptions} disabled={disabled}
+                    onChange={(value) => update(index, { vendor: value })} />
+                </div>
                 <span className="flex-1" />
-                <span className="text-[12px] text-jolu-muted">暂停</span>
+                <span className="text-[12px] text-jn-text-3">暂停</span>
                 <Switch liquid label={`暂停 ${vendor?.name ?? draft.vendor}`} on={draft.off} disabled={disabled} onChange={(off) => update(index, { off })} />
                 <ActionButton
                   tone="danger"
@@ -122,7 +119,7 @@ export function SearchSection() {
                 rows={Math.min(4, Math.max(2, draft.keysText.split("\n").length))}
                 placeholder={vendor?.key_optional ? "可不填；多把 Key 每行一把" : "每行一把 Key，被拒的会自动排到最后"}
                 onChange={(event) => update(index, { keysText: event.target.value })}
-                className="ml-7 min-w-0 resize-y rounded-lg border border-jolu-border bg-transparent px-2.5 py-2 font-mono text-xs text-jolu-text outline-none placeholder:font-sans placeholder:text-jolu-muted focus:border-jolu-accent disabled:opacity-45"
+                className="ml-7 min-w-0 resize-y rounded-lg border border-jn-line bg-transparent px-2.5 py-2 font-mono text-xs text-jn-text outline-none placeholder:font-sans placeholder:text-jn-text-3 focus:border-jn-primary disabled:opacity-45"
               />
               {(vendor?.needs_url || draft.url) && (
                 <input
@@ -132,13 +129,13 @@ export function SearchSection() {
                   spellCheck={false}
                   placeholder={vendor?.needs_url ? "实例地址，如 https://searx.example.com" : "自定义地址（留空用官方地址）"}
                   onChange={(event) => update(index, { url: event.target.value })}
-                  className="ml-7 h-9 min-w-0 rounded-lg border border-jolu-border bg-transparent px-2.5 text-xs text-jolu-text outline-none placeholder:text-jolu-muted focus:border-jolu-accent disabled:opacity-45"
+                  className="ml-7 h-9 min-w-0 rounded-lg border border-jn-line bg-transparent px-2.5 text-xs text-jn-text outline-none placeholder:text-jn-text-3 focus:border-jn-primary disabled:opacity-45"
                 />
               )}
             </div>
           )
         })}
-        <div className="flex items-center gap-2 border-t border-jolu-border py-3.5">
+        <div className="flex items-center gap-2 border-t border-jn-line py-3.5">
           <ActionButton
             icon={<Plus aria-hidden className="size-3.5" />}
             disabled={disabled || vendors.length === 0}
@@ -146,16 +143,16 @@ export function SearchSection() {
           >
             添加后端
           </ActionButton>
-          <span className={cn("flex-1 truncate text-[12px]", problem && changed ? "text-jolu-danger" : "text-jolu-muted")}>
+          <span className={cn("flex-1 truncate text-[12px]", problem && changed ? "text-jn-danger" : "text-jn-text-3")}>
             {changed ? problem ?? "有未保存的修改" : "保留编辑框里的掩码 = 保留原 Key"}
           </span>
           <ActionButton tone="secondary" disabled={disabled || !changed || saving} onClick={() => setDrafts(toDrafts(saved))}>撤销</ActionButton>
           <ActionButton tone="accent" busy={saving} disabled={disabled || !changed || !!problem} onClick={save}>保存</ActionButton>
         </div>
-        <div className="flex flex-col gap-2 border-t border-jolu-border py-3.5">
+        <div className="flex flex-col gap-2 border-t border-jn-line py-3.5">
           <div className="flex items-center gap-2">
-            <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg border border-jolu-border px-2.5 focus-within:border-jolu-accent">
-              <Search aria-hidden className="size-[15px] shrink-0 text-jolu-muted" />
+            <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg border border-jn-line px-2.5 focus-within:border-jn-primary">
+              <Search aria-hidden className="size-[15px] shrink-0 text-jn-text-3" />
               <input
                 aria-label="试搜关键词"
                 value={query}
@@ -163,21 +160,21 @@ export function SearchSection() {
                 placeholder="用已保存的配置试搜一次"
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={(event) => { if (event.key === "Enter") trySearch() }}
-                className="min-w-0 flex-1 bg-transparent text-xs text-jolu-text outline-none placeholder:text-jolu-muted disabled:opacity-45"
+                className="min-w-0 flex-1 bg-transparent text-xs text-jn-text outline-none placeholder:text-jn-text-3 disabled:opacity-45"
               />
             </label>
             <ActionButton busy={trying} disabled={disabled || !query.trim() || changed} onClick={trySearch}>试搜</ActionButton>
           </div>
-          {changed && <span className="text-[12px] text-jolu-muted">先保存，再试搜。</span>}
+          {changed && <span className="text-[12px] text-jn-text-3">先保存，再试搜。</span>}
           {tryError && <Notice tone="danger">{tryError}</Notice>}
-          {hits && hits.length === 0 && <span className="text-[12px] text-jolu-muted">没有结果。</span>}
+          {hits && hits.length === 0 && <span className="text-[12px] text-jn-text-3">没有结果。</span>}
           {hits && hits.length > 0 && (
             <ol className="flex flex-col gap-2" aria-label="试搜结果">
               {hits.map((hit, index) => (
                 <li key={`${hit.url}-${index}`} className="flex min-w-0 flex-col gap-0.5">
-                  <span className="truncate text-xs font-medium text-jolu-text">{index + 1}. {hit.title}</span>
-                  <span className="truncate font-mono text-[11.5px] text-jolu-muted">{hit.url}</span>
-                  {hit.snippet && <span className="line-clamp-2 text-[12px] text-jolu-muted">{hit.snippet}</span>}
+                  <span className="truncate text-xs font-medium text-jn-text">{index + 1}. {hit.title}</span>
+                  <span className="truncate font-mono text-[11.5px] text-jn-text-3">{hit.url}</span>
+                  {hit.snippet && <span className="line-clamp-2 text-[12px] text-jn-text-3">{hit.snippet}</span>}
                 </li>
               ))}
             </ol>
@@ -236,7 +233,7 @@ function SearchPluginGroup() {
   return (
     <SettingsGroup icon={Plug} title="搜索插件（MCP）" desc="把 Jolu 搜索装进各工具；同名的第三方条目不会被覆盖。">
       {error && <Notice tone="danger" className="mb-3">{error}</Notice>}
-      {!isTauri && <p className="border-t border-jolu-border py-3.5 text-xs text-jolu-muted">浏览器预览不读取本机工具配置。</p>}
+      {!isTauri && <p className="border-t border-jn-line py-3.5 text-xs text-jn-text-3">浏览器预览不读取本机工具配置。</p>}
       {rows?.map((row) => {
         const state = pluginState(row)
         return (

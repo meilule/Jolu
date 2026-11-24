@@ -1,8 +1,7 @@
+import * as Menu from "@radix-ui/react-dropdown-menu"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { useContentMotion } from "@/lib/motion"
 import { LoadingSurface } from "@/components/ui/LoadingSurface"
-import * as Menu from "@radix-ui/react-dropdown-menu"
-import { useEffect, useRef, useState } from "react"
-import { ArrowUpRight, Bot, ChartColumn, ChevronDown, ChevronRight, ChevronsUp, Copy, Ellipsis, Eye, FileCode, FileDown, Folder } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api, isTauri, type MessageDto, type MessagePageDto, type SessionItemDto } from "@/lib/api"
 import { canCompress, canContinue, consumption, middleEllipsis, projectName, sessionTitle, spanLabel, statusLabel } from "@/lib/sessionThreads"
@@ -15,10 +14,13 @@ import { Tip } from "@/components/ui/Tip"
 import { useToast } from "@/components/ui/Toast"
 import { providerName } from "@/lib/providerCatalog"
 import type { Connection, PlatformId } from "@/types"
+import { Icon, type IconName } from "@/icons"
+import { Collapse } from "@/motion"
+import { Button, IconButton, StatusPill, Tabs } from "@/ui"
 
 type DetailTab = "messages" | "info"
 
-/** 会话详情（画板 40 / 42）：消息记录与会话信息两个页签，正文只读 */
+/** 会话详情（R1-05）：消息记录与会话信息两个页签，正文只读，底部明确标注继续能力。 */
 export function SessionDetail({ session, connections, onDrillUsage, onContinue, onCreateAutomation, onCompress }: {
   session: SessionItemDto
   connections: readonly Connection[]
@@ -84,89 +86,82 @@ export function SessionDetail({ session, connections, onDrillUsage, onContinue, 
     void navigator.clipboard.writeText(text).then(() => toast.success("已复制", what), () => toast.danger("复制失败", "请手动选择文字复制"))
   }
 
+  const resumable = canContinue(session.platform) && session.has_source
   const compressButton = (
-    <button type="button" onClick={onCompress} disabled={!canCompress(session.platform)} className="inline-flex h-[34px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-jolu-selected px-3 text-xs font-medium text-jolu-on outline-none hover:bg-jolu-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-45"><FileDown aria-hidden className="size-4 shrink-0"/>压缩会话</button>
+    <Button kind="soft" size="sm" icon="compress" disabled={!canCompress(session.platform)} onClick={onCompress}>
+      压缩会话
+    </Button>
   )
-
   const continueButton = (
-    <button
-      type="button"
-      disabled={!canContinue(session.platform) || !session.has_source}
-      onClick={onContinue}
-      className="inline-flex h-[34px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-jolu-accent px-3 text-xs font-medium text-[#071B10] outline-none hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-45"
-    >
+    <Button kind="primary" size="sm" icon="external" disabled={!resumable} onClick={onContinue}>
       在 {name} 中继续
-      <ArrowUpRight aria-hidden className="size-3.5 shrink-0" />
-    </button>
+    </Button>
   )
 
   return (
-    <section className="jolu-card flex min-h-0 min-w-0 flex-1 flex-col gap-3 rounded-xl border border-jolu-border bg-jolu-cc-surface p-5">
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 rounded-jn-card border border-jn-line bg-jn-surface p-5 shadow-jn-surface">
       <div className="flex items-start gap-2.5">
-        <div className="flex min-w-0 flex-1 flex-col gap-[7px]">
-          <h3 className="truncate text-lg font-semibold text-jolu-text" title={sessionTitle(session)}>{sessionTitle(session)}</h3>
-          <span className="truncate whitespace-pre text-[12px] text-jolu-muted">{name}  /  {projectName(session.cwd)}  /  {spanLabel(session.first_ts, session.last_ts)}</span>
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <h3 className="truncate text-lg font-bold text-jn-text" title={sessionTitle(session)}>{sessionTitle(session)}</h3>
+          <span className="truncate whitespace-pre text-xs text-jn-text-3">{name}  /  {projectName(session.cwd)}  /  {spanLabel(session.first_ts, session.last_ts)}</span>
         </div>
         <Menu.Root modal={false}>
-          <Menu.Trigger aria-label="更多会话操作" className="grid size-[30px] shrink-0 place-items-center rounded-lg bg-jolu-side text-jolu-muted outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent data-[state=open]:bg-jolu-stage">
-            <Ellipsis aria-hidden className="size-4" />
+          <Menu.Trigger asChild>
+            <IconButton icon="more" label="更多会话操作" size="sm" kind="ghost" />
           </Menu.Trigger>
           <Menu.Portal>
-            <Menu.Content align="end" sideOffset={6} className="motion-popover z-[100] w-[200px] rounded-xl border border-jolu-border bg-jolu-cc-surface p-1.5 shadow-popover">
-              <MenuItem icon={<Copy />} onSelect={() => copy(session.session_id, "会话 ID")}>复制会话 ID</MenuItem>
-              <MenuItem icon={<Folder />} disabled={!session.cwd} onSelect={() => session.cwd && copy(session.cwd, "项目路径")}>复制项目路径</MenuItem>
-              <MenuItem icon={<ChartColumn />} onSelect={onDrillUsage}>查看用量明细</MenuItem>
-              <MenuItem icon={<ArrowUpRight />} disabled={!canContinue(session.platform) || !session.has_source} onSelect={onContinue}>在原工具中继续</MenuItem>
+            <Menu.Content align="end" sideOffset={6} className="jn-popover z-[140] w-[200px] rounded-[16px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface">
+              <MenuItem icon="copy" onSelect={() => copy(session.session_id, "会话 ID")}>复制会话 ID</MenuItem>
+              <MenuItem icon="folder" disabled={!session.cwd} onSelect={() => session.cwd && copy(session.cwd, "项目路径")}>复制项目路径</MenuItem>
+              <MenuItem icon="navUsage" onSelect={onDrillUsage}>查看用量明细</MenuItem>
+              <MenuItem icon="external" disabled={!resumable} onSelect={onContinue}>在原工具中继续</MenuItem>
             </Menu.Content>
           </Menu.Portal>
         </Menu.Root>
       </div>
 
-      <div className="flex min-h-7 flex-wrap items-center gap-x-2 gap-y-1">
-        <Chip on={session.status === "done" || session.status === "running"}>{statusLabel(session.status)}</Chip>
+      <div className="flex min-h-7 flex-wrap items-center gap-x-2 gap-y-1.5">
+        <StatusPill tone={session.status === "done" || session.status === "running" ? "success" : session.status === "failed" ? "danger" : "neutral"}>
+          {statusLabel(session.status)}
+        </StatusPill>
         <Chip>{account ? accountLabel(account) : "未归属账号"}</Chip>
         <Chip>{page ? (page.available ? `${page.total} 条消息` : "无消息正文") : "— 条消息"}</Chip>
         <Chip>{formatTokens(consumption(session))} Token</Chip>
+        <span className="min-w-0 flex-1" />
+        <Tabs
+          style="segment"
+          value={tab}
+          onChange={setTab}
+          items={[
+            { key: "messages", label: "消息记录" },
+            { key: "info", label: "会话信息" },
+          ]}
+        />
       </div>
 
-      <div role="tablist" className="flex h-8 shrink-0 gap-6 border-b border-jolu-border">
-        {(["messages", "info"] as const).map((t) => (
-          <button
-            key={t}
-            type="button"
-            role="tab"
-            aria-selected={tab === t}
-            onClick={() => setTab(t)}
-            className={cn("-mb-px border-b-2 text-xs font-medium outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent", tab === t ? "border-jolu-accent text-jolu-on" : "border-transparent text-jolu-muted hover:text-jolu-text")}
-          >
-            {t === "messages" ? "消息记录" : "会话信息"}
-          </button>
-        ))}
-      </div>
-
-      <div ref={bodyMotion} className="-mr-2 min-h-0 flex-1 overflow-y-auto pr-2">
+      <div ref={bodyMotion} className="-mr-2 min-h-0 flex-1 overflow-y-auto border-t border-jn-line pt-3 pr-2">
         {tab === "messages" ? (
           error ? (
-            <StateBox title="会话源暂时不可读" note="读取失败不代表会话结束；旧记录保留。" action={<SmallButton onClick={load}>重新读取</SmallButton>} detail={error} />
+            <StateBox title="会话源暂时不可读" note="读取失败不代表会话结束；旧记录保留。" action={<Button kind="soft" size="sm" icon="retry" onClick={load}>重新读取</Button>} detail={error} />
           ) : !page ? (
             <LoadingSurface layout="messages" label="正在读取消息" />
           ) : !page.available ? (
             <StateBox
               title="这个来源未保留消息正文"
               note="会话标题和 Token 仍可查看。不会将统计记录拼成对话内容。"
-              action={<SmallButton accent onClick={() => setTab("info")}>查看会话信息<ChevronRight aria-hidden className="size-3.5" /></SmallButton>}
+              action={<Button kind="soft" size="sm" icon="next" onClick={() => setTab("info")}>查看会话信息</Button>}
             />
           ) : (
             <div className="flex flex-col gap-3">
-              {page.note && <p className="rounded-lg bg-jolu-stage px-2.5 py-1.5 text-[11px] leading-relaxed text-jolu-muted">{page.note}</p>}
+              {page.note && <p className="rounded-[12px] bg-jn-well px-3 py-2 text-[11.5px] leading-relaxed text-jn-text-3">{page.note}</p>}
               {page.offset > 0 && (
-                <button type="button" onClick={loadEarlier} disabled={loadingMore} className="flex h-6 items-center justify-center gap-1 text-[11px] text-jolu-muted outline-none hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent">
-                  <ChevronsUp aria-hidden className="size-3" />
+                <button type="button" onClick={loadEarlier} disabled={loadingMore} className="jn-interactive flex h-7 items-center justify-center gap-1.5 self-center rounded-full bg-jn-well px-3 text-[11.5px] font-medium text-jn-text-2 outline-none hover:bg-jn-track hover:text-jn-text">
+                  <Icon name="chevronsUp" size="xs" />
                   {loadingMore ? "正在读取…" : `加载更早的 ${page.offset} 条消息`}
                 </button>
               )}
               {messages.map((m, index) => <MessageView key={index} message={m} platform={platform} name={name} />)}
-              {!messages.length && <span className="text-xs text-jolu-muted">源文件里没有可显示的消息</span>}
+              {!messages.length && <span className="text-xs text-jn-text-3">源文件里没有可显示的消息</span>}
             </div>
           )
         ) : (
@@ -174,26 +169,23 @@ export function SessionDetail({ session, connections, onDrillUsage, onContinue, 
         )}
       </div>
 
-      {/* 操作行：容器窄时整体折行，单行内按钮不参与收缩。
-          以前是 `flex h-[34px]` 且按钮没有 shrink-0 —— 窗口变窄时浏览器压缩按钮、
-          按钮内文字折成两行，而高度锁死 34px 就把文字挤出按钮（实测 930px 宽内容区）。
-          「在 <工具名> 中继续」的文案长度随工具名变化（Claude Code / OpenCode），
-          比其它按钮长，总是第一个被压坏。 */}
-      <div className="flex min-h-[34px] shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
-        <Eye aria-hidden className="size-[15px] shrink-0 text-jolu-muted" />
-        <span className="whitespace-nowrap text-[12px] text-jolu-muted">本机会话 · 只读</span>
+      <div className="flex min-h-9 shrink-0 flex-wrap items-center gap-x-2.5 gap-y-2 border-t border-jn-line pt-3">
+        <StatusPill tone={resumable ? "success" : "neutral"}>
+          {resumable ? "可在原工具继续" : !session.has_source ? "仅用量记录" : "仅本机只读"}
+        </StatusPill>
+        <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-jn-text-3">
+          <Icon name="eye" size="sm" />
+          本机会话 · 只读
+        </span>
         <span className="flex-1" />
-        {/* 按钮组可以收窄到所在栏宽：放不下时按钮换行（每个按钮自己不折字）。原先 shrink-0 让组按「三个一行」的宽度撑出详情栏（B5 桌面端 900 宽实测溢出 48px） */}
         <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
-          <button type="button" onClick={onCreateAutomation} className="inline-flex h-[34px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-jolu-selected px-3 text-xs font-medium text-jolu-on outline-none hover:bg-jolu-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent">
-            <Bot aria-hidden className="size-4 shrink-0" />
+          <Button kind="soft" size="sm" icon="bot" onClick={onCreateAutomation}>
             创建自动化
-          </button>
-          {/* 与「在原工具继续」同样按平台禁用；提示文案无画板，待确认 */}
+          </Button>
           {canCompress(session.platform)
             ? compressButton
             : <Tip label={`${name} 暂不支持压缩（需要 Claude Code / Codex 会话）`}><span className="flex shrink-0">{compressButton}</span></Tip>}
-          {canContinue(session.platform) && session.has_source
+          {resumable
             ? continueButton
             : <Tip label={!canContinue(session.platform) ? `${name} 暂无可靠的继续入口` : "没有可读的源文件，无法定位会话"}><span className="flex shrink-0">{continueButton}</span></Tip>}
         </div>
@@ -202,33 +194,25 @@ export function SessionDetail({ session, connections, onDrillUsage, onContinue, 
   )
 }
 
-function MenuItem({ icon, children, onSelect, disabled }: { icon: React.ReactNode; children: React.ReactNode; onSelect: () => void; disabled?: boolean }) {
+function MenuItem({ icon, children, onSelect, disabled }: { icon: IconName; children: ReactNode; onSelect: () => void; disabled?: boolean }) {
   return (
-    <Menu.Item disabled={disabled} onSelect={onSelect} className="flex h-8 cursor-default select-none items-center gap-2 rounded-md px-2 text-xs text-jolu-text outline-none data-[highlighted]:bg-jolu-selected data-[disabled]:opacity-40 [&_svg]:size-[15px] [&_svg]:text-jolu-muted data-[highlighted]:[&_svg]:text-jolu-on">
-      {icon}
+    <Menu.Item disabled={disabled} onSelect={onSelect} className="flex h-8 cursor-pointer select-none items-center gap-2 rounded-[10px] px-2.5 text-xs text-jn-text outline-none data-[highlighted]:bg-jn-primary-wash data-[highlighted]:text-jn-primary-ink data-[disabled]:opacity-40">
+      <Icon name={icon} size="sm" className="shrink-0 opacity-75" />
       {children}
     </Menu.Item>
   )
 }
 
-function Chip({ on, children }: { on?: boolean; children: React.ReactNode }) {
-  return <span className={cn("inline-flex h-[22px] max-w-full items-center truncate whitespace-nowrap rounded-[5px] px-2 text-[11px]", on ? "bg-jolu-selected text-jolu-on" : "bg-jolu-stage text-jolu-muted")}>{children}</span>
+function Chip({ children }: { children: ReactNode }) {
+  return <span className="inline-flex h-6 max-w-full items-center truncate whitespace-nowrap rounded-full bg-jn-well px-2.5 text-[11px] font-medium text-jn-text-2">{children}</span>
 }
 
-function SmallButton({ accent, onClick, children }: { accent?: boolean; onClick: () => void; children: React.ReactNode }) {
+function StateBox({ title, note, action, detail }: { title: string; note: string; action: ReactNode; detail?: string }) {
   return (
-    <button type="button" onClick={onClick} className={cn("inline-flex h-[34px] items-center gap-1.5 rounded-lg px-3 text-xs font-medium outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent", accent ? "bg-jolu-selected text-jolu-on hover:bg-jolu-pressed" : "bg-jolu-side text-jolu-text hover:bg-jolu-stage")}>
-      {children}
-    </button>
-  )
-}
-
-function StateBox({ title, note, action, detail }: { title: string; note: string; action: React.ReactNode; detail?: string }) {
-  return (
-    <div className="flex flex-col items-start gap-3 rounded-xl border border-jolu-border p-4">
-      <span className="text-base font-semibold text-jolu-text">{title}</span>
-      <span className="text-xs text-jolu-muted">{note}</span>
-      {detail && <span className="text-[12px] text-jolu-danger">{detail}</span>}
+    <div className="flex flex-col items-start gap-2.5 rounded-[16px] bg-jn-well p-4">
+      <span className="text-sm font-semibold text-jn-text">{title}</span>
+      <span className="text-xs text-jn-text-3">{note}</span>
+      {detail && <span className="text-xs text-jn-danger">{detail}</span>}
       {action}
     </div>
   )
@@ -243,10 +227,10 @@ function clock(ts: number | null): string {
 function MessageView({ message, platform, name }: { message: MessageDto; platform: PlatformId; name: string }) {
   if (message.role === "user") {
     return (
-      <div className="flex flex-col gap-2 rounded-[9px] bg-jolu-side p-3">
+      <div className="flex flex-col gap-2 rounded-[14px] bg-jn-well p-3.5">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-semibold text-jolu-text">你</span>
-          <span className="tnum text-[11px] text-jolu-muted">{clock(message.ts)}</span>
+          <span className="text-xs font-semibold text-jn-text">你</span>
+          <span className="tnum text-[11px] text-jn-text-3">{clock(message.ts)}</span>
         </div>
         <MessageMarkdown text={message.text} />
       </div>
@@ -254,17 +238,16 @@ function MessageView({ message, platform, name }: { message: MessageDto; platfor
   }
   return (
     <div className="flex flex-col gap-2.5 py-1">
-      <div className="flex items-center gap-[7px]">
+      <div className="flex items-center gap-2">
         <PlatformLogo platform={platform} size={17} />
-        <span className="text-xs font-semibold text-jolu-text">{name}</span>
-        {message.model && <span className="min-w-0 truncate text-[11px] text-jolu-muted" title={message.model}>{message.model}</span>}
-        <span className="tnum text-[11px] text-jolu-muted">{clock(message.ts)}</span>
+        <span className="text-xs font-semibold text-jn-text">{name}</span>
+        {message.model && <span className="min-w-0 truncate font-mono text-[11px] text-jn-text-3" title={message.model}>{message.model}</span>}
+        <span className="tnum text-[11px] text-jn-text-3">{clock(message.ts)}</span>
       </div>
-      {/* ZCode 这类库型来源保留推理片段；源文件来源没有，不占位 */}
       {message.reasoning && (
-        <details className="rounded-[7px] bg-jolu-side px-2.5 py-2">
-          <summary className="cursor-default text-[11px] text-jolu-muted">推理过程 · {message.reasoning.length} 字</summary>
-          <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] text-jolu-muted">{message.reasoning}</pre>
+        <details className="rounded-[12px] bg-jn-well px-3 py-2">
+          <summary className="cursor-pointer text-[11.5px] text-jn-text-3">推理过程 · {message.reasoning.length} 字</summary>
+          <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] text-jn-text-3">{message.reasoning}</pre>
         </details>
       )}
       {message.text && <MessageMarkdown text={message.text} />}
@@ -277,18 +260,17 @@ function ToolRow({ tool }: { tool: MessageDto["tools"][number] }) {
   const [open, setOpen] = useState(false)
   return (
     <div className="flex flex-col gap-1.5">
-      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="flex h-[34px] items-center gap-[7px] rounded-[7px] bg-jolu-side px-2.5 text-left outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent">
-        {open ? <ChevronDown aria-hidden className="size-3.5 text-jolu-muted" /> : <ChevronRight aria-hidden className="size-3.5 text-jolu-muted" />}
-        <FileCode aria-hidden className="size-3.5 text-jolu-muted" />
-        <span className="min-w-0 flex-1 truncate text-[12px] text-jolu-text">{tool.summary ? `${tool.name} · ${tool.summary}` : tool.name}</span>
-        <span className={cn("text-[11px]", tool.output ? "text-jolu-muted" : "text-jolu-muted/70")}>{tool.output ? "已完成" : "无输出记录"}</span>
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="jn-interactive flex h-[34px] items-center gap-2 rounded-[10px] bg-jn-well px-3 text-left outline-none hover:bg-jn-track/60">
+        <Icon name={open ? "expand" : "next"} size="xs" className="shrink-0 text-jn-text-3" />
+        <Icon name="file" size="sm" className="shrink-0 text-jn-text-3" />
+        <span className="min-w-0 flex-1 truncate text-xs text-jn-text">{tool.summary ? `${tool.name} · ${tool.summary}` : tool.name}</span>
+        <span className={cn("text-[11px]", tool.output ? "text-jn-text-3" : "text-jn-text-3/70")}>{tool.output ? "已完成" : "无输出记录"}</span>
       </button>
-      {open && (
-        <div className="rounded-[7px] bg-jolu-side p-2.5">
-          {/* 缺少工具输出时只显示调用摘要，不补写结果（画板 46） */}
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] text-jolu-muted">{tool.output ?? "来源没有记录这次调用的输出"}</pre>
+      <Collapse open={open}>
+        <div className="rounded-[10px] bg-jn-well p-3">
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] text-jn-text-3">{tool.output ?? "来源没有记录这次调用的输出"}</pre>
         </div>
-      )}
+      </Collapse>
     </div>
   )
 }
@@ -300,23 +282,19 @@ function InfoPanel({ session, page, accountText, onCopy, onDrillUsage }: {
   onCopy: (text: string, what: string) => void
   onDrillUsage: () => void
 }) {
-  const row = (label: string, value: React.ReactNode, copyText?: string, what?: string) => (
+  const row = (label: string, value: ReactNode, copyText?: string, what?: string) => (
     <div className="flex min-h-[30px] items-center gap-3">
-      <span className="w-[60px] shrink-0 text-[12px] text-jolu-muted">{label}</span>
-      <span className="min-w-0 flex-1 truncate text-[12px] text-jolu-text">{value}</span>
-      {copyText && (
-        <button type="button" aria-label={`复制${what}`} onClick={() => onCopy(copyText, what!)} className="grid size-[30px] place-items-center rounded-lg bg-jolu-side text-jolu-muted outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent">
-          <Copy aria-hidden className="size-4" />
-        </button>
-      )}
+      <span className="w-[60px] shrink-0 text-xs text-jn-text-3">{label}</span>
+      <span className="min-w-0 flex-1 truncate text-xs text-jn-text">{value}</span>
+      {copyText && <IconButton icon="copy" label={`复制${what}`} size="sm" kind="ghost" onClick={() => onCopy(copyText, what!)} />}
     </div>
   )
   const models = page?.models ?? []
   const split: [string, number | null][] = [["普通输入", session.fresh_input], ["输出", session.output], ["缓存读取", session.cache_read], ["缓存写入", session.cache_write]]
   return (
     <div className="flex flex-col gap-3.5">
-      <div className="flex flex-col gap-[9px] rounded-[9px] border border-jolu-border p-3">
-        {row("会话 ID", <span title={session.session_id}>{middleEllipsis(session.session_id)}</span>, session.session_id, "会话 ID")}
+      <div className="flex flex-col gap-2 rounded-[16px] bg-jn-well p-3.5">
+        {row("会话 ID", <span className="font-mono" title={session.session_id}>{middleEllipsis(session.session_id)}</span>, session.session_id, "会话 ID")}
         {row("项目目录", session.cwd ?? "未识别", session.cwd ?? undefined, "项目目录")}
         {row("数据来源", session.has_source || page?.available ? `本机 ${providerName(session.platform)} 记录` : `本机 ${providerName(session.platform)} 用量记录（无正文）`)}
         {row("模型", models.length ? (
@@ -324,23 +302,23 @@ function InfoPanel({ session, page, accountText, onCopy, onDrillUsage }: {
         ) : "—")}
         {row("账号归属", accountText)}
       </div>
-      <div className="flex gap-2.5">
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         {split.map(([label, value]) => (
-          <div key={label} className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-lg bg-jolu-side p-2.5">
-            <span className="text-[11px] text-jolu-muted">{label}</span>
-            <span className={cn("tnum text-[17px] font-semibold", value === null ? "text-jolu-muted" : "text-jolu-text")}>{formatTokens(value)}</span>
+          <div key={label} className="flex min-w-0 flex-col gap-1 rounded-[14px] bg-jn-well p-3">
+            <span className="text-[11px] text-jn-text-3">{label}</span>
+            <span className={cn("tnum font-mono text-[17px] font-bold", value === null ? "text-jn-text-3" : "text-jn-text")}>{formatTokens(value)}</span>
           </div>
         ))}
       </div>
       <div className="flex items-center gap-2.5">
-        <span className="text-[12px] text-jolu-muted">
+        <span className="text-xs text-jn-text-3">
           估算费用 {page && page.priced_requests ? formatUsd(page.cost) : "—"} · {session.requests} 次调用
           {page && page.priced_requests < page.requests ? `（${page.requests - page.priced_requests} 次未计价）` : ""}
         </span>
         <span className="flex-1" />
-        <SmallButton accent onClick={onDrillUsage}>查看用量明细<ChevronRight aria-hidden className="size-3.5" /></SmallButton>
+        <Button kind="soft" size="sm" icon="next" onClick={onDrillUsage}>查看用量明细</Button>
       </div>
-      <p className="text-[11px] text-jolu-muted">缺少模型价格或计量字段时显示 —；账号归属不使用当前登录账号推断。</p>
+      <p className="text-[11px] text-jn-text-3">缺少模型价格或计量字段时显示 —；账号归属不使用当前登录账号推断。</p>
     </div>
   )
 }

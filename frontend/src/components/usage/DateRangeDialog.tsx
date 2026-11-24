@@ -1,27 +1,25 @@
-import { useDialogClose } from "@/hooks/useDialogClose"
-import * as Dialog from "@radix-ui/react-dialog"
+/**
+ * 选择日期范围弹窗 —— 设计稿 `docs/ui/jolu-new.pen` R1-28。
+ *
+ * 双月日历点选开始与结束，确认后才生效；取消保持原筛选。
+ * 允许同一天；缺日期或开始晚于结束时确认不可用；今天之后的日期不可选。
+ */
 import { useState } from "react"
-import { CalendarDays, ChevronLeft, ChevronRight, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { RANGE_PRESETS, canConfirmRange, dateKey, monthGrid, parseDateKey, pickDate, rangeDays, rangeLabel, zoneName, localZone, type DateRange } from "@/lib/usageStats"
+import { Icon } from "@/icons"
+import { Button, Dialog, IconButton } from "@/ui"
 
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"]
 
-/**
- * 选择日期范围（画板 36）：双月日历点选开始与结束，确认后才生效；取消保持原筛选。
- * 允许同一天；缺日期或开始晚于结束时确认不可用；今天之后的日期不可选（画板 38）。
- */
-export function DateRangeDialog({ value, currentLabel, onConfirm, onClose: onDismiss }: {
+export function DateRangeDialog({ value, currentLabel, onConfirm, onClose }: {
   value: DateRange
-  /** 「当前筛选」的文案；导出弹窗未选日期时传「全部日期」，不传则按 value 显示 */
   currentLabel?: string
   onConfirm: (range: DateRange) => void
   onClose: () => void
 }) {
-  const { open: dialogOpen, close: onClose, finish } = useDialogClose(onDismiss)
   const today = dateKey(new Date())
   const [draft, setDraft] = useState<{ start: string | null; end: string | null }>({ start: value.start, end: value.end })
-  // 右侧显示结束日所在月份，左侧是前一个月
   const [anchor, setAnchor] = useState(() => {
     const end = parseDateKey(value.end)
     return { year: end.getFullYear(), month: end.getMonth() }
@@ -37,80 +35,87 @@ export function DateRangeDialog({ value, currentLabel, onConfirm, onClose: onDis
   const editing = draft.start === null ? "start" : "end"
 
   return (
-    <Dialog.Root open={dialogOpen} onOpenChange={(open) => !open && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="motion-overlay fixed inset-x-0 bottom-0 top-[30px] z-50 bg-black/40" />
-        <Dialog.Content
-          aria-describedby={undefined}
-          className="motion-dialog fixed left-1/2 top-[calc(50%+15px)] z-50 flex max-h-[calc(100dvh-70px)] w-[620px] max-w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col gap-[18px] overflow-y-auto rounded-2xl border border-jolu-border bg-jolu-cc-surface p-6 shadow-dialog outline-none"
-        >
-          <div className="flex items-center justify-between">
-            <Dialog.Title className="text-lg font-semibold text-jolu-text">选择日期范围</Dialog.Title>
-            <Dialog.Close asChild>
-              <button type="button" className="inline-flex h-[34px] items-center gap-1.5 rounded-lg border border-jolu-border px-3 text-xs font-medium text-jolu-text outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent">
-                <X aria-hidden className="size-4 text-jolu-muted" />
-                关闭
-              </button>
-            </Dialog.Close>
-          </div>
-          <p className="text-xs text-jolu-muted">当前筛选：{currentLabel ?? rangeLabel(value)} · 以下日期为待确认范围</p>
-          <div className="flex flex-wrap gap-1.5">
-            {RANGE_PRESETS.map((preset) => {
-              const range = preset.range(new Date())
-              const active = draft.start === range.start && draft.end === range.end
-              return (
-                <button
-                  key={preset.key}
-                  type="button"
-                  onClick={() => setDraft({ start: range.start, end: range.end })}
-                  className={cn(
-                    "h-7 rounded-md border px-2.5 text-[12px]",
-                    active
-                      ? "border-jolu-accent bg-jolu-selected text-jolu-on"
-                      : "border-jolu-border text-jolu-muted hover:bg-jolu-stage",
-                  )}
-                >
-                  {preset.label}
-                </button>
-              )
-            })}
-          </div>
-          <div className="flex gap-4">
-            <DateBox label="开始日期" value={draft.start} active={editing === "start"} />
-            <DateBox label="结束日期" value={draft.end} active={editing === "end"} />
-          </div>
-          <div className="flex gap-6">
-            <Month year={left.year} month={left.month} draft={draft} today={today} onPrev={() => shift(-1)} onPick={(key) => setDraft((d) => pickDate(d, key))} />
-            <Month year={anchor.year} month={anchor.month} draft={draft} today={today} onNext={atLatest ? undefined : () => shift(1)} onPick={(key) => setDraft((d) => pickDate(d, key))} />
-          </div>
-          <p className="text-[12px] text-jolu-muted">按{zoneName(localZone())}时区统计，包含开始与结束当天；今天统计至当前时刻。</p>
-          <div className="flex h-9 items-center justify-between">
-            <span className="text-xs text-jolu-muted">{valid ? `已选择 ${rangeDays({ start: draft.start!, end: draft.end! })} 天` : "请选择结束日期"}</span>
-            <div className="flex gap-2">
-              <button type="button" onClick={onClose} className="inline-flex h-[34px] items-center rounded-lg border border-jolu-border px-3 text-xs font-medium text-jolu-text outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent">取消</button>
-              <button
-                type="button"
-                disabled={!valid}
-                onClick={() => valid && finish(() => onConfirm({ start: draft.start!, end: draft.end! }))}
-                className="inline-flex h-[34px] items-center rounded-lg bg-jolu-accent px-3 text-xs font-medium text-[#071B10] outline-none hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-45"
-              >
-                确认
-              </button>
-            </div>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <Dialog
+      open
+      onOpenChange={(open) => { if (!open) onClose() }}
+      width="lg"
+      title="选择日期范围"
+      description={`当前筛选：${currentLabel ?? rangeLabel(value)}。以下日期为待确认范围，确认后才生效。`}
+      actions={
+        <>
+          <Button kind="ghost" size="md" onClick={onClose}>取消</Button>
+          <Button
+            kind="primary"
+            size="md"
+            icon="check"
+            disabled={!valid}
+            onClick={() => valid && onConfirm({ start: draft.start!, end: draft.end! })}
+          >
+            确认
+          </Button>
+        </>
+      }
+    >
+      {/* 快捷预设胶囊 */}
+      <div className="flex flex-wrap gap-1.5">
+        {RANGE_PRESETS.map((preset) => {
+          const range = preset.range(new Date())
+          const active = draft.start === range.start && draft.end === range.end
+          return (
+            <button
+              key={preset.key}
+              type="button"
+              onClick={() => setDraft({ start: range.start, end: range.end })}
+              className={cn(
+                "jn-interactive h-7 rounded-full px-3 text-xs font-medium",
+                active
+                  ? "bg-jn-primary text-jn-on-primary"
+                  : "bg-jn-well text-jn-text-2 hover:bg-jn-track hover:text-jn-text",
+              )}
+            >
+              {preset.label}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* 起止日期框 */}
+      <div className="flex items-end gap-3">
+        <DateBox label="开始日期" value={draft.start} active={editing === "start"} />
+        <span aria-hidden className="pb-2.5 text-sm text-jn-text-3">→</span>
+        <DateBox label="结束日期" value={draft.end} active={editing === "end"} />
+      </div>
+
+      {/* 双月日历 */}
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+        <Month year={left.year} month={left.month} draft={draft} today={today} onPrev={() => shift(-1)} onPick={(key) => setDraft((d) => pickDate(d, key))} />
+        <Month year={anchor.year} month={anchor.month} draft={draft} today={today} onNext={atLatest ? undefined : () => shift(1)} onPick={(key) => setDraft((d) => pickDate(d, key))} />
+      </div>
+
+      {/* 底部汇总条（R1-28） */}
+      <div className="flex flex-wrap items-center gap-2 rounded-[14px] bg-jn-well px-3.5 py-2.5 text-xs">
+        <Icon name="calendar" size="sm" className="shrink-0 text-jn-primary" />
+        <span className="font-semibold text-jn-text">
+          {valid ? `已选择 ${rangeDays({ start: draft.start!, end: draft.end! })} 天` : "请选择结束日期"}
+        </span>
+        <span className="min-w-0 flex-1" />
+        <span className="text-[11.5px] text-jn-text-3">
+          按{zoneName(localZone())}时区统计，包含开始与结束当天；今天统计至当前时刻。
+        </span>
+      </div>
+    </Dialog>
   )
 }
 
 function DateBox({ label, value, active }: { label: string; value: string | null; active: boolean }) {
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-2">
-      <span className="text-xs text-jolu-muted">{label}</span>
-      <div className={cn("flex h-10 items-center gap-2 rounded-lg border px-3", active ? "border-jolu-accent" : "border-jolu-border")}>
-        <CalendarDays aria-hidden className="size-4 text-jolu-muted" />
-        <span className={cn("tnum text-[13px]", value ? "text-jolu-text" : "text-jolu-muted")}>{value ? value.replaceAll("-", "/") : "请选择"}</span>
+    <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+      <span className="text-xs font-semibold text-jn-text">{label}</span>
+      <div className={cn("flex h-10 items-center gap-2 rounded-[14px] border-[1.5px] px-3.5", active ? "border-jn-primary bg-jn-surface" : "border-transparent bg-jn-well")}>
+        <Icon name="calendar" size="sm" className="text-jn-text-3" />
+        <span className={cn("tnum font-mono text-[13px]", value ? "text-jn-text" : "text-jn-text-3")}>
+          {value ?? "请选择"}
+        </span>
       </div>
     </div>
   )
@@ -125,41 +130,41 @@ function Month({ year, month, draft, today, onPrev, onNext, onPick }: {
   onNext?: () => void
   onPick: (key: string) => void
 }) {
-  const nav = (label: string, onClick: (() => void) | undefined, icon: React.ReactNode) => (
-    <button type="button" aria-label={label} disabled={!onClick} onClick={onClick}
-      className={cn("grid size-6 place-items-center rounded-md text-jolu-muted outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:invisible")}>
-      {icon}
-    </button>
-  )
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-2">
-      <div className="flex h-7 items-center justify-between">
-        {nav("上一月", onPrev, <ChevronLeft aria-hidden className="size-4" />)}
-        <span className="text-[13px] font-semibold text-jolu-text">{year} 年 {month + 1} 月</span>
-        {nav("下一月", onNext, <ChevronRight aria-hidden className="size-4" />)}
+    <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+      <div className="flex h-8 items-center justify-between">
+        {onPrev ? <IconButton icon="prev" label="上一月" size="sm" kind="ghost" onClick={onPrev} /> : <span className="size-8" />}
+        <span className="text-[13px] font-semibold text-jn-text">{year} 年 {month + 1} 月</span>
+        {onNext ? <IconButton icon="next" label="下一月" size="sm" kind="ghost" onClick={onNext} /> : <span className="size-8" />}
       </div>
-      <div className="grid grid-cols-7 gap-[3px]">
-        {WEEKDAYS.map((d) => <span key={d} className="grid h-[22px] place-items-center text-[11px] text-jolu-muted">{d}</span>)}
+      <div className="grid grid-cols-7 gap-y-0.5">
+        {WEEKDAYS.map((d) => <span key={d} className="grid h-6 place-items-center text-[11px] font-medium text-jn-text-3">{d}</span>)}
         {monthGrid(year, month).flat().map((key, index) => {
-          if (!key) return <span key={`empty-${index}`} className="h-[29px]" />
+          if (!key) return <span key={`empty-${index}`} className="h-8" />
           const edge = key === draft.start || key === draft.end
           const inside = !!draft.start && !!draft.end && key > draft.start && key < draft.end
+          const isToday = key === today
           const future = key > today
           return (
-            <button
-              key={key}
-              type="button"
-              disabled={future}
-              aria-pressed={edge || inside}
-              aria-label={key}
-              onClick={() => onPick(key)}
-              className={cn(
-                "tnum h-[29px] rounded-md text-xs outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-35",
-                edge ? "bg-jolu-accent font-semibold text-[#071B10]" : inside ? "bg-jolu-selected text-jolu-on" : "text-jolu-text hover:bg-jolu-stage",
-              )}
-            >
-              {Number(key.slice(8))}
-            </button>
+            <div key={key} className={cn("flex h-8 items-center justify-center", inside && "bg-jn-primary-wash")}>
+              <button
+                type="button"
+                disabled={future}
+                aria-pressed={edge || inside}
+                aria-label={key}
+                onClick={() => onPick(key)}
+                className={cn(
+                  "jn-interactive tnum grid size-[30px] place-items-center rounded-full text-xs font-medium disabled:pointer-events-none disabled:opacity-40",
+                  edge
+                    ? "bg-jn-primary font-bold text-jn-on-primary"
+                    : isToday
+                      ? "border border-jn-primary text-jn-primary-ink"
+                      : "text-jn-text hover:bg-jn-well",
+                )}
+              >
+                {Number(key.slice(8))}
+              </button>
+            </div>
           )
         })}
       </div>

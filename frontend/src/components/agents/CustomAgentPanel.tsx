@@ -1,20 +1,18 @@
-import { useState } from "react"
-import { FilePlus2, Plug, ShieldCheck, Trash2, TriangleAlert, Undo2 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { useState, type ChangeEvent } from "react"
 import type { CustomAgentDto, CustomAgentInputDto, WiringPreviewDto } from "@/lib/gatewayApi"
 import { CUSTOM_AGENT_PRESETS, CUSTOM_EXAMPLES, type CustomAgentPreset } from "@/lib/agentPage"
-import { Button, Modal } from "@/components/gateway/GatewayDialogs"
-import { SelectField } from "@/components/ui/SelectField"
-import { AgentBadge, Switch } from "./AgentList"
+import { Icon } from "@/icons"
+import { Button, Dialog, FormField, Input, Select, StatusPill, Switch, Tabs } from "@/ui"
+import { AgentBadge } from "./AgentBadge"
 import { DiffView } from "./DiffView"
 
-
 /**
- * 通用接入的自定义工具详情（P1-1，无画板，待确认；外壳对齐 V6 详情态，内容沿用 V5 版式）。
+ * 通用接入的自定义工具详情（P1-1，画板未画，标「待确认」；外壳对齐 R1-09 的工具头）。
+ *
  * 只写三个键：地址、令牌、模型（可选）；断开时只还原仍是 Jolu 写下的值的键。
+ * 详情从抽屉改成整页（与内置工具一致），返回按钮与列表状态都由 `AgentsView` 持有。
  */
-export function CustomAgentPanel({ drawer = false, agent, models, routing, preview, previewError, busy, model, onModel, onBack, onWire, onUnwire, onRemove }: {
-  drawer?: boolean
+export function CustomAgentPanel({ agent, models, routing, preview, previewError, busy, model, onModel, onBack, onWire, onUnwire, onRemove }: {
   agent: CustomAgentDto
   models: string[]
   routing: boolean
@@ -36,97 +34,97 @@ export function CustomAgentPanel({ drawer = false, agent, models, routing, previ
     ...(agent.model_key ? [{ label: "模型", key: agent.model_key, value: "你在下面选的模型" }] : []),
   ]
   return (
-    <div className={cn("flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto pb-8 pt-6 [&>*]:shrink-0", drawer ? "agent-detail-drawer-content px-7" : "px-8")}>
-      <div className="flex items-center gap-2">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3.5 overflow-y-auto px-0.5 pb-2 pt-0.5 [&>*]:shrink-0">
+      <div className="flex items-center gap-3.5">
         <button type="button" onClick={onBack}
-          className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-meta text-jolu-muted outline-none hover:bg-jolu-side hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent">
-          <svg aria-hidden viewBox="0 0 14 14" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <path d="M9 3L5 7L9 11" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          className="jn-interactive inline-flex h-8 shrink-0 items-center gap-1 rounded-full bg-jn-surface pr-3 pl-2 text-[12.5px] font-medium text-jn-text-2 shadow-jn-surface">
+          <Icon name="prev" size="sm" />
           全部工具
         </button>
-      </div>
-      <div className="flex items-center gap-4">
         <AgentBadge agent={agent.id} name={agent.name} size={40} />
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-[17px] font-semibold text-jolu-text">{agent.name}</span>
-            <span className="rounded-full bg-jolu-track px-2 py-0.5 text-note font-semibold text-jolu-muted">{managed ? "自定义 · 已接入" : "自定义 · 未接入"}</span>
-          </div>
-          <span className="truncate text-meta text-jolu-muted">{agent.format.toUpperCase()} · {agent.config_path}</span>
+        <div className="flex min-w-0 max-w-[420px] flex-none flex-col gap-0.5">
+          <span className="truncate text-[20px] leading-7 font-bold text-jn-text">{agent.name}</span>
+          <span className="truncate text-[12px] text-jn-text-3">{agent.format.toUpperCase()} · {agent.config_path}</span>
         </div>
-        {agent.wired && <Switch on disabled={busy} label={`断开 ${agent.name}`} onClick={onUnwire} />}
+        <StatusPill tone={managed ? "success" : "neutral"}>{managed ? "已接入" : "未接入"}</StatusPill>
+        <span className="min-w-0 flex-1" />
+        {agent.wired && <Switch checked disabled={busy} label={`断开 ${agent.name}`} onChange={() => onUnwire()} />}
       </div>
 
       {agent.drift && (
-        <div className="flex items-center gap-2.5 rounded-[10px] bg-jolu-status-error-bg px-3.5 py-2.5">
-          <TriangleAlert aria-hidden className="size-3.5 shrink-0 text-jolu-danger" />
-          <span className="min-w-0 flex-1 text-meta text-jolu-text">{agent.drift === "removed" ? "配置文件被删除了" : "配置里的地址已被改成别的值"}，这个工具的请求不再经过模型路由。</span>
-          <button type="button" disabled={busy} onClick={onWire} className="h-7 shrink-0 rounded-md border border-jolu-border bg-jolu-bg px-2.5 text-meta text-jolu-text disabled:opacity-45">重新接入</button>
-          <button type="button" disabled={busy} onClick={onUnwire} className="h-7 shrink-0 rounded-md border border-jolu-border bg-jolu-bg px-2.5 text-meta text-jolu-text disabled:opacity-45">放弃管理</button>
+        <div className="flex items-center gap-2.5 rounded-[16px] bg-jn-danger-soft px-3.5 py-[11px]">
+          <Icon name="warning" size="sm" className="shrink-0 text-jn-danger" />
+          <span className="min-w-0 flex-1 text-[12.5px] font-medium text-jn-text">
+            {agent.drift === "removed" ? "配置文件被删除了" : "配置里的地址已被改成别的值"}，这个工具的请求不再经过模型路由。
+          </span>
+          <Button kind="ghost" size="sm" disabled={busy} onClick={onWire}>重新接入</Button>
+          <Button kind="ghost" size="sm" disabled={busy} onClick={onUnwire}>放弃管理</Button>
         </div>
       )}
 
       {!managed && (
-        <div className="flex flex-col gap-2.5 rounded-xl border border-jolu-border p-4">
-          <span className="text-[13px] font-semibold text-jolu-text">接入 {agent.name}</span>
+        <section className="flex flex-col gap-2.5 rounded-jn-card border border-jn-line bg-jn-surface p-4 shadow-jn-surface">
+          <span className="text-[15px] font-semibold text-jn-text">接入 {agent.name}</span>
           <div className="flex flex-wrap items-center gap-2.5">
             {agent.model_key && (
-              <SelectField label="写入的模型" value={model} disabled={busy} onValueChange={onModel}
-                placeholder="不写模型（保留工具自己的）" className="w-[260px] rounded-[10px] px-3 text-meta"
-                options={models.map((entry) => ({ value: entry, label: entry }))} />
+              <div className="w-[260px]">
+                <Select width="full" label="写入的模型" value={model || null} disabled={busy} onChange={onModel}
+                  placeholder="不写模型（保留工具自己的）"
+                  options={models.map((entry) => ({ value: entry, label: entry }))} />
+              </div>
             )}
-            <button type="button" disabled={busy || !agent.installed} onClick={onWire}
-              className="flex h-8 items-center gap-1.5 rounded-lg bg-jolu-accent px-3.5 text-meta font-semibold text-[#071B10] outline-none disabled:opacity-45">
-              <Plug aria-hidden className="size-3.5" />
-              接入 {agent.name}
-            </button>
+            <Button kind="primary" icon="connect" disabled={busy || !agent.installed} onClick={onWire}>接入 {agent.name}</Button>
           </div>
-          {!routing && <span className="text-meta text-jolu-muted">模型路由现在没开，点「接入」会先开启模型路由，再写入配置。</span>}
-        </div>
+          {!routing && <span className="text-[12px] text-jn-text-3">模型路由现在没开，点「接入」会先开启模型路由，再写入配置。</span>}
+        </section>
       )}
 
       <div className="flex flex-col gap-2.5">
-        <span className="text-[13px] font-semibold text-jolu-text">{managed ? "Jolu 写了这些键" : "接入会做什么"}</span>
+        <span className="text-[13px] font-semibold text-jn-text">{managed ? "Jolu 写了这些键" : "接入会做什么"}</span>
         {keys.map((item) => (
           <div key={item.key} className="flex items-center gap-2.5">
-            <span className="flex size-[26px] shrink-0 items-center justify-center rounded-[7px] bg-jolu-selected"><FilePlus2 aria-hidden className="size-3.5 text-jolu-on" /></span>
-            <span className="text-meta text-jolu-text"><code className="font-mono">{item.key}</code> ← {item.value}</span>
+            <span className="flex size-[26px] shrink-0 items-center justify-center rounded-[7px] bg-jn-primary-soft">
+              <Icon name="file" size="sm" className="text-jn-primary-ink" />
+            </span>
+            <span className="text-[12px] text-jn-text"><code className="font-mono">{item.key}</code> ← {item.value}</span>
           </div>
         ))}
         <div className="flex items-center gap-2.5">
-          <span className="flex size-[26px] shrink-0 items-center justify-center rounded-[7px] bg-jolu-selected"><ShieldCheck aria-hidden className="size-3.5 text-jolu-on" /></span>
-          <span className="text-meta text-jolu-text">这三个键的原值先存快照；文件里的其它内容不动，写前备份到应用数据目录</span>
+          <span className="flex size-[26px] shrink-0 items-center justify-center rounded-[7px] bg-jn-primary-soft">
+            <Icon name="shield" size="sm" className="text-jn-primary-ink" />
+          </span>
+          <span className="text-[12px] text-jn-text">这三个键的原值先存快照；文件里的其它内容不动，写前备份到应用数据目录</span>
         </div>
         <div className="flex items-center gap-2.5">
-          <span className="flex size-[26px] shrink-0 items-center justify-center rounded-[7px] bg-jolu-selected"><Undo2 aria-hidden className="size-3.5 text-jolu-on" /></span>
-          <span className="text-meta text-jolu-text">断开时只还原仍是 Jolu 写下的值的键；接入后你自己改过的不会被还原</span>
+          <span className="flex size-[26px] shrink-0 items-center justify-center rounded-[7px] bg-jn-primary-soft">
+            <Icon name="undo" size="sm" className="text-jn-primary-ink" />
+          </span>
+          <span className="text-[12px] text-jn-text">断开时只还原仍是 Jolu 写下的值的键；接入后你自己改过的不会被还原</span>
         </div>
       </div>
 
-      {previewError && <p className="text-meta text-jolu-danger">预览读取失败：{previewError}</p>}
+      {previewError && <p className="text-[12px] text-jn-danger">预览读取失败：{previewError}</p>}
       {files.map((file) => <DiffView key={file.path} file={file} caption={preview?.mode === "wired" ? "断开时还原成左侧（-）的样子" : file.existed ? "写入预览 · 还没有改动" : "写入预览 · 会新建这个文件"} />)}
 
       <div className="flex items-center gap-2">
-        <span className="text-meta text-jolu-muted">通用接入</span>
-        <span className="flex-1" />
+        <span className="text-[12px] text-jn-text-3">通用接入</span>
+        <span className="min-w-0 flex-1" />
         {managed ? (
-          <button type="button" disabled={busy} onClick={onUnwire}
-            className="flex h-8 items-center gap-1.5 rounded-lg border border-jolu-border px-3 text-meta text-jolu-danger outline-none hover:bg-jolu-side disabled:opacity-45">
-            <Undo2 aria-hidden className="size-3.5" />断开并还原
-          </button>
+          <Button kind="danger" icon="undo" disabled={busy} onClick={onUnwire}>断开并还原</Button>
         ) : (
-          <button type="button" disabled={busy} onClick={onRemove}
-            className="flex h-8 items-center gap-1.5 rounded-lg border border-jolu-border px-3 text-meta text-jolu-danger outline-none hover:bg-jolu-side disabled:opacity-45">
-            <Trash2 aria-hidden className="size-3.5" />删除这个工具
-          </button>
+          <Button kind="danger" icon="delete" disabled={busy} onClick={onRemove}>删除这个工具</Button>
         )}
       </div>
     </div>
   )
 }
 
-/** 添加自定义工具的表单（P1-1，待确认：没有画板） */
+/**
+ * 添加自定义工具的表单（P1-1，画板未画，标「待确认」）。
+ *
+ * 用 R1-C 的 `Dialog` + `FormField` + `Input`：旧 `Modal` 与 `Button` 来自模型路由的
+ * 旧弹窗外壳，令牌是 `jolu-*` 的，新页面不再依赖它们。
+ */
 export function CustomAgentDialog({ busy, onClose, onSave }: { busy: boolean; onClose: () => void; onSave: (input: CustomAgentInputDto) => Promise<boolean> }) {
   const [format, setFormat] = useState<"json" | "toml" | "env">("json")
   const [form, setForm] = useState({ name: "", config_path: "", base_url_key: "", auth_key: "", model_key: "", base_suffix: "/v1" })
@@ -146,59 +144,52 @@ export function CustomAgentDialog({ busy, onClose, onSave }: { busy: boolean; on
       base_suffix: next.suffix,
     })
   }
-  const set = (key: keyof typeof form) => (event: React.ChangeEvent<HTMLInputElement>) => setForm((current) => ({ ...current, [key]: event.target.value }))
-  const ready = form.name.trim() && form.config_path.trim() && form.base_url_key.trim() && form.auth_key.trim()
-  const field = (key: keyof typeof form, label: string, placeholder: string, note?: string) => (
-    <label className="flex flex-col gap-1.5">
-      <span className="text-meta font-medium text-jolu-text">{label}</span>
-      <input value={form[key]} onChange={set(key)} placeholder={placeholder} spellCheck={false} autoComplete="off"
-        className="h-9 rounded-lg border border-jolu-border bg-jolu-bg px-3 font-mono text-meta text-jolu-text outline-none focus:border-jolu-accent" />
-      {note && <span className="text-note text-jolu-muted">{note}</span>}
-    </label>
+  const set = (key: keyof typeof form) => (event: ChangeEvent<HTMLInputElement>) => setForm((current) => ({ ...current, [key]: event.target.value }))
+  const ready = Boolean(form.name.trim() && form.config_path.trim() && form.base_url_key.trim() && form.auth_key.trim())
+  const field = (key: keyof typeof form, label: string, placeholder: string, hint?: string) => (
+    <FormField label={label} required={key === "name" || key === "config_path" || key === "base_url_key" || key === "auth_key"} hint={hint}>
+      <Input spellCheck={false} autoComplete="off" aria-label={label} value={form[key]} onChange={set(key)} placeholder={placeholder} className="font-mono" />
+    </FormField>
   )
   return (
-    <Modal title="添加自定义工具" busy={busy} onClose={onClose} width={560}
-      footer={<>
-        <Button label="取消" disabled={busy} onClick={onClose} />
-        <Button label="添加" primary disabled={busy || !ready} onClick={() => void onSave({
-          name: form.name.trim(), config_path: form.config_path.trim(), format,
-          base_url_key: form.base_url_key.trim(), auth_key: form.auth_key.trim(),
-          model_key: form.model_key.trim() || null, base_suffix: form.base_suffix.trim() || null,
-        }).then((ok) => { if (ok) onClose() })} />
-      </>}>
-      <label className="flex flex-col gap-1.5">
-        <span className="text-meta font-medium text-jolu-text">从已支持的工具开始</span>
-        <SelectField label="从已支持的工具开始" value={preset?.id ?? ""}
-          onValueChange={(value) => applyPreset(CUSTOM_AGENT_PRESETS.find((item) => item.id === value) ?? null)}
-          placeholder="自己填（不套用预设）" className="h-9 w-full rounded-[10px] px-3 text-meta"
-          options={[
-            { value: "", label: "自己填（不套用预设）" },
-            ...CUSTOM_AGENT_PRESETS.map((item) => ({ value: item.id, label: item.name + (item.verified ? "" : " · 键名待核对"), description: item.configPath })),
-          ]} />
-        {preset && !preset.verified && (
-          <span className="flex items-start gap-1.5 text-note text-[#9A5B00]">
-            <TriangleAlert aria-hidden className="mt-px size-3 shrink-0" />
-            这个工具的键名是按常见格式推测的，接入前请对照它的官方文档核对；键名不对会写坏配置（Jolu 会先备份）。
-          </span>
-        )}
-      </label>
-      {field("name", "名称 *", "例如 Crush")}
-      <div className="flex flex-col gap-1.5">
-        <span className="text-meta font-medium text-jolu-text">配置文件格式 *</span>
-        <div className="flex items-center gap-0.5 self-start rounded-lg bg-jolu-track p-0.5" role="group" aria-label="配置文件格式">
-          {(["json", "toml", "env"] as const).map((value) => (
-            <button key={value} type="button" aria-pressed={format === value} onClick={() => setFormat(value)}
-              className={cn("h-7 rounded-md px-3 text-meta outline-none", format === value ? "bg-jolu-bg font-medium text-jolu-text shadow-sm" : "text-jolu-muted")}>
-              {value === "env" ? "env" : value.toUpperCase()}
-            </button>
-          ))}
-        </div>
-      </div>
-      {field("config_path", "配置文件路径 *", example.path, "绝对路径，或以 ~ 开头")}
-      {field("base_url_key", "地址键 *", example.base, format === "env" ? "变量名" : "用点分隔的路径；中间缺的层级会自动建")}
-      {field("auth_key", "令牌键 *", example.auth)}
+    <Dialog
+      open
+      onOpenChange={(open) => { if (!open && !busy) onClose() }}
+      title="添加自定义工具"
+      width="md"
+      actions={
+        <>
+          <Button kind="ghost" disabled={busy} onClick={onClose}>取消</Button>
+          <Button kind="primary" loading={busy} disabled={busy || !ready} onClick={() => void onSave({
+            name: form.name.trim(), config_path: form.config_path.trim(), format,
+            base_url_key: form.base_url_key.trim(), auth_key: form.auth_key.trim(),
+            model_key: form.model_key.trim() || null, base_suffix: form.base_suffix.trim() || null,
+          }).then((ok) => { if (ok) onClose() })}>添加</Button>
+        </>
+      }
+    >
+      <FormField label="从已支持的工具开始">
+        <Select width="full" label="从已支持的工具开始" value={preset?.id ?? ""}
+          onChange={(value) => applyPreset(CUSTOM_AGENT_PRESETS.find((item) => item.id === value) ?? null)}
+          placeholder="自己填（不套用预设）"
+          options={[{ value: "", label: "自己填（不套用预设）" }, ...CUSTOM_AGENT_PRESETS.map((item) => ({ value: item.id, label: item.name + (item.verified ? "" : " · 键名待核对"), hint: item.configPath }))]} />
+      </FormField>
+      {preset && !preset.verified && (
+        <span className="flex items-start gap-1.5 text-[11px] text-jn-warning">
+          <Icon name="warning" size="xs" className="mt-px shrink-0" />
+          这个工具的键名是按常见格式推测的，接入前请对照它的官方文档核对；键名不对会写坏配置（Jolu 会先备份）。
+        </span>
+      )}
+      {field("name", "名称", "例如 Crush")}
+      <FormField label="配置文件格式" required>
+        <Tabs style="segment" value={format} onChange={setFormat}
+          items={[{ key: "json", label: "JSON" }, { key: "toml", label: "TOML" }, { key: "env", label: "env" }]} />
+      </FormField>
+      {field("config_path", "配置文件路径", example.path, "绝对路径，或以 ~ 开头")}
+      {field("base_url_key", "地址键", example.base, format === "env" ? "变量名" : "用点分隔的路径；中间缺的层级会自动建")}
+      {field("auth_key", "令牌键", example.auth)}
       {field("model_key", "模型键", example.model, "可不填：不填就不改工具自己的模型")}
       {field("base_suffix", "地址后缀", example.suffix, "OpenAI 兼容的工具通常要 /v1；Anthropic 兼容的留空")}
-    </Modal>
+    </Dialog>
   )
 }

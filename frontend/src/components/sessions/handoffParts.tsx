@@ -1,18 +1,46 @@
+/**
+ * 会话压缩 / 修订 / 交接预览共用弹窗壳（R1-43 / R1-44 / R1-45）。
+ * 统一走 `@/ui` `Dialog`（圆角 28、Motion 进出场、顶底固定内容滚动）。
+ */
+import type { ReactNode } from "react"
 import { cn } from "@/lib/utils"
-import * as Dialog from '@radix-ui/react-dialog'
-import type { ReactNode } from 'react'
-import { X } from 'lucide-react'
-export const handoffButton = 'inline-flex shrink-0 whitespace-nowrap h-[34px] items-center justify-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-xs font-medium text-jolu-text hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45 disabled:cursor-not-allowed'
-export const handoffPrimary = cn(handoffButton, 'border-transparent bg-jolu-accent text-[#071B10] hover:bg-jolu-accent hover:brightness-95')
-export const handoffInput = 'w-full rounded-lg border border-jolu-border bg-jolu-bg px-3 py-2 text-xs text-jolu-text outline-none focus:border-jolu-accent disabled:opacity-45'
-export function HandoffShell({ title, children, onClose, chat = false }: {title:string; children:ReactNode; onClose:()=>void; chat?:boolean}) {
-  return <Dialog.Root open onOpenChange={open => !open && onClose()}><Dialog.Portal>
-    <Dialog.Overlay className="motion-overlay fixed inset-x-0 bottom-0 top-[30px] z-50 bg-black/40" />
-    <Dialog.Content aria-describedby={undefined} className="motion-dialog fixed left-1/2 top-[calc(50%+15px)] z-50 flex max-h-[calc(100dvh-70px)] max-w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-2xl border border-jolu-border bg-jolu-cc-surface p-6 shadow-dialog outline-none" style={{width:chat?780:740,height:chat?840:undefined}}>
-      <div className="flex items-center gap-3"><Dialog.Title className="min-w-0 flex-1 truncate text-[19px] font-semibold text-jolu-text">{title}</Dialog.Title><button aria-label="关闭" onClick={onClose} className={handoffButton}><X className="size-4" /></button></div>{children}
-    </Dialog.Content>
-  </Dialog.Portal></Dialog.Root>
+import { Banner, Dialog } from "@/ui"
+
+export const handoffButton =
+  "jn-interactive inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full bg-jn-well px-3.5 text-xs font-semibold whitespace-nowrap text-jn-text hover:bg-jn-track disabled:pointer-events-none disabled:opacity-45"
+
+export const handoffPrimary = cn(
+  handoffButton,
+  "bg-jn-primary text-jn-on-primary hover:bg-jn-primary-hover",
+)
+
+export const handoffInput =
+  "w-full rounded-[14px] border-[1.5px] border-transparent bg-jn-well px-3.5 py-2 text-xs text-jn-text outline-none focus:border-jn-primary focus:bg-jn-surface disabled:opacity-45"
+
+export function HandoffShell({
+  title,
+  children,
+  onClose,
+  chat = false,
+}: {
+  title: string
+  children: ReactNode
+  onClose: () => void
+  chat?: boolean
+}) {
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => { if (!open) onClose() }}
+      width={chat ? "xl" : "lg"}
+      title={title}
+      bodyClassName={chat ? "min-h-[540px]" : undefined}
+    >
+      {children}
+    </Dialog>
+  )
 }
-export function HandoffNotice({children, danger=false}: {children:ReactNode;danger?:boolean}) {
-  return <div role={danger?'alert':undefined} className={`rounded-lg p-3 text-xs leading-6 ${danger?'bg-jolu-danger/10 text-jolu-danger':'bg-jolu-selected text-jolu-on'}`}>{children}</div>
+
+export function HandoffNotice({ children, danger = false }: { children: ReactNode; danger?: boolean }) {
+  return <Banner tone={danger ? "danger" : "info"}>{children}</Banner>
 }

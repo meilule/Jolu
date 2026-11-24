@@ -92,8 +92,8 @@ export function Segmented<T extends string>({
     value,
   })
   return (
-    <div ref={root} className={cn("relative isolate inline-flex gap-1 rounded-xl bg-jolu-cc-track p-1", className)}>
-      <span ref={indicator} aria-hidden="true" data-motion-indicator className="motion-indicator pointer-events-none absolute left-0 top-0 -z-10 rounded-lg bg-jolu-cc-surface shadow-[0_2px_4px_var(--jolu-cc-control-shadow)]" />
+    <div ref={root} className={cn("relative isolate inline-flex gap-1 rounded-xl bg-jn-well p-1", className)}>
+      <span ref={indicator} aria-hidden="true" data-motion-indicator className="motion-indicator pointer-events-none absolute left-0 top-0 -z-10 rounded-lg bg-jn-surface shadow-[0_2px_4px_var(--jn-shadow)]" />
       {items.map((it) => {
         const active = it.value === value
         return (

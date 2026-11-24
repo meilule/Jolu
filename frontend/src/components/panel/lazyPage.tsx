@@ -12,7 +12,7 @@ class PageErrorBoundary extends Component<{ children: ReactNode; label: string; 
 
   render() {
     return this.state.failed
-      ? <div role="alert" className="flex items-center justify-between gap-3 rounded-[10px] bg-jolu-danger-soft px-4 py-2.5 text-xs text-jolu-danger">
+      ? <div role="alert" className="flex items-center justify-between gap-3 rounded-[10px] bg-jn-danger-soft px-4 py-2.5 text-xs text-jn-danger">
           <span>{this.props.label}暂时无法显示。{this.state.loadFailed ? "页面资源加载失败，可以重新加载应用，或切换到其他页面。" : "请重试。"}</span>
           <JoluButton size="sm" variant="danger-soft" onClick={this.state.loadFailed ? () => window.location.reload() : this.props.onRetry}>
             {this.state.loadFailed ? "重新加载应用" : "重试"}
@@ -24,7 +24,14 @@ class PageErrorBoundary extends Component<{ children: ReactNode; label: string; 
 
 function ReadyPage({ children, fillHeight }: { children: ReactNode; fillHeight: boolean }) {
   const motion = useContentMotion("ready", 220, 0, true)
-  return <div ref={motion} className={fillHeight ? "h-full min-h-0 min-w-0" : "min-w-0"}>{children}</div>
+  return (
+    <div
+      ref={motion}
+      className={fillHeight ? "flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden" : "min-w-0"}
+    >
+      {children}
+    </div>
+  )
 }
 
 /** 在模块顶层创建；普通重渲染复用同一 lazy 实例，只有明确重试才丢弃缓存的拒绝结果。 */

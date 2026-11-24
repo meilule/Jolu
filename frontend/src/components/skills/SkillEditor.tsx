@@ -1,6 +1,5 @@
 import * as Menu from "@radix-ui/react-dropdown-menu"
 import { useMemo, useRef, useState } from "react"
-import { Check, ChevronDown, CircleAlert, CircleCheck, FileText, GitCompare, LoaderCircle, Square, SquareCheck } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { lineDiff } from "@/lib/textDiff"
 import { isTauri } from "@/lib/api"
@@ -8,19 +7,17 @@ import { SKILL_EXTERNAL_CHANGE, skillsApi, type SkillDetailDto, type SkillItemDt
 import {
   SKILL_PLATFORMS, frontField, hasNameConflict, projectLabel, setFrontField, skillTemplate, targetDirHint, validSkillName,
 } from "@/lib/skillsManager"
-import { JoluButton } from "@/components/ui/JoluButton"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { useToast } from "@/components/ui/Toast"
 import { providerName } from "@/lib/providerCatalog"
-import { DialogShell, Field, FieldSelect, INPUT_CLASS, MarkdownPreview, Tag } from "./skillParts"
+import { Field, FieldSelect, INPUT_CLASS, MarkdownPreview, Tag } from "./skillParts"
+import { Icon } from "@/icons"
+import { Banner, Button, Checkbox, Dialog, StatusPill } from "@/ui"
 
 /** 差异弹窗读取到的磁盘版本 */
 type DiskVersion = { text: string; modified: number | null; truncated: boolean }
 
-/**
- * 查看差异（D-17；画板 84 · 05 只画了入口，弹窗样式待确认）：按行对比「磁盘版本」与「当前草稿」。
- * 只在磁盘版本里的行标删除（jolu-danger 浅底），只在草稿里的行标新增（jolu-on 浅底）。
- */
+/** 查看差异：按行对比「磁盘版本」与「当前草稿」。 */
 function DiffDialog({ disk, draft, onUseDisk, onKeepDraft, onClose }: {
   disk: DiskVersion
   draft: string
@@ -32,28 +29,36 @@ function DiffDialog({ disk, draft, onUseDisk, onKeepDraft, onClose }: {
   const removed = lines.filter((l) => l.kind === "del").length
   const added = lines.filter((l) => l.kind === "add").length
   return (
-    <DialogShell width={760} title="查看差异" onClose={onClose}>
-      <div className="flex flex-wrap items-center gap-2 text-[12px] text-jolu-muted">
-        <span className="rounded bg-jolu-danger-soft px-1.5 py-0.5 font-mono text-jolu-danger">- 磁盘版本</span>
-        <span className="rounded bg-jolu-selected px-1.5 py-0.5 font-mono text-jolu-on">+ 当前草稿</span>
+    <Dialog
+      open
+      onOpenChange={(next) => { if (!next) onClose() }}
+      width="xl"
+      title="查看差异"
+      description="按行对比磁盘上的最新版本与当前草稿。"
+      actions={
+        <>
+          <Button kind="ghost" size="md" disabled={disk.truncated} onClick={onUseDisk}>使用磁盘版本</Button>
+          <Button kind="primary" size="md" onClick={onKeepDraft}>保留草稿</Button>
+        </>
+      }
+    >
+      <div className="flex flex-wrap items-center gap-2 text-xs text-jn-text-3">
+        <span className="rounded-md bg-jn-danger-soft px-2 py-0.5 font-mono text-jn-danger">- 磁盘版本</span>
+        <span className="rounded-md bg-jn-primary-wash px-2 py-0.5 font-mono text-jn-primary-ink">+ 当前草稿</span>
         <span className="flex-1" />
         <span>{removed || added ? `删除 ${removed} 行 · 新增 ${added} 行` : "两个版本内容相同"}</span>
       </div>
-      {disk.truncated && <p role="alert" className="rounded-lg bg-jolu-danger-soft px-3 py-2 text-[12px] text-jolu-danger">磁盘上的文件超过 512 KB，只对比了前 512 KB；为避免丢失内容，不能直接使用磁盘版本。</p>}
-      <div className="max-h-[420px] min-h-[160px] overflow-auto rounded-lg border border-jolu-border bg-jolu-bg py-1 font-mono text-[12px] leading-5">
+      {disk.truncated && <Banner tone="danger">磁盘上的文件超过 512 KB，只对比了前 512 KB；为避免丢失内容，不能直接使用磁盘版本。</Banner>}
+      <div className="max-h-[420px] min-h-[160px] overflow-auto rounded-[14px] border border-jn-line bg-jn-well py-1.5 font-mono text-[12px] leading-5">
         {lines.map((line, i) => (
-          <div key={i} className={cn("flex min-w-max whitespace-pre px-3", line.kind === "del" && "bg-jolu-danger-soft text-jolu-danger", line.kind === "add" && "bg-jolu-selected text-jolu-on", line.kind === "same" && "text-jolu-text")}>
+          <div key={i} className={cn("flex min-w-max whitespace-pre px-3", line.kind === "del" && "bg-jn-danger-soft text-jn-danger", line.kind === "add" && "bg-jn-primary-wash text-jn-primary-ink", line.kind === "same" && "text-jn-text")}>
             <span aria-hidden className="w-4 shrink-0 select-none">{line.kind === "del" ? "-" : line.kind === "add" ? "+" : " "}</span>
             <span className="sr-only">{line.kind === "del" ? "删除：" : line.kind === "add" ? "新增：" : ""}</span>
             {line.text || " "}
           </div>
         ))}
       </div>
-      <div className="flex justify-end gap-2">
-        <JoluButton variant="outline" className="h-[34px]" disabled={disk.truncated} onClick={onUseDisk}>使用磁盘版本</JoluButton>
-        <JoluButton variant="primary" className="h-[34px]" onClick={onKeepDraft}>保留草稿</JoluButton>
-      </div>
-    </DialogShell>
+    </Dialog>
   )
 }
 
@@ -61,11 +66,10 @@ export type EditorTarget =
   | { mode: "new"; platform: string }
   | { mode: "edit"; item: SkillItemDto; detail: SkillDetailDto }
 
-/** 新建与编辑 Skill（画板 80）：基本信息、SKILL.md 编辑器与实时预览、保存前校验 */
+/** 新建与编辑 Skill（R1-31）：基本信息、SKILL.md 编辑器与实时预览、保存前校验与外部修改横幅。 */
 export function SkillEditor({ target, items, platforms, projects, onCancel, onSaved }: {
   target: EditorTarget
   items: SkillItemDto[]
-  /** 各工具的全局目标目录（目录设置里可能已更换） */
   platforms: SkillPlatformDto[]
   projects: string[]
   onCancel: () => void
@@ -86,8 +90,10 @@ export function SkillEditor({ target, items, platforms, projects, onCancel, onSa
   const [leaving, setLeaving] = useState(false)
   const [replacingTemplate, setReplacingTemplate] = useState(false)
   const templateTrigger = useRef<HTMLButtonElement>(null)
+  const gutterRef = useRef<HTMLDivElement>(null)
   const [diff, setDiff] = useState<DiskVersion | null>(null)
   const [loadingDiff, setLoadingDiff] = useState(false)
+  const lineCount = useMemo(() => Math.max(1, content.split("\n").length), [content])
 
   const scope: SkillScope = scopeKey.startsWith("project:") ? "project" : (scopeKey as SkillScope)
   const project = scope === "project" ? scopeKey.slice("project:".length) : null
@@ -142,8 +148,6 @@ export function SkillEditor({ target, items, platforms, projects, onCancel, onSa
     }
   }
 
-  /** 保留草稿：以磁盘上的最新版本为基准，下一次保存覆盖外部修改（覆盖前后端会先备份原文件）。
-   *  已在差异弹窗里读过磁盘版本时直接用它的修改时间 */
   const keepDraft = async (latestModified?: number | null) => {
     if (latestModified !== undefined) setExpected(latestModified)
     else if (editing && isTauri) {
@@ -159,7 +163,6 @@ export function SkillEditor({ target, items, platforms, projects, onCancel, onSa
     toast.info("已保留草稿", "再次保存将覆盖外部修改，原文件会先备份")
   }
 
-  /** 查看差异（D-17）：读取磁盘上的最新 SKILL.md，与当前草稿按行对比 */
   const openDiff = async () => {
     if (!editing) return
     if (!isTauri) return setDiff({ text: initialContent, modified: expected, truncated: false })
@@ -174,7 +177,6 @@ export function SkillEditor({ target, items, platforms, projects, onCancel, onSa
     }
   }
 
-  /** 使用磁盘版本：草稿替换为磁盘内容，并以它的修改时间作为下次保存的基准 */
   const applyDisk = (disk: DiskVersion) => {
     setContent(disk.text)
     setExpected(disk.modified)
@@ -188,21 +190,21 @@ export function SkillEditor({ target, items, platforms, projects, onCancel, onSa
 
   return (
     <div className="flex w-full flex-col gap-4">
-      <div className="flex h-12 items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-col gap-1">
-          <h2 className="text-[22px] font-semibold text-jolu-text">{editing ? "编辑 Skill" : "新建 Skill"}</h2>
-          <p className="text-xs text-jolu-muted">{editing ? "修改 SKILL.md 并预览效果；保存前会先备份原文件。" : "从模板开始，编辑内容并预览效果。"}</p>
+          <h2 className="text-[20px] font-bold text-jn-text">{editing ? "编辑 Skill" : "新建 Skill"}</h2>
+          <p className="text-xs text-jn-text-3">{editing ? "修改 SKILL.md 并预览效果；保存前会先备份原文件。" : "从模板开始，编辑内容并预览效果。"}</p>
         </div>
         <div className="flex gap-2">
-          <JoluButton variant="outline" className="h-[34px]" disabled={saving} onClick={cancel}>取消</JoluButton>
-          <JoluButton variant="primary" className="h-[34px]" disabled={!ok || saving || external} onClick={() => void save()}>
-            <Check aria-hidden />{saving ? "保存中…" : "保存 Skill"}
-          </JoluButton>
+          <Button kind="ghost" size="sm" disabled={saving} onClick={cancel}>取消</Button>
+          <Button kind="primary" size="sm" icon="check" loading={saving} disabled={!ok || saving || external} onClick={() => void save()}>
+            {saving ? "保存中…" : "保存 Skill"}
+          </Button>
         </div>
       </div>
 
-      <section className="jolu-card flex flex-col gap-4 rounded-xl border border-jolu-border bg-jolu-cc-surface p-5">
-        <div className="flex gap-4">
+      <section className="flex flex-col gap-4 rounded-jn-card border border-jn-line bg-jn-surface p-5 shadow-jn-surface">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="名称 *">
             <input value={name} disabled={editing || saving} onChange={(e) => updateName(e.target.value.trim())} placeholder="例如 api-review" aria-label="名称" className={INPUT_CLASS} />
           </Field>
@@ -210,7 +212,7 @@ export function SkillEditor({ target, items, platforms, projects, onCancel, onSa
             <input value={description} disabled={saving} onChange={(e) => setContent((text) => setFrontField(text, "description", e.target.value))} placeholder="说明何时使用这个 Skill" aria-label="描述" className={INPUT_CLASS} />
           </Field>
         </div>
-        <div className="flex gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="供应商 *">
             <FieldSelect label="供应商" value={platform} disabled={editing || saving} onChange={setPlatform} options={SKILL_PLATFORMS.map((id) => ({ value: id, label: providerName(id) }))} />
           </Field>
@@ -218,63 +220,90 @@ export function SkillEditor({ target, items, platforms, projects, onCancel, onSa
             <FieldSelect label="作用范围" value={scopeKey} disabled={editing || saving} onChange={setScopeKey} options={editing && scope !== "global" && scope !== "project" ? [{ value: scopeKey, label: scopeKey }] : scopeOptions} />
           </Field>
         </div>
-        <p className="truncate text-[12px] text-jolu-muted">
+        <p className="truncate font-mono text-[11.5px] text-jn-text-3">
           {editing ? `文件位置：${target.item.path}` : `保存到 ${targetDirHint(platform, scope, project, platforms)}${name || "<名称>"}/`}
           {!editing && projects.length === 0 && " · 需要项目范围时，先在「目录设置」添加项目目录"}
         </p>
       </section>
 
-      <div className="flex h-[490px] gap-4">
-        <section className="jolu-card flex min-w-0 flex-1 flex-col gap-3.5 rounded-xl border border-jolu-border bg-jolu-side p-5">
-          <div className="flex h-7 items-center justify-between">
-            <span className="font-mono text-[13px] font-semibold text-jolu-text">SKILL.md</span>
+      <div className="grid h-[490px] grid-cols-1 gap-4 lg:grid-cols-2">
+        <section className="flex min-h-0 min-w-0 flex-col gap-3 rounded-jn-card border border-jn-line bg-jn-surface p-5 shadow-jn-surface">
+          <div className="flex h-8 items-center gap-2">
+            <span className="font-mono text-[13px] font-semibold text-jn-text">SKILL.md</span>
+            {dirty && <StatusPill tone="warning">已修改</StatusPill>}
+            <span className="min-w-0 flex-1" />
+            {editing && (
+              <Button kind="ghost" size="sm" icon="diff" loading={loadingDiff} disabled={saving || loadingDiff} onClick={() => void openDiff()}>
+                查看差异
+              </Button>
+            )}
             <Menu.Root modal={false}>
-              <Menu.Trigger ref={templateTrigger} disabled={saving} className="jolu-control inline-flex h-7 items-center gap-1.5 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-xs font-medium text-jolu-text outline-none hover:bg-jolu-stage focus-visible:outline-2 focus-visible:outline-jolu-accent">
-                插入模板<ChevronDown aria-hidden className="size-4" />
+              <Menu.Trigger ref={templateTrigger} disabled={saving} className="jn-interactive inline-flex h-8 items-center gap-1.5 rounded-full bg-jn-well px-3 text-xs font-medium text-jn-text outline-none hover:bg-jn-track">
+                插入模板<Icon name="expand" size="xs" className="jn-chevron text-jn-text-3" />
               </Menu.Trigger>
               <Menu.Portal>
-                <Menu.Content align="end" sideOffset={6} className="motion-popover z-[100] w-[220px] rounded-xl border border-jolu-border bg-jolu-cc-surface p-1.5 shadow-popover">
+                <Menu.Content align="end" sideOffset={6} className="jn-popover z-[140] w-[220px] rounded-[16px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface">
                   <Menu.Item
                     disabled={saving}
-                    className="flex h-8 cursor-default select-none items-center gap-2 rounded-md px-2 text-xs text-jolu-text outline-none data-[highlighted]:bg-jolu-side"
+                    className="flex h-8 cursor-pointer select-none items-center gap-2 rounded-[10px] px-2.5 text-xs text-jn-text outline-none data-[highlighted]:bg-jn-well"
                     onSelect={() => { if (content !== skillTemplate(name, description)) setReplacingTemplate(true) }}
                   >
-                    <FileText aria-hidden className="size-4 text-jolu-muted" />基础模板（替换当前内容）
+                    <Icon name="fileText" size="sm" className="text-jn-text-3" />基础模板（替换当前内容）
                   </Menu.Item>
-                  <span className="block px-2 py-1 text-[11px] text-jolu-muted">更多模板待确认</span>
+                  <span className="block px-2.5 py-1 text-[11px] text-jn-text-3">更多模板待确认</span>
                 </Menu.Content>
               </Menu.Portal>
             </Menu.Root>
           </div>
-          <textarea
-            disabled={saving}
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            spellCheck={false}
-            aria-label="SKILL.md 内容"
-            className="min-h-0 flex-1 resize-none bg-transparent font-mono text-[12px] leading-5 text-jolu-text outline-none"
-          />
+          <div className="flex min-h-0 flex-1 overflow-hidden rounded-[14px] bg-jn-well focus-within:ring-2 focus-within:ring-jn-primary/30">
+            <div
+              ref={gutterRef}
+              aria-hidden
+              className="tnum select-none overflow-hidden border-r border-jn-line/70 py-3.5 pr-2.5 pl-3 text-right font-mono text-[12px] leading-5 text-jn-text-3"
+            >
+              {Array.from({ length: lineCount }, (_, idx) => (
+                <div key={idx}>{idx + 1}</div>
+              ))}
+            </div>
+            <textarea
+              disabled={saving}
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              onScroll={(e) => {
+                if (gutterRef.current) gutterRef.current.scrollTop = e.currentTarget.scrollTop
+              }}
+              spellCheck={false}
+              aria-label="SKILL.md 内容"
+              className="min-h-0 flex-1 resize-none bg-transparent py-3.5 pr-3.5 pl-3 font-mono text-[12px] leading-5 text-jn-text outline-none"
+            />
+          </div>
         </section>
-        <section className="jolu-card flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto rounded-xl border border-jolu-border bg-jolu-cc-surface p-6">
-          <span className="text-xs font-semibold text-jolu-on">实时预览</span>
+        <section className="flex min-h-0 min-w-0 flex-col gap-4 overflow-y-auto rounded-jn-card border border-jn-line bg-jn-surface p-6 shadow-jn-surface">
+          <span className="text-xs font-semibold text-jn-primary-ink">实时预览</span>
           <MarkdownPreview source={content} />
         </section>
       </div>
 
       {external ? (
-        <section role="alert" className="jolu-card flex flex-col gap-2.5 rounded-xl border border-jolu-border bg-jolu-cc-surface p-4">
-          <Tag tone="danger">检测到外部修改</Tag>
-          <p className="text-xs text-jolu-muted">文件已被其他程序修改。当前草稿已保留，查看差异后再决定如何合并。</p>
-          <div className="flex gap-2">
-            <JoluButton variant="soft" size="sm" disabled={loadingDiff} onClick={() => void openDiff()}>
-              {loadingDiff ? <LoaderCircle aria-hidden className="animate-spin" /> : <GitCompare aria-hidden />}查看差异
-            </JoluButton>
-            <JoluButton variant="neutral" size="sm" onClick={() => void keepDraft()}><FileText aria-hidden />保留草稿</JoluButton>
+        <Banner tone="danger">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+              <span className="font-semibold">检测到外部修改</span>
+              <span className="text-xs opacity-90">文件已被其他程序修改。当前草稿已保留，查看差异后再决定如何合并。</span>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <Button kind="soft" size="sm" icon="diff" loading={loadingDiff} disabled={loadingDiff} onClick={() => void openDiff()}>
+                查看差异
+              </Button>
+              <Button kind="ghost" size="sm" icon="fileText" onClick={() => void keepDraft()}>
+                保留草稿
+              </Button>
+            </div>
           </div>
-        </section>
+        </Banner>
       ) : (
-        <div className={cn("flex min-h-11 items-center gap-2.5 rounded-lg px-3.5 text-xs", ok ? "bg-jolu-selected text-jolu-on" : "bg-jolu-danger-soft text-jolu-danger")}>
-          {ok ? <CircleCheck aria-hidden className="size-4 shrink-0" /> : <CircleAlert aria-hidden className="size-4 shrink-0" />}
+        <div className={cn("flex min-h-11 items-center gap-2.5 rounded-[14px] px-4 text-xs", ok ? "bg-jn-primary-wash text-jn-primary-ink" : "bg-jn-danger-soft text-jn-danger")}>
+          <Icon name={ok ? "success" : "danger"} size="sm" className="shrink-0" />
           <span className="min-w-0 flex-1 truncate">
             {error ?? (ok ? `名称、描述与目标目录校验通过 · ${editing ? "尚未保存" : "尚未写入"}` : conflict ? "目标已有同名 Skill，请换一个名称或选择其他范围" : problems[0])}
           </span>
@@ -283,11 +312,13 @@ export function SkillEditor({ target, items, platforms, projects, onCancel, onSa
       )}
 
       {!editing && (
-        <button type="button" role="checkbox" disabled={saving} aria-checked={enable} onClick={() => setEnable(!enable)} className="flex h-[34px] items-center gap-2 self-start rounded-md text-xs text-jolu-text outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent">
-          {enable ? <SquareCheck aria-hidden className="size-4 text-jolu-on" /> : <Square aria-hidden className="size-4 text-jolu-muted" />}
-          保存后启用
-          <span className="text-[12px] text-jolu-muted">（{platform === "claude" ? "不勾选时放入 Jolu 停用区，工具不会加载，同名副本不受影响" : "不勾选时按这份 SKILL.md 的路径写入 config.toml"}）</span>
-        </button>
+        <div className="flex items-center gap-2.5 self-start">
+          <Checkbox checked={enable} disabled={saving} label="保存后启用" onChange={setEnable} />
+          <button type="button" disabled={saving} onClick={() => setEnable(!enable)} className="text-left text-xs text-jn-text outline-none">
+            保存后启用
+            <span className="ml-1 text-[11.5px] text-jn-text-3">（{platform === "claude" ? "不勾选时放入 Jolu 停用区，工具不会加载，同名副本不受影响" : "不勾选时按这份 SKILL.md 的路径写入 config.toml"}）</span>
+          </button>
+        </div>
       )}
 
       {diff && <DiffDialog disk={diff} draft={content} onUseDisk={() => applyDisk(diff)} onKeepDraft={() => void keepDraft(diff.modified)} onClose={() => setDiff(null)} />}
@@ -302,16 +333,20 @@ export function SkillEditor({ target, items, platforms, projects, onCancel, onSa
         onConfirm={() => setContent(skillTemplate(name, description))}
       />}
 
-      {leaving && (
-        <DialogShell width={420} title="离开编辑器？" onClose={() => setLeaving(false)}>
-          <p className="text-xs text-jolu-muted">有尚未保存的修改。</p>
-          <div className="flex justify-end gap-2">
-            <JoluButton variant="outline" onClick={() => setLeaving(false)}>继续编辑</JoluButton>
-            <JoluButton variant="danger-soft" onClick={onCancel}>放弃修改</JoluButton>
-            <JoluButton variant="primary" disabled={!ok || saving} onClick={() => { setLeaving(false); void save() }}>保存</JoluButton>
-          </div>
-        </DialogShell>
-      )}
+      <Dialog
+        open={leaving}
+        onOpenChange={(next) => { if (!next) setLeaving(false) }}
+        width="sm"
+        title="离开编辑器？"
+        description="当前有尚未保存的修改。"
+        actions={
+          <>
+            <Button kind="ghost" size="sm" onClick={() => setLeaving(false)}>继续编辑</Button>
+            <Button kind="danger" size="sm" onClick={onCancel}>放弃修改</Button>
+            <Button kind="primary" size="sm" disabled={!ok || saving} onClick={() => { setLeaving(false); void save() }}>保存</Button>
+          </>
+        }
+      />
     </div>
   )
 }

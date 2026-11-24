@@ -1,23 +1,24 @@
-// Agent 页与模型路由页（Jolu.pen「统一网关 · R2 重设计」V5-1 / V5-2 / V5-3 / V5-4）预览验收：
+// Agent 与模型路由（jolu-new.pen R1）浏览器预览验收：
 // 真实 AgentsView / GatewayView + 合成 API；不连接真实桌面、账号或上游，不读写任何工具配置。
-// 用法：pnpm --dir frontend exec vite --port 5197 --strictPort；在仓库根目录 node scripts/acceptance/agents-routing-r2.e2e.mjs
-// 依赖：output/acceptance/node 里的 playwright-core 与本机 Edge。截图在 output/acceptance/agents-routing-r2/。
+// 用法：pnpm --dir frontend exec vite --port 5197 --strictPort
+//       node scripts/acceptance/agents-routing-r2.e2e.mjs
+// 依赖：output/acceptance/node 里的 playwright-core 与本机 Edge。截图在 output/acceptance/agents-routing-r1/。
 import assert from "node:assert/strict"
 import { createRequire } from "node:module"
 import { mkdir } from "node:fs/promises"
 import { resolve } from "node:path"
+
 const require = createRequire(import.meta.url)
 const { chromium } = require(require.resolve("playwright-core", { paths: [resolve("output/acceptance/node")] }))
 const base = process.env.JOLU_PREVIEW_URL || "http://127.0.0.1:5197"
 assert.ok(["localhost", "127.0.0.1", "[::1]"].includes(new URL(base).hostname))
-const output = resolve("output/acceptance/agents-routing-r2")
+const output = resolve("output/acceptance/agents-routing-r1")
 await mkdir(output, { recursive: true })
 
 const connections = [
-  ["c1", "工作账号", "claude", "auth", "claude-work", true],
+  ["c1", "Momo", "claude", "auth", "claude-momo", true],
   ["c2", "ZCode 个人套餐", "zcode", "auth", "zcode", true],
   ["c3", "Kimi Key", "custom", "api", "kimi", true],
-  ["c4", "DeepSeek Key", "custom", "api", "deepseek", false],
 ].map(([id, baseName, platformId, kind, slug, serve]) => ({
   id, baseName, name: baseName, platformId, kind, slug, serve_enabled: serve, label: "", masked: "", status: "connected",
   lastSyncText: "", baseUrl: null, model: null, effort: null, context1m: null, protocol: null,
@@ -29,141 +30,163 @@ import { AgentsView } from '/src/views/AgentsView.tsx';
 import { GatewayView } from '/src/views/GatewayView.tsx';
 import { gatewayApi } from '/src/lib/gatewayApi.ts';
 import { settingsApi } from '/src/lib/settingsApi.ts';
-import { skillsApi } from '/src/lib/skillsApi.ts';
-import { automationApi } from '/src/lib/automationApi.ts';
-import { api } from '/src/lib/api.ts';
-import { ToastProvider } from '/src/components/ui/Toast.tsx'; import '/src/index.css';
+import { ToastProvider } from '/src/components/ui/Toast.tsx';
+import { PageActionsProvider, PageHeader, Sidebar, WindowShell } from '/src/ui/index.ts';
+import '/src/index.css';
 const now=Date.now();
 const wiring=[
-  {agent:'claude-code',wired:true,state:'wired',config_path:'~/.claude/settings.json',notice:'新会话生效；已在运行的会话需重开',reason:null},
-  {agent:'codex',wired:true,state:'wired',config_path:'~/.codex/config.toml',notice:'需重启 Codex 后生效',reason:null,codex_mode:'oauth'},
-  {agent:'gemini',wired:false,state:'wired',drift:'changed',config_path:'~/.gemini/.env',notice:null,reason:null},
-  {agent:'opencode',wired:false,config_path:'~/.config/opencode/opencode.json',notice:null,reason:null},
+  {agent:'claude-code',wired:true,state:'wired',config_path:'~/.claude/settings.json',notice:'新会话生效；已在运行的会话需重开',current_model:'claude-sonnet-4-5',current_resolved:'claude-momo/claude-sonnet-4-5'},
+  {agent:'codex',wired:true,state:'wired',config_path:'~/.codex/config.toml',notice:'需重启 Codex 后生效',codex_mode:'oauth',current_model:'gpt-5'},
+  {agent:'gemini',wired:true,state:'wired',drift:'model_changed',config_path:'~/.gemini/.env',current_model:'gemini-2.5-pro'},
+  {agent:'opencode',wired:false,config_path:'~/.config/opencode/opencode.json'},
   {agent:'zcode',wired:false,config_path:null,notice:null,reason:'尚未安装或未生成配置文件'},
 ];
-gatewayApi.status=async()=>({mode:'relay',enabled:true,port:15721,circuit_threshold:5,auto_escape:true,default_connection:'c2',wiring});
-gatewayApi.catalog=async()=>['claude-work/claude-opus-5-5','claude-work/claude-sonnet-5-5','claude-work/claude-haiku-4-5','zcode/glm-5.3','zcode/glm-5.3-flash','kimi/kimi-k2.5'].map(id=>({id,source:id.split('/')[0],slug:id.split('/')[0],model:id.split('/')[1],kind:'api',status:'connected'}));
-gatewayApi.groupList=async()=>[{id:'g1',slug:'daily-coding',name:'日常编码',strategy:'order',members:[{slug:'claude-work',model:'claude-sonnet-5-5'},{slug:'zcode',model:'glm-5.3'}],created_ms:1},{id:'g2',slug:'fast',name:'快',strategy:'order',members:[{slug:'zcode',model:'glm-5.3-flash'}],created_ms:2}];
-gatewayApi.profilesList=async()=>[{name:'日常编码',agents:{},created_ms:1},{name:'省额度',agents:{},created_ms:2}];
-gatewayApi.dayOverview=async()=>({today:1284,yesterday:1146,reroutes:17,errors:2,by_agent:{'claude-code':612,codex:540},partial:false,last_error:{id:9,ts:now-60000,agent:'codex',requested_model:'group/fast',source:'zcode',upstream_model:null,status_code:502,result:'failed',duration_ms:900}});
+gatewayApi.status=async()=>({mode:'relay',enabled:true,port:12731,circuit_threshold:5,auto_escape:true,default_connection:'c2',wiring});
+gatewayApi.catalog=async()=>[
+  {id:'m1',slug:'claude-momo',model:'claude-sonnet-4-5',source:'Claude',kind:'auth',status:'connected',context_window:200000},
+  {id:'m2',slug:'claude-momo',model:'claude-opus-4-5',source:'Claude',kind:'auth',status:'connected',context_window:200000},
+  {id:'m3',slug:'zcode',model:'glm-5.3',source:'ZCode',kind:'auth',status:'connected',context_window:128000},
+  {id:'m4',slug:'kimi',model:'kimi-k2.5',source:'Kimi',kind:'api',status:'connected',context_window:262144},
+];
+gatewayApi.groups=async()=>({sources:[],agents:[]});
+gatewayApi.groupList=async()=>[
+  {id:'g1',slug:'coding',name:'编码主力',strategy:'usage',members:[{slug:'claude-momo',model:'claude-sonnet-4-5'},{slug:'zcode',model:'glm-5.3'},{slug:'kimi',model:'kimi-k2.5'}],created_ms:1},
+  {id:'g2',slug:'light',name:'轻量问答',strategy:'order',members:[{slug:'zcode',model:'glm-5.3'},{slug:'kimi',model:'kimi-k2.5'}],created_ms:2},
+];
+gatewayApi.profilesList=async()=>[{name:'日常编码',agents:{},created_ms:1}];
+gatewayApi.sourceCapabilities=async()=>[];
+gatewayApi.dayOverview=async()=>({today:846,yesterday:712,reroutes:14,errors:3,by_agent:{'claude-code':612},partial:false,identity_incomplete:false,last_error:null});
+gatewayApi.routeLogPage=async()=>({rows:[
+  {id:5,ts:now-60000,agent:'claude-code',requested_model:'claude-sonnet-4-5',upstream_model:'claude-sonnet-4-5',source:'claude-momo',connection_id:'c1',result:'ok',status_code:200,duration_ms:900},
+  {id:4,ts:now-120000,agent:'codex',requested_model:'gpt-5',upstream_model:'gpt-5',source:'claude-momo',connection_id:'c1',result:'ok',status_code:200,duration_ms:1700},
+  {id:3,ts:now-180000,agent:'gemini',requested_model:'gemini-2.5-pro',source:'zcode',connection_id:'c2',result:'failed',status_code:502,duration_ms:3400},
+],page:1,page_size:10,total:3,page_count:1,upper_id:5});
+gatewayApi.contextSessions=async()=>[];
 gatewayApi.agentDiscovery=async()=>[
   {agent:'claude-code',name:'Claude Code',installed:true,state:'installed',evidence:'bin',cli_found:true,cli_path:'~/.local/bin/claude'},
   {agent:'codex',name:'Codex',installed:true,state:'installed',evidence:'bin',cli_found:true,cli_path:null},
   {agent:'gemini',name:'Gemini CLI',installed:true,state:'installed',evidence:'bin',cli_found:true,cli_path:null},
   {agent:'opencode',name:'OpenCode',installed:true,state:'installed',evidence:'bin',cli_found:true,cli_path:'~/.local/bin/opencode'},
   {agent:'zcode',name:'ZCode',installed:false,state:'not_found',evidence:null,cli_found:false,cli_path:null}];
-gatewayApi.wiringApplied=async()=>({model:'zcode/glm-5.3',subagent_model:null,tiers:{sonnet:'claude-work/claude-sonnet-5-5',haiku:'zcode/glm-5.3-flash'}});
+gatewayApi.wiringApplied=async()=>({model:'zcode/glm-5.3',subagent_model:null,tiers:{sonnet:'claude-momo/claude-sonnet-4-5',haiku:'zcode/glm-5.3'}});
 const diff=(path,lines,keys,existed=true)=>({path,existed,keys,lines});
-gatewayApi.wiringPreview=async(agent)=>agent==='claude-code'
-  ? {mode:'wired',files:[diff('~/.claude/settings.json',[{op:'…',text:'3 行未改动'},{op:'-',text:'    "ANTHROPIC_BASE_URL": "https://api.anthropic.com",'},{op:'+',text:'    "ANTHROPIC_BASE_URL": "http://127.0.0.1:15721",'},{op:'+',text:'    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "131072",'},{op:' ',text:'  },'}],9)]}
-  : {mode:'wire',files:[diff('~/.config/opencode/opencode.json',[{op:' ',text:'"provider": {'},{op:' ',text:'  "deepseek": { … 原样保留 … },'},{op:'+',text:'  "jolu": {'},{op:'+',text:'    "npm": "@ai-sdk/openai-compatible",'},{op:'+',text:'    "options": { "baseURL": "http://127.0.0.1:15721/v1", "apiKey": "jolu-opencode" }'},{op:'+',text:'  }'},{op:' ',text:'}'}],3)]};
-settingsApi.agentVersions=async()=>[{agent:'claude-code',name:'Claude Code',found:true,version:'2.3.1',raw:null,update_command:null,update_note:''},{agent:'opencode',name:'OpenCode',found:true,version:'1.4.2',raw:null,update_command:null,update_note:''}];
-skillsApi.overview=async(p)=>({platforms:[],items:Array.from({length:7},(_,i)=>({platform:p,enabled:true})),roots:[],projects:[],errors:[],scanned_at:now});
-api.sessionsList=async()=>({sessions:Array.from({length:12},()=>({})),files:12});
-automationApi.overview=async()=>({tasks:[{platform:'claude'},{platform:'claude'}],enabled:2,running:0,running_note:null,waiting:0,next_reset:null,done_today:0,failed_today:0});
-gatewayApi.groups=async()=>({sources:[],agents:[]});
-gatewayApi.sourceCapabilities=async()=>[];
-gatewayApi.routeLog=async()=>[{id:3,ts:now-60000,agent:'claude-code',requested_model:'group/daily-coding',source:'Claude 订阅',status_code:200,result:'ok',duration_ms:3400},{id:2,ts:now-120000,agent:'codex',requested_model:'claude-haiku-4.5',source:'ZCode',status_code:200,result:'ok',duration_ms:900}];
-gatewayApi.routeLogPage=async()=>({rows:[],page:1,page_size:10,total:0,page_count:0,upper_id:null});
-gatewayApi.middlewares=async()=>[{name:'a',kind:'model-map',config:{},enabled:true,sort:0},{name:'b',kind:'word-guard',config:{},enabled:false,sort:1}];
-gatewayApi.clientKeys=async()=>[];
+gatewayApi.wiringPreview=async()=>({mode:'wired',files:[diff('~/.claude/settings.json',[{op:'…',text:'3 行未改动'},{op:'-',text:'    "ANTHROPIC_BASE_URL": "https://api.anthropic.com",'},{op:'+',text:'    "ANTHROPIC_BASE_URL": "http://127.0.0.1:12731",'},{op:'+',text:'    "ANTHROPIC_AUTH_TOKEN": "jolu-••••••••3f2a",'},{op:' ',text:'  },'}],9)]});
+settingsApi.agentVersions=async()=>[{agent:'claude-code',name:'Claude Code',found:true,version:'2.3.1',raw:null,update_command:null,update_note:''}];
+gatewayApi.customAgents=async()=>[{id:'custom-agent:crush',name:'Crush',slug:'crush',config_path:'~/.config/crush/crush.json',format:'json',base_url_key:'providers.jolu.base_url',auth_key:'providers.jolu.api_key',model_key:'models.large.model',base_suffix:'/v1',installed:true,wired:false,drift:null,model:null}];
+gatewayApi.customAgentPreview=async()=>({mode:'wire',files:[diff('~/.config/crush/crush.json',[{op:'+',text:'  "providers": {'},{op:'+',text:'    "jolu": { "base_url": "http://127.0.0.1:12731/v1" }'},{op:'+',text:'  }'}],2,false)]});
+gatewayApi.middlewares=async()=>[
+  {name:'隐私脱敏',kind:'word-guard',config:{block:'',mask:'sk-,token'},enabled:true,sort:0},
+  {name:'长上下文自动改写',kind:'model-map',config:{fast:'zcode/glm-5.3'},enabled:true,sort:1},
+  {name:'限制输出上限',kind:'param-override',config:{set:'max_tokens=4096'},enabled:false,sort:2},
+];
+gatewayApi.clientKeys=async()=>[
+  {name:'笔记本 · 只读',masked:'jolu-…3f81',models:null,read_only:true,today_requests:42,requests_per_day:500,expires_ms:null,last_used_ms:now-18*60000,budget:null,accounts:[],max_concurrency:null},
+  {name:'办公台式',masked:'jolu-…9ac2',models:['group/coding','zcode/glm-5.3'],read_only:false,today_requests:168,requests_per_day:null,expires_ms:now+40*86400000,last_used_ms:now-3*3600000,budget:null,accounts:['c1','c2'],max_concurrency:2},
+];
 gatewayApi.sessionsOverview=async()=>({seq:1,at:now,in_flight:[],sessions:[]});
 gatewayApi.lanAddress=async()=>'192.168.1.23';
-gatewayApi.customAgents=async()=>[{id:'custom-agent:crush',name:'Crush',slug:'crush',config_path:'~/.config/crush/crush.json',format:'json',base_url_key:'providers.jolu.base_url',auth_key:'providers.jolu.api_key',model_key:'models.large.model',base_suffix:'/v1',installed:true,wired:false,drift:null,model:null}];
-gatewayApi.customAgentPreview=async()=>({mode:'wire',files:[diff('~/.config/crush/crush.json',[{op:'+',text:'  "providers": {'},{op:'+',text:'    "jolu": { "base_url": "http://127.0.0.1:15721/v1", "api_key": "jolu-custom-crush.abcd1234" }'},{op:'+',text:'  }'}],2,false)]});
+gatewayApi.modelsDevStatus=async()=>[now-86400000,120];
 gatewayApi.allowIpsFromEnv=async()=>false;
 const view=new URLSearchParams(location.search).get('view')||'agents';
-const node=view==='agents'?React.createElement(AgentsView,{onNavigate(){}}):React.createElement(GatewayView,{onNavigate(){}});
-ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(ToastProvider,null,React.createElement('div',{className:'h-screen bg-jolu-bg'},node)));
+const node=view==='agents'?React.createElement(AgentsView,{onNavigate(){}}):React.createElement(GatewayView,{onNavigate(){},onOpenConnection(){}});
+const shell=React.createElement(PageActionsProvider,null,
+  React.createElement(WindowShell,{
+    sidebar:React.createElement(Sidebar,{collapsed:false,logo:React.createElement('span',{className:'px-2 text-sm font-bold text-jn-text'},'Jolu')},
+      React.createElement('div',{className:'px-3 text-[11px] text-jn-text-3'},'导航占位')),
+    header:React.createElement(PageHeader,{title:view==='agents'?'Agent':'模型路由'}),
+  },node));
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(ToastProvider,null,React.createElement('div',{className:'h-screen w-full bg-jn-stage'},shell)));
 `
 
 const browser = await chromium.launch({ channel: "msedge", headless: true })
+const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
 const errors = []
-const page = await browser.newPage({ viewport: { width: 1072, height: 796 } })
+const noise = (text) => /WebSocket|\[vite\]|Failed to load resource/.test(text)
+const shot = async (name) => {
+  await page.waitForTimeout(500)
+  await page.screenshot({ path: resolve(output, name) })
+}
+const visible = async (text) => assert.ok(await page.getByText(text).first().isVisible(), `缺少：${text}`)
+
+page.on("pageerror", (error) => errors.push(error.message))
+page.on("console", (msg) => { if (msg.type() === "error" && !noise(msg.text())) errors.push(msg.text()) })
+
 try {
-  const noise = (text) => /WebSocket|\[vite\]|Failed to load resource|合成环境禁止原生调用/.test(text)
-  page.on("pageerror", (error) => errors.push(error.message))
-  page.on("console", (msg) => { if (msg.type() === "error" && !noise(msg.text())) errors.push(msg.text()) })
   await page.addInitScript(() => {
-    window.unexpectedNativeCalls = []
     const callbacks = new Map()
     let next = 1
     window.__TAURI_INTERNALS__ = {
+      metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
+      unregisterListener() {},
       transformCallback(cb) { const id = next++; callbacks.set(id, cb); return id },
       unregisterCallback(id) { callbacks.delete(id) },
       invoke(cmd, args) {
         if (cmd === "plugin:event|listen") return Promise.resolve(args.handler)
         if (cmd === "plugin:event|unlisten") return Promise.resolve()
-        if (cmd === "get_settings") return Promise.resolve({ claude_long_context: "", gateway_shared_lan: false })
-        window.unexpectedNativeCalls.push(cmd)
+        if (cmd === "get_settings") return Promise.resolve({ claude_long_context: "", gateway_shared_lan: true, gateway_allow_ips: [] })
         return Promise.reject(new Error(`合成环境禁止原生调用：${cmd}`))
       },
     }
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} }
   })
   await page.route("**/src/hooks/useConnections.ts*", (r) => r.fulfill({
     contentType: "application/javascript",
     body: `const connections=${JSON.stringify(connections)}; const reload=async()=>{}; export function useConnections(){return {connections,reload,loading:false,error:null}}`,
   }))
-  await page.route("**/r2-check*", (r) => r.fulfill({ contentType: "text/html", body: `<!doctype html><html><head><meta charset="UTF-8"></head><body class="bg-jolu-bg"><div id="root"></div><script type="module">
+  await page.route("**/r1-check*", (r) => r.fulfill({
+    contentType: "text/html",
+    body: `<!doctype html><html><head><meta charset="UTF-8"></head><body><div id="root"></div><script type="module">
 import RefreshRuntime from '/@react-refresh'; RefreshRuntime.injectIntoGlobalHook(window);
 window.$RefreshReg$=()=>{}; window.$RefreshSig$=()=>type=>type; window.__vite_plugin_react_preamble_installed__=true;
-await import('/r2-fixture');</script></body></html>` }))
-  await page.route("**/r2-fixture", (r) => r.fulfill({ contentType: "application/javascript", body: fixture }))
+await import('/r1-fixture');</script></body></html>`,
+  }))
+  await page.route("**/r1-fixture", (r) => r.fulfill({ contentType: "application/javascript", body: fixture }))
 
-  // V5-1：已接入的 Claude Code
-  await page.goto(`${base}/r2-check?view=agents`)
-  await page.getByText("本机检测到 6 个工具").waitFor()
-  await page.getByText("已接入 · 经模型路由调用模型").waitFor()
-  for (const text of ["已接入", "可以接入", "暂时不能接入", "配置被改动，未经路由", "Skills 7", "会话 12", "自动化 2", "今日路由 612", "/model opus", "也跑标题、Explore 等后台小任务", "断开并还原", "日常编码"]) {
-    assert.ok(await page.getByText(text, { exact: true }).first().isVisible(), `V5-1 缺少：${text}`)
+  // ── Agent：R1-08 列表 → R1-09 详情 → R1-32 高级 → R1-33 写入改动 ──
+  await page.goto(`${base}/r1-check?view=agents`)
+  await page.getByText("接入模型路由，为每个工具配置顺手的模型").waitFor({ timeout: 15000 })
+  for (const text of ["全部 6", "已接入 3", "可接入 2", "Claude Code", "Codex", "OpenCode", "Crush", "暂不能接入"]) await visible(text)
+  await shot("agents-r1-08-list.png")
+
+  await page.getByText("详细", { exact: true }).first().click()
+  await page.getByText("新会话默认模型").first().waitFor()
+  for (const text of ["模型设置", "高级", "写入改动", "Claude Code 档位", "今天经过路由", "能力验证", "已接入 · 配置一致"]) await visible(text)
+  await shot("agents-r1-09-detail.png")
+
+  await page.getByRole("tab", { name: "高级" }).click()
+  await page.getByText("模型与压缩").waitFor()
+  await visible("子代理模型")
+  await shot("agents-r1-32-advanced.png")
+
+  await page.getByRole("tab", { name: "写入改动" }).click()
+  await page.getByText("改了 1 个文件 · 9 个键 · 断开时逐键还原").waitFor()
+  await shot("agents-r1-33-diff.png")
+
+  await page.getByRole("button", { name: "全部工具" }).click()
+  await page.getByText("接入模型路由，为每个工具配置顺手的模型").waitFor()
+
+  // ── 模型路由：R1-01 概览 + R1-18～22 五个页签 ──
+  await page.goto(`${base}/r1-check?view=gateway`)
+  await page.getByText("本机路由").first().waitFor({ timeout: 15000 })
+  for (const text of ["今日请求", "今日 Token", "局域网共享", "中间件链", "来源额度", "需要关注", "响应头耗时", "活跃会话", "路由分组"]) await visible(text)
+  await shot("gateway-r1-01-overview.png")
+
+  const tabs = [
+    ["路由流水", "route-log", ["全部 Agent", "全部结果", "暂停刷新", "Claude Code", "成功"]],
+    ["路由分组", "groups", ["编码主力", "选择策略", "成员模型", "保存更改"]],
+    ["模型池", "pool", ["模型池", "Momo", "claude-momo/claude-sonnet-4-5", "管理来源"]],
+    ["对外访问", "access", ["局域网共享", "客户端 Key", "笔记本 · 只读", "签发 Key"]],
+    ["中间件", "middleware", ["隐私脱敏", "中间件规则 · 2 条", "长上下文自动改写", "保存前用样例请求校验"]],
+  ]
+  for (const [tab, name, texts] of tabs) {
+    await page.getByRole("tab", { name: tab }).click()
+    await page.getByText(texts[0]).first().waitFor()
+    for (const text of texts) await visible(text)
+    await shot(`gateway-${name}.png`)
   }
-  await page.screenshot({ path: resolve(output, "v5-1-agent-wired.png") })
-  await page.getByRole("button", { name: /写入的改动/ }).click()
-  await page.getByText("CLAUDE_CODE_MAX_OUTPUT_TOKENS", { exact: false }).waitFor()
-  await page.screenshot({ path: resolve(output, "v5-1-agent-diff.png"), fullPage: true })
 
-  // V5-2：接入前预览（OpenCode）
-  await page.getByRole("button", { name: /OpenCode/ }).first().click()
-  await page.getByText("接入会做什么").waitFor()
-  await page.getByText("写入预览 · 还没有改动").waitFor()
-  assert.ok(await page.getByRole("button", { name: "接入 OpenCode" }).isVisible())
-  await page.screenshot({ path: resolve(output, "v5-2-agent-preview.png") })
-
-  // 通用接入（P1-1）：自定义工具详情与添加表单
-  await page.getByRole("button", { name: /Crush/ }).first().click()
-  await page.getByText("自定义 · 未接入").waitFor()
-  await page.getByText("写入预览 · 会新建这个文件").waitFor()
-  await page.screenshot({ path: resolve(output, "p1-1-custom-agent.png") })
-  await page.getByRole("button", { name: "添加自定义工具" }).click()
-  await page.getByRole("dialog", { name: "添加自定义工具" }).waitFor()
-  await page.screenshot({ path: resolve(output, "p1-1-custom-add.png") })
-  await page.keyboard.press("Escape")
-
-  // V5-3：模型路由概览
-  await page.goto(`${base}/r2-check?view=gateway`)
-  await page.getByText("模型路由运行中").waitFor()
-  for (const text of ["今日请求", "1,284", "较昨天 +12%", "改道", "Agent 收到的错误", "请求怎么走", "需要你处理", "Gemini CLI 已不经过模型路由", "group/daily-coding", "模型池", "对外访问", "1 启用"]) {
-    assert.ok(await page.getByText(text, { exact: true }).first().isVisible(), `V5-3 缺少：${text}`)
-  }
-  await page.screenshot({ path: resolve(output, "v5-3-routing-overview.png") })
-
-  // V5-4：对外访问
-  await page.getByRole("button", { name: /对外访问/ }).click()
-  await page.getByText("http://192.168.1.23:15721").waitFor()
-  assert.ok(await page.getByText("http://127.0.0.1:15721", { exact: true }).isVisible())
-  await page.screenshot({ path: resolve(output, "v5-4-routing-access.png"), fullPage: true })
-
-  // 模型池（只读）
-  await page.getByRole("button", { name: /模型池/ }).click()
-  await page.getByText("未加入模型池").waitFor()
-  await page.screenshot({ path: resolve(output, "v5-5-pool.png") })
-
-  assert.deepEqual(errors, [], `页面错误：${errors.join("\n")}`)
-  console.log(JSON.stringify({ ok: true, screenshots: output, unmocked: await page.evaluate(() => [...new Set(window.unexpectedNativeCalls)]) }, null, 2))
-} catch (error) {
-  await page.screenshot({ path: resolve(output, "failure.png"), fullPage: true }).catch(() => undefined)
-  console.error("页面错误：", errors, "未合成的原生调用：", await page.evaluate(() => window.unexpectedNativeCalls).catch(() => null))
-  throw error
+  assert.deepEqual(errors, [], `控制台有错误：\n${errors.join("\n")}`)
+  console.log(`通过：Agent 4 张 + 模型路由 6 张截图，见 ${output}`)
 } finally {
   await browser.close()
 }

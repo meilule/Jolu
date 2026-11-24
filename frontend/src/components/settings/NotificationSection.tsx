@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { BellRing, ChevronRight } from "lucide-react"
+import { BellRing, CircleDollarSign, Moon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import { parseThreshold } from "@/lib/settingsPage"
@@ -55,42 +55,7 @@ export function NotificationSection({ cfg, setDirty }: { cfg: Cfg; setDirty: Set
 
   return (
     <>
-      <SettingsGroup title="免打扰">
-        <SettingsRow
-          className="min-h-[72px]"
-          title="启用免打扰"
-          control={<Switch liquid label="启用免打扰" on={s.dnd} disabled={disabled || cfg.isSaving("dnd")} onChange={(on) => void cfg.setDnd(on)} />}
-        />
-      </SettingsGroup>
-
-      <SettingsGroup title="余额提醒">
-        <SettingsRow
-          className="min-h-[72px]"
-          title="低余额提醒"
-          desc="仅限能取到余额的 API 连接"
-          control={<Switch liquid label="低余额提醒" on={saved != null} disabled={disabled || busy} onChange={toggle} />}
-        />
-        <div className="flex min-h-[72px] flex-col justify-center gap-1.5 border-t border-jolu-border py-3">
-          <div className="flex items-center gap-5">
-            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-              <span className="text-[13px] font-medium text-jolu-text">提醒阈值</span>
-              <span className="text-[12px] text-jolu-muted">按原币种比较</span>
-            </div>
-            <span className={cn("inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-lg border bg-jolu-bg px-3 focus-within:border-jolu-accent", message ? "border-jolu-danger" : "border-jolu-border")}>
-              <input aria-label="提醒阈值" inputMode="decimal" value={amount} disabled={disabled || busy}
-                onChange={(e) => { setAmount(e.target.value); setMessage(null) }}
-                style={{ width: `calc(${Math.max(1, amount.length)}ch + 2px)`, maxWidth: "28ch" }}
-                className="tnum min-w-0 shrink-0 bg-transparent p-0 text-right text-xs text-jolu-text outline-none" />
-              <span aria-label="币种" className="select-none text-xs text-jolu-muted">{currency}</span>
-            </span>
-            <ActionButton tone="soft" busy={busy} disabled={disabled || value === null || (saved != null && !dirty)} onClick={() => value !== null && save(value)}>保存阈值</ActionButton>
-          </div>
-          {message && <span role="alert" className="text-right text-[12px] text-jolu-danger">{message}</span>}
-          {saved == null && !message && <span className="text-right text-[12px] text-jolu-muted">当前未开启；保存阈值即开启提醒</span>}
-        </div>
-      </SettingsGroup>
-
-      <SettingsGroup title="任务提醒">
+      <SettingsGroup icon={BellRing} title="任务提醒">
         <SettingsRow
           className="min-h-[72px]"
           title="额度恢复与任务继续"
@@ -110,17 +75,40 @@ export function NotificationSection({ cfg, setDirty }: { cfg: Cfg; setDirty: Set
         />
       </SettingsGroup>
 
-      <div className="flex flex-col gap-2.5 rounded-xl border border-jolu-border bg-jolu-bg p-4 shadow-sm">
-        <span className="flex items-center gap-2 text-[13px] font-medium text-jolu-text">
-          <BellRing aria-hidden className="size-4 text-jolu-on" />
-          任务已继续
-        </span>
-        <span className="text-xs text-jolu-muted">Codex 额度已恢复，「完善登录流程」正在原会话中继续。</span>
-        <span aria-hidden className="inline-flex h-[34px] w-28 items-center justify-center gap-1.5 rounded-lg bg-jolu-selected text-xs font-medium text-jolu-on">
-          查看任务<ChevronRight className="size-3.5" />
-        </span>
-        <span className="text-[11px] text-jolu-muted">通知样式预览 · 示例</span>
-      </div>
+      <SettingsGroup icon={CircleDollarSign} title="额度与余额提醒">
+        <SettingsRow
+          className="min-h-[72px]"
+          title="低余额提醒"
+          desc="仅限能取到余额的 API 连接"
+          control={<Switch liquid label="低余额提醒" on={saved != null} disabled={disabled || busy} onChange={toggle} />}
+        />
+        <div className="flex min-h-[72px] flex-col justify-center gap-1.5 border-t border-jn-line py-3">
+          <div className="flex items-center gap-5">
+            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <span className="text-[13px] font-medium text-jn-text">提醒阈值</span>
+              <span className="text-[12px] text-jn-text-3">按原币种比较</span>
+            </div>
+            <span className={cn("inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-lg border bg-jn-surface px-3 focus-within:border-jn-primary", message ? "border-jn-danger" : "border-jn-line")}>
+              <input aria-label="提醒阈值" inputMode="decimal" value={amount} disabled={disabled || busy}
+                onChange={(e) => { setAmount(e.target.value); setMessage(null) }}
+                style={{ width: `calc(${Math.max(1, amount.length)}ch + 2px)`, maxWidth: "28ch" }}
+                className="tnum min-w-0 shrink-0 bg-transparent p-0 text-right text-xs text-jn-text outline-none" />
+              <span aria-label="币种" className="select-none text-xs text-jn-text-3">{currency}</span>
+            </span>
+            <ActionButton tone="soft" busy={busy} disabled={disabled || value === null || (saved != null && !dirty)} onClick={() => value !== null && save(value)}>保存阈值</ActionButton>
+          </div>
+          {message && <span role="alert" className="text-right text-[12px] text-jn-danger">{message}</span>}
+          {saved == null && !message && <span className="text-right text-[12px] text-jn-text-3">当前未开启；保存阈值即开启提醒</span>}
+        </div>
+      </SettingsGroup>
+
+      <SettingsGroup icon={Moon} title="免打扰">
+        <SettingsRow
+          className="min-h-[72px]"
+          title="启用免打扰"
+          control={<Switch liquid label="启用免打扰" on={s.dnd} disabled={disabled || cfg.isSaving("dnd")} onChange={(on) => void cfg.setDnd(on)} />}
+        />
+      </SettingsGroup>
 
     </>
   )

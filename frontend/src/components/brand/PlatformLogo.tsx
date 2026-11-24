@@ -200,7 +200,7 @@ export function PlatformLogo({ platform: rawPlatform, size = 16, className }: Pl
         role="img"
         aria-label="自定义供应商"
         style={{ width: size, height: size, borderRadius: size * 0.27 }}
-        className={cn("relative grid shrink-0 place-items-center bg-jolu-selected text-jolu-on", className)}
+        className={cn("relative grid shrink-0 place-items-center bg-jn-primary-soft text-jn-primary-ink", className)}
       >
         <Hexagon aria-hidden style={{ width: size * 0.8, height: size * 0.8 }} className="absolute" />
         <Code aria-hidden style={{ width: size * 0.5, height: size * 0.5 }} />
@@ -212,7 +212,7 @@ export function PlatformLogo({ platform: rawPlatform, size = 16, className }: Pl
   if (platform === "opencode") {
     return (
       <svg width={size} height={size} viewBox="0 0 16 16" className={cn("shrink-0", className)} aria-label="OpenCode" role="img">
-        <text x="8" y="8.6" dominantBaseline="middle" textAnchor="middle" fontSize="8.6" fontWeight="700" fill="currentColor" className="text-jolu-text">OC</text>
+        <text x="8" y="8.6" dominantBaseline="middle" textAnchor="middle" fontSize="8.6" fontWeight="700" fill="currentColor" className="text-jn-text">OC</text>
       </svg>
     )
   }

@@ -1,21 +1,19 @@
 import { useEffect, useState } from "react"
-import { Copy, Eye, GitFork, Globe, KeyRound, Laptop, ListFilter, Plus } from "lucide-react"
-import { cn } from "@/lib/utils"
 import { gatewayApi, type ClientKeySummaryDto, type IssuedClientKeyDto } from "@/lib/gatewayApi"
 import { useConnections } from "@/hooks/useConnections"
 import { useSettings } from "@/hooks/useSettings"
 import { useToast } from "@/components/ui/Toast"
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
-import { SelectField } from "@/components/ui/SelectField"
-import { Switch } from "@/components/agents/AgentList"
 import { useLatestGate } from "@/hooks/useLatestGate"
+import { Icon } from "@/icons"
+import { Button, Checkbox, ConfirmDialog, Dialog, FormField, IconButton, Input, Select, StatusPill, Switch, Tabs } from "@/ui"
+import { cn } from "@/lib/utils"
 import {
   BUDGET_FIELDS, budgetForm, budgetFromForm, concurrencyOptions, expiresAtFrom, EXPIRY_CHOICES,
   isExhausted, isExpired, KEY_ONCE_NOTICE, lastUsedText, limitText, parseModelList, TOKENS_LIMIT_NOTICE,
   type BudgetForm,
 } from "./sharedAccess"
 
-const KEY_COLUMNS = "grid grid-cols-[minmax(0,1.5fr)_minmax(0,1.1fr)_150px_150px_110px_56px] gap-3"
+const KEY_COLUMNS = "grid grid-cols-[minmax(180px,1.2fr)_minmax(120px,1fr)_minmax(140px,1fr)_minmax(120px,0.9fr)_96px_36px] gap-3"
 
 /**
  * 模型路由 · 对外访问（Jolu.pen「统一网关 · R2 重设计」V6 画板 RMna2）：
@@ -78,7 +76,6 @@ export function AccessPanel({ port, shared, busy, onSharedChange, run, models }:
       })
       setIssued(created)
       setForm(emptyForm)
-      setIssuing(false)
       await load()
       return created
     }, "已签发客户端 Key")
@@ -93,92 +90,107 @@ export function AccessPanel({ port, shared, busy, onSharedChange, run, models }:
   }
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-4 px-8 pb-8 pt-2">
-      <h2 className="text-[20px] font-semibold text-jolu-text">对外访问</h2>
-
-      <section className={cn(
-        "flex items-center gap-3.5 rounded-xl border px-5 py-4",
-        shared ? "border-jolu-selected bg-jolu-status-success-bg" : "border-jolu-border",
-      )}>
-        <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-[10px]", shared ? "bg-jolu-selected" : "bg-jolu-side")}>
-          <Globe aria-hidden className={cn("size-5", shared ? "text-jolu-on" : "text-jolu-muted")} />
+    <div className="flex min-w-0 flex-col gap-3.5">
+      <section className="flex items-center gap-3.5 rounded-jn-card border border-jn-line bg-jn-surface px-5 py-[18px] shadow-jn-surface">
+        <span className="flex size-[42px] shrink-0 items-center justify-center rounded-[14px] bg-jn-well">
+          <Icon name="external" size="lg" className="text-jn-text-2" />
         </span>
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="text-[15px] font-semibold text-jolu-text">局域网共享</span>
-          <span className="text-meta text-jolu-muted">下次启动中转时生效</span>
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="text-[15px] font-bold text-jn-text">局域网共享</span>
+          <span className="text-[12px] text-jn-text-3">开启后同一网络里的设备可以用客户端 Key 访问本机路由；下次启动中转时生效</span>
         </span>
-        {shared && <span className="shrink-0 text-meta font-medium text-jolu-on">已开启</span>}
-        <Switch on={shared} large disabled={busy} label={shared ? "关闭局域网共享" : "开启局域网共享"} onClick={() => onSharedChange(!shared)} />
+        <StatusPill tone={shared ? "success" : "neutral"}>{shared ? "已开启" : "已关闭"}</StatusPill>
+        <Switch checked={shared} disabled={busy} label="局域网共享" onChange={onSharedChange} />
       </section>
 
-      <div className="flex items-center gap-2.5">
-        <Chip active={chip === "address"} onClick={() => setChip("address")}>连接地址与示例</Chip>
-        <Chip active={chip === "keys"} onClick={() => setChip("keys")}>客户端 Key</Chip>
-      </div>
+      <Tabs style="segment-lg" className="self-start" value={chip} onChange={setChip}
+        items={[{ key: "keys", label: "客户端 Key" }, { key: "address", label: "连接地址与示例" }]} />
 
       {chip === "keys" ? (
         <section className="flex flex-col gap-3">
-          <div className="flex items-center gap-2.5">
-            <span className="text-[15px] font-semibold text-jolu-text">客户端 Key</span>
-            {rows !== null && <span className="text-meta tabular-nums text-jolu-muted">{rows.length}</span>}
-            <span className="flex-1" />
-            <button type="button" disabled={busy} onClick={() => setIssuing((value) => !value)}
-              className="flex h-10 shrink-0 items-center gap-1.5 rounded-lg bg-jolu-text px-4 text-meta font-semibold text-jolu-bg outline-none hover:opacity-90 focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
-              <Plus aria-hidden className="size-4" />签发 Key
-            </button>
+          <div className="flex items-center gap-2">
+            <span className="text-[14px] font-bold text-jn-text">客户端 Key</span>
+            {rows !== null && <span className="flex h-5 items-center rounded-full bg-jn-well px-2 text-[11px] font-bold text-jn-text-2">{rows.length}</span>}
+            <span className="min-w-0 flex-1" />
+            <Button kind="primary" size="sm" icon="add" disabled={busy} onClick={() => { setIssued(null); setIssuing(true) }}>签发 Key</Button>
           </div>
 
-          {issuing && (
-            <div className="flex flex-col gap-2.5 rounded-xl border border-jolu-border px-4 py-3.5" data-issue-form>
-              <div className="flex flex-wrap items-center gap-2">
-                <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="名称，例如 书房台式机" aria-label="Key 名称"
-                  className="h-9 min-w-[160px] flex-1 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-meta text-jolu-text outline-none focus:border-jolu-accent" />
-                <input value={form.requests} onChange={(event) => setForm({ ...form, requests: event.target.value })} inputMode="numeric" placeholder="每日请求上限" aria-label="每日请求上限"
-                  className="h-9 w-[130px] rounded-lg border border-jolu-border bg-jolu-bg px-3 text-meta text-jolu-text outline-none focus:border-jolu-accent" />
-                <input value={form.tokens} onChange={(event) => setForm({ ...form, tokens: event.target.value })} inputMode="numeric" placeholder="每日 Token 上限" aria-label="每日 Token 上限"
-                  className="h-9 w-[130px] rounded-lg border border-jolu-border bg-jolu-bg px-3 text-meta text-jolu-text outline-none focus:border-jolu-accent" />
+          {/* R1-34 签发客户端 Key 弹窗 */}
+          <Dialog
+            open={issuing}
+            onOpenChange={(open) => { if (!open && !busy) { setIssuing(false); setIssued(null) } }}
+            preventClose={busy}
+            width="md"
+            title="签发客户端 Key"
+            description="局域网设备接入时使用；本机回环访问不需要 Key。"
+            footerStart={issued ? KEY_ONCE_NOTICE : `留空即不限 · ${TOKENS_LIMIT_NOTICE}`}
+            actions={
+              issued ? (
+                <Button kind="primary" size="md" icon="check" onClick={() => { setIssuing(false); setIssued(null) }}>我已保存</Button>
+              ) : (
+                <>
+                  <Button kind="ghost" size="md" disabled={busy} onClick={() => setIssuing(false)}>取消</Button>
+                  <Button kind="primary" size="md" icon="key" loading={busy} disabled={busy || form.name.trim() === ""} onClick={() => void issue()}>签发</Button>
+                </>
+              )
+            }
+          >
+            <div className="flex flex-col gap-3.5" data-issue-form>
+              <FormField label="名称" required hint="名称用于区分不同设备，例如「书房台式机」">
+                <Input size="lg" value={form.name} disabled={busy || Boolean(issued)} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="书房台式机" aria-label="Key 名称" />
+              </FormField>
+              <div className="grid grid-cols-2 gap-3">
+                <FormField label="每日请求上限">
+                  <Input size="lg" value={form.requests} disabled={busy || Boolean(issued)} onChange={(event) => setForm({ ...form, requests: event.target.value })} inputMode="numeric" placeholder="留空即不限" aria-label="每日请求上限" />
+                </FormField>
+                <FormField label="每日 Token 上限">
+                  <Input size="lg" value={form.tokens} disabled={busy || Boolean(issued)} onChange={(event) => setForm({ ...form, tokens: event.target.value })} inputMode="numeric" placeholder="留空即不限" aria-label="每日 Token 上限" />
+                </FormField>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <SelectField label="有效期" value={form.expiryDays === null ? "" : String(form.expiryDays)}
-                  onValueChange={(value) => setForm({ ...form, expiryDays: value === "" ? null : Number(value) })}
-                  className="h-9 w-[120px] rounded-[10px]"
-                  options={EXPIRY_CHOICES.map((choice) => ({ value: choice.days === null ? "" : String(choice.days), label: choice.days === null ? choice.label : `有效 ${choice.label}` }))} />
-                <input value={form.models} onChange={(event) => setForm({ ...form, models: event.target.value })} placeholder="模型白名单，逗号分隔，留空 = 全部" aria-label="模型白名单"
-                  className="h-9 min-w-[180px] flex-1 rounded-lg border border-jolu-border bg-jolu-bg px-3 text-meta text-jolu-text outline-none focus:border-jolu-accent" />
-                <label className="flex h-9 items-center gap-1.5 text-meta text-jolu-text">
-                  <input type="checkbox" checked={form.readOnly} onChange={(event) => setForm({ ...form, readOnly: event.target.checked })} className="size-3.5 accent-[var(--jolu-accent)]" />
-                  只读
-                </label>
-              </div>
-              <div className="flex items-center gap-2">
-                <button type="button" disabled={busy || form.name.trim() === ""} onClick={() => void issue()}
-                  className="flex h-9 items-center rounded-lg bg-jolu-accent px-4 text-meta font-semibold text-[#071B10] outline-none disabled:opacity-45">签发</button>
-                <button type="button" disabled={busy} onClick={() => setIssuing(false)} className="text-meta text-jolu-muted outline-none hover:text-jolu-text">取消</button>
-                <span className="min-w-0 flex-1 truncate text-note text-jolu-muted" title={`只读 Key 只能查询（如读模型列表）。${TOKENS_LIMIT_NOTICE}`}>留空即不限 · 只读只能查询</span>
-              </div>
+              <FormField label="有效期">
+                <Tabs
+                  style="segment"
+                  className="self-start"
+                  value={form.expiryDays === null ? "" : String(form.expiryDays)}
+                  onChange={(value) => { if (!busy && !issued) setForm({ ...form, expiryDays: value === "" ? null : Number(value) }) }}
+                  items={EXPIRY_CHOICES.map((choice) => ({
+                    key: choice.days === null ? "" : String(choice.days),
+                    label: choice.label,
+                  }))}
+                />
+              </FormField>
+              <FormField label="模型白名单" hint="逗号分隔，留空 = 全部模型">
+                <Input size="lg" value={form.models} disabled={busy || Boolean(issued)} onChange={(event) => setForm({ ...form, models: event.target.value })} placeholder="group/daily, gpt-5" aria-label="模型白名单" />
+              </FormField>
+              <Checkbox
+                checked={form.readOnly}
+                disabled={busy || Boolean(issued)}
+                label="只读（只能查询，例如读取模型列表）"
+                onChange={(checked) => setForm({ ...form, readOnly: checked })}
+              />
+              {issued && (
+                <div className="flex flex-col gap-2 rounded-[16px] border border-jn-primary-soft bg-jn-primary-wash p-3.5" data-issued-key>
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-jn-primary-ink">
+                    <Icon name="success" size="sm" />
+                    已签发「{issued.name}」
+                  </span>
+                  <div className="flex items-center gap-2 rounded-xl bg-jn-surface px-3 py-2">
+                    <code className="min-w-0 flex-1 break-all font-mono text-xs font-medium text-jn-text">{issued.key}</code>
+                    <Button kind="soft" size="sm" icon="copy" onClick={() => copyKey(issued.key)}>{copied ? "已复制" : "复制 Key"}</Button>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+          </Dialog>
 
-          {issued && (
-            <div className="flex flex-col gap-1.5 rounded-xl border border-jolu-on bg-jolu-status-success-bg px-4 py-3.5">
-              <span className="text-meta font-medium text-jolu-on">{issued.name} 的 Key</span>
-              <code className="break-all rounded-lg bg-jolu-bg px-3 py-2 font-mono text-meta text-jolu-text">{issued.key}</code>
-              <div className="flex items-center gap-2">
-                <button type="button" onClick={() => copyKey(issued.key)}
-                  className="flex h-8 items-center rounded-lg bg-jolu-accent px-3.5 text-meta font-semibold text-[#071B10]">{copied ? "已复制" : "复制 Key"}</button>
-                <button type="button" onClick={() => setIssued(null)} className="text-meta text-jolu-muted hover:text-jolu-text">我已保存</button>
-                <span className="min-w-0 flex-1 truncate text-note text-jolu-danger">{KEY_ONCE_NOTICE}</span>
-              </div>
-            </div>
-          )}
-
-          <div className="flex flex-col overflow-hidden rounded-xl border border-jolu-border">
-            <div className={cn(KEY_COLUMNS, "items-center bg-jolu-side px-4 py-2.5 text-note text-jolu-muted")}>
+          <div className="overflow-x-auto rounded-jn-card border border-jn-line bg-jn-surface p-3 shadow-jn-surface">
+          <div className="flex min-w-[740px] flex-col gap-0.5">
+            <div className={cn(KEY_COLUMNS, "items-center px-2.5 pb-1.5 text-[12px] font-medium text-jn-text-3")}>
               <span>客户端</span><span>访问范围</span><span>今日请求</span><span>状态 / 有效期</span><span>最近使用</span><span />
             </div>
-            {error && <div className="border-t border-jolu-border px-4 py-4 text-meta text-jolu-danger">读取失败：{error}</div>}
+            {error && <div className="px-2.5 py-4 text-[12px] text-jn-danger">读取失败：{error}</div>}
             {rows !== null && rows.length === 0 && !error && (
-              <p className="border-t border-jolu-table-divider px-4 py-8 text-center text-meta text-jolu-muted">
+              <p className="px-2.5 py-8 text-center text-[12px] text-jn-text-3">
                 还没有客户端 Key。局域网设备接入前，先点「签发 Key」创建一个；本机回环访问不需要 Key。
               </p>
             )}
@@ -187,73 +199,67 @@ export function AccessPanel({ port, shared, busy, onSharedChange, run, models }:
               const exhausted = isExhausted(row)
               const expired = isExpired(row, now)
               const editingRow = editing?.name === row.name
+              const tone = expired || exhausted ? "danger" : "success"
               return (
-                <div key={row.name} className={cn(KEY_COLUMNS, "items-center border-t border-jolu-table-divider px-4 py-3")}>
+                <div key={row.name} className={cn(KEY_COLUMNS, "items-center rounded-[14px] px-2.5 py-2 odd:bg-jn-well")}>
                   <span className="flex min-w-0 items-center gap-2.5">
-                    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-jolu-side">
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-[11px] bg-jn-surface">
                       <RowIcon row={row} />
                     </span>
-                    <span className="flex min-w-0 flex-col gap-0.5">
-                      <span className="truncate text-meta font-medium text-jolu-text" title={row.name}>{row.name}</span>
-                      <code className="truncate font-mono text-note text-jolu-muted" title={row.masked}>{row.masked}</code>
+                    <span className="flex min-w-0 flex-col gap-px">
+                      <span className="truncate text-[13px] font-semibold text-jn-text" title={row.name}>{row.name}</span>
+                      <code className="truncate font-mono text-[11px] text-jn-text-3" title={row.masked}>{row.masked}</code>
                     </span>
                   </span>
-                  <span className="min-w-0 truncate text-meta text-jolu-text" title={row.models?.join("、")}>{scopeText(row)}</span>
+                  <span className="min-w-0 truncate text-[12.5px] text-jn-text-2" title={row.models?.join("、")}>{scopeText(row)}</span>
                   <span className="flex min-w-0 flex-col gap-1">
-                    <span className={cn("text-meta tabular-nums", exhausted ? "text-jolu-danger" : "text-jolu-text")}>
+                    <span className={cn("text-[12.5px] font-semibold tabular-nums", exhausted ? "text-jn-danger" : "text-jn-text")}>
                       {row.today_requests} / {limitText(row.requests_per_day)}
                     </span>
                     {row.requests_per_day !== null && (
-                      <span className="h-1.5 w-[130px] overflow-hidden rounded-full bg-jolu-track">
-                        <span className={cn("block h-full rounded-full", exhausted ? "bg-jolu-danger" : "bg-jolu-on")}
+                      <span className="h-1.5 w-[130px] overflow-hidden rounded-full bg-jn-track">
+                        <span className={cn("block h-full rounded-full", exhausted ? "bg-jn-danger" : "bg-jn-primary")}
                           style={{ width: `${Math.min(100, Math.round((row.today_requests / row.requests_per_day) * 100))}%` }} />
                       </span>
                     )}
                   </span>
-                  <span className="flex min-w-0 flex-col gap-0.5">
-                    <span className={cn("text-meta font-medium", expired || exhausted ? "text-jolu-danger" : "text-jolu-on")}>
-                      {expired ? "已过期" : exhausted ? "今日已用满" : "有效"}
-                    </span>
-                    <span className="text-note text-jolu-muted">{row.expires_ms === null ? "永不过期" : `剩余 ${daysLeft(row.expires_ms, now)} 天`}</span>
+                  <span className="flex min-w-0 flex-col gap-1">
+                    <StatusPill tone={tone} className="self-start">{expired ? "已过期" : exhausted ? "今日已用满" : "有效"}</StatusPill>
+                    <span className="text-[11px] text-jn-text-3">{row.expires_ms === null ? "永不过期" : `剩余 ${daysLeft(row.expires_ms, now)} 天`}</span>
                   </span>
-                  <span className="min-w-0 truncate text-note text-jolu-muted">{lastUsedText(row.last_used_ms, now)}</span>
+                  <span className="min-w-0 truncate text-[12px] text-jn-text-3">{lastUsedText(row.last_used_ms, now)}</span>
                   <span className="justify-self-end">
-                    <button type="button" aria-label={`调整 ${row.name}`} disabled={busy}
-                      onClick={() => setEditing(editingRow ? null : { name: row.name, form: budgetForm(row.budget), accounts: row.accounts ?? [], concurrency: row.max_concurrency ?? null, error: null })}
-                      className="grid size-7 place-items-center rounded-md text-jolu-muted outline-none hover:bg-jolu-stage hover:text-jolu-text focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:opacity-45">
-                      <EllipsisDot />
-                    </button>
+                    <IconButton icon="more" label={`调整 ${row.name}`} size="sm" disabled={busy}
+                      onClick={() => setEditing(editingRow ? null : { name: row.name, form: budgetForm(row.budget), accounts: row.accounts ?? [], concurrency: row.max_concurrency ?? null, error: null })} />
                   </span>
                   {editingRow && editing && (
-                    <div className={cn(KEY_COLUMNS, "col-span-full flex flex-col gap-2.5 border-t border-jolu-table-divider bg-jolu-side px-4 py-3")} data-limits-editor>
+                    <div className={cn(KEY_COLUMNS, "col-span-full flex flex-col gap-2.5 rounded-[14px] bg-jn-stage px-3.5 py-3")} data-limits-editor>
                       <div className="col-span-full flex flex-col gap-1.5">
-                        <span className="text-note text-jolu-muted">每日上限与同时请求数 · 留空即不限</span>
-                        <div className="grid grid-cols-3 gap-2">
+                        <span className="text-[11px] text-jn-text-3">每日上限与同时请求数 · 留空即不限</span>
+                        <div className="grid grid-cols-4 gap-2">
                           {BUDGET_FIELDS.map((field) => (
-                            <label key={field.key} className="flex flex-col gap-0.5">
-                              <span className="text-note text-jolu-muted">{field.label}</span>
-                              <input aria-label={`${row.name} ${field.label}`} inputMode={field.money ? "decimal" : "numeric"}
+                            <label key={field.key} className="flex flex-col gap-1">
+                              <span className="text-[11px] text-jn-text-3">{field.label}</span>
+                              <Input size="md" aria-label={`${row.name} ${field.label}`} inputMode={field.money ? "decimal" : "numeric"}
                                 value={editing.form[field.key]}
-                                onChange={(event) => setEditing({ ...editing, form: { ...editing.form, [field.key]: event.target.value }, error: null })}
-                                className="h-8 rounded-md border border-jolu-border bg-jolu-bg px-2 text-meta text-jolu-text outline-none focus:border-jolu-accent" />
+                                onChange={(event) => setEditing({ ...editing, form: { ...editing.form, [field.key]: event.target.value }, error: null })} />
                             </label>
                           ))}
-                          <label className="flex flex-col gap-0.5">
-                            <span className="text-note text-jolu-muted">同时请求数</span>
-                            <SelectField label={`${row.name} 的同时请求数`} value={String(editing.concurrency ?? 0)} disabled={busy}
-                              onValueChange={(value) => setEditing({ ...editing, concurrency: Number(value) || null })}
-                              className="h-8 rounded-[8px]"
+                          <label className="flex flex-col gap-1">
+                            <span className="text-[11px] text-jn-text-3">同时请求数</span>
+                            <Select width="full" label={`${row.name} 的同时请求数`} value={String(editing.concurrency ?? 0)} disabled={busy}
+                              onChange={(value) => setEditing({ ...editing, concurrency: Number(value) || null })}
                               options={concurrencyOptions(editing.concurrency).map((option) => ({ value: String(option.value), label: option.label }))} />
                           </label>
                         </div>
-                        <span className="text-note text-jolu-muted">只能使用这些账号（全不勾 = 不限）</span>
+                        <span className="text-[11px] text-jn-text-3">只能使用这些账号（全不勾 = 不限）</span>
                         <AccountChecks accounts={editing.accounts} onToggle={(id) => setEditing({
                           ...editing,
                           accounts: editing.accounts.includes(id) ? editing.accounts.filter((item) => item !== id) : [...editing.accounts, id],
                         })} />
-                        {editing.error && <span className="text-note text-jolu-danger">{editing.error}</span>}
+                        {editing.error && <span className="text-[11px] text-jn-danger">{editing.error}</span>}
                         <div className="flex items-center gap-2">
-                          <button type="button" disabled={busy} onClick={async () => {
+                          <Button kind="primary" size="sm" disabled={busy} onClick={async () => {
                             const parsed = budgetFromForm(editing.form)
                             if (parsed.error !== undefined) { setEditing({ ...editing, error: parsed.error }); return }
                             try {
@@ -265,8 +271,8 @@ export function AccessPanel({ port, shared, busy, onSharedChange, run, models }:
                             } catch (reason) {
                               setEditing({ ...editing, error: String(reason) })
                             }
-                          }} className="h-8 rounded-lg bg-jolu-accent px-3.5 text-meta font-semibold text-[#071B10] disabled:opacity-45">保存限额</button>
-                          <button type="button" disabled={busy} onClick={() => setEditing(null)} className="text-meta text-jolu-muted hover:text-jolu-text">取消</button>
+                          }}>保存限额</Button>
+                          <Button kind="ghost" size="sm" disabled={busy} onClick={() => setEditing(null)}>取消</Button>
                         </div>
                       </div>
                     </div>
@@ -275,9 +281,10 @@ export function AccessPanel({ port, shared, busy, onSharedChange, run, models }:
               )
             })}
           </div>
+          </div>
 
-          <p className="flex items-center gap-2 text-note text-jolu-muted">
-            <KeyRound aria-hidden className="size-3.5 shrink-0" />
+          <p className="flex items-center gap-2 text-[11px] text-jn-text-3">
+            <Icon name="shield" size="sm" className="shrink-0" />
             Key 原文只在签发时显示一次。行尾菜单可调整限额、账号范围或撤销。
           </p>
         </section>
@@ -286,27 +293,31 @@ export function AccessPanel({ port, shared, busy, onSharedChange, run, models }:
       )}
 
       {revoking && (
-        <ConfirmDialog title={`撤销「${revoking}」？`} description="删除后这个 Key 立即失效，使用它的设备会收到 401；历史路由流水的归属保留。"
-          confirmLabel="撤销" danger onClose={() => setRevoking(null)}
-          onConfirm={async () => {
+        <ConfirmDialog
+          open
+          onOpenChange={(open) => { if (!open) setRevoking(null) }}
+          title={`撤销「${revoking}」？`}
+          description="删除后这个 Key 立即失效，使用它的设备会收到 401；历史路由流水的归属保留。"
+          confirmText="撤销"
+          loading={busy}
+          onConfirm={() => {
             const name = revoking
             setRevoking(null)
-            await run(async () => {
+            void run(async () => {
               await gatewayApi.revokeClientKey(name)
               await load()
             }, `已撤销「${name}」`)
-          }} />
+          }}
+        />
       )}
     </div>
   )
 }
 
-/** 行首图标按访问范围给语义：分组 → 分叉、白名单 → 清单、只读 → 眼睛，其余 = 一般客户端。 */
+/** 行首图标按访问范围给语义：分组 → 分叉、白名单 → 文件、只读 → 眼睛，其余 = 一般客户端。 */
 function RowIcon({ row }: { row: ClientKeySummaryDto }) {
-  if (row.models?.some((model) => model.startsWith("group/"))) return <GitFork aria-hidden className="size-3.5 text-jolu-muted" />
-  if (row.models?.length) return <ListFilter aria-hidden className="size-3.5 text-jolu-muted" />
-  if (row.read_only) return <Eye aria-hidden className="size-3.5 text-jolu-muted" />
-  return <Laptop aria-hidden className="size-3.5 text-jolu-muted" />
+  const icon = row.models?.some((model) => model.startsWith("group/")) ? "blocks" : row.models?.length ? "file" : row.read_only ? "eye" : "users"
+  return <Icon name={icon} size="sm" className="text-jn-text-2" />
 }
 
 function scopeText(row: ClientKeySummaryDto): string {
@@ -318,18 +329,6 @@ function scopeText(row: ClientKeySummaryDto): string {
 
 function daysLeft(expiresMs: number, now: number): number {
   return Math.max(0, Math.ceil((expiresMs - now) / 86_400_000))
-}
-
-function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button type="button" aria-pressed={active} onClick={onClick}
-      className={cn(
-        "flex h-9 items-center rounded-lg px-4 text-meta font-medium outline-none focus-visible:outline-2 focus-visible:outline-jolu-accent",
-        active ? "bg-jolu-selected text-jolu-on" : "border border-jolu-border text-jolu-text hover:bg-jolu-side",
-      )}>
-      {children}
-    </button>
-  )
 }
 
 /** 连接地址与示例页签（沿用 V5-4 的地址卡与接入示例；IP 白名单无 V6 画板，保留在此页签）。 */
@@ -346,45 +345,46 @@ function AddressChip({ port, shared, models, copy }: {
   const code = example(protocol, shell, `http://127.0.0.1:${port}`, chosen, shared)
   return (
     <div className="flex flex-col gap-4">
-      <section className="flex flex-col overflow-hidden rounded-xl border border-jolu-border">
-        <div className="flex items-baseline gap-2 bg-jolu-side px-4 py-2.5">
-          <span className="text-[13px] font-semibold text-jolu-text">地址</span>
-          <span className="text-meta text-jolu-muted">本机不需要 Key；局域网请求必须带启用的客户端 Key</span>
+      <section className="flex flex-col overflow-hidden rounded-xl border border-jn-line">
+        <div className="flex items-baseline gap-2 bg-jn-surface px-4 py-2.5">
+          <span className="text-[13px] font-semibold text-jn-text">地址</span>
+          <span className="text-[12px] text-jn-text-3">本机不需要 Key；局域网请求必须带启用的客户端 Key</span>
         </div>
         <AddressRow label="端口" value={String(port)} note="改端口还没有命令（待确认）" />
         <AddressRow label="本机" value={`http://127.0.0.1:${port}`} mono action={<CopyBtn label="复制本机地址" onClick={() => copy(`http://127.0.0.1:${port}`)} />} />
         <LanRow port={port} shared={shared} copy={copy} />
       </section>
 
-      <section className="flex flex-col overflow-hidden rounded-xl border border-jolu-border">
-        <div className="flex items-center gap-2 bg-jolu-side px-4 py-2.5">
-          <span className="text-[13px] font-semibold text-jolu-text">接入示例</span>
-          <span className="min-w-0 flex-1 truncate text-meta text-jolu-muted">按模型与协议生成</span>
-          <SelectField label="示例模型" value={model} onValueChange={setModel}
-            className="max-w-[220px]"
-            options={models.length === 0 ? [{ value: "", label: "（模型池为空）" }] : models.map((entry) => ({ value: entry, label: entry }))} />
+      <section className="flex flex-col overflow-hidden rounded-xl border border-jn-line">
+        <div className="flex items-center gap-2 bg-jn-surface px-4 py-2.5">
+          <span className="text-[13px] font-semibold text-jn-text">接入示例</span>
+          <span className="min-w-0 flex-1 truncate text-[12px] text-jn-text-3">按模型与协议生成</span>
+          <div className="w-[220px] shrink-0">
+            <Select variant="filter" width="full" label="示例模型" value={model || null} onChange={setModel}
+              placeholder="（模型池为空）"
+              options={models.map((entry) => ({ value: entry, label: entry }))} />
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-3 px-4 pt-3">
           {(["anthropic", "openai", "gemini"] as const).map((value) => (
             <button key={value} type="button" aria-pressed={protocol === value} onClick={() => setProtocol(value)}
-              className={cn("text-meta outline-none", protocol === value ? "font-semibold text-jolu-on" : "text-jolu-muted hover:text-jolu-text")}>
+              className={cn("text-[12px] outline-none", protocol === value ? "font-semibold text-jn-primary-ink" : "text-jn-text-3 hover:text-jn-text")}>
               {value === "openai" ? "OpenAI" : value === "anthropic" ? "Anthropic" : "Gemini"}
             </button>
           ))}
           <span className="flex-1" />
           {(["powershell", "shell", "curl", "python", "node"] as const).map((value) => (
             <button key={value} type="button" aria-pressed={shell === value} onClick={() => setShell(value)}
-              className={cn("text-meta outline-none", shell === value ? "font-semibold text-jolu-on" : "text-jolu-muted hover:text-jolu-text")}>
+              className={cn("text-[12px] outline-none", shell === value ? "font-semibold text-jn-primary-ink" : "text-jn-text-3 hover:text-jn-text")}>
               {value === "powershell" ? "PowerShell" : value === "shell" ? "Shell" : value}
             </button>
           ))}
         </div>
-        <div className="relative m-4 mt-3 rounded-lg bg-jolu-side px-3.5 py-3">
-          <pre className="overflow-x-auto whitespace-pre font-mono text-note leading-5 text-jolu-text">{code}</pre>
-          <button type="button" aria-label="复制示例" onClick={() => copy(code)}
-            className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-md hover:bg-jolu-stage">
-            <Copy aria-hidden className="size-3.5 text-jolu-muted" />
-          </button>
+        <div className="relative m-4 mt-3 rounded-lg bg-jn-surface px-3.5 py-3">
+          <pre className="overflow-x-auto whitespace-pre font-mono text-[11px] leading-5 text-jn-text">{code}</pre>
+          <span className="absolute top-2 right-2">
+            <IconButton icon="copy" label="复制示例" size="sm" onClick={() => copy(code)} />
+          </span>
         </div>
       </section>
 
@@ -395,10 +395,10 @@ function AddressChip({ port, shared, models, copy }: {
 
 function AddressRow({ label, value, note, mono, action }: { label: string; value: string; note?: string; mono?: boolean; action?: React.ReactNode }) {
   return (
-    <div className="flex min-h-11 items-center gap-3 border-t border-jolu-table-divider px-4 py-2">
-      <span className="w-14 shrink-0 text-meta text-jolu-muted">{label}</span>
-      <span className={cn("min-w-0 truncate text-meta text-jolu-text", mono && "font-mono")}>{value}</span>
-      {note && <span className="min-w-0 truncate text-note text-jolu-muted">{note}</span>}
+    <div className="flex min-h-11 items-center gap-3 border-t border-jn-line px-4 py-2">
+      <span className="w-14 shrink-0 text-[12px] text-jn-text-3">{label}</span>
+      <span className={cn("min-w-0 truncate text-[12px] text-jn-text", mono && "font-mono")}>{value}</span>
+      {note && <span className="min-w-0 truncate text-[11px] text-jn-text-3">{note}</span>}
       <span className="flex-1" />
       {action}
     </div>
@@ -419,12 +419,7 @@ function LanRow({ port, shared, copy }: { port: number; shared: boolean; copy: (
 }
 
 function CopyBtn({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} aria-label={label}
-      className="flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-jolu-border px-2.5 text-note text-jolu-text outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent">
-      <Copy aria-hidden className="size-3 text-jolu-muted" />复制
-    </button>
-  )
+  return <Button kind="ghost" size="sm" icon="copy" onClick={onClick} title={label}>复制</Button>
 }
 
 function AccountChecks({ accounts, onToggle }: { accounts: string[]; onToggle: (id: string) => void }) {
@@ -432,12 +427,12 @@ function AccountChecks({ accounts, onToggle }: { accounts: string[]; onToggle: (
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1.5">
       {connections.map((connection) => (
-        <label key={connection.id} className="flex items-center gap-1.5 text-meta text-jolu-text">
-          <input type="checkbox" checked={accounts.includes(connection.id)} onChange={() => onToggle(connection.id)} className="size-3.5 accent-[var(--jolu-accent)]" />
+        <label key={connection.id} className="flex items-center gap-1.5 text-[12px] text-jn-text">
+          <input type="checkbox" checked={accounts.includes(connection.id)} onChange={() => onToggle(connection.id)} className="size-3.5 accent-[var(--jn-primary)]" />
           {connection.name}
         </label>
       ))}
-      {connections.length === 0 && <span className="text-note text-jolu-muted">还没有连接</span>}
+      {connections.length === 0 && <span className="text-[11px] text-jn-text-3">还没有连接</span>}
     </div>
   )
 }
@@ -454,13 +449,13 @@ function AllowIpsCard() {
   }, [])
   const text = draft ?? saved
   return (
-    <section className="flex flex-col gap-1.5 rounded-xl border border-jolu-border px-4 py-3.5">
-      <span className="text-[13px] font-semibold text-jolu-text">允许连入的来源地址</span>
-      <span className="text-note text-jolu-muted">每行一个 IP 或网段 · 留空则局域网内都可连 · 本机始终可连</span>
-      {fromEnv && <span className="text-note text-jolu-warn">已由环境变量 JOLU_ALLOW_IPS 指定，这里保存的不会生效。</span>}
+    <section className="flex flex-col gap-1.5 rounded-xl border border-jn-line px-4 py-3.5">
+      <span className="text-[13px] font-semibold text-jn-text">允许连入的来源地址</span>
+      <span className="text-[11px] text-jn-text-3">每行一个 IP 或网段 · 留空则局域网内都可连 · 本机始终可连</span>
+      {fromEnv && <span className="text-[11px] text-jn-warning">已由环境变量 JOLU_ALLOW_IPS 指定，这里保存的不会生效。</span>}
       <textarea aria-label="允许连入的来源地址" rows={3} value={text} spellCheck={false}
         onChange={(event) => setDraft(event.target.value)}
-        className="rounded-lg border border-jolu-border bg-jolu-bg px-3 py-2 font-mono text-meta text-jolu-text outline-none focus:border-jolu-accent" />
+        className="rounded-lg border border-jn-line bg-jn-surface px-3 py-2 font-mono text-[12px] text-jn-text outline-none focus:border-jn-primary" />
       {draft !== null && (
         <div className="flex items-center gap-2">
           <button type="button" onClick={async () => {
@@ -471,8 +466,8 @@ function AllowIpsCard() {
             } catch (reason) {
               toast.danger("保存白名单失败", String(reason))
             }
-          }} className="h-8 rounded-lg bg-jolu-accent px-3.5 text-meta font-semibold text-[#071B10]">保存白名单</button>
-          <button type="button" onClick={() => setDraft(null)} className="text-meta text-jolu-muted hover:text-jolu-text">撤销</button>
+          }} className="h-8 rounded-lg bg-jn-primary px-3.5 text-[12px] font-semibold text-jn-on-primary">保存白名单</button>
+          <button type="button" onClick={() => setDraft(null)} className="text-[12px] text-jn-text-3 hover:text-jn-text">撤销</button>
         </div>
       )}
     </section>
@@ -481,7 +476,7 @@ function AllowIpsCard() {
 
 /** 接入示例：Key 一律写占位（局域网换成你的客户端 Key），不把任何真实 Key 放进页面。 */
 export function example(protocol: "anthropic" | "openai" | "gemini", shell: "powershell" | "shell" | "curl" | "python" | "node", base: string, model: string, shared: boolean): string {
-  const key = shared ? "<你的客户端 Key>" : "jolu-local"
+  const key = shared ? "<你的客户端 Key>" : "jn-primary-ink"
   const path = protocol === "openai" ? "/v1/chat/completions" : protocol === "anthropic" ? "/v1/messages" : `/v1beta/models/${model}:generateContent`
   const body = protocol === "gemini"
     ? `{"contents":[{"parts":[{"text":"你好"}]}]}`
@@ -508,10 +503,4 @@ export function example(protocol: "anthropic" | "openai" | "gemini", shell: "pow
   }
 }
 
-function EllipsisDot() {
-  return (
-    <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="currentColor">
-      <circle cx="3.2" cy="8" r="1.4" /><circle cx="8" cy="8" r="1.4" /><circle cx="12.8" cy="8" r="1.4" />
-    </svg>
-  )
-}
+

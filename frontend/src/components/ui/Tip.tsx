@@ -21,7 +21,7 @@ export function Tip({ label, side = "bottom", children, className }: { label: Re
           side={side}
           sideOffset={6}
           collisionPadding={8}
-          className={cn("motion-popover z-[120] rounded-md border border-jolu-border bg-jolu-cc-surface px-2 py-1 text-[12px] text-jolu-text shadow-popover", className)}
+          className={cn("jn-popover z-[130] inline-flex h-7 max-w-[280px] items-center rounded-[9px] bg-jn-inverse px-2.5 text-[11px] leading-tight text-jn-on-inverse shadow-jn-surface", className)}
         >
           {label}
         </Tooltip.Content>

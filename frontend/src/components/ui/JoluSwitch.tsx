@@ -84,9 +84,9 @@ function PlainSwitch({ on, onChange, disabled, label, compact = false }: JoluSwi
   return (
     <button type="button" role="switch" aria-checked={on} aria-label={label}
       disabled={disabled || !onChange} onClick={() => onChange?.(!on)}
-      data-size={compact ? "compact" : "regular"} className="jolu-switch">
-      <span aria-hidden className="jolu-switch-track">
-        <span className="jolu-switch-thumb" />
+      data-size={compact ? "compact" : "regular"} className="jn-switch">
+      <span aria-hidden className="jn-switch-track">
+        <span className="jn-switch-thumb" />
       </span>
     </button>
   )
@@ -216,7 +216,7 @@ function LiquidSwitch({ on, onChange, disabled, label, compact = false }: JoluSw
       aria-label={label}
       disabled={disabled || !onChange}
       data-size={compact ? "compact" : "regular"}
-      className="jolu-switch jolu-switch--liquid"
+      className="jn-switch jn-switch--liquid"
       /* 几何回写给样式表：轨道/滑块尺寸只有这一份来源 */
       style={{
         "--switch-width": `${trackW}px`,
@@ -236,8 +236,8 @@ function LiquidSwitch({ on, onChange, disabled, label, compact = false }: JoluSw
         onChange?.(!on)
       }}
     >
-      <span aria-hidden className="jolu-switch-track">
-        <motion.span className="jolu-switch-thumb" style={{ x, scaleX: shape.wide, scaleY: shape.tall }} />
+      <span aria-hidden className="jn-switch-track">
+        <motion.span className="jn-switch-thumb" style={{ x, scaleX: shape.wide, scaleY: shape.tall }} />
       </span>
     </button>
   )

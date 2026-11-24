@@ -60,6 +60,36 @@ export const STATE_LABEL: Record<VerifyState, string> = {
   na: "不适用",
 }
 
+/**
+ * 能力标签档位（`ui/data/CapabilityTag`）。
+ *
+ * 矩阵有五态，标签有六档：`unverified` 落到「待验证」（代码在、没有真实验收），
+ * `none` 落到「无记录」——两者不能合并：前者至少知道有实现，后者是连记录都没找到。
+ */
+export function capLevel(state: VerifyState): "verified" | "partial" | "pending" | "unknown" | "unsupported" {
+  switch (state) {
+    case "verified": return "verified"
+    case "partial": return "partial"
+    case "unverified": return "pending"
+    case "none": return "unknown"
+    case "na": return "unsupported"
+  }
+}
+
+/** 这家平台是否在能力矩阵里（不在时页面不显示推断出来的空行）。 */
+export function hasCapabilityPlatform(platform: string): boolean {
+  return PLATFORMS.some((entry) => entry.id === platform)
+}
+
+/** 某平台的全部能力行；矩阵里缺的格保留 `cell: null`（页面按「无记录」显示）。 */
+export function capabilityRows(platform: string): { capability: Capability; name: string; cell: VerifyCell | null }[] {
+  return CAPABILITIES.map((item) => ({
+    capability: item.id,
+    name: item.name,
+    cell: CELLS.find((cell) => cell.platform === platform && cell.capability === item.id) ?? null,
+  }))
+}
+
 export const CELLS: readonly VerifyCell[] = [
   { platform: "claude", capability: "login", state: "partial", date: "2026-10-26", record: "docs/verification/2026-10-26-claude-local-config-precedence.md", evidence: "API Key 本机导入真实跑通（状态 connected）；订阅 OAuth 登录、真实身份接口与跨账号切换仍未验证（2026-10-23-account-backend.md）", missing: "完整订阅 OAuth 登录样本、真实身份接口与跨账号切换" },
   { platform: "claude", capability: "quota", state: "partial", date: "2026-10-26", record: "docs/verification/2026-10-26-claude-local-config-precedence.md", evidence: "「真实只读余额烟测通过，返回 ok、有效 USD 余额字段」；编程套餐真实返回不支持（当前凭证未关联 Coding Plan）", missing: "订阅 OAuth 额度样本、已关联 Coding Plan 的凭证" },

@@ -1,13 +1,11 @@
 import { useEffect, type ReactNode } from "react"
 import { EVENTS } from "@/lib/events"
-import * as Dialog from "@radix-ui/react-dialog"
-import { X } from "lucide-react"
 import { useQuota } from "@/hooks/useQuota"
 import { listenEvent } from "@/lib/api"
 import type { CheckinStatistics, OfficialCheckinStatistics } from "@/lib/checkinApi"
 import { checkinPeriodDisplay, checkinQuotaDisplay, checkinQuotaSummary } from "@/lib/checkinStats"
 import { cn } from "@/lib/utils"
-import { JoluButton } from "@/components/ui/JoluButton"
+import { Button, Dialog } from "@/ui"
 
 export interface CheckinAccountStatsProps {
   accountId: string
@@ -25,7 +23,21 @@ export interface CheckinAccountStatsProps {
   deleteAction: ReactNode
 }
 
-export function CheckinAccountStats({ accountId, statistics, active, identityKey, official, showHistory = true, accountLabel, providerLabel, statusMessage, detailsOpen, onDetailsOpenChange, action, deleteAction }: CheckinAccountStatsProps) {
+export function CheckinAccountStats({
+  accountId,
+  statistics,
+  active,
+  identityKey,
+  official,
+  showHistory = true,
+  accountLabel,
+  providerLabel,
+  statusMessage,
+  detailsOpen,
+  onDetailsOpenChange,
+  action,
+  deleteAction,
+}: CheckinAccountStatsProps) {
   const enabled = active && identityKey !== null
   const quota = useQuota(accountId, false, enabled)
   const { refresh } = quota
@@ -34,9 +46,9 @@ export function CheckinAccountStats({ accountId, statistics, active, identityKey
     if (!enabled) return
     let stopped = false
     let off: (() => void) | undefined
-    void listenEvent(EVENTS.DAILY_CHECKIN_CHANGED, id => {
+    void listenEvent(EVENTS.DAILY_CHECKIN_CHANGED, (id) => {
       if (!stopped && id === accountId) void refresh()
-    }).then(unlisten => {
+    }).then((unlisten) => {
       if (stopped) unlisten()
       else off = unlisten
     }).catch(() => {})
@@ -49,77 +61,105 @@ export function CheckinAccountStats({ accountId, statistics, active, identityKey
   const display = checkinQuotaDisplay(quota)
   const summary = checkinQuotaSummary(quota)
 
-  const details = <section aria-label="签到统计与账户额度" data-checkin-details={accountId} className="flex min-w-0 flex-col gap-4">
-    <div className="flex flex-col gap-2"><h3 className="text-xs font-medium text-jolu-text">签到状态</h3><p className="break-words text-xs leading-relaxed text-jolu-muted">{statusMessage}</p></div>
-    {showHistory && <><div className="grid grid-cols-2 gap-3 rounded-lg bg-jolu-side p-3">
-      {periods.map(period => <div key={period.title} className="flex min-w-0 flex-col gap-1">
-        <p className="text-[12px] text-jolu-muted">{period.title}</p>
-        <p className="text-[22px] font-semibold leading-tight tabular-nums text-jolu-text">{period.days}</p>
-        <p className={cn("break-words text-[12px] tabular-nums", period.reward === "—" ? "text-jolu-muted" : "text-jolu-on")}>获得 {period.reward}</p>
-        <p className="text-[11px] text-jolu-muted">{period.source}</p>
-      </div>)}
-    </div>
-    <div className="flex min-w-0 items-baseline justify-between gap-2 text-[12px]">
-      <span className="shrink-0 text-jolu-muted">{official?.all ? `${official.scope}签到获得` : "累计签到获得"}</span>
-      <span className={cn("min-w-0 break-words text-right font-medium tabular-nums", all.reward === "—" ? "text-jolu-muted" : "text-jolu-on")}>{all.reward}</span>
-    </div>
-    {statistics?.has_records && !statistics.unit.trim() && <p className="text-[11px] text-jolu-muted">奖励单位未获取或不一致</p>}</>}
-    <div aria-label="账户额度" aria-busy={quota.loading} data-checkin-quota={accountId} className="flex min-w-0 flex-col gap-2 rounded-lg border border-jolu-border p-3">
-      <h3 className="text-[12px] font-medium text-jolu-text">账户额度</h3>
-      {display.rows.map(row => <div key={row.key} className="flex min-w-0 flex-col gap-1.5">
-        {row.label !== "账户额度" && <p className="break-words text-[12px] font-medium text-jolu-muted">{row.label}</p>}
-        <dl className="grid min-w-0 grid-cols-2 gap-3">
+  return (
+    <>
+      <section aria-label="账号数据摘要" data-checkin-stats={accountId} className="flex min-w-0 flex-1 flex-col gap-2.5">
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-3.5 rounded-[14px] bg-jn-well p-3.5">
+          {periods.map((period) => (
+            <div key={period.title} className="min-w-0">
+              <dt className="text-[11.5px] text-jn-text-3">{period.title}</dt>
+              <dd className="tnum mt-1 font-mono text-[20px] font-bold leading-tight text-jn-text">{showHistory ? period.days : "不适用"}</dd>
+            </div>
+          ))}
           <div className="min-w-0">
-            <dt className="text-[12px] text-jolu-muted">总额度</dt>
-            <dd className="mt-1 break-words text-[13px] font-medium leading-snug tabular-nums text-jolu-text">{row.total}</dd>
+            <dt className="text-[11.5px] text-jn-text-3">总额度</dt>
+            <dd className="tnum mt-1 break-words font-mono text-[14px] font-semibold leading-snug text-jn-text">{summary.total}</dd>
           </div>
           <div className="min-w-0">
-            <dt className="text-[12px] text-jolu-muted">{row.remainingLabel ?? "可用额度"}</dt>
-            <dd className="mt-1 break-words text-[13px] font-medium leading-snug tabular-nums text-jolu-text">{row.remaining}</dd>
+            <dt className="text-[11.5px] text-jn-text-3">{summary.remainingLabel}</dt>
+            <dd className="tnum mt-1 break-words font-mono text-[14px] font-semibold leading-snug text-jn-text">{summary.remaining}</dd>
           </div>
         </dl>
-        {row.used && <p className="text-[11px] tabular-nums text-jolu-muted">已用 {row.used}</p>}
-        {row.reason && <p className="break-words text-[11px] leading-relaxed text-jolu-muted">{row.reason}</p>}
-      </div>)}
-      {display.message && <p role="status" className={cn("break-words text-[11px] leading-relaxed", display.stale ? "font-medium text-jolu-text" : "text-jolu-muted")}>{display.message}</p>}
-      {display.stale && quota.fetchedAt && <p className="text-[11px] text-jolu-muted">上次更新 {quota.fetchedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</p>}
-    </div>
-    {showHistory && <>{official?.note && <p className="text-[11px] leading-relaxed text-jolu-muted">{official.note}</p>}
-    <p className="text-[11px] leading-relaxed text-jolu-muted">{official?.all ? `${official.scope}累计来自官方；周/月来源见各项标注` : "签到统计仅含 Jolu 已记录数据"}</p></>}
-  </section>
-
-  return <Dialog.Root open={detailsOpen} onOpenChange={onDetailsOpenChange}>
-    <section aria-label="账号数据摘要" data-checkin-stats={accountId} className="flex min-w-0 flex-1 flex-col gap-2.5">
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-4 rounded-lg bg-jolu-side p-3">
-        {periods.map(period => <div key={period.title} className="min-w-0">
-          <dt className="text-[12px] text-jolu-muted">{period.title}</dt>
-          <dd className="mt-1 text-[20px] font-semibold leading-tight tabular-nums text-jolu-text">{showHistory ? period.days : "不适用"}</dd>
-        </div>)}
-        <div className="min-w-0"><dt className="text-[12px] text-jolu-muted">总额度</dt><dd className="mt-1 break-words text-[15px] font-medium leading-snug tabular-nums text-jolu-text">{summary.total}</dd></div>
-        <div className="min-w-0"><dt className="text-[12px] text-jolu-muted">{summary.remainingLabel}</dt><dd className="mt-1 break-words text-[15px] font-medium leading-snug tabular-nums text-jolu-text">{summary.remaining}</dd></div>
-      </dl>
-      {(summary.status || summary.scope !== "账户额度") && (
-        <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px] text-jolu-muted">
-          {summary.scope !== "账户额度" ? <span>额度 · {summary.scope}</span> : <span />}
-          {summary.status && <span role="status" className={cn(quota.stale && "text-jolu-danger")}>额度{summary.status}</span>}
+        {(summary.status || summary.scope !== "账户额度") && (
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px] text-jn-text-3">
+            {summary.scope !== "账户额度" ? <span>额度 · {summary.scope}</span> : <span />}
+            {summary.status && <span role="status" className={cn(quota.stale && "text-jn-danger")}>额度{summary.status}</span>}
+          </div>
+        )}
+        <div data-checkin-actions={accountId} className="mt-auto flex items-center gap-1.5 pt-1.5">
+          <Button size="sm" kind="ghost" aria-label={`查看账号详情 ${accountLabel}`} onClick={() => onDetailsOpenChange(true)}>
+            详情
+          </Button>
+          <div className="min-w-0 flex-1">{action}</div>
+          {deleteAction}
         </div>
-      )}
-      <div data-checkin-actions={accountId} className="mt-auto flex items-center gap-1.5 pt-1.5">
-        <Dialog.Trigger asChild><JoluButton size="sm" variant="outline" aria-label={`查看账号详情 ${accountLabel}`} className="shrink-0 px-2">详情</JoluButton></Dialog.Trigger>
-        <div className="min-w-0 flex-1">{action}</div>
-        {deleteAction}
-      </div>
-    </section>
-    <Dialog.Portal>
-      <Dialog.Overlay className="motion-overlay fixed inset-x-0 bottom-0 top-[30px] z-50 bg-black/40" />
-      <Dialog.Content aria-describedby={undefined} className="fixed bottom-0 right-0 top-[30px] z-50 flex w-[480px] max-w-full flex-col border-l border-jolu-border bg-jolu-cc-surface shadow-dialog outline-none">
-        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-jolu-border p-6">
-          <div className="min-w-0"><Dialog.Title className="text-lg font-semibold text-jolu-text">账号详情</Dialog.Title><p className="mt-2 text-xs text-jolu-muted">{providerLabel}</p><p className="mt-1 break-all text-xs text-jolu-text">{accountLabel}</p></div>
-          <Dialog.Close aria-label="关闭账号详情" className="grid size-8 shrink-0 place-items-center rounded-lg text-jolu-muted outline-none hover:bg-jolu-side focus-visible:outline-2 focus-visible:outline-jolu-accent"><X aria-hidden className="size-4" /></Dialog.Close>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto p-6">{details}</div>
-        <footer className="flex shrink-0 justify-end border-t border-jolu-border px-6 py-4"><Dialog.Close asChild><JoluButton variant="outline">关闭</JoluButton></Dialog.Close></footer>
-      </Dialog.Content>
-    </Dialog.Portal>
-  </Dialog.Root>
+      </section>
+
+      <Dialog
+        open={detailsOpen}
+        onOpenChange={onDetailsOpenChange}
+        width="md"
+        title="账号详情"
+        description={`${providerLabel} · ${accountLabel}`}
+        actions={<Button kind="ghost" size="md" onClick={() => onDetailsOpenChange(false)}>关闭</Button>}
+      >
+        <section aria-label="签到统计与账户额度" data-checkin-details={accountId} className="flex min-w-0 flex-col gap-3.5">
+          <div className="flex flex-col gap-1.5 rounded-[14px] bg-jn-well p-3.5">
+            <h3 className="text-xs font-semibold text-jn-text">签到状态</h3>
+            <p className="break-words text-xs leading-relaxed text-jn-text-2">{statusMessage}</p>
+          </div>
+
+          {showHistory && (
+            <>
+              <div className="grid grid-cols-2 gap-3 rounded-[14px] bg-jn-well p-3.5">
+                {periods.map((period) => (
+                  <div key={period.title} className="flex min-w-0 flex-col gap-1">
+                    <p className="text-[11.5px] text-jn-text-3">{period.title}</p>
+                    <p className="tnum font-mono text-[22px] font-bold leading-tight text-jn-text">{period.days}</p>
+                    <p className={cn("tnum break-words text-xs font-medium", period.reward === "—" ? "text-jn-text-3" : "text-jn-primary-ink")}>获得 {period.reward}</p>
+                    <p className="text-[11px] text-jn-text-3">{period.source}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="flex min-w-0 items-baseline justify-between gap-2 px-1 text-xs">
+                <span className="shrink-0 text-jn-text-3">{official?.all ? `${official.scope}签到获得` : "累计签到获得"}</span>
+                <span className={cn("tnum min-w-0 break-words text-right font-semibold", all.reward === "—" ? "text-jn-text-3" : "text-jn-primary-ink")}>{all.reward}</span>
+              </div>
+              {statistics?.has_records && !statistics.unit.trim() && <p className="text-[11px] text-jn-text-3">奖励单位未获取或不一致</p>}
+            </>
+          )}
+
+          <div aria-label="账户额度" aria-busy={quota.loading} data-checkin-quota={accountId} className="flex min-w-0 flex-col gap-2.5 rounded-[14px] border border-jn-line p-3.5">
+            <h3 className="text-xs font-semibold text-jn-text">账户额度</h3>
+            {display.rows.map((row) => (
+              <div key={row.key} className="flex min-w-0 flex-col gap-1.5">
+                {row.label !== "账户额度" && <p className="break-words text-xs font-medium text-jn-text-2">{row.label}</p>}
+                <dl className="grid min-w-0 grid-cols-2 gap-3">
+                  <div className="min-w-0">
+                    <dt className="text-[11.5px] text-jn-text-3">总额度</dt>
+                    <dd className="tnum mt-1 break-words font-mono text-[13px] font-semibold leading-snug text-jn-text">{row.total}</dd>
+                  </div>
+                  <div className="min-w-0">
+                    <dt className="text-[11.5px] text-jn-text-3">{row.remainingLabel ?? "可用额度"}</dt>
+                    <dd className="tnum mt-1 break-words font-mono text-[13px] font-semibold leading-snug text-jn-text">{row.remaining}</dd>
+                  </div>
+                </dl>
+                {row.used && <p className="tnum text-[11px] text-jn-text-3">已用 {row.used}</p>}
+                {row.reason && <p className="break-words text-[11px] leading-relaxed text-jn-text-3">{row.reason}</p>}
+              </div>
+            ))}
+            {display.message && <p role="status" className={cn("break-words text-[11.5px] leading-relaxed", display.stale ? "font-medium text-jn-text" : "text-jn-text-3")}>{display.message}</p>}
+            {display.stale && quota.fetchedAt && <p className="text-[11px] text-jn-text-3">上次更新 {quota.fetchedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</p>}
+          </div>
+
+          {showHistory && (
+            <div className="flex flex-col gap-1 text-[11px] leading-relaxed text-jn-text-3">
+              {official?.note && <p>{official.note}</p>}
+              <p>{official?.all ? `${official.scope}累计来自官方；周/月来源见各项标注` : "签到统计仅含 Jolu 已记录数据"}</p>
+            </div>
+          )}
+        </section>
+      </Dialog>
+    </>
+  )
 }
