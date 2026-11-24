@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { cn } from "@/lib/utils"
 import { compactTokens } from "@/lib/api"
 import { useLiveCount } from "@/lib/liveCounts"
@@ -6,50 +6,39 @@ import { useGaze } from "@/hooks/useGaze"
 import { gazeAmp, gazeBase } from "@/lib/botGaze"
 import { tickRingMarker, tickRingSegments } from "@/lib/quotaRings"
 import { formatShort, tickerNext, tickerStart, type TickerFace } from "@/lib/tokenTicker"
-import type { BotExpr } from "@/lib/botExpression"
+import { isAlertExpr, type BotExpr, type BotProp, type BotShot } from "@/lib/botExpression"
 import type { RingGeometry } from "@/lib/providers/types"
+import { RiveBotFace } from "./RiveBotFace"
 
 /**
- * 胶囊灵动岛的 bot：脸、眼睛、额度环（Jolu.pen A3-5 / A3-6，设计说明 §6）。
- * props 只收数据，不读全局状态；眼睛跟随与 Token 轮播都在内部直接改 DOM / 定时器，
- * 不让灵动岛每帧重渲染。
- *
- * 额度环有两种几何，由环自己带 `geometry`（`lib/quotaRings.ts` 按窗口声明给出）：
- * `arc` 弧段环（5h / 7d）、`ticks` 24 段刻度环（日额度 / 积分桶，A3-13 / A3-14）。
- * 弧段环的半径、线宽、颜色、起点、方向与改造前逐字一致，刻度环只是多出来的分支。
+ * 胶囊灵动岛的 bot：双圈 SVG 额度环 + Rive 脸部（未交付 `.riv` 或加载失败时自动回退 SVG 眼睛）。
+ * 支持 R2-I-06 / §6.4 戳一戳：单击眨眼、连戳 3 次挤眼 `> <`（2 秒恢复），告警表情期间自动忽略。
  */
 const W = "#FFFFFF"
 interface EyeStyle { k: string; c: string; g: string; R?: string; h?: number; s?: number; dy?: number; cls?: string }
 const EYES: Record<BotExpr, EyeStyle> = {
   idle: { k: "pill", c: W, g: "#FFFFFF66" },
   look: { k: "pill", c: W, g: "#FFFFFF66" },
-  // 工作中的眼睛用主题绿：fill 由 capsule.css 的 `.cbot[data-expr="work"] .cbot-eyes-inner > *`
-  // 覆盖成 --pn-capsule-green（浅深色各一套），这里的 c 只是 CSS 没命中时的兜底；
-  // 光晕也换成同一个变量，免得浅色主题下深绿瞳孔外面套一圈亮薄荷色。
-  work: { k: "pill", h: 0.85, c: "#5BF08A", g: "color-mix(in srgb, var(--pn-capsule-green) 55%, transparent)", cls: "cbot-scan" },
+  work: { k: "pill", h: 0.85, c: "#3DD68C", g: "color-mix(in srgb, var(--pn-capsule-green) 55%, transparent)", cls: "cbot-scan" },
   refresh: { k: "spin", c: "#7DD8FF", g: "#5AC8FA99", cls: "cbot-spin" },
   happy: { k: "happy", c: W, g: "#FFFFFF66" },
   surprise: { k: "round", s: 1.15, c: W, g: "#FFFFFF66", cls: "cbot-hop" },
   greet: { k: "pill", R: "happy", c: W, g: "#FFFFFF66" },
   drag: { k: "gt", c: W, g: "#FFFFFF66" },
   peek: { k: "pill", h: 0.9, c: W, g: "#FFFFFF66" },
-  worry: { k: "lid", c: "#FFB340", g: "#FF9F0A99", cls: "cbot-breathe" },
-  sad: { k: "sad", dy: 0.05, c: "#FF6961", g: "#FF453A99" },
-  error: { k: "x", c: "#FF6961", g: "#FF453A99", cls: "cbot-shake" },
+  worry: { k: "lid", c: "#F5B83D", g: "#F5B83D99", cls: "cbot-breathe" },
+  sad: { k: "sad", dy: 0.05, c: "#FF6B6F", g: "#FF6B6F99" },
+  error: { k: "x", c: "#FF6B6F", g: "#FF6B6F99", cls: "cbot-shake" },
   sleep: { k: "line", dy: 0.06, c: "#8E8E93", g: "transparent", cls: "cbot-sleep" },
-  reset: { k: "star", c: "#5BF08A", g: "#30D15899" },
-  wait: { k: "pill", h: 0.55, dy: 0.04, c: "#FFB340", g: "#FF9F0A99" },
-  relay: { k: "pill", h: 0.85, c: "#7DD8FF", g: "#5AC8FA99" },
+  reset: { k: "star", c: "#3DD68C", g: "#3DD68C99" },
+  wait: { k: "pill", h: 0.55, dy: 0.04, c: "#F5B83D", g: "#F5B83D99" },
+  relay: { k: "pill", h: 0.85, c: "#5AC8FA", g: "#5AC8FA99" },
 }
 
 const n = (value: number) => Math.round(value * 100) / 100
 
-/** 单只眼睛。F 为脸的直径，(cx, cy) 为眼睛中心，flip 用于左右镜像的形状。
-    形状统一挂 .cbot-eye-shape：capsule.css 的绿/青/灰三档 fill 用 CSS 声明命中这里
-    （CSS 声明压过 SVG fill 属性），与 .cbot-eye-p 包裹层、.cbot-eyes-inner 的层级解耦。 */
 function Eye({ kind, cx, cy, F, e, flip }: { kind: string; cx: number; cy: number; F: number; e: EyeStyle; flip: boolean }) {
   const sw = n(Math.max(1.5, F * 0.055))
-  // vector-effect：球面透视缩放时描线粗细保持不变（EyeTracker「写尺寸不写缩放」的 SVG 等效）
   const stroke = { fill: "none", stroke: e.c, strokeWidth: sw, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, vectorEffect: "non-scaling-stroke" as const }
   switch (kind) {
     case "pill": {
@@ -84,7 +73,6 @@ function Eye({ kind, cx, cy, F, e, flip }: { kind: string; cx: number; cy: numbe
       )
     }
     case "lid": {
-      // 内侧上眼睑抬高，形成担心的眉形
       const w = F * 0.14, h = F * 0.234, x0 = cx - w / 2, y0 = cy - h * 0.46, u = w / 10, v = h / 18
       const p = (x: number, y: number) => `${n(x0 + x * u)} ${n(y0 + y * v)}`
       const top = flip ? `M${p(0, 0)} L${p(10, 3)}` : `M${p(0, 3)} L${p(10, 0)}`
@@ -98,19 +86,9 @@ function Eye({ kind, cx, cy, F, e, flip }: { kind: string; cx: number; cy: numbe
   return null
 }
 
-/**
- * 24 段刻度环（Jolu.pen A3-13 / A3-14）：24 段矩形、每段 15°、放射状摆放，
- * 12 点方向的起点标记点标出填充方向。几何参数全部在 `lib/quotaRings.ts`：
- * 32px 外径 + 环宽 2 时是「半径 15、线宽 1.44、段长 2.6、标记 1.6」，与画板一致。
- *
- * 0% 画成全轨道（24 段轨道色 + 起点标记），100% 整圈点亮——两者可区分，
- * 未知（没有百分比）由上游直接不给环，不会落到这里冒充 0%。
- */
 function TickRing({ size, radius, ringWidth, percent, color, warn, dimmed }: {
   size: number
-  /** 段中心所在半径（与弧段环同一套公式，最内侧就是最内圈） */
   radius: number
-  /** 该环的线宽，聚光时已按 1.35 放大 */
   ringWidth: number
   percent: number | null
   color: string
@@ -127,7 +105,6 @@ function TickRing({ size, radius, ringWidth, percent, color, warn, dimmed }: {
           rx={n(segment.width / 2)} fill="var(--pn-capsule-track)" style={{ opacity: dimmed ? 0.5 : 1 }}
           transform={`rotate(${n(segment.angle)} ${n(segment.cx)} ${n(segment.cy)})`} />
       ))}
-      {/* 点亮段合成一组：≥80% 的呼吸动画（.cbot-breathe .cbot-warn-ring）只作用在一个元素上 */}
       <g className={cn(warn && "cbot-warn-ring")} style={{ opacity: dimmed ? 0.3 : 1 }}>
         {ticks.filter(({ segment }) => segment.on).map(({ segment, index }) => (
           <rect key={`on-${index}`} x={n(segment.x)} y={n(segment.y)} width={n(segment.width)} height={n(segment.height)}
@@ -140,18 +117,14 @@ function TickRing({ size, radius, ringWidth, percent, color, warn, dimmed }: {
   )
 }
 
-/** 逐帧 Token 数：叶子组件订阅，追数时只有这里重渲染 */
 function LiveText({ countKey, short, ...rest }: { countKey: string; short: boolean } & React.SVGProps<SVGTextElement>) {
   const value = useLiveCount(countKey) ?? 0
   return <text {...rest}>{short ? formatShort(value) : `+${compactTokens(value)}`}</text>
 }
 
 export interface BotRing {
-  /** 已用百分比；未知为 null，只画空轨道 */
   p: number | null
-  /** 环几何：弧段环 / 刻度环（由 `lib/quotaRings.ts` 按窗口声明给出，不再按平台） */
   geometry: RingGeometry
-  /** CSS 颜色，如 var(--pn-capsule-green) */
   color: string
   warn?: boolean
   aria?: string
@@ -159,18 +132,19 @@ export interface BotRing {
 
 export interface BotProps {
   size: number
-  /** 「正在写」的可信度（4.2）：inferred 时工作眼睛改青色，unknown 时空闲眼睛改灰色 */
   certainty?: "confirmed" | "inferred" | "unknown" | "idle"
-  /** 环宽、环间距、无环时的内边距 */
   ringWidth?: number
   ringGap?: number
   inset?: number
   rings?: BotRing[]
   expr: BotExpr
+  prop?: BotProp
+  shot?: BotShot | null
+  reduced?: boolean
+  /** 启用 R2-I-06 戳一戳（单击眨眼、连戳 3 次挤眼，告警期自动屏蔽） */
+  pokeable?: boolean
   dockEdge?: "top" | "bottom" | "left" | "right" | null
-  /** 运行中 Token 轮播：countKey 指向 LiveCountsContext 的键 */
   ticker?: { countKey: string; label: string; sub?: string } | null
-  /** 聚焦的环序号：其余环变淡，屏幕改显数值 */
   focus?: number | null
   display?: [string, string, string?] | null
   interactive?: boolean
@@ -184,24 +158,69 @@ const SMALL_FACE = 40
 const MIN_TICK_FACE = 16
 
 export function Bot({
-  size, ringWidth = 0, ringGap = 0, inset = 0, rings = [], expr, dockEdge = null, ticker = null, certainty,
+  size, ringWidth = 0, ringGap = 0, inset = 0, rings = [], expr, prop = "none", shot = null, reduced = false,
+  pokeable = false, dockEdge = null, ticker = null, certainty,
   focus = null, display = null, interactive = false, onRingHover, onRingClick, pinnedRing = null, className,
 }: BotProps) {
   const count = rings.length
   const offset = count ? count * (ringWidth + ringGap) : inset
   const F = size - 2 * offset
   const small = F < SMALL_FACE
-  const e = EYES[expr] ?? EYES.idle
   const c = size / 2
 
   const svgRef = useRef<SVGSVGElement>(null)
   const faceRef = useRef<SVGCircleElement>(null)
   const eyesRef = useRef<SVGGElement>(null)
-  // 球面眼睛静息几何（Bencho EyeTracker 移植）：眼距 / 垂直偏移随表情的 dy 变化
-  const gapPx = F * 0.135, eyeCy = F / 2 + (e.dy ?? 0) * F
-  useGaze(faceRef, eyesRef, { base: gazeBase(expr, dockEdge), amp: gazeAmp(expr), gapPx, cyPx: eyeCy }, F)
+  const [riveReady, setRiveReady] = useState(false)
 
-  // Token 轮播：首轮先看眼睛 2 秒，之后眼睛 4 秒、Token 3 秒；迷你尺寸不显示数字
+  // R2-I-06 戳一戳状态：单击眨眼，1.2s 内连戳 3 次挤眼（> <）停留 2 秒；告警期静默不响应
+  const [pokeSeq, setPokeSeq] = useState(0)
+  const [squeezed, setSqueezed] = useState(false)
+  const pokeTimes = useRef<number[]>([])
+  const squeezeTimer = useRef(0)
+  const blinkTimer = useRef(0)
+
+  useEffect(() => {
+    if (isAlertExpr(expr) && squeezed) {
+      window.clearTimeout(squeezeTimer.current)
+      setSqueezed(false)
+    }
+  }, [expr, squeezed])
+
+  useEffect(() => () => {
+    window.clearTimeout(squeezeTimer.current)
+    window.clearTimeout(blinkTimer.current)
+  }, [])
+
+  const handleFaceClick = useCallback((event: React.MouseEvent) => {
+    if (!pokeable || isAlertExpr(expr) || event.detail > 1) return
+    const now = Date.now()
+    pokeTimes.current = [...pokeTimes.current.filter((t) => now - t <= 1200), now]
+    setPokeSeq((seq) => seq + 1)
+
+    if (pokeTimes.current.length >= 3) {
+      pokeTimes.current = []
+      setSqueezed(true)
+      window.clearTimeout(squeezeTimer.current)
+      squeezeTimer.current = window.setTimeout(() => setSqueezed(false), 2000)
+      return
+    }
+    const svg = svgRef.current
+    if (svg && !reduced) {
+      svg.classList.remove("cbot-blink")
+      void svg.getBoundingClientRect()
+      svg.classList.add("cbot-blink")
+      window.clearTimeout(blinkTimer.current)
+      blinkTimer.current = window.setTimeout(() => svg.classList.remove("cbot-blink"), 160)
+    }
+  }, [pokeable, expr, reduced])
+
+  const shownExpr: BotExpr = squeezed && !isAlertExpr(expr) ? "drag" : expr
+  const e = EYES[shownExpr] ?? EYES.idle
+
+  const gapPx = F * 0.135, eyeCy = F / 2 + (e.dy ?? 0) * F
+  useGaze(faceRef, eyesRef, { base: gazeBase(shownExpr, dockEdge), amp: gazeAmp(shownExpr), gapPx, cyPx: eyeCy }, F)
+
   const tickerOn = Boolean(ticker) && F >= MIN_TICK_FACE && !display
   const [face, setFace] = useState<TickerFace>("eyes")
   useEffect(() => {
@@ -219,9 +238,8 @@ export function Bot({
   }, [tickerOn])
   const ticking = tickerOn && face === "tick"
 
-  // 空闲类表情每 4–6 秒眨一次眼
   useEffect(() => {
-    if (!["idle", "look", "peek"].includes(expr)) return
+    if (reduced || !["idle", "look", "peek"].includes(shownExpr)) return
     let timer = 0, reset = 0
     const schedule = () => {
       timer = window.setTimeout(() => {
@@ -232,20 +250,19 @@ export function Bot({
     }
     schedule()
     return () => { window.clearTimeout(timer); window.clearTimeout(reset) }
-  }, [expr])
+  }, [shownExpr, reduced])
 
-  // 完成：外圈走一圈高光
-  const previous = useRef<BotExpr>(expr)
+  const previous = useRef<BotExpr>(shownExpr)
   useEffect(() => {
     const svg = svgRef.current
-    if (expr === "happy" && previous.current !== "happy" && svg && count) {
+    if (!reduced && shownExpr === "happy" && previous.current !== "happy" && svg && count) {
       svg.classList.remove("cbot-sweeping"); void svg.getBoundingClientRect(); svg.classList.add("cbot-sweeping")
       const timer = window.setTimeout(() => svg.classList.remove("cbot-sweeping"), 1150)
-      previous.current = expr
+      previous.current = shownExpr
       return () => window.clearTimeout(timer)
     }
-    previous.current = expr
-  }, [expr, count])
+    previous.current = shownExpr
+  }, [shownExpr, count, reduced])
 
   const g = gapPx, cy = eyeCy
   const ringEls: ReactNode[] = rings.map((ring, i) => {
@@ -254,7 +271,6 @@ export function Bot({
     const p = ring.p === null ? 0 : Math.max(0, Math.min(100, ring.p)) / 100
     const dimmed = focus != null && focus !== i
     const w = focus === i ? ringWidth * 1.35 : ringWidth
-    // 几何只看环自己的声明：弧段环走改造前的 ellipse，刻度环走 A3-13 的 24 段
     const ticks = ring.geometry === "ticks"
     return (
       <g
@@ -282,7 +298,6 @@ export function Bot({
               style={{ opacity: p <= 0 ? 0 : dimmed ? 0.3 : 1 }} />
           </>
         )}
-        {/* 完成时的外圈高光只属于弧段环：刻度环没有「一圈走完」的轨迹可扫 */}
         {i === 0 && !ticks && (
           <circle className="cbot-sweep" cx={c} cy={c} r={n(r)} fill="none" stroke="#FFFFFF" strokeWidth={ringWidth} strokeLinecap="round"
             strokeDasharray={`${n(C * 0.1)} ${n(C)}`} transform={`rotate(-90 ${c} ${c})`} style={{ ["--c" as string]: n(C) }} />
@@ -293,59 +308,100 @@ export function Bot({
   })
 
   return (
-    // data-expr 给 capsule.css 用：只有「工作中」把眼睛染成 --pn-capsule-green，
-    // 其他表达式（含表情库预览）保持原色；blink / scan 的 keyframes 不受影响。
-    <svg
-      ref={svgRef}
-      width={size}
-      height={size}
-      viewBox={`0 0 ${size} ${size}`}
-      aria-hidden={interactive ? undefined : true}
-      className={cn("cbot", e.cls, ticking && "cbot-ticking", display && "cbot-showing", className)}
-      data-expr={expr}
-      data-certainty={certainty}
-      data-small={small && count ? 1 : 0}
-      style={{ ["--F" as string]: n(F), ["--z" as string]: n(size / F), ["--glow" as string]: e.g }}
-    >
-      {ringEls}
-      <g transform={`translate(${n(offset)} ${n(offset)})`}>
-        <g className="cbot-zoom">
-          <circle ref={faceRef} cx={n(F / 2)} cy={n(F / 2)} r={n(F / 2 - 0.5)} fill="var(--pn-capsule-bot)" stroke="var(--pn-capsule-bot-stroke)" strokeWidth={1} />
-          <g ref={eyesRef} className="cbot-eyes" style={{ filter: `drop-shadow(0 0 ${n(Math.max(1.5, F * 0.1))}px var(--glow))` }}>
-            <g className="cbot-eyes-slide">
-              <g className="cbot-eyes-inner" key={expr}>
-                {/* 球面眼睛：每只眼包一层，useGaze 按帧写各自的 transform（透视变形） */}
-                <g className="cbot-eye-p"><Eye kind={e.k} cx={F / 2 - g} cy={cy} F={F} e={e} flip={false} /></g>
-                <g className="cbot-eye-p"><Eye kind={e.R ?? e.k} cx={F / 2 + g} cy={cy} F={F} e={e} flip /></g>
+    <span className={cn("cbot-wrap", className)} style={{ width: size, height: size }}>
+      <svg
+        ref={svgRef}
+        width={size}
+        height={size}
+        viewBox={`0 0 ${size} ${size}`}
+        aria-hidden={interactive ? undefined : true}
+        className={cn("cbot", e.cls, ticking && "cbot-ticking", display && "cbot-showing")}
+        data-expr={shownExpr}
+        data-certainty={certainty}
+        data-rive={riveReady ? "on" : "fallback"}
+        data-small={small && count ? 1 : 0}
+        style={{ ["--F" as string]: n(F), ["--z" as string]: n(size / F), ["--glow" as string]: e.g }}
+      >
+        {ringEls}
+        <g transform={`translate(${n(offset)} ${n(offset)})`}>
+          <g className="cbot-zoom">
+            <circle
+              ref={faceRef}
+              cx={n(F / 2)}
+              cy={n(F / 2)}
+              r={n(F / 2 - 0.5)}
+              fill="var(--pn-capsule-bot)"
+              stroke="var(--pn-capsule-bot-stroke)"
+              strokeWidth={1}
+              className={pokeable && !isAlertExpr(expr) ? "cbot-face-hit" : undefined}
+              onClick={handleFaceClick}
+            />
+            {!riveReady && (
+              <g ref={eyesRef} className="cbot-eyes" style={{ filter: `drop-shadow(0 0 ${n(Math.max(1.5, F * 0.1))}px var(--glow))`, pointerEvents: "none" }}>
+                <g className="cbot-eyes-slide">
+                  <g className="cbot-eyes-inner" key={shownExpr}>
+                    <g className="cbot-eye-p"><Eye kind={e.k} cx={F / 2 - g} cy={cy} F={F} e={e} flip={false} /></g>
+                    <g className="cbot-eye-p"><Eye kind={e.R ?? e.k} cx={F / 2 + g} cy={cy} F={F} e={e} flip /></g>
+                  </g>
+                </g>
               </g>
-            </g>
-          </g>
-          {ticker && (
-            <g className="cbot-tick" textAnchor="middle" fontFamily="var(--font-mono, ui-monospace)" style={{ filter: `drop-shadow(0 0 ${n(Math.max(1.5, F * 0.06))}px #30D15880)` }}>
-              {small ? (
-                <LiveText countKey={ticker.countKey} short x={n(F / 2)} y={n(F / 2 + F * 0.13)} fontSize={n(F * 0.36)} fontWeight={700} fill="#5BF08A" letterSpacing={-0.3} />
-              ) : (
-                <>
-                  <LiveText countKey={ticker.countKey} short={false} x={n(F / 2)} y={n(F * 0.53)} fontSize={n(F * 0.2)} fontWeight={700} fill="#5BF08A" letterSpacing={-0.6} />
-                  <text x={n(F / 2)} y={n(F * 0.67)} fontSize={n(F * 0.095)} fontWeight={600} fill="#FFFFFFB3">{ticker.label}</text>
-                  {ticker.sub && <text x={n(F / 2)} y={n(F * 0.79)} fontSize={n(F * 0.08)} fontWeight={500} fill="#FFFFFF80">{ticker.sub}</text>}
-                </>
-              )}
-            </g>
-          )}
-          {display && (
-            <g className="cbot-disp" textAnchor="middle">
-              <text x={n(F / 2)} y={n(F * 0.52)} fontSize={n(F * 0.24)} fontWeight={700} fill="#FFFFFF" letterSpacing={-0.5}>{display[0]}</text>
-              <text x={n(F / 2)} y={n(F * 0.66)} fontSize={n(F * 0.095)} fontWeight={600} fill="#FFFFFFB3">{display[1]}</text>
-              {display[2] && <text x={n(F / 2)} y={n(F * 0.78)} fontSize={n(F * 0.08)} fontWeight={500} fill="#FFFFFF80">{display[2]}</text>}
-            </g>
-          )}
-          <g className="cbot-zz" fontWeight={700}>
-            <text x={n(F * 0.68)} y={n(F * 0.34)} fontSize={n(F * 0.17)} fill="#FFFFFF80">z</text>
-            <text x={n(F * 0.8)} y={n(F * 0.22)} fontSize={n(F * 0.12)} fill="#FFFFFF55">z</text>
+            )}
+            {ticker && (
+              <g className="cbot-tick" textAnchor="middle" fontFamily="var(--font-mono, ui-monospace)" style={{ filter: `drop-shadow(0 0 ${n(Math.max(1.5, F * 0.06))}px #3DD68C80)`, pointerEvents: "none" }}>
+                {small ? (
+                  <LiveText countKey={ticker.countKey} short x={n(F / 2)} y={n(F / 2 + F * 0.13)} fontSize={n(F * 0.36)} fontWeight={700} fill="#3DD68C" letterSpacing={-0.3} />
+                ) : (
+                  <>
+                    <LiveText countKey={ticker.countKey} short={false} x={n(F / 2)} y={n(F * 0.53)} fontSize={n(F * 0.2)} fontWeight={700} fill="#3DD68C" letterSpacing={-0.6} />
+                    <text x={n(F / 2)} y={n(F * 0.67)} fontSize={n(F * 0.095)} fontWeight={600} fill="#FFFFFFB3">{ticker.label}</text>
+                    {ticker.sub && <text x={n(F / 2)} y={n(F * 0.79)} fontSize={n(F * 0.08)} fontWeight={500} fill="#FFFFFF80">{ticker.sub}</text>}
+                  </>
+                )}
+              </g>
+            )}
+            {display && (
+              <g className="cbot-disp" textAnchor="middle" style={{ pointerEvents: "none" }}>
+                <text x={n(F / 2)} y={n(F * 0.52)} fontSize={n(F * 0.24)} fontWeight={700} fill="#FFFFFF" letterSpacing={-0.5}>{display[0]}</text>
+                <text x={n(F / 2)} y={n(F * 0.66)} fontSize={n(F * 0.095)} fontWeight={600} fill="#FFFFFFB3">{display[1]}</text>
+                {display[2] && <text x={n(F / 2)} y={n(F * 0.78)} fontSize={n(F * 0.08)} fontWeight={500} fill="#FFFFFF80">{display[2]}</text>}
+              </g>
+            )}
+            {!riveReady && (
+              <g className="cbot-zz" fontWeight={700} style={{ pointerEvents: "none" }}>
+                <text x={n(F * 0.68)} y={n(F * 0.34)} fontSize={n(F * 0.17)} fill="#FFFFFF80">z</text>
+                <text x={n(F * 0.8)} y={n(F * 0.22)} fontSize={n(F * 0.12)} fill="#FFFFFF55">z</text>
+              </g>
+            )}
           </g>
         </g>
-      </g>
-    </svg>
+      </svg>
+
+      {/* Rive 脸部叠加在额度环内部：未交付 bot.riv 时不渲染、透明回退 SVG 眼睛 */}
+      <span
+        style={{
+          position: "absolute",
+          left: offset,
+          top: offset,
+          width: F,
+          height: F,
+          borderRadius: "50%",
+          overflow: "hidden",
+          pointerEvents: "none",
+          display: ticking || display ? "none" : "block",
+        }}
+      >
+        <RiveBotFace
+          size={F}
+          expr={shownExpr}
+          certainty={certainty}
+          prop={prop}
+          shot={shot}
+          pokeSeq={pokeSeq}
+          small={small}
+          reduced={reduced}
+          onReadyChange={setRiveReady}
+        />
+      </span>
+    </span>
   )
 }

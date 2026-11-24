@@ -145,6 +145,7 @@ pub(crate) fn set_otlp_endpoint(app: tauri::AppHandle, endpoint: Option<String>)
 #[tauri::command]
 pub(crate) fn set_dock_enabled(app: tauri::AppHandle, on: bool) -> Result<settings::Settings, String> {
     if !on { FIRST_INSTALL_INTRO.store(false, Ordering::Release); }
+    let prev = app.state::<Cfg>().0.get();
     let next = app.state::<Cfg>().0.try_update(|settings| {
         settings.dock_enabled = on;
         if !on {
@@ -153,9 +154,24 @@ pub(crate) fn set_dock_enabled(app: tauri::AppHandle, on: bool) -> Result<settin
         }
     })?;
     if !on {
-        for window in island_windows(&app) { dock::undock(&window); }
+        let is_capsule = next.island_style == "capsule";
+        for window in island_windows(&app) {
+            if is_capsule {
+                let id = island_clones::id_from_label(window.label()).flatten();
+                dock::undock_stage(&window, island_dock(&prev, id.as_deref()).edge);
+            } else {
+                dock::undock(&window);
+            }
+        }
     }
     for id in island_ids(&next) { emit_dock_changed(&app, id.as_deref(), &island_dock(&next, id.as_deref())); }
+    crate::events::settings_changed(&app);
+    Ok(next)
+}
+
+#[tauri::command]
+pub(crate) fn set_island_horizontal_dock_full(app: tauri::AppHandle, on: bool) -> Result<settings::Settings, String> {
+    let next = app.state::<Cfg>().0.try_update(|settings| settings.island_horizontal_dock_full = on)?;
     crate::events::settings_changed(&app);
     Ok(next)
 }

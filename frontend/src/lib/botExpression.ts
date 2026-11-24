@@ -9,6 +9,85 @@ export type BotExpr =
 /** 一次性表情：触发后短暂停留，不回放已经错过的 */
 export type BotShot = "happy" | "surprise" | "greet" | "reset"
 
+/**
+ * Rive 状态机 `expr` 输入的固定编号表（docs/specs/2026-11-24-island-rendering-tech.md §6.2）。
+ * 新增表情时必须追加在末尾，保持已有编号稳定；`botExpression.test.mjs` 会校验两表一致。
+ */
+export const BOT_EXPR_ORDER: readonly BotExpr[] = [
+  "idle", "look", "work", "refresh", "happy", "surprise", "greet", "drag",
+  "peek", "worry", "sad", "error", "sleep", "reset", "wait", "relay",
+] as const
+
+export const BOT_EXPR_INDEX: Record<BotExpr, number> = Object.fromEntries(
+  BOT_EXPR_ORDER.map((expr, index) => [expr, index]),
+) as Record<BotExpr, number>
+
+/** R2-I-05 道具编号表（§6.2 `prop` 输入）：0 无、1 礼物、2 充能、3 彩带、4 存钱罐、5 餐具、6 旗子、7 咖啡、8 奖章 */
+export type BotProp = "none" | "gift" | "charge" | "confetti" | "piggy" | "utensils" | "flag" | "coffee" | "medal"
+
+export const BOT_PROP_ORDER: readonly BotProp[] = [
+  "none", "gift", "charge", "confetti", "piggy", "utensils", "flag", "coffee", "medal",
+] as const
+
+export const BOT_PROP_INDEX: Record<BotProp, number> = Object.fromEntries(
+  BOT_PROP_ORDER.map((prop, index) => [prop, index]),
+) as Record<BotProp, number>
+
+/** §6.2 `eyeTone` 输入：0 白、1 绿（写入）、2 青（转发）、3 橙（预警 / 等待）、4 红（出错）、5 灰（睡着） */
+export type BotEyeTone = "white" | "green" | "cyan" | "orange" | "red" | "gray"
+
+export const BOT_EYE_TONE_INDEX: Record<BotEyeTone, number> = {
+  white: 0,
+  green: 1,
+  cyan: 2,
+  orange: 3,
+  red: 4,
+  gray: 5,
+}
+
+/** §6.2 `shotKind` 输入：与 `BotShot` 对应 */
+export const BOT_SHOT_INDEX: Record<BotShot, number> = {
+  happy: 1,
+  surprise: 2,
+  greet: 3,
+  reset: 4,
+}
+
+/** 由表情与写入可信度推出眼睛色档（同时供 Rive `eyeTone` 与 SVG 兜底参考） */
+export function botEyeTone(
+  expr: BotExpr,
+  certainty?: "confirmed" | "inferred" | "unknown" | "idle",
+): BotEyeTone {
+  if (expr === "error" || expr === "sad") return "red"
+  if (expr === "worry" || expr === "wait") return "orange"
+  if (expr === "sleep") return "gray"
+  if (expr === "relay" || expr === "refresh") return "cyan"
+  if (expr === "work") return certainty === "inferred" ? "cyan" : "green"
+  if (expr === "reset") return "green"
+  if (certainty === "unknown" && (expr === "idle" || expr === "look" || expr === "peek")) return "gray"
+  return "white"
+}
+
+/** 告警类表情期间忽略戳一戳，避免覆盖真实告警（§6.4 / R2-I-06） */
+export function isAlertExpr(expr: BotExpr): boolean {
+  return expr === "worry" || expr === "sad" || expr === "error"
+}
+
+/** 硬件材质下边缘同色环境光档位（§5 光晕跟状态走） */
+export type IslandAmbientGlow = "work" | "relay" | "warn" | "error" | "idle"
+
+export function islandAmbientGlow(
+  expr: BotExpr,
+  certainty?: "confirmed" | "inferred" | "unknown" | "idle",
+): IslandAmbientGlow {
+  if (expr === "error" || expr === "sad") return "error"
+  if (expr === "worry" || expr === "wait") return "warn"
+  if (expr === "relay" || expr === "refresh") return "relay"
+  if (expr === "work") return certainty === "inferred" ? "relay" : "work"
+  if (expr === "reset" || expr === "happy") return "work"
+  return "idle"
+}
+
 /** 无运行状态、无告警时 30 分钟没有写入就睡着 */
 export const SLEEP_AFTER_MS = 30 * 60_000
 /** 单段新增达到这个数就惊讶 */

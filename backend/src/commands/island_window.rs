@@ -55,8 +55,8 @@ pub(crate) fn remember_clone_position(app: &tauri::AppHandle, id: &str, window: 
     }
 }
 
-/// 灵动岛窗口尺寸跟随内容。收缩 / 展开 / 停靠三态高度差很大（展开态有会话列表），
-/// 写死会把内容截断——由前端测量实际内容后调用本命令。调用方窗口即目标岛。
+/// 灵动岛窗口尺寸跟随内容（仅经典样式）。
+/// 胶囊样式已切到固定舞台窗口（§3），形变期间不再改原生窗口大小，只返回工作区高度上限。
 #[tauri::command]
 pub(crate) fn resize_island(app: tauri::AppHandle, window: WebviewWindow, width: f64, height: f64) -> Result<Option<f64>, String> {
     let id = island_id_of(&window)?;
@@ -64,9 +64,12 @@ pub(crate) fn resize_island(app: tauri::AppHandle, window: WebviewWindow, width:
     if !width.is_finite() || !height.is_finite() || width < 8.0 || height < 8.0 {
         return Err("灵动岛尺寸无效".into());
     }
-    // 用户主动展开本体后，不再按首次安装计时强制收成停靠条。
-    if id.is_none() && height > 150.0 { FIRST_INSTALL_INTRO.store(false, Ordering::Release); }
     let cfg = app.state::<Cfg>().0.get();
+    if cfg.island_style == "capsule" {
+        return Ok(dock::work_area(&w).map(|area| area.3));
+    }
+    // 用户主动展开本体后，不再按首次安装计时强制收成停靠条（经典样式仍按窗口高度判断）。
+    if id.is_none() && height > 150.0 { FIRST_INSTALL_INTRO.store(false, Ordering::Release); }
     // 改尺寸后重新确认置顶：对应设置里默认开启的「灵动岛置顶」
     let _ = w.set_always_on_top(cfg.always_on_top);
     let dock_state = island_dock(&cfg, id.as_deref());
@@ -75,12 +78,7 @@ pub(crate) fn resize_island(app: tauri::AppHandle, window: WebviewWindow, width:
         // 把停靠窗口的实际工作区上限交给前端，避免动画等待不可达高度。
         return Ok(dock::work_area(&w).map(|area| area.3));
     } else {
-        // 胶囊自由态：围绕水平中心缩放，展开/收回时内容不会整块往右跳
-        if cfg.island_style == "capsule" {
-            dock::resize_free_centered(&w, width, height)?;
-        } else {
-            dock::resize_free(&w, width, height)?;
-        }
+        dock::resize_free(&w, width, height)?;
         if id.is_none() && FIRST_INSTALL_INTRO.load(Ordering::Acquire) {
             dock::place_free_top_center(&w)?;
         }
@@ -88,11 +86,38 @@ pub(crate) fn resize_island(app: tauri::AppHandle, window: WebviewWindow, width:
     Ok(None)
 }
 
+/// 胶囊舞台窗口上报当前可见轮廓（含四角圆角）与强制交互态（如下拉菜单打开中）。
+/// 后端 `island_pointer` 据此精确切换鼠标穿透，透明区域点击落到下方程序。
+#[tauri::command]
+pub(crate) fn set_island_hit_region(
+    window: WebviewWindow,
+    rects: Vec<island_pointer::HitRect>,
+    interactive: bool,
+) -> Result<(), String> {
+    let _ = island_id_of(&window)?;
+    island_pointer::set_hit_region(window.label(), rects, interactive);
+    Ok(())
+}
+
+/// 胶囊形态通知后端展开 / 收起：替代原依赖窗口高度 > 150px 判断首次安装引导的逻辑（§3）。
+#[tauri::command]
+pub(crate) fn island_set_expanded(window: WebviewWindow, expanded: bool) -> Result<(), String> {
+    let id = island_id_of(&window)?;
+    if id.is_none() && expanded {
+        FIRST_INSTALL_INTRO.store(false, Ordering::Release);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub(crate) fn island_drag(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
     let id = island_id_of(&window)?;
     if id.is_none() { FIRST_INSTALL_INTRO.store(false, Ordering::Release); }
     let w = window;
+    let is_capsule = app.state::<Cfg>().0.get().island_style == "capsule";
+    if is_capsule {
+        let _ = w.set_ignore_cursor_events(false);
+    }
     dock::DRAGGING.store(true, std::sync::atomic::Ordering::Relaxed);
     let result = dock::drag(&w);
     dock::DRAGGING.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -125,9 +150,14 @@ pub(crate) fn island_position(app: tauri::AppHandle, edge: Option<dock::Edge>, i
     let id = island.as_deref();
     if id.is_none() { FIRST_INSTALL_INTRO.store(false, Ordering::Release); }
     let Some(w) = island_window(&app, id) else { return };
+    let is_capsule = app.state::<Cfg>().0.get().island_style == "capsule";
     if let Some(edge) = edge {
         let Some(offset) = dock::centered_offset(&w, edge) else { return };
-        dock::apply_dock(&w, edge, offset);
+        if is_capsule {
+            dock::apply_stage_dock(&w, edge, offset);
+        } else {
+            dock::apply_dock(&w, edge, offset);
+        }
         // 窗口 API 会跨线程等待主事件循环；禁止在设置锁内调用，移动回调也会读取设置。
         let monitor = w.current_monitor().ok().flatten().and_then(|m| m.name().cloned());
         store_island_dock(&app, id, dock::DockState { edge: Some(edge), offset, monitor });
@@ -142,7 +172,28 @@ pub(crate) fn island_position(app: tauri::AppHandle, edge: Option<dock::Edge>, i
 #[tauri::command]
 pub(crate) fn set_island_style(app: tauri::AppHandle, style: String) -> Result<settings::Settings, String> {
     settings::validate_island_style(&style)?;
-    let next = app.state::<Cfg>().0.try_update(|settings| settings.island_style = style)?;
+    let next = app.state::<Cfg>().0.try_update(|settings| settings.island_style = style.clone())?;
+    let is_capsule = style == "capsule";
+    for w in island_windows(&app) {
+        let id = island_clones::id_from_label(w.label()).flatten();
+        let dock_state = island_dock(&next, id.as_deref());
+        if is_capsule {
+            let _ = w.set_ignore_cursor_events(true);
+            if next.dock_enabled && dock_state.edge.is_some() {
+                let _ = dock::restore_stage_dock(&w, &dock_state);
+            } else {
+                let _ = dock::apply_stage_free(&w);
+            }
+        } else {
+            island_pointer::clear_hit_region(w.label());
+            let _ = w.set_ignore_cursor_events(false);
+            if next.dock_enabled && dock_state.edge.is_some() {
+                let _ = dock::restore_dock(&w, &dock_state);
+            } else {
+                let _ = dock::resize_free(&w, dock::FREE_W, dock::FREE_H);
+            }
+        }
+    }
     crate::events::settings_changed(&app);
     Ok(next)
 }
@@ -194,12 +245,17 @@ pub(crate) async fn island_menu(app: tauri::AppHandle, window: WebviewWindow, re
 
 pub(crate) fn dock_release_for(app: &tauri::AppHandle, w: &WebviewWindow, id: Option<&str>) -> Option<dock::SnapResult> {
     let store = &app.state::<Cfg>().0;
-    if !store.get().dock_enabled {
+    let cfg = store.get();
+    if !cfg.dock_enabled {
         store.update(|settings| { island_clones::set_dock(settings, id, Default::default()); });
         emit_dock_changed(app, id, &Default::default());
         return None;
     }
-    let r = dock::snap_on_release(w);
+    let r = if cfg.island_style == "capsule" {
+        dock::snap_on_release_stage(w, island_pointer::primary_contour(w.label()))
+    } else {
+        dock::snap_on_release(w)
+    };
     let monitor = w.current_monitor().ok().flatten().and_then(|m| m.name().cloned());
     let dock_state = match &r {
         Some(sr) => dock::DockState { edge: sr.edge, offset: sr.offset, monitor },
@@ -210,7 +266,7 @@ pub(crate) fn dock_release_for(app: &tauri::AppHandle, w: &WebviewWindow, id: Op
     r
 }
 
-/// 解除停靠，回到自由态收缩尺寸
+/// 解除停靠，回到自由态
 #[tauri::command]
 pub(crate) fn dock_undock(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
     let id = island_id_of(&window)?;
@@ -219,7 +275,13 @@ pub(crate) fn dock_undock(app: tauri::AppHandle, window: WebviewWindow) -> Resul
 }
 
 pub(crate) fn dock_undock_for(app: &tauri::AppHandle, w: &WebviewWindow, id: Option<&str>) {
-    dock::undock(w);
+    let cfg = app.state::<Cfg>().0.get();
+    let prev_edge = island_dock(&cfg, id).edge;
+    if cfg.island_style == "capsule" {
+        dock::undock_stage(w, prev_edge);
+    } else {
+        dock::undock(w);
+    }
     app.state::<Cfg>().0.update(|settings| { island_clones::set_dock(settings, id, Default::default()); });
     crate::events::settings_changed(&app);
     emit_dock_changed(app, id, &Default::default());

@@ -349,6 +349,16 @@ export interface IslandCloneDto {
   position: [number, number] | null
 }
 
+/** 胶囊舞台窗口上报给后端的可见圆角矩形轮廓（窗口内逻辑像素，island-rendering-tech.md §3） */
+export interface IslandHitRectDto {
+  x: number
+  y: number
+  width: number
+  height: number
+  /** `[top-left, top-right, bottom-right, bottom-left]` 圆角半径 */
+  radii: [number, number, number, number]
+}
+
 /** 停靠事件带岛 id（本体为 null），各岛只处理自己的 */
 export interface DockChangedEvent {
   island: string | null
@@ -413,6 +423,8 @@ export interface AppSettings {
   balance_alert_threshold: number | null
   balance_alert_currency: string
   dock_enabled: boolean
+  /** 胶囊样式贴顶 / 贴底停靠时保持完整胶囊常显；false 时与左右一致收起为小图标，悬停探出 */
+  island_horizontal_dock_full?: boolean
   retention_days: number | null
   dock: { edge: DockEdgeDto | null; offset: number; monitor: string | null }
   /** 免打扰：只暂停提示与动效，不停止采集与统计 */
@@ -560,9 +572,15 @@ export const api = {
   menuRefreshing: () => invoke<boolean>("menu_refreshing"),
   islandMenu: (refreshing: boolean) => invoke<void>("island_menu", { refreshing }),
   islandDrag: () => invoke<void>("island_drag"),
+  /** 胶囊舞台窗口上报可见轮廓与强制交互态（如下拉展开时），供后端精确控制鼠标穿透 */
+  setIslandHitRegion: (rects: IslandHitRectDto[], interactive = false) =>
+    invoke<void>("set_island_hit_region", { rects, interactive }),
+  /** 胶囊形态通知后端展开 / 收起（替代原窗口高度 > 150px 判断首次安装引导） */
+  islandSetExpanded: (expanded: boolean) => invoke<void>("island_set_expanded", { expanded }),
   mainDrag: () => invoke<void>("main_drag"),
   islandTopmost: (on: boolean) => invoke<AppSettings>("island_topmost", { on }),
   setDockEnabled: (on: boolean) => invoke<AppSettings>("set_dock_enabled", { on }),
+  setIslandHorizontalDockFull: (on: boolean) => invoke<AppSettings>("set_island_horizontal_dock_full", { on }),
   /** 显示 / 隐藏本体与全部分身，与托盘同一个值 */
   setIslandVisibility: (visible: boolean) => invoke<AppSettings>("set_island_visibility", { visible }),
   /** 显示位置：edge 为 null 表示自由移动；island 为 null 表示本体 */

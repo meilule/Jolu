@@ -12,4 +12,7 @@ export {
   SpringThumb,
   Stagger,
   StaggerItem,
+  useMotionValue,
+  useReducedMotion,
+  useSpring,
 } from "./components"

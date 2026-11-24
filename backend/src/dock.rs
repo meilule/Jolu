@@ -49,9 +49,14 @@ pub static DRAGGING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 const BAR_LONG: f64 = 120.0;
 const BAR_SHORT: f64 = 14.0;
 
-/// 自由态收缩尺寸，解除停靠时恢复
+/// 自由态收缩尺寸，经典样式解除停靠时恢复
 pub const FREE_W: f64 = 428.0;
 pub const FREE_H: f64 = 124.0;
+
+/// 胶囊样式舞台窗口固定尺寸（逻辑像素，docs/specs/2026-11-24-island-rendering-tech.md §3）。
+/// 容纳展开卡片（380px）、双层硬件阴影与分离气泡，形变全程不再调用 resize_island。
+pub const STAGE_W: f64 = 520.0;
+pub const STAGE_H: f64 = 680.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -300,18 +305,6 @@ pub fn resize_free(win: &WebviewWindow, width: f64, height: f64) -> Result<(), S
     win.set_position(PhysicalPosition::new(x, y)).map_err(|error| error.to_string())
 }
 
-/// 以水平中心为基准的自由态缩放（胶囊样式）：上下边保持不动，左右各让一半。
-/// 胶囊展开/收回时内容围绕自己的中心长大，不会整块往右跑。
-pub fn resize_free_centered(win: &WebviewWindow, width: f64, height: f64) -> Result<(), String> {
-    let (wx, wy, ww, wh, scale, _) = work_area(win).ok_or("无法读取窗口工作区")?;
-    let position = win.outer_position().map_err(|error| error.to_string())?;
-    let old = win.outer_size().map_err(|error| error.to_string())?;
-    let (x, y, w, h) = free_rect_centered((wx, wy, ww, wh), scale,
-        (position.x, position.y), old.width as i32, (width, height));
-    win.set_size(PhysicalSize::new(w, h)).map_err(|error| error.to_string())?;
-    win.set_position(PhysicalPosition::new(x, y)).map_err(|error| error.to_string())
-}
-
 /// 中心缩放的位置计算：新左边界 = 旧左边界 − 宽度差的一半，再夹回工作区。
 fn free_rect_centered(area: (f64, f64, f64, f64), scale: f64,
     position: (i32, i32), old_width: i32, size: (f64, f64)) -> (i32, i32, u32, u32) {
@@ -340,13 +333,143 @@ pub fn undock(win: &WebviewWindow) {
 }
 
 pub fn hover_hint(win: &WebviewWindow) -> Option<SnapHint> {
+    hover_hint_rect(win, None)
+}
+
+/// 按给定窗口内轮廓矩形（逻辑像素）计算吸附提示；`local_rect` 为 None 时按整窗外框判定（经典样式）。
+/// 胶囊舞台窗口固定 520×680，必须用岛的实际可见轮廓判定贴边，否则透明边距会提前触发吸附。
+pub fn hover_hint_rect(win: &WebviewWindow, local_rect: Option<(f64, f64, f64, f64)>) -> Option<SnapHint> {
     let (wx, wy, ww, wh, scale, _) = work_area(win)?;
     let pos = win.outer_position().ok()?;
     let size = win.outer_size().ok()?;
-    snap_hint((wx, wy, ww, wh), (
-        pos.x as f64 / scale, pos.y as f64 / scale,
-        size.width as f64 / scale, size.height as f64 / scale,
-    ))
+    let win_x = pos.x as f64 / scale;
+    let win_y = pos.y as f64 / scale;
+    let rect = match local_rect {
+        Some((lx, ly, lw, lh)) if lw > 4.0 && lh > 4.0 => (win_x + lx, win_y + ly, lw, lh),
+        _ => (win_x, win_y, size.width as f64 / scale, size.height as f64 / scale),
+    };
+    snap_hint((wx, wy, ww, wh), rect)
+}
+
+/// 舞台窗口在当前显示器工作区内的目标逻辑尺寸（小屏按工作区夹紧）。
+pub fn stage_dimensions(area: (f64, f64, f64, f64)) -> (f64, f64) {
+    (STAGE_W.min(area.2.max(240.0)), STAGE_H.min(area.3.max(240.0)))
+}
+
+/// 胶囊舞台窗口按指定边贴齐：靠边一侧零余量，沿边按 offset 居中。
+pub fn apply_stage_dock(win: &WebviewWindow, edge: Edge, offset: f64) {
+    let Some((x, y, width, height, scale, _)) = work_area(win) else { return };
+    let (sw, sh) = stage_dimensions((x, y, width, height));
+    let (px, py, pw, ph) = anchored_rect((x, y, width, height), scale, edge, offset, sw, sh);
+    if let Err(error) = win.set_size(PhysicalSize::new(pw, ph))
+        .and_then(|_| win.set_position(PhysicalPosition::new(px, py)))
+    {
+        eprintln!("[停靠·舞台] {} 落位失败: {error}", edge.as_str());
+    }
+}
+
+/// 胶囊舞台窗口恢复持久化停靠状态（目标屏不在时回退主屏）。
+pub fn restore_stage_dock(win: &WebviewWindow, state: &DockState) -> Option<String> {
+    let edge = state.edge?;
+    let monitors = win.available_monitors().ok()?;
+    let target = state.monitor.as_deref()
+        .and_then(|name| monitors.iter().find(|monitor| monitor.name().map(String::as_str) == Some(name)))
+        .or_else(|| monitors.iter().find(|monitor| {
+            win.primary_monitor().ok().flatten().as_ref().is_some_and(|primary| {
+                primary.name() == monitor.name()
+            })
+        }))
+        .or_else(|| monitors.first())?;
+    let position = target.position();
+    let size = target.size();
+    let _ = win.set_position(PhysicalPosition::new(
+        position.x + size.width as i32 / 2,
+        position.y + size.height as i32 / 2,
+    ));
+    apply_stage_dock(win, edge, state.offset);
+    win.current_monitor().ok().flatten().and_then(|monitor| monitor.name().cloned())
+}
+
+/// 胶囊舞台窗口切换为自由态固定尺寸，保持水平中心并确保舞台落在工作区内。
+pub fn apply_stage_free(win: &WebviewWindow) -> Result<(f64, f64), String> {
+    let (wx, wy, ww, wh, scale, _) = work_area(win).ok_or("无法读取灵动岛工作区")?;
+    let (sw, sh) = stage_dimensions((wx, wy, ww, wh));
+    let position = win.outer_position().map_err(|e| e.to_string())?;
+    let old = win.outer_size().map_err(|e| e.to_string())?;
+    let (x, y, w, h) = free_rect_centered((wx, wy, ww, wh), scale, (position.x, position.y), old.width as i32, (sw, sh));
+    win.set_size(PhysicalSize::new(w, h)).map_err(|e| e.to_string())?;
+    win.set_position(PhysicalPosition::new(x, y)).map_err(|e| e.to_string())?;
+    Ok((sw, sh))
+}
+
+/// 胶囊舞台窗口首次安装 / 重置位置：置顶居中于主显示器工作区。
+pub fn place_stage_free_top_center(win: &WebviewWindow) -> Result<(f64, f64), String> {
+    if let Some(monitor) = win.primary_monitor().map_err(|e| e.to_string())? {
+        let position = monitor.position();
+        let size = monitor.size();
+        let _ = win.set_position(PhysicalPosition::new(
+            position.x + size.width as i32 / 2,
+            position.y + size.height as i32 / 2,
+        ));
+    }
+    let (wx, wy, ww, wh, scale, _) = work_area(win).ok_or("无法读取灵动岛工作区")?;
+    let (sw, sh) = stage_dimensions((wx, wy, ww, wh));
+    let pw = (sw * scale).round() as u32;
+    let ph = (sh * scale).round() as u32;
+    let left = (wx * scale).round() as i32;
+    let top = (wy * scale).round() as i32;
+    let width = (ww * scale).round() as i32;
+    let x = left + (width - pw as i32).max(0) / 2;
+    let y = top + (24.0 * scale).round() as i32;
+    win.set_size(PhysicalSize::new(pw, ph)).map_err(|e| e.to_string())?;
+    win.set_position(PhysicalPosition::new(x, y)).map_err(|e| e.to_string())?;
+    Ok((sw, sh))
+}
+
+/// 胶囊舞台窗口解除停靠：保持舞台尺寸，从原停靠边向屏内轻推一段，避免立即重新吸附。
+pub fn undock_stage(win: &WebviewWindow, prev_edge: Option<Edge>) {
+    let Some((wx, wy, ww, wh, scale, _)) = work_area(win) else { return };
+    let (sw, sh) = stage_dimensions((wx, wy, ww, wh));
+    let pw = (sw * scale).round() as u32;
+    let ph = (sh * scale).round() as u32;
+    let _ = win.set_size(PhysicalSize::new(pw, ph));
+    let Ok(pos) = win.outer_position() else { return };
+    let nudge = ((SNAP_THRESHOLD + 24.0) * scale).round() as i32;
+    let left = (wx * scale).round() as i32;
+    let top = (wy * scale).round() as i32;
+    let right = ((wx + ww) * scale).round() as i32;
+    let bottom = ((wy + wh) * scale).round() as i32;
+    let (nx, ny) = match prev_edge {
+        Some(Edge::Top) => (pos.x, pos.y + nudge),
+        Some(Edge::Bottom) => (pos.x, pos.y - nudge),
+        Some(Edge::Left) => (pos.x + nudge, pos.y),
+        Some(Edge::Right) => (pos.x - nudge, pos.y),
+        None => (pos.x, pos.y),
+    };
+    let x = nx.clamp(left, (right - pw as i32).max(left));
+    let y = ny.clamp(top, (bottom - ph as i32).max(top));
+    let _ = win.set_position(PhysicalPosition::new(x, y));
+}
+
+/// 胶囊舞台窗口拖动松手：按可见轮廓判定吸附；未吸附时保持舞台位置并确保可见轮廓留在屏内。
+pub fn snap_on_release_stage(win: &WebviewWindow, local_rect: Option<(f64, f64, f64, f64)>) -> Option<SnapResult> {
+    if let Some(hint) = hover_hint_rect(win, local_rect) {
+        apply_stage_dock(win, hint.edge, hint.offset);
+        return Some(SnapResult { edge: Some(hint.edge), offset: hint.offset });
+    }
+    // 未吸附：确保可见轮廓留在工作区内，允许透明边距略出屏，避免胶囊离边缘还有一大截就撞墙。
+    if let (Some((wx, wy, ww, wh, scale, _)), Ok(pos), Some((lx, ly, lw, lh))) = (work_area(win), win.outer_position(), local_rect) {
+        let win_x = pos.x as f64 / scale;
+        let win_y = pos.y as f64 / scale;
+        let vx = (win_x + lx).clamp(wx + 8.0, (wx + ww - lw - 8.0).max(wx + 8.0));
+        let vy = (win_y + ly).clamp(wy + 8.0, (wy + wh - lh - 8.0).max(wy + 8.0));
+        let next_x = ((vx - lx) * scale).round() as i32;
+        let next_y = ((vy - ly) * scale).round() as i32;
+        if (next_x - pos.x).abs() > 1 || (next_y - pos.y).abs() > 1 {
+            let _ = win.set_position(PhysicalPosition::new(next_x, next_y));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -482,6 +605,29 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn stage_dimensions_clamp_to_small_work_area() {
+        assert_eq!(stage_dimensions((0.0, 0.0, 1920.0, 1040.0)), (STAGE_W, STAGE_H));
+        assert_eq!(stage_dimensions((0.0, 0.0, 480.0, 600.0)), (480.0, 600.0));
+    }
+
+    #[test]
+    fn stage_dock_anchor_flushes_to_all_four_edges_without_gap() {
+        let area = (0.0, 0.0, 1920.0, 1040.0);
+        let (sw, sh) = stage_dimensions(area);
+        for scale in [1.0, 1.25, 1.5] {
+            let (tx, ty, tw, _th) = anchored_rect(area, scale, Edge::Top, 960.0, sw, sh);
+            assert_eq!(ty, 0);
+            assert!(tx >= 0 && tx + tw as i32 <= (1920.0 * scale).round() as i32);
+            let (_bx, by, _bw, bh) = anchored_rect(area, scale, Edge::Bottom, 960.0, sw, sh);
+            assert_eq!(by + bh as i32, (1040.0 * scale).round() as i32);
+            let (lx, _ly, _lw, _lh) = anchored_rect(area, scale, Edge::Left, 520.0, sw, sh);
+            assert_eq!(lx, 0);
+            let (rx, _ry, rw, _rh) = anchored_rect(area, scale, Edge::Right, 520.0, sw, sh);
+            assert_eq!(rx + rw as i32, (1920.0 * scale).round() as i32);
         }
     }
 }

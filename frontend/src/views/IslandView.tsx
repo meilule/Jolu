@@ -197,6 +197,18 @@ export function IslandView() {
                   }
                 />
                 <Row
+                  title="上下贴边保持完整胶囊"
+                  desc="贴顶或贴底停靠时常显完整胶囊，不再收起为小图标；仅对胶囊样式生效"
+                  control={
+                    <Switch
+                      checked={s.island_horizontal_dock_full !== false}
+                      disabled={disabled || cfg.isSaving("island_horizontal_dock_full") || !s.dock_enabled}
+                      label="上下贴边保持完整胶囊"
+                      onChange={(on) => void cfg.setIslandHorizontalDockFull(on)}
+                    />
+                  }
+                />
+                <Row
                   title="免打扰"
                   desc="暂停增量提示、水位提醒与通知；继续采集"
                   control={
@@ -242,7 +254,7 @@ export function IslandView() {
                 />
                 <Row
                   title="缩小后大小"
-                  desc="仅调整经典样式的停靠条；胶囊贴边后固定为 32px"
+                  desc="仅调整经典样式的停靠条；胶囊样式统一从屏幕边缘长出"
                   control={
                     <Select
                       width="sm"

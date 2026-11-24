@@ -46,6 +46,7 @@ export function demoSettings(): AppSettings {
     balance_alert_threshold: 5,
     balance_alert_currency: "USD",
     dock_enabled: true,
+    island_horizontal_dock_full: true,
     retention_days: 180,
     dock: { edge: null, offset: 0, monitor: "DISPLAY1" },
     dnd: false,

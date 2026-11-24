@@ -6,9 +6,11 @@
  * 并通过根部 `<MotionProvider>` 接管系统偏好与 Jolu 的「减少动效」设置。
  */
 import { useEffect, useRef, useState, type ComponentPropsWithoutRef, type ReactNode, type Ref } from "react"
-import { AnimatePresence, LazyMotion, MotionConfig, domAnimation, m, useReducedMotion } from "framer-motion"
+import { AnimatePresence, LazyMotion, MotionConfig, domAnimation, m, useMotionValue, useReducedMotion, useSpring } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { DURATION, EASE, SPRING, STAGGER, STAGGER_LIMIT } from "./tokens"
+
+export { useMotionValue, useReducedMotion, useSpring }
 
 /** 全局动效容器：挂在主窗口根部一次，统一接管 reducedMotion 与默认缓动。 */
 export function MotionProvider({

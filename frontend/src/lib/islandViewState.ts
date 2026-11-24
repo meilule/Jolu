@@ -20,3 +20,15 @@ export function snapIndicatorVisible(
 ): boolean {
   return dragging && hasHint
 }
+
+/** 胶囊停靠时是否收起为「贴边小图标」；开启上下贴边保持完整胶囊时，顶部与底部直接常显完整胶囊。 */
+export function capsuleUsesEdgeTab(
+  dockEdge: DockEdge | null,
+  mode: IslandMode,
+  peek: boolean,
+  horizontalDockFull: boolean,
+): boolean {
+  if (!dockEdge || mode === "expanded" || peek) return false
+  if (horizontalDockFull && (dockEdge === "top" || dockEdge === "bottom")) return false
+  return true
+}

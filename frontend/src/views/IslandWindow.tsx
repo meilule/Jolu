@@ -1,4 +1,6 @@
 import { useSettings } from "@/hooks/useSettings"
+import { isTauri } from "@/lib/api"
+import { MotionProvider } from "@/motion"
 import { CapsuleWindow } from "@/views/capsule/CapsuleWindow"
 import { ClassicIslandWindow } from "@/views/classic/ClassicIslandWindow"
 
@@ -21,6 +23,10 @@ import { ClassicIslandWindow } from "@/views/classic/ClassicIslandWindow"
  */
 export function IslandWindow() {
   const { settings } = useSettings()
+  const previewStyle = !isTauri ? new URLSearchParams(window.location.search).get("style") : null
+  const style = previewStyle === "capsule" || previewStyle === "classic" ? previewStyle : settings.island_style
   // 分流只发生在最外层；换样式即换容器，形态会按当前停靠设置重新对齐
-  return settings.island_style === "capsule" ? <CapsuleWindow /> : <ClassicIslandWindow />
+  return style === "capsule"
+    ? <MotionProvider reduced={Boolean(settings.reduce_motion)}><CapsuleWindow /></MotionProvider>
+    : <ClassicIslandWindow />
 }

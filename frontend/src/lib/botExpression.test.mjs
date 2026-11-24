@@ -1,6 +1,22 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { BOT_NAMES, BOT_TRIGGERS, botExpression, quotaJustReset, SHOT_MS, SLEEP_AFTER_MS } from "./botExpression.ts"
+import {
+  BOT_EXPR_INDEX,
+  BOT_EXPR_ORDER,
+  BOT_EYE_TONE_INDEX,
+  BOT_NAMES,
+  BOT_PROP_INDEX,
+  BOT_PROP_ORDER,
+  BOT_SHOT_INDEX,
+  BOT_TRIGGERS,
+  botExpression,
+  botEyeTone,
+  isAlertExpr,
+  islandAmbientGlow,
+  quotaJustReset,
+  SHOT_MS,
+  SLEEP_AFTER_MS,
+} from "./botExpression.ts"
 
 const base = { connected: true, queryFailed: false, quotaUsed: [12, 59], dragging: false, refreshing: false, working: false }
 const expr = (patch) => botExpression({ ...base, ...patch }).expr
@@ -81,4 +97,38 @@ test("告警分界：79 空闲 / 80 担心 / 100 沮丧", () => {
   assert.equal(expr({ quotaUsed: [79] }), "idle")
   assert.equal(expr({ quotaUsed: [80] }), "worry")
   assert.equal(expr({ quotaUsed: [100] }), "sad")
+})
+
+test("§6.2 Rive 契约：16 个表情与 9 个道具编号连续唯一，与 BOT_NAMES 数量严格一致", () => {
+  const names = Object.keys(BOT_NAMES).sort()
+  assert.equal(BOT_EXPR_ORDER.length, 16)
+  assert.deepEqual([...BOT_EXPR_ORDER].sort(), names)
+  BOT_EXPR_ORDER.forEach((key, idx) => assert.equal(BOT_EXPR_INDEX[key], idx))
+
+  assert.equal(BOT_PROP_ORDER.length, 9)
+  assert.equal(BOT_PROP_INDEX.none, 0)
+  BOT_PROP_ORDER.forEach((prop, idx) => assert.equal(BOT_PROP_INDEX[prop], idx))
+
+  assert.deepEqual(Object.values(BOT_EYE_TONE_INDEX).sort((a, b) => a - b), [0, 1, 2, 3, 4, 5])
+  assert.deepEqual(Object.values(BOT_SHOT_INDEX).sort((a, b) => a - b), [1, 2, 3, 4])
+})
+
+test("§6.4 戳一戳告警拦截与 §5 眼色 / 底部环境光映射", () => {
+  assert.equal(isAlertExpr("worry"), true)
+  assert.equal(isAlertExpr("sad"), true)
+  assert.equal(isAlertExpr("error"), true)
+  assert.equal(isAlertExpr("idle"), false)
+  assert.equal(isAlertExpr("work"), false)
+
+  assert.equal(botEyeTone("work", "confirmed"), "green")
+  assert.equal(botEyeTone("work", "inferred"), "cyan")
+  assert.equal(botEyeTone("idle", "unknown"), "gray")
+  assert.equal(botEyeTone("worry"), "orange")
+  assert.equal(botEyeTone("error"), "red")
+
+  assert.equal(islandAmbientGlow("work"), "work")
+  assert.equal(islandAmbientGlow("relay"), "relay")
+  assert.equal(islandAmbientGlow("worry"), "warn")
+  assert.equal(islandAmbientGlow("error"), "error")
+  assert.equal(islandAmbientGlow("idle"), "idle")
 })

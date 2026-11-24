@@ -33,6 +33,7 @@ const DEFAULTS: AppSettings = {
   balance_alert_threshold: null,
   balance_alert_currency: "USD",
   dock_enabled: true,
+  island_horizontal_dock_full: true,
   retention_days: null,
   dock: { edge: null, offset: 0, monitor: null },
   dnd: false,
@@ -162,6 +163,13 @@ export function useSettings() {
   const setIslandSource = useCallback((id: string | null) => save("island_source", () => api.setIslandSource(id)), [save])
   const setDnd = useCallback((on: boolean) => save("dnd", () => api.setDnd(on)), [save])
   const setDockEnabled = useCallback((on: boolean) => save("dock_enabled", () => api.setDockEnabled(on)), [save])
+  const setIslandHorizontalDockFull = useCallback((on: boolean) => {
+    if (!isTauri) {
+      publish({ settings: { ...shared.settings, island_horizontal_dock_full: on } })
+      return Promise.resolve(true)
+    }
+    return save("island_horizontal_dock_full", () => api.setIslandHorizontalDockFull(on))
+  }, [save])
   const setTopmost = useCallback((on: boolean) => save("always_on_top", () => api.islandTopmost(on)), [save])
   const setIslandVisible = useCallback((visible: boolean) => save("island_visible", () => api.setIslandVisibility(visible)), [save])
   const setAutoCheckUpdates = useCallback((on: boolean) => save("auto_check_updates", () => api.setAutoCheckUpdates(on)), [save])
@@ -178,7 +186,13 @@ export function useSettings() {
     const next = { ...await api.getSettings(), ...patch }
     return api.setDisplayPreferences(next.island_opacity, next.island_scale, next.island_shrink_scale, next.refresh_minutes)
   }), [save])
-  const setIslandStyle = useCallback((style: IslandStyle) => save("island_style", () => api.setIslandStyle(style)), [save])
+  const setIslandStyle = useCallback((style: IslandStyle) => {
+    if (!isTauri) {
+      publish({ settings: { ...shared.settings, island_style: style } })
+      return Promise.resolve(true)
+    }
+    return save("island_style", () => api.setIslandStyle(style))
+  }, [save])
   /** 4.2b：联动开关按「现读最新 + 补丁」写，免得两个开关连续切换时互相覆盖 */
   const setIslandLinkage = useCallback((patch: Partial<IslandLinkageDto>) => save("island_linkage", async () => {
     const current = (await api.getSettings()).island_linkage ?? DEFAULT_ISLAND_LINKAGE
@@ -204,6 +218,6 @@ export function useSettings() {
 
   const { settings, ready, loading } = state
   const error = saveError ?? state.error
-  return { settings, ready, loading, saving, isSaving, error, reload: reloadShared, setIslandPlatform, setIslandConnection, setIslandSource, setDnd, setDockEnabled, setTopmost, setIslandVisible, setAutoCheckUpdates, setUpdateInterval, setCostCurrency, setSilentStartup, setProxy, setTheme, setRetentionDays, setDisplayPreferences, setIslandStyle, setIslandLinkage, setDefaultPage, setAppearance, setNetwork, setTaskNotify }
+  return { settings, ready, loading, saving, isSaving, error, reload: reloadShared, setIslandPlatform, setIslandConnection, setIslandSource, setDnd, setDockEnabled, setIslandHorizontalDockFull, setTopmost, setIslandVisible, setAutoCheckUpdates, setUpdateInterval, setCostCurrency, setSilentStartup, setProxy, setTheme, setRetentionDays, setDisplayPreferences, setIslandStyle, setIslandLinkage, setDefaultPage, setAppearance, setNetwork, setTaskNotify }
 }
 

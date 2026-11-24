@@ -104,6 +104,7 @@ export function routeCommand(cmd: string, args: Args): unknown {
     case "set_island_visibility": return patchSettings({ island_visible: Boolean(args.visible) })
     case "island_topmost": return patchSettings({ always_on_top: Boolean(args.on) })
     case "set_dock_enabled": return patchSettings({ dock_enabled: Boolean(args.on) })
+    case "set_island_horizontal_dock_full": return patchSettings({ island_horizontal_dock_full: Boolean(args.on) })
     case "set_dnd": return patchSettings({ dnd: Boolean(args.on) })
     case "set_island_style": return patchSettings({ island_style: str(args.style) as AppSettings["island_style"] })
     case "set_island_linkage": return patchSettings({ island_linkage: args.linkage as AppSettings["island_linkage"] })

@@ -59,6 +59,9 @@ pub struct Settings {
     /// 是否允许拖到屏幕边缘后自动吸附。
     #[serde(default = "default_dock_enabled")]
     pub dock_enabled: bool,
+    /// 胶囊灵动岛贴顶 / 贴底停靠时是否保持完整胶囊常显（false 则与左右一致收起为小图标，悬停探出）。
+    #[serde(default = "yes")]
+    pub island_horizontal_dock_full: bool,
     /// None 表示不自动清理；其余值由设置页显式选择。
     #[serde(default)]
     pub retention_days: Option<u32>,
@@ -323,6 +326,7 @@ impl Default for Settings {
             balance_alert_threshold: None,
             balance_alert_currency: default_currency(),
             dock_enabled: true,
+            island_horizontal_dock_full: true,
             retention_days: None,
             dnd: false,
             island_visible: true,
@@ -757,6 +761,7 @@ mod tests {
         )
         .expect("旧设置应可迁移");
         assert!(settings.dock_enabled);
+        assert!(settings.island_horizontal_dock_full);
         assert_eq!(settings.theme, "light");
         assert_eq!(settings.island_connection_name, None);
     }

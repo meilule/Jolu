@@ -1246,9 +1246,11 @@ fn ensure_island_window_for(app: &tauri::AppHandle, id: Option<&str>) -> Result<
         Some(id) => format!("index.html?window=island&clone={id}"),
         None => "index.html?window=island".to_string(),
     };
+    let is_capsule = settings.island_style == "capsule";
+    let (init_w, init_h) = if is_capsule { (dock::STAGE_W, dock::STAGE_H) } else { (dock::FREE_W, dock::FREE_H) };
     let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
         .title("Jolu")
-        .inner_size(428.0, 124.0)
+        .inner_size(init_w, init_h)
         .resizable(false)
         .decorations(false)
         .transparent(true)
@@ -1258,15 +1260,24 @@ fn ensure_island_window_for(app: &tauri::AppHandle, id: Option<&str>) -> Result<
         .visible(false)
         .center()
         .build().map_err(|e| e.to_string())?;
+    if is_capsule {
+        let _ = window.set_ignore_cursor_events(true);
+    }
     if settings.dock_enabled && profile.dock.edge.is_some() {
-        let _ = dock::restore_dock(&window, &profile.dock);
+        let _ = if is_capsule { dock::restore_stage_dock(&window, &profile.dock) } else { dock::restore_dock(&window, &profile.dock) };
     } else if let Some((x, y)) = id
         .and_then(|id| settings.island_clones.iter().find(|clone| clone.id == id))
         .and_then(|clone| clone.position)
     {
         // 分身自由态：先挪到记录的位置，再夹回当前工作区，显示器变化后不会落到屏幕外。
         let _ = window.set_position(PhysicalPosition::new(x, y));
-        let _ = dock::resize_free(&window, dock::FREE_W, dock::FREE_H);
+        if is_capsule {
+            let _ = dock::apply_stage_free(&window);
+        } else {
+            let _ = dock::resize_free(&window, dock::FREE_W, dock::FREE_H);
+        }
+    } else if is_capsule {
+        let _ = dock::apply_stage_free(&window);
     }
     Ok(window)
 }
@@ -1280,11 +1291,16 @@ fn create_island_clone(app: &tauri::AppHandle, source: Option<&str>) -> Result<(
     let next = store.try_update(|settings| { created = island_clones::create_clone(settings, source).ok(); })?;
     let clone = created.ok_or("创建分身失败")?;
     let window = ensure_island_window_for(app, Some(&clone.id))?;
+    let is_capsule = next.island_style == "capsule";
     if let Some(origin) = island_window(app, source) {
         if let (Ok(position), Ok(scale)) = (origin.outer_position(), origin.scale_factor()) {
             let offset = (24.0 * scale).round() as i32;
             let _ = window.set_position(PhysicalPosition::new(position.x + offset, position.y + offset));
-            let _ = dock::resize_free(&window, dock::FREE_W, dock::FREE_H);
+            if is_capsule {
+                let _ = dock::apply_stage_free(&window);
+            } else {
+                let _ = dock::resize_free(&window, dock::FREE_W, dock::FREE_H);
+            }
         }
     }
     remember_clone_position(app, &clone.id, &window);
@@ -1304,12 +1320,15 @@ fn destroy_island(app: &tauri::AppHandle, target: Option<&str>) -> Result<(), St
     island_clones::destroy(&mut store.get(), target)?;
     let mut plan = None;
     store.try_update(|settings| { plan = island_clones::destroy(settings, target).ok(); })?;
+    let is_capsule = store.get().island_style == "capsule";
     match plan.ok_or("销毁分身失败")? {
         island_clones::DestroyPlan::CloseClone(id) => {
+            island_pointer::clear_hit_region(&island_clones::label(Some(&id)));
             // 灵动岛的关闭请求会被拦成隐藏，这里必须直接销毁。
             if let Some(window) = island_window(app, Some(&id)) { window.destroy().map_err(|e| e.to_string())?; }
         }
         island_clones::DestroyPlan::PromoteClone { closed } => {
+            island_pointer::clear_hit_region(&island_clones::label(Some(&closed.id)));
             let clone_window = island_window(app, Some(&closed.id));
             if let Some(primary) = app.get_webview_window(ISLAND) {
                 if let Some(window) = &clone_window {
@@ -1318,7 +1337,9 @@ fn destroy_island(app: &tauri::AppHandle, target: Option<&str>) -> Result<(), St
                         let _ = primary.set_position(position);
                     }
                 }
-                if closed.dock.edge.is_some() { let _ = dock::restore_dock(&primary, &closed.dock); }
+                if closed.dock.edge.is_some() {
+                    let _ = if is_capsule { dock::restore_stage_dock(&primary, &closed.dock) } else { dock::restore_dock(&primary, &closed.dock) };
+                }
                 emit_dock_changed(app, None, &closed.dock);
             }
             if let Some(window) = clone_window { window.destroy().map_err(|e| e.to_string())?; }
@@ -1413,21 +1434,32 @@ fn initialize_app(app: &tauri::AppHandle, data_dir: &std::path::Path) -> Result<
     // 恢复已有用户的停靠状态；首次安装先展示自由态灵动岛，再自动贴上边缘。
     {
         let cfg = app.state::<Cfg>().0.get();
+        let is_capsule = cfg.island_style == "capsule";
         let first_intro = FIRST_INSTALL.swap(false, Ordering::AcqRel)
             && cfg.island_visible && cfg.dock_enabled && cfg.dock.edge.is_none();
         if let Some(w) = app.get_webview_window(ISLAND) {
             let _ = w.set_always_on_top(cfg.always_on_top);
+            if is_capsule {
+                let _ = w.set_ignore_cursor_events(true);
+            }
             if first_intro {
                 FIRST_INSTALL_INTRO.store(true, Ordering::Release);
-                if let Err(error) = dock::place_free_top_center(&w) {
+                let placed = if is_capsule {
+                    dock::place_stage_free_top_center(&w).map(|_| ())
+                } else {
+                    dock::place_free_top_center(&w)
+                };
+                if let Err(error) = placed {
                     eprintln!("[启动] 灵动岛首次居中失败: {error}");
                     let _ = w.center();
                 }
+            } else if is_capsule && !(cfg.dock_enabled && cfg.dock.edge.is_some()) {
+                let _ = dock::apply_stage_free(&w);
             }
         }
-        if let (true, Some(edge), Some(w)) = (cfg.dock_enabled, cfg.dock.edge, app.get_webview_window(ISLAND)) {
-            let _ = edge;
-            if let Some(monitor) = dock::restore_dock(&w, &cfg.dock) {
+        if let (true, Some(_edge), Some(w)) = (cfg.dock_enabled, cfg.dock.edge, app.get_webview_window(ISLAND)) {
+            let restored = if is_capsule { dock::restore_stage_dock(&w, &cfg.dock) } else { dock::restore_dock(&w, &cfg.dock) };
+            if let Some(monitor) = restored {
                 if cfg.dock.monitor.as_deref() != Some(&monitor) {
                     app.state::<Cfg>().0.update(|settings| settings.dock.monitor = Some(monitor));
                 }
@@ -1561,18 +1593,32 @@ fn reset_window_layout(app: &tauri::AppHandle) {
         });
         crate::events::settings_changed(&app);
         for id in island_ids(&next) { emit_dock_changed(app, id.as_deref(), &Default::default()); }
-        let _ = w.set_size(tauri::LogicalSize::new(428.0, 124.0));
-        let _ = w.center();
+        let is_capsule = next.island_style == "capsule";
+        if is_capsule {
+            let _ = dock::place_stage_free_top_center(&w);
+            let _ = w.set_ignore_cursor_events(true);
+        } else {
+            let _ = w.set_size(tauri::LogicalSize::new(428.0, 124.0));
+            let _ = w.center();
+        }
         // 分身解除停靠后从本体位置依次向右下错开 24px，避免叠在一起看不见。
         let origin = w.outer_position().ok();
         let scale = w.scale_factor().unwrap_or(1.0);
         for (index, clone) in next.island_clones.iter().enumerate() {
             let Some(cw) = island_window(app, Some(&clone.id)) else { continue };
-            let _ = cw.set_size(tauri::LogicalSize::new(428.0, 124.0));
+            if is_capsule {
+                let _ = cw.set_ignore_cursor_events(true);
+            } else {
+                let _ = cw.set_size(tauri::LogicalSize::new(428.0, 124.0));
+            }
             if let Some(position) = origin {
                 let offset = ((index as f64 + 1.0) * 24.0 * scale).round() as i32;
                 let _ = cw.set_position(PhysicalPosition::new(position.x + offset, position.y + offset));
-                let _ = dock::resize_free(&cw, dock::FREE_W, dock::FREE_H);
+                if is_capsule {
+                    let _ = dock::apply_stage_free(&cw);
+                } else {
+                    let _ = dock::resize_free(&cw, dock::FREE_W, dock::FREE_H);
+                }
             }
             remember_clone_position(app, &clone.id, &cw);
         }
@@ -1941,6 +1987,8 @@ pub fn run() {
             warmup_last_outcome,
             set_otlp_endpoint,
             resize_island,
+            set_island_hit_region,
+            island_set_expanded,
             live_usage,
             connection_kind,
             source_metrics,
@@ -2090,6 +2138,7 @@ pub fn run() {
             island_action,
             island_topmost,
             set_dock_enabled,
+            set_island_horizontal_dock_full,
             set_theme,
             set_display_preferences,
             set_island_style,
@@ -2352,12 +2401,24 @@ pub fn run() {
                             let id = island_clones::id_from_label(&label).flatten();
                             let cfg = store.0.get();
                             let dock_state = island_dock(&cfg, id.as_deref());
+                            let is_capsule = cfg.island_style == "capsule";
                             if dock::DRAGGING.load(Ordering::Relaxed) {
-                                let hint = if cfg.dock_enabled { dock::hover_hint(&webview) } else { None };
+                                let hint = if cfg.dock_enabled {
+                                    if is_capsule {
+                                        dock::hover_hint_rect(&webview, island_pointer::primary_contour(&label))
+                                    } else {
+                                        dock::hover_hint(&webview)
+                                    }
+                                } else { None };
                                 let _ = app.emit(crate::events::DOCK_HINT, DockHintEvent { island: id.clone(), hint });
                             } else if dock_state.edge.is_some()
                                 && (scale_changed || !dock::monitor_exists(&webview, dock_state.monitor.as_deref())) {
-                                if let Some(monitor) = dock::restore_dock(&webview, &dock_state) {
+                                let restored = if is_capsule {
+                                    dock::restore_stage_dock(&webview, &dock_state)
+                                } else {
+                                    dock::restore_dock(&webview, &dock_state)
+                                };
+                                if let Some(monitor) = restored {
                                     store.0.update(|settings| {
                                         island_clones::set_dock(settings, id.as_deref(), dock::DockState { monitor: Some(monitor), ..dock_state.clone() });
                                     });
