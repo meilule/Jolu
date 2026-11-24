@@ -394,29 +394,7 @@ pub(crate) fn record_route(
         },
     );
     // 采集任务持有数据库锁时由写入线程等待，不把锁暂忙当成可丢弃的流水，也不卡住请求线程。
-    crate::gateway::route_log::queue_record(
-        &deps.db,
-        ts,
-        crate::gateway::route_log::OwnedEntry {
-            agent: meta.agent.clone(),
-            requested_model: meta.requested_model.clone(),
-            source: source.map(str::to_string),
-            upstream_model: upstream.map(str::to_string),
-            status_code: status.map(i64::from),
-            result: result.to_string(),
-            duration_ms: Some(duration_ms),
-            connection_id: meta.connection_id.clone(),
-            session_platform: meta.session_platform().map(str::to_string),
-            session_id: meta.session_id().map(str::to_string),
-            client_key: meta.client_key.clone(),
-            request_id: Some(request_id as i64),
-            request_uid: meta.request_uid,
-            // 不带来源前缀、也不是分组的模型 id 走的是裸名解析（目录里第一个暴露它的来源 / 默认来源）
-            resolved_from: (!meta.requested_model.contains('/')).then_some("bare"),
-            profile: crate::gateway::profiles::active(),
-            decision: meta.decision.clone(),
-        },
-    )
+    crate::gateway::route_log::queue_record(&deps.db, ts, owned_entry(meta, request_id, source, upstream, status, result, duration_ms))
 }
 
 /// 选路成功、交给上游之前：发开始事件；返回的 guard 保证请求中途被取消时也有结束事件。
@@ -443,7 +421,81 @@ pub(crate) fn begin_route(
             session_id: meta.session_id(),
         },
     );
-    crate::gateway::activity::EndGuard::new(deps.on_activity.clone(), request_id, meta, &entry.slug, started)
+    let (db, meta_for_row, source) = (deps.db.clone(), meta.clone(), entry.slug.clone());
+    crate::gateway::activity::EndGuard::new(deps.on_activity.clone(), request_id, meta, &entry.slug, started).on_drop(move |duration_ms| {
+        crate::gateway::route_log::queue_record(
+            &db,
+            chrono::Local::now().timestamp_millis(),
+            owned_entry(&meta_for_row, request_id, Some(&source), None, None, "cancelled", duration_ms),
+        );
+    })
+}
+
+/// 流水行的内容（`record_route` 与被丢弃请求的补写共用，字段口径只有一处）。
+fn owned_entry(
+    meta: &RouteMeta,
+    request_id: u64,
+    source: Option<&str>,
+    upstream: Option<&str>,
+    status: Option<u16>,
+    result: &str,
+    duration_ms: i64,
+) -> crate::gateway::route_log::OwnedEntry {
+    crate::gateway::route_log::OwnedEntry {
+        agent: meta.agent.clone(),
+        requested_model: meta.requested_model.clone(),
+        source: source.map(str::to_string),
+        upstream_model: upstream.map(str::to_string),
+        status_code: status.map(i64::from),
+        result: result.to_string(),
+        duration_ms: Some(duration_ms),
+        connection_id: meta.connection_id.clone(),
+        session_platform: meta.session_platform().map(str::to_string),
+        session_id: meta.session_id().map(str::to_string),
+        client_key: meta.client_key.clone(),
+        request_id: Some(request_id as i64),
+        request_uid: meta.request_uid,
+        // 不带来源前缀、也不是分组的模型 id 走的是裸名解析（目录里第一个暴露它的来源 / 默认来源）
+        resolved_from: (!meta.requested_model.contains('/')).then_some("bare"),
+        profile: crate::gateway::profiles::active(),
+        decision: meta.decision.clone(),
+    }
+}
+
+/// 流式响应包一层：没读完时改判流水，改判成功后补发同 `request_id` 的结束事件（P4 审计 D2）。
+fn watch_stream(
+    deps: &Arc<ProxyDeps>,
+    response: Response,
+    row: crate::gateway::route_log::RowSlot,
+    request_id: u64,
+    meta: &RouteMeta,
+    source: &str,
+    started: std::time::Instant,
+) -> Response {
+    let (emit, meta, source) = (deps.on_activity.clone(), meta.clone(), source.to_string());
+    let status = response.status().as_u16();
+    crate::gateway::route_log::CancelWatch::watch_notify(response, &deps.db, row, move |end| {
+        crate::gateway::activity::emit_end(
+            &emit,
+            &crate::gateway::activity::RouteEnd {
+                request_id,
+                ts: chrono::Local::now().timestamp_millis(),
+                agent: meta.agent.as_deref(),
+                identified_by: meta.identified_by,
+                unidentified_ua: meta.unidentified_ua.as_deref(),
+                client_key: meta.client_key.as_deref(),
+                requested_model: &meta.requested_model,
+                source: Some(&source),
+                upstream_model: None,
+                status_code: Some(status),
+                result: end.result(),
+                duration_ms: started.elapsed().as_millis() as i64,
+                connection_id: meta.connection_id.as_deref(),
+                session_platform: meta.session_platform(),
+                session_id: meta.session_id(),
+            },
+        );
+    })
 }
 
 /// 选中连接后的元数据（连接 id 只在命中来源时才有）。
@@ -1147,7 +1199,7 @@ async fn forward_one(
                 bind(entry);
             }
             // 流式响应：客户端可能在中途断开，那时流水已记成 ok。包一层在 drop 时改判。
-            crate::gateway::route_log::CancelWatch::watch(response, &deps.db, row_id)
+            watch_stream(deps, response, row_id, request_id, &meta, &entry.slug, started)
         }
         // 订阅来源：按平台分发到各自适配器；协议不匹配本地直接返回，不发开始事件
         _ => {
@@ -1258,7 +1310,7 @@ async fn forward_one(
             if response.status().is_success() {
                 bind(entry);
             }
-            crate::gateway::route_log::CancelWatch::watch(response, &deps.db, row_id)
+            watch_stream(deps, response, row_id, request_id, &meta, &entry.slug, started)
         }
     }
 }
@@ -1896,7 +1948,16 @@ mod tests {
     #[tokio::test]
     async fn a_stream_that_breaks_midway_is_not_retried_on_the_next_member() {
         crate::gateway::route_log::flush();
-        let deps = crate::proxy::test_support::bare_deps();
+        let mut deps = Arc::try_unwrap(crate::proxy::test_support::bare_deps())
+            .unwrap_or_else(|_| panic!("test dependencies must have a single owner"));
+        let ends = Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+        let sink = ends.clone();
+        deps.on_activity = Arc::new(move |name, value| {
+            if name == crate::gateway::activity::END_EVENT {
+                sink.lock().unwrap().push(value);
+            }
+        });
+        let deps = Arc::new(deps);
         let (base_a, hits_a) = counting_upstream(true).await;
         let (base_b, hits_b) = counting_upstream(false).await;
         add_group(&deps, "p2-midstream", "order", &[("p2m-a", &base_a), ("p2m-b", &base_b)]);
@@ -1922,6 +1983,11 @@ mod tests {
         let now = chrono::Local::now().timestamp_millis();
         let day = crate::gateway::route_log::day_overview(&conn, now - 60_000, 0, now + 60_000).unwrap();
         assert_eq!((day.today, day.reroutes, day.errors), (1, 0, 1), "一次请求、没有转移、一次错误");
+        // P4 审计 D2 情形 B：改判后补发同 request_id 的结束事件，前端据此把那次 ok 换成失败
+        let ends = ends.lock().unwrap();
+        let results: Vec<&str> = ends.iter().filter_map(|e| e["result"].as_str()).collect();
+        assert_eq!(results, ["ok", "failed"], "响应头阶段一次 ok，改判后再补一次 failed：{ends:?}");
+        assert_eq!(ends[0]["request_id"], ends[1]["request_id"]);
     }
 
     /// P3 盘点 S1 / S7：转 Chat 时省略的服务端工具照常省略，但这次尝试的决策说明里写明省略了什么。

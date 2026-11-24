@@ -97,6 +97,8 @@ export interface IslandData {
   carriedCountKey?: string
   /** 胶囊样式用：生效连接的 id，切换连接时据此重置额度基线 */
   connectionId?: string | null
+  /** 跳到用量页时带的连接筛选：只在归属确定（exact）时有值，见 `usageJumpConnection` */
+  usageConnectionId?: string | null
   /**
    * 胶囊样式用：本平台正在跑的那条**已存连接**（连接归因的 exact / mapped 两档）。
    * `platform` 档或缺失时为 null —— 收缩态那一行继续显示平台名，绝不显示猜出来的连接。

@@ -45,6 +45,8 @@ export interface ActiveSessionRow {
   title: string
   project: string | null
   running: boolean
+  /** 会话生命周期状态（`GatewaySessionDto.thread_status`）；只有快照、没有会话记录时为 null */
+  threadStatus: string | null
   /** 最近活动时间：快照、会话线程、经网关流水与在途请求取最新 */
   lastTs: number
   model: string | null
@@ -105,8 +107,18 @@ export function cacheCell(row: ContextSessionRowDto | null): CacheCell {
 }
 
 /** 状态：只有在途请求算「正在生成」；没有阶段数据，不细分「调用工具」（待确认） */
-export function statusCell(running: boolean): StatusCell {
-  return running ? { text: "正在生成", tone: "on" } : { text: "空闲", tone: "muted" }
+/**
+ * 状态列。在途请求只是「正在生成」的证据；没有在途请求时还要看会话自己的生命周期状态
+ * （`thread_status`，灵动岛与会话页用的同一份），否则 Claude Code 在思考、执行本地工具时
+ * 这里写「空闲」，而灵动岛和会话页写「运行中」（P4 审计 D12）。没有证据时写「最近活跃」，
+ * 不断言「空闲」。文案无画板，待确认。
+ */
+export function statusCell(running: boolean, threadStatus: string | null = null): StatusCell {
+  if (running) return { text: "正在生成", tone: "on" }
+  if (threadStatus === "running") return { text: "运行中（无在途请求）", tone: "on" }
+  if (threadStatus === "done") return { text: "已完成", tone: "muted" }
+  if (threadStatus === "failed") return { text: "失败", tone: "muted" }
+  return { text: "最近活跃", tone: "muted" }
 }
 
 /** 项目名：工作目录的最后一段 */
@@ -146,6 +158,7 @@ export function activeSessionRows(views: SessionView[], contexts: ContextSession
       title: session ? sessionTitle(session) : sessionTitle({ title: null, session_id: ctx?.session_id ?? "" }),
       project: projectOf(session?.cwd),
       running,
+      threadStatus: session?.thread_status ?? null,
       lastTs: Math.max(activity, ctx?.ts ?? 0),
       model: ctx?.upstream_model ?? bareModel(ctx?.requested_model) ?? link?.upstream_model ?? bareModel(link?.requested_model),
       account: accountOf(ctx, link?.source ?? null),

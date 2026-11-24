@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react"
 import { ArrowUpRight, Bot, ChartColumn, ChevronDown, ChevronRight, ChevronsUp, Copy, Ellipsis, Eye, FileCode, FileDown, Folder } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api, isTauri, type MessageDto, type MessagePageDto, type SessionItemDto } from "@/lib/api"
-import { canContinue, consumption, middleEllipsis, projectName, sessionTitle, spanLabel, statusLabel } from "@/lib/sessionThreads"
+import { canCompress, canContinue, consumption, middleEllipsis, projectName, sessionTitle, spanLabel, statusLabel } from "@/lib/sessionThreads"
 import { formatTokens, formatUsd, modelDisplayName } from "@/lib/usageStats"
 import { accountLabel } from "@/lib/usageFilters"
 import { demoMessages } from "@/mock/sessionThreads"
@@ -83,6 +83,10 @@ export function SessionDetail({ session, connections, onDrillUsage, onContinue, 
   const copy = (text: string, what: string) => {
     void navigator.clipboard.writeText(text).then(() => toast.success("已复制", what), () => toast.danger("复制失败", "请手动选择文字复制"))
   }
+
+  const compressButton = (
+    <button type="button" onClick={onCompress} disabled={!canCompress(session.platform)} className="inline-flex h-[34px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-jolu-selected px-3 text-xs font-medium text-jolu-on outline-none hover:bg-jolu-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent disabled:cursor-not-allowed disabled:opacity-45"><FileDown aria-hidden className="size-4 shrink-0"/>压缩会话</button>
+  )
 
   const continueButton = (
     <button
@@ -185,7 +189,10 @@ export function SessionDetail({ session, connections, onDrillUsage, onContinue, 
             <Bot aria-hidden className="size-4 shrink-0" />
             创建自动化
           </button>
-          <button type="button" onClick={onCompress} className="inline-flex h-[34px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-jolu-selected px-3 text-xs font-medium text-jolu-on outline-none hover:bg-jolu-pressed focus-visible:outline-2 focus-visible:outline-jolu-accent"><FileDown aria-hidden className="size-4 shrink-0"/>压缩会话</button>
+          {/* 与「在原工具继续」同样按平台禁用；提示文案无画板，待确认 */}
+          {canCompress(session.platform)
+            ? compressButton
+            : <Tip label={`${name} 暂不支持压缩（需要 Claude Code / Codex 会话）`}><span className="flex shrink-0">{compressButton}</span></Tip>}
           {canContinue(session.platform) && session.has_source
             ? continueButton
             : <Tip label={!canContinue(session.platform) ? `${name} 暂无可靠的继续入口` : "没有可读的源文件，无法定位会话"}><span className="flex shrink-0">{continueButton}</span></Tip>}

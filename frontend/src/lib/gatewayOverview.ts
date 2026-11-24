@@ -81,9 +81,17 @@ export function hourlyTrend(rows: readonly RouteLogDto[], dayStartMs: number, no
     buckets.push(bucket)
     index.set(h, bucket)
   }
+  // 归小时用请求的**首次**尝试时间（与后端 day_overview 归日一致），结果取最终尝试；
+  // 以前按最终尝试的时间归，跨整点转移的请求概览算前一小时、趋势画进后一小时（P4 审计 D14）
+  const firstTs = new Map<number, number>()
+  for (const row of rows) {
+    if (typeof row.request_uid !== "number") continue
+    firstTs.set(row.request_uid, Math.min(firstTs.get(row.request_uid) ?? row.ts, row.ts))
+  }
   for (const row of finalAttempts(rows)) {
-    if (row.ts < dayStartMs || row.ts > nowMs) continue
-    const hour = Math.floor((row.ts - dayStartMs) / 3_600_000)
+    const ts = typeof row.request_uid === "number" ? firstTs.get(row.request_uid) ?? row.ts : row.ts
+    if (ts < dayStartMs || ts > nowMs) continue
+    const hour = Math.floor((ts - dayStartMs) / 3_600_000)
     const bucket = index.get(hour)
     if (!bucket) continue
     if (row.result === "ok") bucket.ok += 1

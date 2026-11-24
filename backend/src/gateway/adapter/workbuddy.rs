@@ -465,7 +465,10 @@ async fn forward_at(
     let streamed = response.headers().get("content-type").and_then(|v| v.to_str().ok()).is_some_and(|ct| ct.contains("event-stream"));
     if !wants_stream && streamed && response.status().is_success() {
         let bytes = axum::body::to_bytes(response.into_body(), 32 * 1024 * 1024).await.unwrap_or_default();
-        let assembled = super::workbuddy_retry::assemble_chat_stream(&String::from_utf8_lossy(&bytes));
+        let assembled = match super::workbuddy_retry::assemble_chat_stream(&String::from_utf8_lossy(&bytes)) {
+            Ok(assembled) => assembled,
+            Err(reason) => return error_response(StatusCode::BAD_GATEWAY, &format!("WorkBuddy 上游在输出中途报错：{reason}")),
+        };
         return Response::builder()
             .status(StatusCode::OK)
             .header("content-type", "application/json")

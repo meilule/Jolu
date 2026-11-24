@@ -63,7 +63,10 @@ test("缓存列：没给写「未提供」，给了 0 就是 0，占比的分母
 
 test("状态、项目与来源账号", () => {
   assert.deepEqual(statusCell(true), { text: "正在生成", tone: "on" })
-  assert.deepEqual(statusCell(false), { text: "空闲", tone: "muted" })
+  assert.deepEqual(statusCell(false), { text: "最近活跃", tone: "muted" }, "没有证据时不断言空闲")
+  // P4 审计 D12：没有在途请求但会话仍在运行（思考、执行本地工具）时不能写「空闲」
+  assert.deepEqual(statusCell(false, "running"), { text: "运行中（无在途请求）", tone: "on" })
+  assert.equal(statusCell(false, "done").text, "已完成")
   assert.equal(projectOf(win("D:", "work", "Jolu", "")), "Jolu")
   assert.equal(projectOf("/home/dev/proj"), "proj")
   assert.equal(projectOf(null), null)

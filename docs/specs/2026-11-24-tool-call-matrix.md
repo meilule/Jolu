@@ -17,7 +17,12 @@
 | S1 / S7 静默丢弃 | ✅ 已处理（2026-11-24 鼠鼠同意按推荐：降级转发并记录） | 照常省略来源接不住的服务端工具，但在这次尝试的流水 `decision` 里写「来源不支持，已省略服务端工具：…」（`wire.rs` `dropped_tools_note`，覆盖 API Key 来源的三种转 Chat 路径与 Gemini / WorkBuddy / Qoder / Trae 订阅）；测试 `server_tools_dropped_in_conversion_are_written_to_the_log`（去掉记录即失败）、`plain_tools_are_not_reported_as_dropped` |
 | S10 历史里的内置工具项 / B1 Claude 订阅桥 | ⏸ 待真实账号 | S10 的历史项省略不影响本轮工具；B1 需真实 Claude 订阅确认桥是否转发服务端工具 |
 | D2 无整体时限 / 中间轮结果不回传 | ✅ 已处理（按推荐） | 加整体时限 `tool_loop::LOOP_BUDGET` = 90 秒，两轮之间检查，超时用已有结果收尾、去掉悬空调用并说明；测试 `the_tool_loop_stops_when_its_time_budget_is_spent`（即 T11）。中间轮结果维持只回传一行摘要（完整结果会撑大后续上下文），流式进度事件不做 |
-| D4、D6–D10 及其余待补测试 | ⬜ 未做 | 按 §7 / §8 清单继续 |
+| D6 WorkBuddy 非流式拼装忽略错误块 | ✅ 已修 | `workbuddy_retry::assemble_chat_stream` 遇错误块返回错误，适配器回 502 并带原因；测试 `an_error_chunk_fails_the_assembled_reply` |
+| D9 同名服务端工具被静默丢弃 | ✅ 已覆盖 | 属 S1 子情况：照常省略，流水决策说明写明省略的工具 |
+| D10 空文本错误结果丢失错误标记 | ✅ 已修 | `translate.rs` 失败的 `tool_result` 没有文字时写「Error: 工具执行失败（没有返回内容）」；测试 `an_empty_error_result_still_says_it_failed` |
+| D4 上游无视 stream:false | ⬜ 待样本 | 需要确认真有上游在非流式请求下仍回 SSE（zcode 待确认），没有样本前不改 |
+| D7 并行工具参数交错 | ⬜ 待样本 | Anthropic 流式块必须顺序输出，修复要缓存全部参数到流尾；先确认有上游这样交错发送 |
+| D8 Claude 订阅桥闲置进程惰性清理 | ⬜ 待真实账号 | 加后台定时清理需要真实 Claude 订阅验证进程生命周期 |
 
 ---
 

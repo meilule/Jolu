@@ -275,7 +275,7 @@ pub enum StreamEnd {
 }
 
 impl StreamEnd {
-    fn result(self) -> &'static str {
+    pub(crate) fn result(self) -> &'static str {
         match self {
             StreamEnd::Cancelled => "cancelled",
             StreamEnd::Failed => "failed",
@@ -332,14 +332,33 @@ impl CancelWatch {
     ///
     /// 改判同样排队交给写入线程，`Drop` 里不等数据库锁。它排在这一行的写入之后，
     /// 执行时 `row` 里已有行 id；流水没写进库时 `row` 为空，什么都不做。
+    #[cfg(test)]
     pub(crate) fn watch(response: axum::response::Response, db: &Db, row: RowSlot) -> axum::response::Response {
+        Self::watch_notify(response, db, row, |_| {})
+    }
+
+    /// 同 [`watch`](Self::watch)，并在这一行**确实被改判**后执行 `notify`。
+    ///
+    /// 生产里用它补发一条同 `request_id` 的结束事件：前端在拿到响应头时已按 `ok` 计数，
+    /// 改判后不通知的话，灵动岛的成功数一直偏多（P4 审计 D2 情形 B）。前端按 `request_id`
+    /// 只计最后一次结果，补发的事件会替换掉那次 `ok`。
+    pub(crate) fn watch_notify(
+        response: axum::response::Response,
+        db: &Db,
+        row: RowSlot,
+        notify: impl FnOnce(StreamEnd) + Send + 'static,
+    ) -> axum::response::Response {
         let db = db.clone();
         Self::wrap(response, move |end| {
             submit(move || {
                 let Some(id) = row.get() else { return };
                 let Ok(conn) = db.lock() else { return };
                 match mark_unfinished(&conn, id, end) {
-                    Ok(true) => eprintln!("[路由流水] 流式响应没有读完，第 {id} 行改判为 {}", end.result()),
+                    Ok(true) => {
+                        eprintln!("[路由流水] 流式响应没有读完，第 {id} 行改判为 {}", end.result());
+                        drop(conn);
+                        notify(end);
+                    }
                     Ok(false) => {}
                     Err(error) => eprintln!("[路由流水] 改判失败：{error}"),
                 }

@@ -299,11 +299,20 @@ pub(crate) struct EndGuard {
     source: String,
     started: std::time::Instant,
     done: bool,
+    /// 被丢弃时补写一行流水（参数是耗时毫秒）。以前只补发结束事件、不写流水，灵动岛记了
+    /// 一次失败，路由概览却完全看不到这次请求（P4 审计 D2 情形 A）。
+    on_drop: Option<Box<dyn FnOnce(i64) + Send>>,
 }
 
 impl EndGuard {
     pub(crate) fn new(emit: Emit, request_id: u64, meta: &RouteMeta, source: &str, started: std::time::Instant) -> Self {
-        Self { emit, request_id, meta: meta.clone(), source: source.to_string(), started, done: false }
+        Self { emit, request_id, meta: meta.clone(), source: source.to_string(), started, done: false, on_drop: None }
+    }
+
+    /// 被丢弃（客户端在拿到响应头之前断开）时额外执行：生产里用来写一行 `cancelled` 流水。
+    pub(crate) fn on_drop(mut self, record: impl FnOnce(i64) + Send + 'static) -> Self {
+        self.on_drop = Some(Box::new(record));
+        self
     }
 
     pub(crate) fn finish(mut self) {
@@ -315,6 +324,10 @@ impl Drop for EndGuard {
     fn drop(&mut self) {
         if self.done {
             return;
+        }
+        let duration_ms = self.started.elapsed().as_millis() as i64;
+        if let Some(record) = self.on_drop.take() {
+            record(duration_ms);
         }
         emit_end(
             &self.emit,
@@ -330,7 +343,7 @@ impl Drop for EndGuard {
                 upstream_model: None,
                 status_code: None,
                 result: "failed",
-                duration_ms: self.started.elapsed().as_millis() as i64,
+                duration_ms,
                 connection_id: self.meta.connection_id.as_deref(),
                 session_platform: self.meta.session_platform(),
                 session_id: self.meta.session_id(),
@@ -526,5 +539,19 @@ mod tests {
         }).unwrap();
         let keys: Vec<_> = value.as_object().unwrap().keys().cloned().collect();
         assert_eq!(keys, ["agent", "client_key", "connection_id", "identified_by", "request_id", "requested_model", "session_id", "session_platform", "source", "ts", "unidentified_ua"]);
+    }
+
+    /// P4 审计 D2 情形 A：被丢弃的请求除了补发结束事件，还要补写流水；正常结束不补写。
+    #[test]
+    fn a_dropped_guard_records_once_and_a_finished_one_does_not() {
+        let (emit, events) = test_support::collector();
+        let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = recorded.clone();
+        drop(EndGuard::new(emit.clone(), 9_100_007, &meta(), "src", std::time::Instant::now()).on_drop(move |ms| sink.lock().unwrap().push(ms)));
+        assert_eq!(recorded.lock().unwrap().len(), 1, "被丢弃时补写一次");
+        assert_eq!(events.lock().unwrap().len(), 1, "照常补发结束事件");
+        let sink = recorded.clone();
+        EndGuard::new(emit, 9_100_008, &meta(), "src", std::time::Instant::now()).on_drop(move |ms| sink.lock().unwrap().push(ms)).finish();
+        assert_eq!(recorded.lock().unwrap().len(), 1, "正常结束由调用方写流水，不重复补写");
     }
 }

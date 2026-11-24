@@ -1,4 +1,6 @@
 import { useContentMotion } from "@/lib/motion"
+import { useCollectionStatus } from "@/hooks/useCollectionStatus"
+import { collectionWarning } from "@/lib/usageStats"
 import { LoadingSurface } from "@/components/ui/LoadingSurface"
 import { CompressDialog } from '@/components/sessions/CompressDialog'
 import { HandoffPreview } from '@/components/sessions/HandoffPreview'
@@ -44,6 +46,8 @@ export function SessionsView({ active, target, onDrillUsage, onCreateAutomation 
   const toast = useToast()
   const conn = useConnections()
   const [platform, setPlatform] = useState<PlatformId | null>(null)
+  const collection = useCollectionStatus()
+  const collectionNote = collectionWarning(collection.status, platform)
   const [account, setAccount] = useState<string | null>(null)
   const [project, setProject] = useState<string | null>(null)
   const [time, setTime] = useState<TimePreset>("all")
@@ -221,6 +225,8 @@ export function SessionsView({ active, target, onDrillUsage, onCreateAutomation 
       </div>
 
       {query.error && <ErrorNotice error={query.error} stale={query.data !== null} onRetry={query.refresh} />}
+      {/* 待确认：采集失败提示无画板，最小版（P4 审计 D13） */}
+      {collectionNote && <div role="status" className="rounded-[10px] bg-jolu-danger-soft px-4 py-2.5 text-xs text-jolu-danger">{collectionNote}</div>}
 
       {/* 详情面板最小宽 420：更窄的窗口整行横向滚动（列表 + 详情一起拖），内容不再被裁破版 */}
       <div ref={listMotion} className="flex h-[630px] gap-4 overflow-x-auto pb-1 [scrollbar-width:thin]">

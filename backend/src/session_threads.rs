@@ -812,6 +812,15 @@ fn parse_file(path: &Path, platform: &str) -> Result<Vec<Message>, String> {
 }
 
 /// 会话主记录文件；源文件不存在时为 None
+/// 不在平台目录里、但有本地会话文件的来源（`kimi_sessions` / `pi_sessions` / `dsh_sessions`）。
+/// 会话列表按平台筛选时也要认它们，否则这三家只能在「全部」里看到（P4 审计 §3.2 第 5 条）。
+pub(crate) const EXTERNAL_SESSION_PLATFORMS: &[&str] = &["kimi", "pi", "dsh"];
+
+/// 会话列表接受的平台筛选值：平台目录里的，加上外部会话来源。
+pub(crate) fn session_platform_allowed(platform: &str) -> bool {
+    crate::platforms::known(platform) || EXTERNAL_SESSION_PLATFORMS.contains(&platform)
+}
+
 pub(crate) fn source_path(conn: &Connection, platform: &str, session_id: &str) -> rusqlite::Result<Option<PathBuf>> {
     Ok(source_files(conn)?.remove(&(platform.to_string(), session_id.to_string())).filter(|p| p.exists()))
 }
@@ -1292,6 +1301,14 @@ pub fn continue_session(conn: &Connection, platform: &str, session_id: &str) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn external_session_platforms_can_be_filtered() {
+        for platform in ["kimi", "pi", "dsh", "claude", "zcode"] {
+            assert!(super::session_platform_allowed(platform), "{platform}");
+        }
+        assert!(!super::session_platform_allowed("nope"));
+    }
+
     use super::*;
 
     #[test]

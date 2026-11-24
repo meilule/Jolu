@@ -180,3 +180,11 @@ test("今日 Token：老后端没有覆盖字段时有数按已知、没数按�
     { text: "—", note: null, state: "missing" },
   )
 })
+
+test("跳到用量页只在归属确定时带连接筛选（P4 审计 D7）", async () => {
+  const { usageJumpConnection } = await import("./islandPresentation.ts")
+  assert.equal(usageJumpConnection({ connection_id: "c1", confidence: "exact" }), "c1")
+  assert.equal(usageJumpConnection({ connection_id: "c1", confidence: "mapped" }), null, "映射出来的不算确定")
+  assert.equal(usageJumpConnection({ connection_id: null, confidence: "platform" }), null)
+  assert.equal(usageJumpConnection(null), null)
+})

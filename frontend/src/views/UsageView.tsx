@@ -3,12 +3,13 @@ import { useEffect, useState } from "react"
 import { CalendarDays, Download, Search } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api, isTauri, type StatsCallPageDto, type StatsFilterDto, type StatsModelRowDto, type StatsTrendBucketDto } from "@/lib/api"
-import { dateKey, localZone, rangeLabel, rangeToMillis, todayRange, utcOffsetLabel, zoneName, type DateRange } from "@/lib/usageStats"
+import { collectionWarning, dateKey, localZone, rangeLabel, rangeToMillis, todayRange, utcOffsetLabel, zoneName, type DateRange } from "@/lib/usageStats"
 import { useCostFx } from "@/lib/costCurrency"
 import { UNATTRIBUTED_ACCOUNT, accountsFor, keepApplicable } from "@/lib/usageFilters"
 import { useConnections } from "@/hooks/useConnections"
 import { useSettings } from "@/hooks/useSettings"
 import { useStatsQuery } from "@/hooks/useStatsQuery"
+import { useCollectionStatus } from "@/hooks/useCollectionStatus"
 import { useMainContextReport } from "@/hooks/useMainContextReport"
 import { demoActivity, demoCalls, demoOverview } from "@/mock/usageStats"
 import { useToast } from "@/components/ui/Toast"
@@ -59,6 +60,8 @@ export function UsageView({ active, request, onOpenSession }: {
   const [tab, setTab] = useState<UsageTab>("overview")
   const [range, setRange] = useState<DateRange>(() => todayRange())
   const [platform, setPlatform] = useState<PlatformId | null>(null)
+  const collection = useCollectionStatus()
+  const collectionNote = collectionWarning(collection.status, platform)
   const [accounts, setAccounts] = useState<string[]>([])
   // 4.2b：只筛了一个真实账号时，告诉本体岛「主窗口在看这个连接」（岛开了「跟随主窗口」才会用）
   useMainContextReport("usage", accounts.length === 1 && accounts[0] !== UNATTRIBUTED_ACCOUNT ? accounts[0] : null)
@@ -262,6 +265,8 @@ export function UsageView({ active, request, onOpenSession }: {
       )}
 
       {current.error && <ErrorNotice error={current.error} stale={current.data !== null} onRetry={current.refresh} />}
+      {/* 待确认：采集失败提示无画板，最小版 */}
+      {collectionNote && <div role="status" className="rounded-[10px] bg-jolu-danger-soft px-4 py-2.5 text-xs text-jolu-danger">{collectionNote}</div>}
 
       {tab === "analysis" && activity.error && <ErrorNotice error={activity.error} stale={!!activity.data} onRetry={activity.refresh} />}
       <ContentTransition identity={`${tab}-${!!current.data}`} className="flex flex-col gap-4">

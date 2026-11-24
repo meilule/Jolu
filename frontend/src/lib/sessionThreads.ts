@@ -174,6 +174,14 @@ export function canContinue(platform: string): boolean {
   return platform === "claude" || platform === "codex"
 }
 
+/**
+ * 压缩会话与本地交接导出的读取链路只支持这两家（后端 `session_threads::parse_detail`）。
+ * 以前按钮对所有平台可点，ZCode 等会话点进去提示「源文件不可读」，原因写错了（P4 审计 §3.2）。
+ */
+export function canCompress(platform: string): boolean {
+  return platform === "claude" || platform === "codex"
+}
+
 /** 键盘导航用的可见行：项目行与展开项目下的会话行 */
 export type TreeRow = { kind: "project"; key: string } | { kind: "session"; key: string; project: string }
 

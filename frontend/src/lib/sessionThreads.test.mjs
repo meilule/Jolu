@@ -79,3 +79,10 @@ test("ZCode 自建的草稿目录归成一组，排在真实项目之后、未�
   ])
   assert.deepEqual(groups.map((g) => [g.name, g.sessions.length]), [["jolu", 1], [ZCODE_DRAFTS, 2], ["未识别项目", 1]])
 })
+
+test("压缩只对 Claude Code / Codex 会话开放（P4 审计 §3.2）", async () => {
+  const { canCompress } = await import("./sessionThreads.ts")
+  assert.equal(canCompress("claude"), true)
+  assert.equal(canCompress("codex"), true)
+  for (const platform of ["zcode", "opencode", "qoder", "kimi", "pi", "dsh"]) assert.equal(canCompress(platform), false, platform)
+})

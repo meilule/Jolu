@@ -159,8 +159,9 @@ pub(crate) fn anthropic_request(body: &[u8]) -> Result<Bytes, String> {
                 })),
                 "tool_result" => {
                     let (mut text, images) = tool_output(&b["content"]);
-                    if b["is_error"] == true && !text.is_empty() {
-                        text = format!("Error: {text}");
+                    // 失败的结果即使没有文字（空内容或只有图片）也要让上游看出是失败（P3 盘点 D10）
+                    if b["is_error"] == true {
+                        text = if text.is_empty() { "Error: 工具执行失败（没有返回内容）".to_string() } else { format!("Error: {text}") };
                     }
                     results.push(json!({"role":"tool","tool_call_id":in_id(b["tool_use_id"].as_str().unwrap_or_default()),"content":text}));
                     result_images.extend(images);
@@ -1190,5 +1191,17 @@ mod tests {
         let mut e = Encoder::new("m");
         let failed = String::from_utf8(e.feed(b"data: {\"error\":{\"message\":\"boom\"}}\n\n")).unwrap();
         assert!(failed.contains("event: error") && failed.contains("boom"));
+    }
+
+    /// P3 盘点 D10：失败的工具结果没有文字时，转成 Chat 后仍要标明失败。
+    #[test]
+    fn an_empty_error_result_still_says_it_failed() {
+        let body = serde_json::json!({"model": "m", "messages": [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [], "is_error": true}]}
+        ]});
+        let chat: serde_json::Value = serde_json::from_slice(&anthropic_request(body.to_string().as_bytes()).unwrap()).unwrap();
+        let tool = chat["messages"].as_array().unwrap().iter().find(|m| m["role"] == "tool").unwrap();
+        assert!(tool["content"].as_str().unwrap().starts_with("Error:"), "{tool}");
     }
 }

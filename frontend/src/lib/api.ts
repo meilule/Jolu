@@ -887,6 +887,8 @@ export interface StatsSessionRowDto {
   session_id: string
   title: string | null
   tokens: number
+  /** 没有提供 Token 的记录数；大于 0 时 tokens 只是已知部分（老后端缺失） */
+  unknown_requests?: number
   /** 项目目录；来源文件缺失或没写 cwd 时为 null，界面只显示供应商 */
   cwd: string | null
 }

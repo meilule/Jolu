@@ -477,14 +477,21 @@ pub struct SourceBreakdown {
     pub unattributed_requests: i64,
 }
 
+///
+/// Token 用**新鲜口径**并排除退化行（[`crate::db::FRESH_TOKENS_SQL`]），与同一张灵动岛卡片上的
+/// 「本地今日 Token」（`today_fresh_tokens`）一致；以前用含缓存的总量，各来源相加远大于底部
+/// 合计，用户无法对账（P4 审计 D6）。只有灵动岛用这个查询。
 pub fn source_breakdown(conn: &Connection, platform: Option<&str>, start_ms: i64, end_ms: i64) -> rusqlite::Result<SourceBreakdown> {
-    let mut stmt = conn.prepare(
-        "SELECT r.connection_id, c.name, COUNT(*),
-                SUM(CASE WHEN r.total_known = 1 THEN r.total_tokens END)
-         FROM requests r LEFT JOIN connections c ON c.id = r.connection_id
-         WHERE r.ts >= ?1 AND r.ts < ?2 AND (?3 IS NULL OR r.platform = ?3)
-         GROUP BY r.connection_id",
-    )?;
+    let fresh = crate::db::FRESH_TOKENS_SQL;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT r.connection_id, c.name, r.n, r.fresh
+         FROM (SELECT connection_id, COUNT(*) AS n,
+                      SUM(CASE WHEN total_known = 1 THEN {fresh} END) AS fresh
+               FROM requests
+               WHERE ts >= ?1 AND ts < ?2 AND (?3 IS NULL OR platform = ?3){EXCLUDE_DEGENERATE_SQL}
+               GROUP BY connection_id) r
+         LEFT JOIN connections c ON c.id = r.connection_id"
+    ))?;
     let mut rows = Vec::new();
     let (mut total, mut unattributed) = (0, 0);
     let mapped = stmt.query_map(rusqlite::params![start_ms, end_ms, platform], |r| {
@@ -507,8 +514,10 @@ pub struct SessionRow {
     pub platform: String,
     pub session_id: String,
     pub title: Option<String>,
-    /// 范围内已知 Token 之和
+    /// 范围内已知 Token 之和（只算有 Token 的记录）
     pub tokens: i64,
+    /// 范围内没有提供 Token 的记录数；大于 0 时 `tokens` 只是已知部分（P4 审计 D11）
+    pub unknown_requests: i64,
     /// 项目目录：从会话来源文件读取（D-30，不改用量表）；来源文件缺失或没写 cwd 时为 None
     pub cwd: Option<String>,
 }
@@ -684,21 +693,28 @@ fn providers(reqs: &[Req]) -> Vec<ProviderRow> {
 }
 
 fn top_sessions(conn: &Connection, reqs: &[Req], limit: usize) -> rusqlite::Result<Vec<SessionRow>> {
-    let mut groups: HashMap<(&str, &str), i64> = HashMap::new();
+    // 按共享契约累加：未知不当 0 混进合计，而是单独计数；只能按已知部分排名，
+    // 一条已知都没有的会话无从比较消耗，不进榜（不是因为它是 0）
+    let mut groups: HashMap<(&str, &str), Vec<Option<i64>>> = HashMap::new();
     for r in reqs {
         if let Some(id) = r.session_id.as_deref() {
-            *groups.entry((r.platform.as_str(), id)).or_default() += r.total.unwrap_or(0);
+            groups.entry((r.platform.as_str(), id)).or_default().push(r.total);
         }
     }
-    let mut ranked: Vec<_> = groups.into_iter().filter(|(_, t)| *t > 0).collect();
-    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let mut ranked: Vec<_> = groups
+        .into_iter()
+        .map(|(key, values)| (key, crate::data_contract::Coverage::of(values)))
+        .filter(|(_, coverage)| coverage.total().is_some_and(|t| t > 0))
+        .map(|(key, coverage)| (key, (coverage.total().unwrap_or(0), coverage.unknown())))
+        .collect();
+    ranked.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then(a.0.cmp(&b.0)));
     ranked.truncate(limit);
     let mut title = conn.prepare("SELECT title FROM sessions WHERE platform = ?1 AND session_id = ?2")?;
     // 只对排名后的几行读 cwd；read_cwd 按文件修改时间缓存，不会每次重读源文件
     let files = if ranked.is_empty() { HashMap::new() } else { crate::session_threads::source_files(conn)? };
     ranked
         .into_iter()
-        .map(|((platform, session_id), tokens)| {
+        .map(|((platform, session_id), (tokens, unknown_requests))| {
             let found: Option<Option<String>> = title
                 .query_row(rusqlite::params![platform, session_id], |r| r.get(0))
                 .map(Some)
@@ -708,6 +724,7 @@ fn top_sessions(conn: &Connection, reqs: &[Req], limit: usize) -> rusqlite::Resu
                 session_id: session_id.to_string(),
                 title: found.flatten().filter(|t| !t.trim().is_empty()),
                 tokens,
+                unknown_requests,
                 cwd: files.get(&(platform.to_string(), session_id.to_string())).and_then(|p| crate::session_threads::read_cwd(p)),
             })
         })
@@ -1061,7 +1078,7 @@ mod tests {
         conn.execute("INSERT INTO connections(id,platform,kind,name,status,created_ms) VALUES('c-a','codex','auth','工作号','connected',1)", []).unwrap();
         let insert = |key: &str, platform: &str, ts: i64, total: i64, known: i64, connection: Option<&str>| {
             conn.execute(
-                "INSERT INTO requests(platform,source,dedup_key,ts,total_tokens,total_known,connection_id) VALUES(?1,'test',?2,?3,?4,?5,?6)",
+                "INSERT INTO requests(platform,source,dedup_key,ts,input_tokens,total_tokens,total_known,connection_id) VALUES(?1,'test',?2,?3,?4,?4,?5,?6)",
                 rusqlite::params![platform, key, ts, total, known, connection],
             )
             .unwrap();
@@ -1079,6 +1096,24 @@ mod tests {
         assert_eq!(b.rows[0], SourceRow { connection_id: "c-a".into(), name: Some("工作号".into()), requests: 2, tokens: Some(80) });
         assert_eq!(b.rows[1], SourceRow { connection_id: "c-gone".into(), name: None, requests: 1, tokens: None }, "全未知不当 0；已删连接没有名字");
         assert_eq!(source_breakdown(&conn, None, 0, 500).unwrap().total_requests, 5);
+    }
+
+    /// P4 审计 D6：「今日按来源」与「本地今日 Token」同为新鲜口径，缓存重读不计。
+    #[test]
+    fn source_breakdown_uses_the_same_fresh_measure_as_todays_tokens() {
+        let conn = crate::db::open(std::path::Path::new(":memory:")).unwrap();
+        conn.execute("INSERT INTO connections(id,platform,kind,name,status,created_ms) VALUES('c1','claude','api','主号','connected',1)", []).unwrap();
+        let now = chrono::Local::now().timestamp_millis() - 1;
+        conn.execute(
+            "INSERT INTO requests(platform,source,dedup_key,ts,input_tokens,output_tokens,cache_read_tokens,total_tokens,connection_id)
+             VALUES('claude','test','k',?1,10,5,1000,1015,'c1')",
+            [now],
+        )
+        .unwrap();
+        let (start, end) = crate::db::period_range(&conn, "claude", "today");
+        let row = &source_breakdown(&conn, Some("claude"), start, end).unwrap().rows[0];
+        assert_eq!(row.tokens, Some(15), "不能把 1000 缓存重读算进来源行");
+        assert_eq!(row.tokens, crate::db::today_fresh_tokens(&conn, "claude").unwrap(), "与底部合计同口径");
     }
 
     fn rec(platform: &str, key: &str, ts: i64, model: &str, tokens: [Option<i64>; 5], session: Option<&str>) -> RequestRecord {
@@ -1335,6 +1370,22 @@ mod tests {
         assert_eq!(csv_cell("a,b"), "\"a,b\"");
         assert_eq!(csv_cell("say \"hi\""), "\"say \"\"hi\"\"\"");
         assert_eq!(csv_cell("plain"), "plain");
+    }
+
+    /// P4 审计 D11：会话里有记录没给 Token 时，榜单给已知部分并带上未提供的次数，不把未知当 0。
+    #[test]
+    fn top_sessions_keep_unknown_requests_apart() {
+        let base = local_ms(NaiveDate::from_ymd_opt(2026, 10, 21).unwrap());
+        let (conn, path) = seeded(&[
+            rec("claude", "k1", base + 1_000, "claude-sonnet-4-5", [Some(60), Some(40), Some(0), Some(0), Some(100)], Some("s")),
+            rec("claude", "k2", base + 2_000, "claude-sonnet-4-5", [None; 5], Some("s")),
+            rec("claude", "k3", base + 3_000, "claude-sonnet-4-5", [None; 5], Some("only-unknown")),
+        ]);
+        let o = overview(&conn, &filter(base, base + 3_600_000)).unwrap();
+        assert_eq!(o.sessions.len(), 1, "一条已知都没有的会话无从排名，不进榜");
+        assert_eq!((o.sessions[0].tokens, o.sessions[0].unknown_requests), (100, 1));
+        drop(conn);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

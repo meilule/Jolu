@@ -27,7 +27,9 @@ pub(crate) fn record_usage(deps: &std::sync::Arc<crate::proxy::ProxyDeps>, entry
     let record = crate::db::RequestRecord {
         platform: entry.platform.clone(), source: "gateway-subscription".into(),
         dedup_key: format!("{}:{}:{id}",entry.connection_id.len(), entry.connection_id), session_id: None,
-        ts: now.timestamp_millis(), model: response.get("model").and_then(Value::as_str).map(str::to_owned),
+        // 归日用请求**开始**时间（now − 耗时），与原生记录（ZCode 等取开始时间）和路由概览按首次尝试归日一致；
+        // 以前取结束时间，23:59 开始、00:01 结束的请求两边归到不同的日（P4 审计 D14）
+        ts: now.timestamp_millis() - elapsed_ms.max(0), model: response.get("model").and_then(Value::as_str).map(str::to_owned),
         input_tokens: n("input_tokens"), output_tokens: n("output_tokens"), cache_read_tokens: cached,
         cache_write_tokens: n("cache_creation_input_tokens"), total_tokens: total, effort: None,
     };
@@ -458,5 +460,32 @@ data: [DONE]
                 .unwrap()
                 .contains("synthetic-secret"));
         }
+    }
+}
+
+#[cfg(test)]
+mod start_time_tests {
+    /// P4 审计 D14：订阅用量记录按请求开始时间归日，不是结束时间。
+    #[test]
+    fn subscription_usage_is_stamped_with_the_request_start() {
+        let deps = crate::proxy::test_support::bare_deps();
+        let entry = super::super::route::PoolEntry {
+            connection_id: "c-start".into(),
+            slug: "s".into(),
+            name: "订阅".into(),
+            platform: "claude".into(),
+            kind: "auth".into(),
+            protocol: "anthropic".into(),
+            base_url: None,
+            secret: None,
+            account_fp: None,
+            model: None,
+            status: "connected".into(),
+        };
+        let before = chrono::Utc::now().timestamp_millis();
+        let response = serde_json::json!({"id": "msg_start", "model": "m", "usage": {"input_tokens": 1, "output_tokens": 1}});
+        super::record_usage(&deps, &entry, &response, 120_000);
+        let ts: i64 = deps.db.lock().unwrap().query_row("SELECT ts FROM requests WHERE source = 'gateway-subscription'", [], |r| r.get(0)).unwrap();
+        assert!(ts <= before - 119_000, "两分钟的请求应记在开始时刻：ts={ts} before={before}");
     }
 }

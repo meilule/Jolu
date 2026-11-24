@@ -432,3 +432,21 @@ export function modelPriceTip(row: { model: string | null; price_source?: string
   const checked = row.price_checked ? ` · 核对于 ${row.price_checked}` : ""
   return `${name}\n价目来源：${row.price_source}${checked}`
 }
+
+/**
+ * 采集失败时用量页的提示（P4 审计 D13）：以前只有灵动岛知道采集出错，用量页照常给确定数字。
+ * 当前筛选的平台（或「全部」时任一平台）在 `failed_sources` 里时返回一句说明，否则 null。
+ * 文案与位置无画板，待确认。
+ */
+export function collectionWarning(
+  status: { ok: boolean; failed_sources: string[]; last_success_ms: number | null } | null | undefined,
+  platform: string | null,
+): string | null {
+  if (!status || status.ok) return null
+  const failed = platform ? status.failed_sources.filter((source) => source === platform) : status.failed_sources
+  if (failed.length === 0) return null
+  const last = status.last_success_ms
+  const at = last ? new Date(last) : null
+  const when = at ? `（上次成功 ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}）` : ""
+  return `本机记录采集失败，数据可能不完整${when}`
+}

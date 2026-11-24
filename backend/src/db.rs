@@ -1441,18 +1441,12 @@ pub fn today_fresh_tokens(conn: &Connection, platform: &str) -> rusqlite::Result
         // 以前所有原生行都用总量，ZCode / Qoder 这类缓存占大头的平台今日数字被放大十几倍，
         // 而同一张卡片上的增量却是新鲜值（P4 审计 D5）。
         return conn.query_row(
-            "SELECT CASE WHEN COUNT(*) = 0 OR COALESCE(SUM(total_known), 0) = 0 THEN NULL
-                         ELSE SUM(CASE WHEN total_known = 1 THEN
-                             CASE WHEN input_semantics = 'includes_cache' AND input_known = 1
-                                       AND output_known = 1 AND cache_read_known = 1
-                                  THEN MAX(input_tokens - cache_read_tokens, 0) + output_tokens
-                                  WHEN input_semantics = 'excludes_cache' AND input_known = 1 AND output_known = 1
-                                  THEN input_tokens + output_tokens
-                                  ELSE total_tokens
-                             END
-                         END)
-                    END
-               FROM requests WHERE platform = ?1 AND ts >= ?2 AND ts < ?3",
+            &format!(
+                "SELECT CASE WHEN COUNT(*) = 0 OR COALESCE(SUM(total_known), 0) = 0 THEN NULL
+                             ELSE SUM(CASE WHEN total_known = 1 THEN {FRESH_TOKENS_SQL} END)
+                        END
+                   FROM requests WHERE platform = ?1 AND ts >= ?2 AND ts < ?3"
+            ),
             params![platform, start, end],
             |r| r.get(0),
         );
@@ -2010,6 +2004,22 @@ const HIT_DENOMINATOR_SQL: &str = "CASE input_semantics WHEN 'includes_cache' TH
 /// 不携带可统计信息，却会让区间的合计、命中率与费用整体变「未知」。统计聚合
 /// 一律跳过它；记录保留在库中，请求日志（request_log_at）特意不加本条件，照常显示。
 /// 限定 claude：Codex 协议本就不上报缓存写入，缺字段在那边是常态而非退化。
+/// 一行请求的「新鲜 Token」（输入 + 输出，不含缓存重读），用于灵动岛本机今日 Token 与
+/// 「今日按来源」。只在 `total_known = 1` 的行上求值，列名不带表别名。
+///
+/// - Codex：输入含缓存读写，扣掉；Claude / 自定义：输入本就不含缓存
+/// - 原生平台按 `input_semantics`：`includes_cache` 扣缓存读，`excludes_cache` 直接相加
+/// - 语义未知或分项缺失：拆不出缓存，只能沿用来源总量（上界）
+pub(crate) const FRESH_TOKENS_SQL: &str = "CASE
+    WHEN platform = 'codex' THEN MAX(input_tokens - cache_read_tokens - cache_write_tokens, 0) + output_tokens
+    WHEN platform IN ('claude', 'custom') THEN input_tokens + output_tokens
+    WHEN input_semantics = 'includes_cache' AND input_known = 1 AND output_known = 1 AND cache_read_known = 1
+        THEN MAX(input_tokens - cache_read_tokens, 0) + output_tokens
+    WHEN input_semantics = 'excludes_cache' AND input_known = 1 AND output_known = 1
+        THEN input_tokens + output_tokens
+    ELSE total_tokens
+END";
+
 pub(crate) const EXCLUDE_DEGENERATE_SQL: &str = " AND NOT (platform = 'claude' AND input_known = 1 AND input_tokens = 0 \
      AND output_known = 1 AND output_tokens = 0 \
      AND (cache_read_known = 0 OR cache_write_known = 0))";

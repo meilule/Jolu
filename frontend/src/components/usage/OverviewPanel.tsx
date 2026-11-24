@@ -190,7 +190,8 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
                   {/* 画板 30：「项目 · 供应商」；读不到项目目录时只显示供应商，不猜项目 */}
                   <span className="truncate text-[11px] text-jolu-muted">{s.cwd ? `${projectName(s.cwd)} · ${providerName(s.platform)}` : providerName(s.platform)}</span>
                 </span>
-                <span className="tnum text-xs font-semibold text-jolu-text">{formatTokens(s.tokens)}</span>
+                {/* 部分记录没给 Token 时写明「已知」，不把未知当 0 混进合计；文案无画板，待确认 */}
+                <span className="tnum text-xs font-semibold text-jolu-text" title={s.unknown_requests ? `${s.unknown_requests} 次未提供 Token，只计已知部分` : undefined}>{s.unknown_requests ? `已知 ${formatTokens(s.tokens)}` : formatTokens(s.tokens)}</span>
                 <ChevronRight aria-hidden className="size-3.5 text-jolu-muted" />
               </button>
             )) : <span className="py-2 text-xs text-jolu-muted">范围内没有可归入会话的记录</span>}

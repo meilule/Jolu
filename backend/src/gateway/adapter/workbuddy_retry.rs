@@ -202,7 +202,10 @@ pub(super) fn succeeded(original_key: Option<u64>, how: &str, system_changed: bo
 }
 
 /// 客户端要非流式、上游却回了事件流时：把 Chat 的流拼成一条完整回复（文字、推理、工具调用按序号合并、用量、结束原因）。
-pub(super) fn assemble_chat_stream(text: &str) -> Value {
+///
+/// 流中途出现 `{"error": …}` 块时返回错误说明：以前错误块被跳过，拼出一条看似成功、
+/// `finish_reason` 可能为 null 的回复，代执行循环会把它当最终回答交出（P3 盘点 D6）。
+pub(super) fn assemble_chat_stream(text: &str) -> Result<Value, String> {
     let mut id = String::new();
     let mut model = String::new();
     let mut content = String::new();
@@ -213,6 +216,10 @@ pub(super) fn assemble_chat_stream(text: &str) -> Value {
     for line in text.lines() {
         let Some(data) = line.trim().strip_prefix("data:").map(str::trim) else { continue };
         let Ok(chunk) = serde_json::from_str::<Value>(data) else { continue };
+        if let Some(error) = chunk.get("error").filter(|e| !e.is_null()) {
+            let message = error.get("message").and_then(Value::as_str).or_else(|| error.as_str()).unwrap_or("上游在流式输出中途报错");
+            return Err(message.to_string());
+        }
         if id.is_empty() {
             id = chunk["id"].as_str().unwrap_or_default().to_string();
             model = chunk["model"].as_str().unwrap_or_default().to_string();
@@ -256,7 +263,7 @@ pub(super) fn assemble_chat_stream(text: &str) -> Value {
     if !usage.is_null() {
         out["usage"] = usage;
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -307,6 +314,14 @@ mod tests {
         assert_eq!(fresh["messages"][0]["content"], DEFAULT_SYSTEM, "记住后首发就挪");
     }
 
+    /// P3 盘点 D6：流中途的错误块不能被拼成一条「成功」的回复。
+    #[test]
+    fn an_error_chunk_fails_the_assembled_reply() {
+        let sse = "data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"半截\"}}]}\n\n\
+data: {\"error\":{\"message\":\"quota exceeded\"}}\n\ndata: [DONE]\n\n";
+        assert_eq!(assemble_chat_stream(sse).unwrap_err(), "quota exceeded");
+    }
+
     #[test]
     fn a_streamed_reply_is_assembled_for_a_non_streaming_client() {
         let sse = "data: {\"id\":\"c1\",\"model\":\"glm\",\"choices\":[{\"delta\":{\"reasoning_content\":\"想\"}}]}\n\n\
@@ -314,7 +329,7 @@ data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n\n\
 data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"t1\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"p\"}}]}}]}\n\n\
 data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\":1}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n\
 data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
-        let out = assemble_chat_stream(sse);
+        let out = assemble_chat_stream(sse).unwrap();
         assert_eq!(out["choices"][0]["message"]["content"], "你");
         assert_eq!(out["choices"][0]["message"]["reasoning_content"], "想");
         assert_eq!(out["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"], "{\"p\":1}");

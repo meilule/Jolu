@@ -131,6 +131,17 @@ export function relayQuotaConnection(
 }
 
 /**
+ * 从灵动岛跳到用量页时带哪条连接筛选：只有后端按请求事实**确定**归到这条连接（`exact`）时才带。
+ *
+ * 灵动岛的今日数字是整个平台的；以前跳转总带「本岛选中的连接」，而直接用 Claude Code、
+ * 不经网关的记录没有连接 id，用量页一筛就是 0 次调用（P4 审计 D7）。`mapped` / `platform`
+ * 档只预筛平台，不猜连接。
+ */
+export function usageJumpConnection(attribution: { connection_id: string | null; confidence: string } | null | undefined): string | null {
+  return attribution?.confidence === "exact" ? attribution.connection_id : null
+}
+
+/**
  * P1-4「未知不是零」在灵动岛上的落点：今日 Token 的三态。
  *
  * 后端 `today_tokens` 是 `Option<i64>`，`None` 有两种完全不同的含义：

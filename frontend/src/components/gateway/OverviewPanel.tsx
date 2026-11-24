@@ -222,7 +222,7 @@ export function OverviewPanel({ day, range, onRange, sessions, contexts, logRows
  * 存在（鼠鼠 2026-11-17 反馈），所以改为折行，字段标签由卡片自己带上。
  */
 function SessionLine({ row, nowMs, contextsFailed, onOpen }: { row: ActiveSessionRow; nowMs: number; contextsFailed: boolean; onOpen: () => void }) {
-  const status = statusCell(row.running)
+  const status = statusCell(row.running, row.threadStatus)
   const context = contextsFailed && row.snapshotId === null ? { text: "读取失败", ratio: null, tone: "danger" as const, title: "上下文快照读取失败，稍后自动重试" } : row.context
   const agentName = row.agent ? agentLabel(row.agent) : null
   const contextText = (

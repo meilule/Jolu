@@ -115,3 +115,13 @@ test("概览范围：四档齐全，未知值退回今天", async () => {
   // 拼错不能把页面变空
   assert.equal(overviewRange("week").id, "today")
 })
+
+test("跨整点转移的请求按首次尝试归小时、按最终尝试计结果（P4 审计 D14）", () => {
+  const rows = [
+    row({ id: 2, ts: DAY_START + 1 * HOUR + 1_000, result: "ok", request_uid: 7 }),
+    row({ id: 1, ts: DAY_START + 1 * HOUR - 1_000, result: "failed", request_uid: 7 }),
+  ]
+  const buckets = hourlyTrend(rows, DAY_START, NOW)
+  assert.equal(buckets[0].ok, 1, "首次尝试在 0 点那一格")
+  assert.equal(buckets[1].ok + buckets[1].failed, 0, "不能画进 1 点")
+})

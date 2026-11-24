@@ -18,7 +18,7 @@ import type { IslandMode, PlatformId } from "@/types"
 import { platformConfig, isFetchOnlyPlatform } from "@/lib/platforms"
 import { useSourceMetrics } from "@/hooks/useSourceMetrics"
 import { useCollectionStatus } from "@/hooks/useCollectionStatus"
-import { balanceSnapshotTime, connectionQueries, islandActiveConnection, islandAttribution, islandConnectionStatus, islandCost, relayQuotaConnection, todayTokenView } from "@/lib/islandPresentation"
+import { balanceSnapshotTime, connectionQueries, islandActiveConnection, islandAttribution, islandConnectionStatus, islandCost, relayQuotaConnection, todayTokenView, usageJumpConnection } from "@/lib/islandPresentation"
 import { dockQuotaView } from "@/lib/dockQuotaView"
 import { carriedDeltaCountKey, carriedDeltaView, latchSessionDelta } from "@/lib/carriedDelta"
 import { islandWriting } from "@/lib/islandWriting"
@@ -334,6 +334,7 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
         quotaUnavailable: !quotaWindows,
         connected: localQuotaPlatform || Boolean(active && active.status !== "paused"),
         connectionId: active?.id ?? null,
+        usageConnectionId: usageJumpConnection(live.attribution),
         // 收缩态那一行按置信度渲染：`exact` / `mapped` 显示连接名（mapped 用弱化样式），
         // `platform` 或 null 保持现在的平台名。
         activeConnection,

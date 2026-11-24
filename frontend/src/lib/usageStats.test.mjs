@@ -225,3 +225,13 @@ test("模型行悬停：价目来源与核对日期，未收录如实说明（4.
   assert.equal(modelPriceTip({ model: "made-up", price_source: null }), "made-up\n未收录价目：费用显示 —")
   assert.equal(modelPriceTip({ model: null }), "未知模型\n未收录价目：费用显示 —")
 })
+
+test("采集失败时用量页给出提示，只看当前筛选的平台（P4 审计 D13）", async () => {
+  const { collectionWarning } = await import("./usageStats.ts")
+  const failed = { ok: false, failed_sources: ["claude"], last_success_ms: null }
+  assert.match(collectionWarning(failed, null), /采集失败/)
+  assert.match(collectionWarning(failed, "claude"), /采集失败/)
+  assert.equal(collectionWarning(failed, "codex"), null, "别的平台出错不影响这个平台")
+  assert.equal(collectionWarning({ ok: true, failed_sources: [], last_success_ms: 1 }, null), null)
+  assert.equal(collectionWarning(null, null), null)
+})

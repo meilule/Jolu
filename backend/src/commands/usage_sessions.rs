@@ -103,7 +103,7 @@ pub(crate) async fn stats_calls(db: State<'_, DbRead>, filter: usage_stats::Stat
 /// 会话线程页（模块 D）：本机会话列表
 #[tauri::command]
 pub(crate) async fn sessions_list(db: State<'_, DbRead>, filter: session_threads::SessionFilter) -> Result<session_threads::SessionList, String> {
-    if filter.platform.as_deref().is_some_and(|p| !platforms::known(p)) { return Err("未知平台".into()); }
+    if filter.platform.as_deref().is_some_and(|p| !session_threads::session_platform_allowed(p)) { return Err("未知平台".into()); }
     with_reader(db.0.clone(), move |conn| session_threads::list(conn, &filter).map_err(|e| e.to_string())).await
 }
 

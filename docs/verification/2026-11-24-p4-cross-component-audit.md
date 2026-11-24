@@ -24,7 +24,14 @@
 | D5 原生平台今日 Token 含缓存 | ✅ 属实 | 已修（鼠鼠 2026-11-24 同意按推荐）：`today_fresh_tokens` 原生分支按 `input_semantics` 取新鲜值，与增量同口径；语义未知或分项缺失的行沿用总量（上界）；测试 `native_today_tokens_use_the_fresh_measure`。ZCode / Qoder 等平台灵动岛今日数字会明显变小，属预期 |
 | D9 两个页面「上期」不同 | ✅ 属实 | 已修：`route_log::day_overview_until` + `Range::prior_end`，截止到此刻的范围上期只算到同一时段；前端文案改「昨天同时段」「前 7 天同时段」；测试 `the_prior_period_stops_at_the_same_time_of_day` |
 | D10 同一次调用记两遍 | 待复现 | 依赖调用方工具是否必写本机日志，放 P4-3 真实环境核对 |
-| D2、D6、D7、D11–D14 | 未处理 | 见 §2 各条；涉及界面口径或展示的需对应画板 |
+| D2 取消 / 改判后事件与流水不一致 | ✅ 属实 | 已修：情形 A，`EndGuard::on_drop` 在请求被丢弃时补写一行 `cancelled` 流水；情形 B，`CancelWatch::watch_notify` 改判成功后补发同 `request_id` 的结束事件，前端按 D1 的去重替换那次 `ok`。测试 `a_dropped_guard_records_once_and_a_finished_one_does_not`，并在 `a_stream_that_breaks_midway_is_not_retried_on_the_next_member` 断言补发事件 |
+| D6 「今日按来源」含缓存 | ✅ 属实 | 已修：`source_breakdown` 改用新鲜口径并排除退化行，新鲜值公式抽成 `db::FRESH_TOKENS_SQL` 与 `today_fresh_tokens` 共用；测试 `source_breakdown_uses_the_same_fresh_measure_as_todays_tokens` |
+| D7 灵动岛跳用量页误带连接筛选 | ✅ 属实 | 已修：只在归属为 `exact` 时带连接（`usageJumpConnection`），其余只预筛平台；前端测试 1 条 |
+| D11 高消耗会话把未知当 0 | ✅ 属实 | 已修：`top_sessions` 按 `Coverage` 累加，`SessionRow.unknown_requests` 计未提供次数，前端部分覆盖时写「已知 X」（无画板，待确认）；测试 `top_sessions_keep_unknown_requests_apart`。会话页退化行排除未改（会话分项口径另行确认） |
+| D12 路由页把运行中写成空闲 | ✅ 属实 | 已修：`statusCell(running, threadStatus)` 参考会话生命周期，没有证据写「最近活跃」（文案待确认）；测试已更新 |
+| D13 采集失败只有灵动岛知道 | ✅ 属实 | 已修：用量页与会话页顶部在当前平台采集失败时提示「本机记录采集失败，数据可能不完整」（`collectionWarning`，无画板，最小版，待确认） |
+| D14 同一请求不同入口取不同时刻 | ✅ 属实 | 已修：网关订阅用量按请求开始时间记（`subscription::record_usage`），路由趋势按首次尝试归小时；测试各 1 条 |
+| §3.2 会话工具范围 | ✅ | 压缩按钮对 Claude Code / Codex 以外的平台禁用并说明原因（`canCompress`）；Kimi / Pi / dsh 可按平台筛选（`session_platform_allowed`，Agent 详情页的会话数随之可取）；AGENTS.md 模块 D 行补写压缩 / 导出范围、无正文平台与「交接给」的作用 |
 
 ---
 

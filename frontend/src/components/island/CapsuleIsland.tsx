@@ -720,7 +720,7 @@ export function CapsuleIsland({
                 {isTauri && (
                   <div className="cap-lnk">
                     <span>今日用量明细</span>
-                    <button type="button" onClick={() => void api.openMainUsage(data.platform, data.connectionId ?? null).catch(() => {})}>
+                    <button type="button" onClick={() => void api.openMainUsage(data.platform, data.usageConnectionId ?? null).catch(() => {})}>
                       在主窗口查看
                     </button>
                   </div>
