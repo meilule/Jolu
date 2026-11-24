@@ -61,8 +61,13 @@ export interface ActivityState {
   shown: ActiveRelay | null
   /** 每个 Agent 最近一次去向 */
   lastByAgent: Record<string, { source: string | null; model: string; ts: number; ok: boolean; durationMs: number | null; statusCode: number | null }>
-  /** 今日统计（本地时区零点起） */
+  /** 今日统计（本地时区零点起）。按**请求**计：失败转移的多次尝试只算一次，取最后一次的结果 */
   today: { day: string; ok: number; rejected: number; failed: number }
+  /**
+   * 今日已计入统计的请求 → 当时计入的结果。同一次请求的后续尝试（失败转移）到达时，
+   * 先撤掉上一次计入的结果再计新的，与后端 `counts_since`（按 request_uid 取最后一次尝试）同口径。
+   */
+  counted?: Record<number, string>
 }
 
 /** 成功停留 2.4s，被拒 / 失败停留 4.8s；只有开始没有结束的请求 120s 后收回 */
@@ -97,6 +102,24 @@ export function activityFromLog(rows: RouteLogDto[], now: number): ActivityState
   return state
 }
 
+function uncountResult(today: ActivityState["today"], result: string) {
+  if (result === "ok") today.ok = Math.max(0, today.ok - 1)
+  else if (result === "rejected") today.rejected = Math.max(0, today.rejected - 1)
+  else today.failed = Math.max(0, today.failed - 1)
+}
+
+/**
+ * 一批结束事件按请求折叠后的计数：同一 `request_id` 只取最后一次尝试的结果。
+ * 快照合并时补加「计数时刻之后才结束」的实时请求也用它，避免一次失败转移被补成两次。
+ */
+export function countByRequest(events: Array<{ request_id: number; result: string }>): { ok: number; rejected: number; failed: number } {
+  const last = new Map<number, string>()
+  for (const event of events) last.set(event.request_id, event.result)
+  const out = { day: "", ok: 0, rejected: 0, failed: 0 }
+  for (const result of last.values()) countResult(out, result)
+  return { ok: out.ok, rejected: out.rejected, failed: out.failed }
+}
+
 function countResult(today: ActivityState["today"], result: string) {
   if (result === "ok") today.ok += 1
   else if (result === "rejected") today.rejected += 1
@@ -129,13 +152,18 @@ export function onEnd(state: ActivityState, event: RouteEndEvent, now: number): 
     startedAt: started?.startedAt ?? now, endedAt: now, durationMs: event.duration_ms, statusCode: event.status_code,
     connectionId: event.connection_id ?? started?.connectionId ?? null,
   }
-  const today = dayKey(now) === state.today.day ? { ...state.today } : { day: dayKey(now), ok: 0, rejected: 0, failed: 0 }
+  const sameDay = dayKey(now) === state.today.day
+  const today = sameDay ? { ...state.today } : { day: dayKey(now), ok: 0, rejected: 0, failed: 0 }
+  const counted = sameDay ? { ...(state.counted ?? {}) } : {}
+  const previous = counted[event.request_id]
+  if (previous !== undefined) uncountResult(today, previous)
   countResult(today, event.result)
+  counted[event.request_id] = event.result
   const lastByAgent = event.agent
     ? { ...state.lastByAgent, [event.agent]: { source: relay.source, model: relay.model, ts: now, ok: phase === "ok", durationMs: event.duration_ms, statusCode: event.status_code } }
     : state.lastByAgent
   // 结果停留期间若还有别的请求在转发，先显示这次结果；停留结束后回到进行中的那条
-  return { inFlight, shown: relay, lastByAgent, today }
+  return { inFlight, shown: relay, lastByAgent, today, counted }
 }
 
 /**
@@ -151,9 +179,10 @@ export function onTick(state: ActivityState, now: number): ActivityState {
   } else if (shown && !inFlight.some((r) => r.requestId === shown!.requestId)) {
     shown = latest(inFlight)
   }
-  const today = dayKey(now) === state.today.day ? state.today : { day: dayKey(now), ok: 0, rejected: 0, failed: 0 }
+  const sameDay = dayKey(now) === state.today.day
+  const today = sameDay ? state.today : { day: dayKey(now), ok: 0, rejected: 0, failed: 0 }
   if (inFlight.length === state.inFlight.length && shown === state.shown && today === state.today) return state
-  return { ...state, inFlight, shown, today }
+  return { ...state, inFlight, shown, today, counted: sameDay ? state.counted : {} }
 }
 
 /** 下一次需要 onTick 的时刻；没有待收尾的内容时为 null */

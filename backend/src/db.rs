@@ -1338,6 +1338,9 @@ pub struct LiveUsage {
     /// 而单一个 `Option` 表达不了。用共享契约 `data_contract::Coverage` 算，
     /// 与用量页 `token_coverage`、会话卡片 `SessionTokens` 同一套规则。
     pub today_token_coverage: crate::data_contract::Coverage,
+    /// `today_tokens` 的来源元数据（P1-4）：与用量页概览同一套 [`crate::data_contract::Provenance`]，
+    /// 范围是本地时区的今天（与 `today_fresh_tokens` 同一组边界）。
+    pub today_provenance: crate::data_contract::Provenance,
     /// 新增记录是否来自刚发生的实时写入；历史补采不得播放增量动画。
     pub realtime_delta: bool,
     /// 首次加载：调用方不得据此播放增量动画（§2.1.1）
@@ -1391,6 +1394,31 @@ pub fn today_token_coverage(
     let (rows, known): (i64, i64) =
         conn.query_row(&sql, rusqlite::params_from_iter(args), |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(crate::data_contract::Coverage::from_counts(known, rows - known, total_tokens))
+}
+
+/// 今日 Token 的来源元数据：范围与 [`today_token_coverage`] 相同（`period_range` 的今天，
+/// 排除退化行），保证灵动岛的「今天」与用量页、路由概览用的是同一组本地自然日边界。
+pub fn today_provenance(conn: &Connection, platform: &str) -> rusqlite::Result<crate::data_contract::Provenance> {
+    use rusqlite::types::Value;
+    let (start, end) = period_range(conn, platform, "today");
+    let (scope, scope_args) = if platform == "all" {
+        ("1 = 1".to_string(), vec![])
+    } else {
+        ("r.platform = ?".to_string(), vec![Value::Text(platform.to_string())])
+    };
+    let range = format!("r.ts >= ? AND r.ts < ? AND {scope}{EXCLUDE_DEGENERATE_SQL}");
+    let mut range_args = vec![Value::Integer(start), Value::Integer(end)];
+    range_args.extend(scope_args.iter().cloned());
+    crate::data_contract::requests_provenance(
+        conn,
+        start,
+        end,
+        &range,
+        &range_args,
+        &scope,
+        &scope_args,
+        Local::now().timestamp_millis(),
+    )
 }
 
 /// 本机今日 Token（新鲜口径）：Claude 取输入+输出，Codex 扣除缓存重读与缓存写入，
@@ -1634,6 +1662,7 @@ pub fn live_usage(
     // 它算的就是「已知行的新鲜 Token 合计」（Codex 已扣缓存），与 `known` 的口径一致。
     // 不在这里另算一次总量——两套口径迟早会漂移。
     let today_token_coverage = today_token_coverage(conn, platform, today_tokens)?;
+    let today_provenance = today_provenance(conn, platform)?;
 
     Ok(LiveUsage {
         platform: platform.to_string(),
@@ -1645,6 +1674,7 @@ pub fn live_usage(
         active_window_seconds,
         today_tokens,
         today_token_coverage,
+        today_provenance,
         realtime_delta,
         initial: since.is_none(),
         data_changed: false,
@@ -3062,6 +3092,13 @@ mod tests {
         assert_eq!(live.today_token_coverage.state(), "partial");
         // total 与 today_tokens 同源（都是 `today_fresh_tokens`），不会两套口径
         assert_eq!(live.today_token_coverage.total(), live.today_tokens);
+        // 灵动岛的来源元数据与覆盖同一个「今天」
+        let (start, end) = period_range(&conn, "claude", "today");
+        // 终点是「此刻」，两次调用差几毫秒：起点必须相同，终点不晚于后取的那次
+        assert_eq!(live.today_provenance.window_start, start);
+        assert!(live.today_provenance.window_end <= end);
+        assert!(live.today_provenance.data_at.is_some(), "今天有记录时数据时间不能为空");
+        assert_eq!(live.today_provenance.unit, crate::data_contract::Unit::Tokens);
         assert_eq!(live.today_tokens, Some(41), "40 输入 + 1 输出");
     }
 

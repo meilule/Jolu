@@ -541,12 +541,19 @@ pub(crate) fn pool_snapshot(
     index: &Mutex<PoolIndex>,
 ) -> Vec<PoolEntry> {
     let now = now_ms();
+    let mut loaded_before = true;
     if let Ok(guard) = index.lock() {
         if guard.refreshed_ms > 0 && now - guard.refreshed_ms < POOL_TTL_MS {
             return guard.entries.clone();
         }
+        loaded_before = guard.refreshed_ms > 0;
     }
-    if let Ok(conn) = db.try_lock() {
+    // 从没加载过时没有旧快照可沿用：此时拿不到锁就返回空池，会把「数据库正忙」
+    // 误报成「分组成员都不在模型池中」（P2 并发测试复现：冷启动时几个请求同时到达，
+    // 抢不到锁的全部 503）。所以只有这一次等锁；之后 TTL 到期仍按 try_lock + 旧快照，
+    // 不让请求线程排队等数据库。
+    let conn = if loaded_before { db.try_lock().ok() } else { db.lock().ok() };
+    if let Some(conn) = conn {
         let recovered = recover_exhausted(&conn, &chrono::Local::now().format("%Y-%m-%d").to_string());
         if recovered > 0 {
             eprintln!("[路由] {recovered} 个额度用尽的来源已到新的一天，恢复可用");

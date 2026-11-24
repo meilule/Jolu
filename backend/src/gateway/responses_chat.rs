@@ -289,6 +289,8 @@ pub(crate) struct StreamTranslator {
     next_index: usize,
     usage: Option<Value>,
     sequence: u64,
+    /// 已发过 `response.failed`：之后的数据块与收尾都不再输出
+    failed: bool,
 }
 
 impl StreamTranslator {
@@ -314,6 +316,9 @@ impl StreamTranslator {
     /// 喂一个 Chat 流式数据块（`data:` 后面的 JSON）。
     pub fn push(&mut self, chunk: &Value) -> String {
         let mut out = String::new();
+        if self.failed {
+            return out;
+        }
         if !self.started {
             self.started = true;
             self.id = chunk.get("id").and_then(Value::as_str).map(|id| format!("resp_{id}")).unwrap_or_else(|| "resp_jolu".into());
@@ -321,6 +326,27 @@ impl StreamTranslator {
             let created = self.base("in_progress", Vec::new());
             self.event(&mut out, "response.created", json!({"response": created.clone()}));
             self.event(&mut out, "response.in_progress", json!({"response": created}));
+        }
+        // 上游在流中途报错（Qoder / Trae / Gemini 订阅等会发 `{"error": …}` 数据块）：
+        // 以前这一块没有 choices 被直接跳过，收尾仍发 `response.completed`，Codex 把半截回答
+        // 当成功（P3 盘点 D5）。现在发 `response.failed` 并结束，`finish` 不再补 completed。
+        if let Some(error) = chunk.get("error").filter(|e| !e.is_null()) {
+            let message = error
+                .get("message")
+                .and_then(Value::as_str)
+                .or_else(|| error.as_str())
+                .unwrap_or("上游在流式输出中途报错")
+                .to_string();
+            let code = error.get("code").or_else(|| error.get("type")).and_then(Value::as_str).unwrap_or("upstream_error").to_string();
+            let mut failed = self.base("failed", Vec::new());
+            failed["error"] = json!({"code": code, "message": message});
+            self.event(&mut out, "response.failed", json!({"response": failed}));
+            self.started = false;
+            self.failed = true;
+            return out;
+        }
+        if self.failed {
+            return out;
         }
         if let Some(usage) = chunk.get("usage").filter(|u| u.is_object()) {
             self.usage = Some(usage_of(usage));
@@ -590,6 +616,25 @@ mod tests {
         assert_eq!(types, ["reasoning", "message", "function_call", "custom_tool_call"]);
         assert_eq!(out["output"][3]["input"], "*** Begin Patch");
         assert_eq!(out["usage"], json!({"input_tokens": 10, "output_tokens": 5, "total_tokens": 15, "input_tokens_details": {"cached_tokens": 4}}));
+    }
+
+    /// P3 盘点 D5：上游流中途的错误块要让 Codex 看到失败，而不是一个「完成」的半截回答。
+    #[test]
+    fn an_upstream_error_chunk_fails_the_stream_instead_of_completing() {
+        let mut t = StreamTranslator::new(vec![]);
+        let mut all = String::new();
+        all += &t.push(&json!({"id": "s", "model": "m", "choices": [{"delta": {"content": "半截"}}]}));
+        all += &t.push(&json!({"error": {"message": "quota exceeded", "code": "rate_limit"}}));
+        all += &t.push(&json!({"choices": [{"delta": {"content": "不该再出现"}}]}));
+        all += &t.finish();
+        let names: Vec<&str> = all.lines().filter_map(|l| l.strip_prefix("event: ")).collect();
+        assert_eq!(names.last(), Some(&"response.failed"));
+        assert!(!names.contains(&"response.completed"), "出错后不能再补 completed：{names:?}");
+        assert!(!all.contains("不该再出现"));
+        let failed: Value = serde_json::from_str(all.lines().filter_map(|l| l.strip_prefix("data: ")).last().unwrap()).unwrap();
+        assert_eq!(failed["response"]["status"], "failed");
+        assert_eq!(failed["response"]["error"]["message"], "quota exceeded");
+        assert_eq!(failed["response"]["error"]["code"], "rate_limit");
     }
 
     #[test]

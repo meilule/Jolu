@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import {
-  activityFromLog, dayKey, emptyActivity, formatDuration, modelPart, nextTickAt, onEnd, onStart, onTick,
+  activityFromLog, countByRequest, dayKey, emptyActivity, formatDuration, modelPart, nextTickAt, onEnd, onStart, onTick,
   OK_HOLD_MS, rejectReason, REJECT_HOLD_MS, STALE_IN_FLIGHT_MS,
 } from "./gatewayActivity.ts"
 
@@ -131,4 +131,20 @@ test("在途记录带上被调用来源的连接 id；结束事件缺 id 时沿�
   assert.equal(s.shown.connectionId, "conn-b")
   const old = onStart(emptyActivity(T0), start(8), T0)
   assert.equal(old.shown.connectionId, null, "旧版后端不带 id")
+})
+
+test("失败转移的多次尝试按一次请求计，取最后一次结果（P4 审计 D1）", () => {
+  let s = onEnd(emptyActivity(T0), end(7, "failed"), T0)
+  assert.deepEqual([s.today.ok, s.today.failed], [0, 1])
+  s = onEnd(s, end(7, "ok"), T0 + 10)
+  assert.deepEqual([s.today.ok, s.today.rejected, s.today.failed], [1, 0, 0], "同一请求转移后成功：成功 1、失败 0")
+  s = onEnd(s, end(8, "failed"), T0 + 20)
+  assert.equal(s.today.failed, 1, "不同请求照常各计一次")
+})
+
+test("快照补加的实时事件同样按请求折叠", () => {
+  const counted = countByRequest([
+    { request_id: 1, result: "failed" }, { request_id: 1, result: "ok" }, { request_id: 2, result: "rejected" },
+  ])
+  assert.deepEqual(counted, { ok: 1, rejected: 1, failed: 0 })
 })

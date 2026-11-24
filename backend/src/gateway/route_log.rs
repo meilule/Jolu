@@ -9,6 +9,8 @@ use rusqlite::{params, Connection};
 
 /// 保留行数；清理每 50 次写执行一次。
 const KEEP_ROWS: i64 = 1000;
+/// 单页最多行数：覆盖概览的 240 行需求，留余量，且不超过保留上限。
+const MAX_PAGE_SIZE: i64 = 500;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RouteLogEntry {
@@ -441,7 +443,9 @@ pub struct RouteLogPage {
 /// 分页：按 id 从大到小。`upper_id` 为 None 时以当前最大 id 建立新的查询范围。
 /// 计数与列表都限定在同一上界内；保留范围清理掉的旧行会让总数变小，页码随之收拢到最后一页。
 pub fn page(conn: &Connection, page: i64, page_size: i64, upper_id: Option<i64>) -> rusqlite::Result<RouteLogPage> {
-    let page_size = page_size.clamp(1, 100);
+    // 上限要容得下概览一次取的 240 行（趋势与响应头分位）；以前截到 100，
+    // 概览实际只用了 100 行却以为是 240 行（P4 审计 D4）。不超过保留行数。
+    let page_size = page_size.clamp(1, MAX_PAGE_SIZE);
     let upper = match upper_id {
         Some(id) => Some(id),
         None => conn.query_row("SELECT MAX(id) FROM gateway_route_log", [], |r| r.get::<_, Option<i64>>(0))?,
@@ -555,6 +559,9 @@ pub struct DayOverview {
     pub identity_incomplete: bool,
     /// 本期最近一次 Agent 收到的错误（最后一次尝试那行）
     pub last_error: Option<RouteLogEntry>,
+    /// 来源元数据（P1-4）：网关流水、按请求计、覆盖「上期起点 → 本期终点」。
+    /// `completeness` 与 `partial` 同源：流水被滚动删除过这段时为 `partial`，否则 `full`。
+    pub provenance: Option<crate::data_contract::Provenance>,
 }
 
 /// 概览页的时间范围（V10-01 右上「今天」下拉）。
@@ -637,11 +644,31 @@ pub fn day_overview(conn: &Connection, today_start: i64, yesterday_start: i64, e
             groups.push((entry.ts, vec![entry]));
         }
     }
+    // 流水按 `KEEP_ROWS` 滚动删除，所以「行数正好达到上限」就说明更早的行可能已被删掉。
+    // 用 `>=` 而不是 `>`：等于上限时无法排除刚删过一批，宁可标不完整也不要给假完整。
+    // 第二个条件是「现存最老一行比上期起点还新」——那说明上期根本没数据留下来。
+    let partial = total >= KEEP_ROWS && oldest.is_some_and(|ts| ts > yesterday_start);
+    let data_at = groups
+        .iter()
+        .flat_map(|(_, attempts)| attempts.iter().map(|a| a.ts))
+        .filter(|ts| *ts >= yesterday_start && *ts < end_exclusive)
+        .max();
     let mut out = DayOverview {
-        // 流水按 `KEEP_ROWS` 滚动删除，所以「行数正好达到上限」就说明更早的行可能已被删掉。
-        // 用 `>=` 而不是 `>`：等于上限时无法排除刚删过一批，宁可标不完整也不要给假完整。
-        // 第二个条件是「现存最老一行比上期起点还新」——那说明上期根本没数据留下来。
-        partial: total >= KEEP_ROWS && oldest.is_some_and(|ts| ts > yesterday_start),
+        partial,
+        provenance: Some(crate::data_contract::Provenance {
+            origin: crate::data_contract::Origin::GatewayLog,
+            unit: crate::data_contract::Unit::Requests,
+            collected_at: chrono::Local::now().timestamp_millis(),
+            data_at,
+            window_start: yesterday_start,
+            window_end: end_exclusive,
+            earliest_available: oldest,
+            completeness: if partial {
+                crate::data_contract::Completeness::Partial
+            } else {
+                crate::data_contract::Completeness::Full
+            },
+        }),
         ..Default::default()
     };
     for (first_ts, attempts) in groups {
@@ -671,8 +698,16 @@ pub fn day_overview(conn: &Connection, today_start: i64, yesterday_start: i64, e
     Ok(out)
 }
 
+/// 流水是否可能没覆盖到 `since` 之后的全部请求：行数已到保留上限，且现存最早一行晚于 `since`
+/// （与 [`day_overview`] 的 `partial` 同一判定）。为真时 [`counts_since`] 只是下限。
+pub fn truncated_since(conn: &Connection, since_ms: i64) -> rusqlite::Result<bool> {
+    let (total, oldest): (i64, Option<i64>) =
+        conn.query_row("SELECT COUNT(*), MIN(ts) FROM gateway_route_log", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(total >= KEEP_ROWS && oldest.is_some_and(|ts| ts > since_ms))
+}
+
 /// 某时刻之后的请求数，按结果分组：(ok, rejected, failed)。供灵动岛「今日经网关」使用。
-/// 流水只保留最近 1000 行，当天超过 1000 次时这是下限，调用方据此标注。
+/// 流水只保留最近 1000 行，当天超过 1000 次时这是下限，调用方用 [`truncated_since`] 标注。
 pub fn counts_since(conn: &Connection, since_ms: i64) -> rusqlite::Result<(i64, i64, i64)> {
     conn.query_row(
         "WITH grouped AS (
@@ -1107,7 +1142,15 @@ mod tests {
         for i in 0..10 {
             insert(today_start + i);
         }
-        assert!(!day_overview(&conn, today_start, yesterday_start, end).unwrap().partial);
+        let small = day_overview(&conn, today_start, yesterday_start, end).unwrap();
+        assert!(!small.partial);
+        let p = small.provenance.expect("概览必须带来源元数据");
+        assert_eq!(p.origin, crate::data_contract::Origin::GatewayLog);
+        assert_eq!(p.unit, crate::data_contract::Unit::Requests, "流水概览按请求计，不是 Token");
+        assert_eq!(p.completeness, crate::data_contract::Completeness::Full);
+        assert_eq!((p.window_start, p.window_end), (yesterday_start, end));
+        assert_eq!(p.data_at, Some(today_start + 9), "数据时间是范围内最后一条流水");
+        assert_eq!(p.earliest_available, Some(today_start));
 
         // 精确灌到保留上限（含前面 10 条），且最早一行落在上期起点之后
         for i in 0..(KEEP_ROWS - 10) {
@@ -1121,6 +1164,11 @@ mod tests {
             "行数正好等于保留上限时无法排除更早的行刚被删掉，必须标不完整（用 > 会漏掉这一档）"
         );
         assert!(day.identity_incomplete, "这些行没有 request_uid，身份同样不完整");
+        assert_eq!(
+            day.provenance.unwrap().completeness,
+            crate::data_contract::Completeness::Partial,
+            "来源元数据的覆盖程度必须与 partial 同源"
+        );
     }
 
     #[test]
@@ -1163,6 +1211,34 @@ mod tests {
             )
             .unwrap();
         assert_eq!(named, 1);
+    }
+
+    /// P4 审计 D4：概览一次要 240 行，分页不能悄悄截到 100。
+    #[test]
+    fn a_page_can_hold_the_overview_sample_of_240_rows() {
+        let conn = db();
+        for i in 0..300 {
+            conn.execute("INSERT INTO gateway_route_log(ts, requested_model, result) VALUES(?1, 'm', 'ok')", params![i]).unwrap();
+        }
+        let sample = page(&conn, 1, 240, None).unwrap();
+        assert_eq!(sample.rows.len(), 240, "概览要的 240 行必须拿全");
+        assert_eq!(page(&conn, 1, 100_000, None).unwrap().rows.len(), MAX_PAGE_SIZE.min(300) as usize);
+    }
+
+    /// P4 审计 D3：「今日经网关」与概览共用截断判定，流水满额且最早一行晚于零点时标为下限。
+    #[test]
+    fn today_counts_report_truncation_like_the_overview() {
+        let conn = db();
+        let since = 1_000i64;
+        for i in 1..=10 {
+            conn.execute("INSERT INTO gateway_route_log(ts, requested_model, result) VALUES(?1, 'm', 'ok')", params![since + i]).unwrap();
+        }
+        assert!(!truncated_since(&conn, since).unwrap(), "少量流水不算截断");
+        for i in 0..(KEEP_ROWS - 10) {
+            conn.execute("INSERT INTO gateway_route_log(ts, requested_model, result) VALUES(?1, 'm', 'ok')", params![since + 100 + i]).unwrap();
+        }
+        assert!(truncated_since(&conn, since).unwrap(), "满额且最早一行晚于起点：计数只是下限");
+        assert!(!truncated_since(&conn, since + 50).unwrap(), "最早一行早于起点：起点之后的流水都还在，不算截断");
     }
 
     #[test]

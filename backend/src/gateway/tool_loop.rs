@@ -135,7 +135,13 @@ pub(crate) fn calls_in(message: &Value, managed: &Managed) -> (Vec<Call>, bool) 
 }
 
 /// 把这一轮的回复与执行结果续进请求：assistant 原样，user 带 tool_result。
+///
+/// 同时放开强制的 `tool_choice`：调用方若写了 `{"type":"tool","name":"web_search"}` 或 `any`，
+/// 改写后它仍指向（现在由网关代执行的）同名工具，模型每一轮都只能再调一次，循环会白白跑满
+/// [`MAX_ROUNDS`] 次上游调用（P3 盘点 D1）。强制只对第一轮有意义——已经调过、结果也续进去了，
+/// 之后交给模型自己决定（`auto`）。
 pub(crate) fn append_round(body: &mut Value, message: &Value, results: &[(String, String, bool)]) {
+    relax_tool_choice(body);
     let content = message.get("content").cloned().unwrap_or_else(|| json!([]));
     let tool_results: Vec<Value> = results
         .iter()
@@ -144,6 +150,15 @@ pub(crate) fn append_round(body: &mut Value, message: &Value, results: &[(String
     if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
         messages.push(json!({"role": "assistant", "content": content}));
         messages.push(json!({"role": "user", "content": tool_results}));
+    }
+}
+
+/// 强制调用（`any` / 指定工具）在第一轮之后改为 `auto`；保留 `disable_parallel_tool_use` 等其余字段。
+fn relax_tool_choice(body: &mut Value) {
+    let Some(choice) = body.get_mut("tool_choice").and_then(Value::as_object_mut) else { return };
+    if matches!(choice.get("type").and_then(Value::as_str), Some("any" | "tool")) {
+        choice.insert("type".into(), json!("auto"));
+        choice.remove("name");
     }
 }
 
@@ -157,14 +172,31 @@ pub(crate) fn strip_managed(message: &mut Value, managed: &Managed) {
     }
 }
 
+/// 各轮用量之和。缓存两项可能整轮都不报：任何一轮报过才写进最终消息，从没报过保持缺省
+/// （未知不是零）。以前只累加输入 / 输出，缓存读写只剩最后一轮的值（P3 盘点 D3）。
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct Usage {
+    pub input: i64,
+    pub output: i64,
+    pub cache_read: Option<i64>,
+    pub cache_creation: Option<i64>,
+}
+
 /// 各轮用量之和写进最终消息（预算与统计按它记账）。
-pub(crate) fn add_usage(total: &mut (i64, i64), message: &Value) {
-    total.0 += message.pointer("/usage/input_tokens").and_then(Value::as_i64).unwrap_or(0);
-    total.1 += message.pointer("/usage/output_tokens").and_then(Value::as_i64).unwrap_or(0);
+pub(crate) fn add_usage(total: &mut Usage, message: &Value) {
+    let field = |name: &str| message.pointer(&format!("/usage/{name}")).and_then(Value::as_i64);
+    total.input += field("input_tokens").unwrap_or(0);
+    total.output += field("output_tokens").unwrap_or(0);
+    if let Some(value) = field("cache_read_input_tokens") {
+        total.cache_read = Some(total.cache_read.unwrap_or(0) + value);
+    }
+    if let Some(value) = field("cache_creation_input_tokens") {
+        total.cache_creation = Some(total.cache_creation.unwrap_or(0) + value);
+    }
 }
 
 /// 最终消息：开头加一行说明，用量换成各轮之和；轮次用尽时把仍在调用的接管工具去掉并说明。
-pub(crate) fn finish(mut message: Value, notes: &[String], usage: (i64, i64), managed: &Managed, exhausted: bool) -> Value {
+pub(crate) fn finish(mut message: Value, notes: &[String], usage: Usage, managed: &Managed, exhausted: bool) -> Value {
     if exhausted {
         strip_managed(&mut message, managed);
         if message.get("stop_reason").and_then(Value::as_str) == Some("tool_use")
@@ -183,11 +215,18 @@ pub(crate) fn finish(mut message: Value, notes: &[String], usage: (i64, i64), ma
             content.insert(0, notice);
         }
     }
+    if !message.get("usage").is_some_and(Value::is_object) {
+        message["usage"] = json!({});
+    }
     if let Some(object) = message.get_mut("usage").and_then(Value::as_object_mut) {
-        object.insert("input_tokens".into(), json!(usage.0));
-        object.insert("output_tokens".into(), json!(usage.1));
-    } else {
-        message["usage"] = json!({"input_tokens": usage.0, "output_tokens": usage.1});
+        object.insert("input_tokens".into(), json!(usage.input));
+        object.insert("output_tokens".into(), json!(usage.output));
+        if let Some(value) = usage.cache_read {
+            object.insert("cache_read_input_tokens".into(), json!(value));
+        }
+        if let Some(value) = usage.cache_creation {
+            object.insert("cache_creation_input_tokens".into(), json!(value));
+        }
     }
     message
 }
@@ -202,7 +241,15 @@ pub(crate) fn message_to_sse(message: &Value) -> String {
     start["content"] = json!([]);
     start["stop_reason"] = Value::Null;
     start["stop_sequence"] = Value::Null;
-    start["usage"] = json!({"input_tokens": message.pointer("/usage/input_tokens").cloned().unwrap_or(json!(0)), "output_tokens": 0});
+    // 输入侧用量（含缓存读写）放在 message_start，与上游原生流一致；以前只带 input_tokens，
+    // 流式调用方因此拿不到缓存用量（P3 盘点 D3）。
+    let mut start_usage = json!({"input_tokens": message.pointer("/usage/input_tokens").cloned().unwrap_or(json!(0)), "output_tokens": 0});
+    for key in ["cache_read_input_tokens", "cache_creation_input_tokens"] {
+        if let Some(value) = message.pointer(&format!("/usage/{key}")) {
+            start_usage[key] = value.clone();
+        }
+    }
+    start["usage"] = start_usage;
     event("message_start", json!({"type": "message_start", "message": start}));
     for (index, block) in message.get("content").and_then(Value::as_array).into_iter().flatten().enumerate() {
         let kind = block.get("type").and_then(Value::as_str).unwrap_or_default();
@@ -342,7 +389,7 @@ mod tests {
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[2]["content"][0]["tool_use_id"], "t1");
-        let mut usage = (0, 0);
+        let mut usage = Usage::default();
         add_usage(&mut usage, &round);
         let last = json!({"id": "msg_1", "model": "glm", "content": [{"type": "text", "text": "答案"}], "stop_reason": "end_turn", "usage": {"input_tokens": 150, "output_tokens": 20}});
         add_usage(&mut usage, &last);
@@ -356,7 +403,7 @@ mod tests {
     fn exhausted_rounds_end_the_turn_without_dangling_managed_calls() {
         let managed = managed_tools(&claude_code_body());
         let last = json!({"content": [{"type": "tool_use", "id": "t9", "name": "web_search", "input": {"query": "again"}}], "stop_reason": "tool_use", "usage": {}});
-        let done = finish(last, &[], (1, 1), &managed, true);
+        let done = finish(last, &[], Usage { input: 1, output: 1, ..Usage::default() }, &managed, true);
         assert_eq!(done["stop_reason"], "end_turn");
         assert!(done["content"].as_array().unwrap().iter().all(|b| b["type"] != "tool_use"));
         assert!(done["content"][0]["text"].as_str().unwrap().contains(&MAX_ROUNDS.to_string()));
@@ -374,5 +421,36 @@ mod tests {
         assert!(sse.contains(r#""partial_json":"{\"path\":\"a\"}""#));
         assert!(sse.contains(r#""stop_reason":"tool_use""#));
         assert!(sse.contains(r#""output_tokens":7"#));
+    }
+
+    /// P3 盘点 D1：强制调用联网工具只对第一轮生效，之后放开为 auto，避免循环跑满。
+    #[test]
+    fn a_forced_tool_choice_is_relaxed_after_the_first_round() {
+        let round = json!({"content": [{"type": "tool_use", "id": "t1", "name": "web_search", "input": {"query": "q"}}]});
+        for forced in [json!({"type": "tool", "name": "web_search"}), json!({"type": "any", "disable_parallel_tool_use": true})] {
+            let mut body = claude_code_body();
+            body["tool_choice"] = forced;
+            append_round(&mut body, &round, &[("t1".into(), "结果".into(), false)]);
+            assert_eq!(body["tool_choice"]["type"], "auto", "第一轮之后不能继续强制");
+            assert!(body["tool_choice"].get("name").is_none());
+        }
+        let mut body = claude_code_body();
+        body["tool_choice"] = json!({"type": "auto", "disable_parallel_tool_use": true});
+        append_round(&mut body, &round, &[("t1".into(), "结果".into(), false)]);
+        assert_eq!(body["tool_choice"], json!({"type": "auto", "disable_parallel_tool_use": true}), "非强制的原样保留");
+    }
+
+    /// P3 盘点 D3：缓存读写同样按轮累加；从没报过的保持缺省，不写成 0。
+    #[test]
+    fn cache_usage_of_every_round_is_summed_and_unknown_stays_absent() {
+        let mut usage = Usage::default();
+        add_usage(&mut usage, &json!({"usage": {"input_tokens": 5, "output_tokens": 1, "cache_read_input_tokens": 10}}));
+        add_usage(&mut usage, &json!({"usage": {"input_tokens": 6, "output_tokens": 2, "cache_read_input_tokens": 20}}));
+        assert_eq!(usage, Usage { input: 11, output: 3, cache_read: Some(30), cache_creation: None });
+        let done = finish(json!({"content": [], "usage": {"cache_read_input_tokens": 20}}), &[], usage, &Managed::default(), false);
+        assert_eq!(done["usage"]["cache_read_input_tokens"], 30, "不能只剩最后一轮的 20");
+        assert!(done["usage"].get("cache_creation_input_tokens").is_none(), "没报过的缓存写入保持未知");
+        let sse = message_to_sse(&done);
+        assert!(sse.contains(r#""cache_read_input_tokens":30"#), "流式回放的 message_start 也要带缓存用量");
     }
 }

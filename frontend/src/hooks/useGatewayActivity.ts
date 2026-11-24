@@ -3,7 +3,7 @@ import { EVENTS } from "@/lib/events"
 import { isTauri, listenEvent } from "@/lib/api"
 import { gatewayApi, type GatewayStatusDto } from "@/lib/gatewayApi"
 import {
-  activityFromLog, dayKey, emptyActivity, mergeSnapshot, nextTickAt, onEnd, onStart, onTick,
+  activityFromLog, countByRequest, dayKey, emptyActivity, mergeSnapshot, nextTickAt, onEnd, onStart, onTick,
   type ActivityState, type RouteEndEvent,
 } from "@/lib/gatewayActivity"
 
@@ -54,17 +54,13 @@ export function useGatewayActivity(enabled: boolean): GatewayActivity {
       if (stopped) return
       const now = Date.now()
       const restored = activityFromLog(rows, now)
-      const after = { ok: 0, rejected: 0, failed: 0 }
+      let after = { ok: 0, rejected: 0, failed: 0 }
       // 今日计数以后端统计为准；取不到时退回最近 20 条流水里的今日部分（只是近似）
       let today = restored.today
       if (counts) {
         today = { day: dayKey(now), ok: counts.ok, rejected: counts.rejected, failed: counts.failed }
-        for (const event of early ?? []) {
-          if (event.ts <= counts.at) continue
-          if (event.result === "ok") after.ok += 1
-          else if (event.result === "rejected") after.rejected += 1
-          else after.failed += 1
-        }
+        // 按请求折叠：一次失败转移的多次尝试只补一次（与后端按请求计数同口径）
+        after = countByRequest((early ?? []).filter((event) => event.ts > counts.at))
       }
       early = null
       setActivity((current) => mergeSnapshot(current, { lastByAgent: restored.lastByAgent, today }, after))

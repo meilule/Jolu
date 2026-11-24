@@ -632,9 +632,10 @@ pub(crate) fn gateway_today_counts(app: tauri::AppHandle) -> Result<GatewayToday
     let state = app.state::<Db>();
     let conn = state.0.lock().map_err(|_| "数据库不可用".to_string())?;
     let (ok, rejected, failed) = crate::gateway::route_log::counts_since(&conn, since).map_err(|error| error.to_string())?;
+    let partial = crate::gateway::route_log::truncated_since(&conn, since).map_err(|error| error.to_string())?;
     // 计数时刻：前端据此只补加之后才结束的实时请求
     let at = chrono::Local::now().timestamp_millis();
-    Ok(GatewayTodayCounts { since, at, ok, rejected, failed })
+    Ok(GatewayTodayCounts { since, at, ok, rejected, failed, partial })
 }
 
 /// 本机的局域网地址（画板 V5-4「地址」行）：按路由表选出的出口 IPv4。UDP connect 不发任何包，
@@ -680,7 +681,15 @@ pub(crate) fn zcode_set_channel(
 
 /// 今日（本地零点起）经网关的请求数：(ok, rejected, failed)。
 #[derive(serde::Serialize)]
-pub(crate) struct GatewayTodayCounts { pub(crate) since: i64, pub(crate) at: i64, pub(crate) ok: i64, pub(crate) rejected: i64, pub(crate) failed: i64 }
+pub(crate) struct GatewayTodayCounts {
+    pub(crate) since: i64,
+    pub(crate) at: i64,
+    pub(crate) ok: i64,
+    pub(crate) rejected: i64,
+    pub(crate) failed: i64,
+    /// 流水已滚动删除过今天的部分，上面三个数只是下限（与概览 `partial` 同一判定）
+    pub(crate) partial: bool,
+}
 
 /* ── V10 Agent 上下文观察（执行文档 §3.4）：只读查询，走只读连接池，不占写锁 ── */
 

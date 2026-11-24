@@ -1293,7 +1293,7 @@ where
         return send(body.clone()).await;
     }
     let streaming = tool_loop::rewrite_request(&mut value, &managed);
-    let mut usage = (0i64, 0i64);
+    let mut usage = tool_loop::Usage::default();
     let mut notes: Vec<String> = Vec::new();
     for round in 0..tool_loop::MAX_ROUNDS {
         let request = serde_json::to_vec(&value).map(axum::body::Bytes::from).unwrap_or_else(|_| body.clone());
@@ -1640,6 +1640,239 @@ mod tests {
         assert_eq!(day.today, 1, "两次尝试是一次请求");
         assert_eq!(day.errors, 1, "最终失败算一次错误请求");
         assert_eq!(day.reroutes, 1);
+    }
+
+    /// P2 并发：起一个假的 Chat 上游，记录收到的请求数；`abort_stream` 时先发一段 SSE 再中途断开。
+    async fn counting_upstream(abort_stream: bool) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let counter = hits.clone();
+        tokio::spawn(async move {
+            let service = axum::Router::new().fallback(move || {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if abort_stream {
+                        // 先给出 200 与一段 SSE，再让 body 报错：上游在流中途断开。
+                        // 第二段延迟后才报错：否则 hyper 可能在发出响应头之前就读到错误，
+                        // 表现成「响应头阶段失败」（502），测不到「流已开始」这一档。
+                        use futures_util::StreamExt;
+                        let first = futures_util::stream::once(async {
+                            Ok::<_, std::io::Error>(axum::body::Bytes::from_static(
+                                b"data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"par\"}}]}\n\n",
+                            ))
+                        });
+                        let broken = futures_util::stream::once(async {
+                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                            Err::<axum::body::Bytes, _>(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "upstream dropped"))
+                        });
+                        return axum::response::Response::builder()
+                            .status(200)
+                            .header("content-type", "text/event-stream")
+                            .body(axum::body::Body::from_stream(first.chain(broken)))
+                            .unwrap();
+                    }
+                    axum::response::Response::builder()
+                        .status(200)
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(
+                            r#"{"id":"chatcmpl-p2","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6}}"#,
+                        ))
+                        .unwrap()
+                }
+            });
+            let _ = axum::serve(listener, service).await;
+        });
+        (base, hits)
+    }
+
+    fn add_group(deps: &Arc<ProxyDeps>, slug: &str, strategy: &str, members: &[(&str, &str)]) {
+        let conn = deps.db.lock().unwrap();
+        for (id, base) in members {
+            conn.execute(
+                "INSERT INTO connections(id,platform,kind,name,secret,base_url,protocol,status,serve_enabled,created_ms,slug)
+                 VALUES(?1,'custom','api',?1,'fixture-token',?2,'openai','connected',1,1,?1)",
+                rusqlite::params![id, base],
+            )
+            .unwrap();
+        }
+        let list: Vec<_> = members
+            .iter()
+            .map(|(id, _)| crate::gateway::routing_groups::GroupMember {
+                slug: (*id).into(),
+                model: "fixture-model".into(),
+                paused_until_ms: None,
+                weight: None,
+                tier: None,
+            })
+            .collect();
+        crate::gateway::routing_groups::create(&conn, slug, slug, strategy, &list, None).unwrap();
+    }
+
+    async fn send_chat(deps: &Arc<ProxyDeps>, slug: &str, session: Option<&str>, stream: bool) -> Response {
+        let mut headers = HeaderMap::new();
+        if let Some(session) = session {
+            headers.insert("authorization", "Bearer jolu-codex.p2".parse().unwrap());
+            headers.insert("session-id", session.parse().unwrap());
+        }
+        let body = format!(
+            r#"{{"model":"group/{slug}","stream":{stream},"messages":[{{"role":"user","content":"hi"}}]}}"#
+        );
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            handle(CallerProtocol::Chat, deps.clone(), headers, axum::body::Bytes::from(body), "/v1/chat/completions", None),
+        )
+        .await
+        .expect("请求应在 10 秒内完成");
+        if response.status() != StatusCode::OK && !stream {
+            let status = response.status();
+            let text = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap_or_default();
+            panic!("网关返回 {status}：{}", String::from_utf8_lossy(&text));
+        }
+        response
+    }
+
+    /// P2 验收「并发」：分组层面多个请求同时轮转。
+    ///
+    /// `rotate` 的游标是进程内共享状态，并发请求各自拿号；断言两点：
+    /// 1. 8 个同时到达的请求被平均分到两个成员（4 / 4），没有因为抢游标而挤到同一个成员；
+    /// 2. 每个请求一行流水、各自独立的 `request_uid`，统计记 8 次请求、0 次转移——
+    ///    并发不能把不同请求合并，也不能把一次请求拆成多次。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_requests_rotate_evenly_and_each_counts_once() {
+        crate::gateway::route_log::flush();
+        let deps = crate::proxy::test_support::bare_deps();
+        let (base_a, hits_a) = counting_upstream(false).await;
+        let (base_b, hits_b) = counting_upstream(false).await;
+        add_group(&deps, "p2-rotate", "rotate", &[("p2r-a", &base_a), ("p2r-b", &base_b)]);
+
+        let calls: Vec<_> = (0..8)
+            .map(|_| {
+                let deps = deps.clone();
+                tokio::spawn(async move {
+                    // 读完 body：中途丢掉响应会被 `CancelWatch` 记成取消
+                    let response = send_chat(&deps, "p2-rotate", None, false).await;
+                    let status = response.status();
+                    axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                    status
+                })
+            })
+            .collect();
+        for call in calls {
+            assert_eq!(call.await.unwrap(), StatusCode::OK);
+        }
+        let (a, b) = (hits_a.load(Ordering::SeqCst), hits_b.load(Ordering::SeqCst));
+        assert_eq!((a, b), (4, 4), "并发轮转应平均分配，实际 A={a} B={b}");
+
+        crate::gateway::route_log::flush();
+        let conn = deps.db.lock().unwrap();
+        let (rows, uids): (i64, i64) = conn
+            .query_row("SELECT COUNT(*), COUNT(DISTINCT request_uid) FROM gateway_route_log", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((rows, uids), (8, 8), "8 个请求各一行、各一个身份");
+        let now = chrono::Local::now().timestamp_millis();
+        let day = crate::gateway::route_log::day_overview(&conn, now - 60_000, 0, now + 60_000).unwrap();
+        assert_eq!((day.today, day.reroutes, day.errors), (8, 0, 0));
+    }
+
+    /// P2 验收「并发」：多个会话同时进入同一分组，亲和各自绑定、互不串号。
+    ///
+    /// 第一轮 4 个会话并发请求（`rotate` 把它们分到两个成员），每个会话绑到服务它的成员；
+    /// 第二轮同样 4 个会话再并发请求一次，每个会话必须回到第一轮的成员——
+    /// 并发绑定不能让会话 A 拿到会话 B 的亲和。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_sessions_keep_their_own_affinity() {
+        crate::gateway::route_log::flush();
+        let deps = crate::proxy::test_support::bare_deps();
+        let (base_a, _) = counting_upstream(false).await;
+        let (base_b, _) = counting_upstream(false).await;
+        add_group(&deps, "p2-affinity", "rotate", &[("p2a-a", &base_a), ("p2a-b", &base_b)]);
+        let sessions = ["p2-s1", "p2-s2", "p2-s3", "p2-s4"];
+
+        async fn round(deps: &Arc<ProxyDeps>, sessions: &[&'static str]) {
+            let calls: Vec<_> = sessions
+                .iter()
+                .map(|session| {
+                    let deps = deps.clone();
+                    let session = *session;
+                    tokio::spawn(async move {
+                        let response = send_chat(&deps, "p2-affinity", Some(session), false).await;
+                        let status = response.status();
+                        axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                        status
+                    })
+                })
+                .collect();
+            for call in calls {
+                assert_eq!(call.await.unwrap(), StatusCode::OK);
+            }
+        }
+        round(&deps, &sessions).await;
+        let bound_after_first: Vec<Option<String>> = {
+            let affinity = deps.affinity.as_ref().unwrap().lock().unwrap();
+            sessions
+                .iter()
+                .map(|s| affinity.get(&format!("hdr:codex-session:{s}")).map(str::to_string))
+                .collect()
+        };
+        assert!(bound_after_first.iter().all(Option::is_some), "每个会话成功后都要绑定：{bound_after_first:?}");
+        let distinct: std::collections::HashSet<_> = bound_after_first.iter().flatten().collect();
+        assert_eq!(distinct.len(), 2, "轮转应把 4 个会话分到两个成员：{bound_after_first:?}");
+
+        round(&deps, &sessions).await;
+        crate::gateway::route_log::flush();
+        let conn = deps.db.lock().unwrap();
+        for (session, first) in sessions.iter().zip(&bound_after_first) {
+            let served: Vec<String> = {
+                let mut stmt = conn
+                    .prepare("SELECT source FROM gateway_route_log WHERE session_id = ?1 ORDER BY id")
+                    .unwrap();
+                stmt.query_map([session], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+            };
+            assert_eq!(served.len(), 2, "{session} 两轮各一行：{served:?}");
+            assert_eq!(Some(&served[1]), first.as_ref(), "{session} 第二轮必须回到自己绑定的成员：{served:?}");
+        }
+    }
+
+    /// P2-3「流式中断下的失败转移」：上游已经开始流式输出后中途断开，**不**换下一个成员。
+    ///
+    /// 这是有意的设计，不是遗漏：响应头与部分内容已经交给了 Agent，此时再换成员重发，
+    /// Agent 会收到两段拼接的回答，上游也会被计费两次。所以只在响应头阶段
+    /// （`is_retryable_status`）做转移；流中途的失败由 `CancelWatch` 把那行改判为 `failed`，
+    /// 让统计如实记一次失败请求。这条测试锁住三件事：B 一次都没被调用、流水只有 A 一行、
+    /// 那一行最终是 `failed`。
+    #[tokio::test]
+    async fn a_stream_that_breaks_midway_is_not_retried_on_the_next_member() {
+        crate::gateway::route_log::flush();
+        let deps = crate::proxy::test_support::bare_deps();
+        let (base_a, hits_a) = counting_upstream(true).await;
+        let (base_b, hits_b) = counting_upstream(false).await;
+        add_group(&deps, "p2-midstream", "order", &[("p2m-a", &base_a), ("p2m-b", &base_b)]);
+
+        let response = send_chat(&deps, "p2-midstream", None, true).await;
+        if response.status() != StatusCode::OK {
+            let status = response.status();
+            let text = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap_or_default();
+            panic!("DEBUG {status} {}", String::from_utf8_lossy(&text));
+        }
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await;
+        assert!(body.is_err(), "上游中途断开，Agent 读 body 应得到错误而不是一个看似完整的回答");
+        assert_eq!(hits_a.load(Ordering::SeqCst), 1);
+        assert_eq!(hits_b.load(Ordering::SeqCst), 0, "流已开始后不能换成员重发（会重复输出、重复计费）");
+
+        crate::gateway::route_log::flush();
+        let conn = deps.db.lock().unwrap();
+        let rows: Vec<(String, String)> = {
+            let mut stmt = conn.prepare("SELECT source, result FROM gateway_route_log ORDER BY id").unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        assert_eq!(rows, vec![("p2m-a".to_string(), "failed".to_string())], "只有 A 一行，且改判为 failed");
+        let now = chrono::Local::now().timestamp_millis();
+        let day = crate::gateway::route_log::day_overview(&conn, now - 60_000, 0, now + 60_000).unwrap();
+        assert_eq!((day.today, day.reroutes, day.errors), (1, 0, 1), "一次请求、没有转移、一次错误");
     }
 
     /// F-1：`pace` 分组里缺剩余量的成员，选路时触发一次后台补查；1 分钟内不重复。

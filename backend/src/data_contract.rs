@@ -118,9 +118,210 @@ impl Coverage {
     }
 }
 
+/// 数据从哪来（P1-1 / P1-4 的「来源」）。
+///
+/// 三种来源的口径不同，不能互相冒充：
+/// - `official`：平台官方接口返回（额度、余额）；
+/// - `local_record`：Jolu 从本机工具的日志 / 数据库采到的记录；
+/// - `gateway_log`：Jolu 自己的网关在转发时写下的记录。
+///
+/// 一份统计同时用到本地记录和网关记录时是 `mixed`（用量表里两种来源的行共存，见
+/// `requests.source`：以 `gateway` 开头的是网关写的，其余都是本机采集）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin {
+    Official,
+    LocalRecord,
+    GatewayLog,
+    Mixed,
+}
+
+/// 数值的单位。同名指标在不同入口单位不同（请求数 vs Token 数 vs 百分比），显式写出来。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Unit {
+    Tokens,
+    Requests,
+    Percent,
+}
+
+/// 覆盖程度：所声明的时间范围是否被完整覆盖。
+///
+/// - `full`：能证明范围内没有缺数据（例如流水没有被滚动删除过这一段）；
+/// - `partial`：已知有缺口（流水被截断、记录早于保留范围）；
+/// - `as_recorded`：只代表 Jolu 已经采到的部分，无法对照源端证明完整（本机采集都属于这一档——
+///   源端可能还没被扫到，也可能已经清理了历史）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Completeness {
+    Full,
+    Partial,
+    AsRecorded,
+}
+
+/// 一份统计的元数据：来源、采集时间、数据时间、覆盖范围、单位、覆盖程度。
+///
+/// 这是 P1-1 原设计里 `DataOrigin` / `Measured` 的落地形态。作为**附加字段**挂到各入口的
+/// 既有 DTO 上（不替换原字段），前端可以逐步改用，旧前端忽略它也不会出错。
+///
+/// 时间全部是 UTC 毫秒；「今天」这类自然日边界由调用方按本地时区算好再传进来，
+/// 这里不再做时区换算——四个入口共用同一组边界，才不会出现「同一个今天两种算法」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Provenance {
+    pub origin: Origin,
+    pub unit: Unit,
+    /// Jolu 生成这份统计的时刻
+    pub collected_at: i64,
+    /// 数据本身最新到哪个时刻：范围内最后一条记录的时间；范围内没有记录时为 None
+    pub data_at: Option<i64>,
+    /// 声明覆盖的范围起点（含）
+    pub window_start: i64,
+    /// 声明覆盖的范围终点（不含）
+    pub window_end: i64,
+    /// 现存最早一条可用记录的时间；比 `window_start` 晚时说明范围前段可能已被清理或从未采到
+    pub earliest_available: Option<i64>,
+    pub completeness: Completeness,
+}
+
+impl Provenance {
+    /// 按「来源中是否有本机记录 / 网关记录」判定来源。两者都没有（范围内无记录）时按
+    /// `fallback` 处理——空范围仍然要说明「本来该从哪取」，不能写成 mixed。
+    pub fn origin_of(has_local: bool, has_gateway: bool, fallback: Origin) -> Origin {
+        match (has_local, has_gateway) {
+            (true, true) => Origin::Mixed,
+            (true, false) => Origin::LocalRecord,
+            (false, true) => Origin::GatewayLog,
+            (false, false) => fallback,
+        }
+    }
+
+    /// 本机记录类统计的覆盖程度：只能是 `as_recorded`，除非已知有缺口。
+    ///
+    /// `earliest_available` 比范围起点晚**不**单独判为缺口：那也可能只是那段时间确实没用。
+    /// 只有调用方明确知道被截断（`truncated`）时才是 `partial`。
+    pub fn recorded_completeness(truncated: bool) -> Completeness {
+        if truncated { Completeness::Partial } else { Completeness::AsRecorded }
+    }
+}
+
+/// 用量表（`requests`，别名 `r`）上一段范围的来源元数据。
+///
+/// - `range_where` / `range_args`：这份统计实际使用的过滤条件（含时间范围），用来取数据时间与来源；
+/// - `scope_where` / `scope_args`：同样的过滤条件但**不含时间范围**，用来取「现存最早一条」。
+///
+/// 两组条件都由调用方给出，保证元数据与统计本身用的是同一批行，不另起一套口径。
+#[allow(clippy::too_many_arguments)]
+pub fn requests_provenance(
+    conn: &rusqlite::Connection,
+    window_start: i64,
+    window_end: i64,
+    range_where: &str,
+    range_args: &[rusqlite::types::Value],
+    scope_where: &str,
+    scope_args: &[rusqlite::types::Value],
+    collected_at: i64,
+) -> rusqlite::Result<Provenance> {
+    let (data_at, has_local, has_gateway): (Option<i64>, i64, i64) = conn.query_row(
+        &format!(
+            "SELECT MAX(r.ts),
+                    COALESCE(MAX(CASE WHEN r.source LIKE 'gateway%' THEN 0 ELSE 1 END), 0),
+                    COALESCE(MAX(CASE WHEN r.source LIKE 'gateway%' THEN 1 ELSE 0 END), 0)
+             FROM requests r WHERE {range_where}"
+        ),
+        rusqlite::params_from_iter(range_args.iter()),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let earliest_available: Option<i64> = conn.query_row(
+        &format!("SELECT MIN(r.ts) FROM requests r WHERE {scope_where}"),
+        rusqlite::params_from_iter(scope_args.iter()),
+        |row| row.get(0),
+    )?;
+    Ok(Provenance {
+        origin: Provenance::origin_of(has_local == 1, has_gateway == 1, Origin::LocalRecord),
+        unit: Unit::Tokens,
+        collected_at,
+        data_at,
+        window_start,
+        window_end,
+        earliest_available,
+        completeness: Provenance::recorded_completeness(false),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn requests_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE requests (ts INTEGER, source TEXT, platform TEXT);").unwrap();
+        conn
+    }
+
+    fn provenance_for(conn: &rusqlite::Connection, start: i64, end: i64, platform: Option<&str>, at: i64) -> Provenance {
+        use rusqlite::types::Value;
+        let (scope, scope_args) = match platform {
+            Some(p) => ("r.platform = ?".to_string(), vec![Value::Text(p.into())]),
+            None => ("1 = 1".to_string(), vec![]),
+        };
+        let mut range_args = vec![Value::Integer(start), Value::Integer(end)];
+        range_args.extend(scope_args.clone());
+        let range = format!("r.ts >= ? AND r.ts < ? AND {scope}");
+        requests_provenance(conn, start, end, &range, &range_args, &scope, &scope_args, at).unwrap()
+    }
+
+    #[test]
+    fn provenance_of_an_empty_window_keeps_the_fallback_origin_and_no_data_time() {
+        let conn = requests_db();
+        let p = provenance_for(&conn, 100, 200, None, 999);
+        assert_eq!(p.origin, Origin::LocalRecord, "空范围也要说明本该从哪取，不能写成 mixed");
+        assert_eq!(p.data_at, None, "没有记录时数据时间未知，不能拿采集时间冒充");
+        assert_eq!(p.earliest_available, None);
+        assert_eq!((p.window_start, p.window_end, p.collected_at), (100, 200, 999));
+        assert_eq!(p.completeness, Completeness::AsRecorded);
+    }
+
+    #[test]
+    fn provenance_separates_local_gateway_and_mixed_records() {
+        let conn = requests_db();
+        conn.execute_batch(
+            "INSERT INTO requests VALUES (50, 'native:zcode:main', 'zcode');
+             INSERT INTO requests VALUES (120, 'native:zcode:main', 'zcode');
+             INSERT INTO requests VALUES (150, 'gateway-subscription', 'qoder');
+             INSERT INTO requests VALUES (180, 'claude-native', 'claude');",
+        )
+        .unwrap();
+        let zcode = provenance_for(&conn, 100, 200, Some("zcode"), 1);
+        assert_eq!(zcode.origin, Origin::LocalRecord);
+        assert_eq!(zcode.data_at, Some(120), "数据时间是范围内最后一条，不是范围外的");
+        assert_eq!(zcode.earliest_available, Some(50), "最早可用记录不受范围限制");
+
+        let gateway = provenance_for(&conn, 100, 200, Some("qoder"), 1);
+        assert_eq!(gateway.origin, Origin::GatewayLog);
+
+        let all = provenance_for(&conn, 100, 200, None, 1);
+        assert_eq!(all.origin, Origin::Mixed, "本机记录与网关记录共存时不能只报一种");
+        assert_eq!(all.data_at, Some(180));
+    }
+
+    #[test]
+    fn provenance_serializes_snake_case_tags() {
+        let p = Provenance {
+            origin: Origin::GatewayLog,
+            unit: Unit::Requests,
+            collected_at: 3,
+            data_at: None,
+            window_start: 1,
+            window_end: 2,
+            earliest_available: Some(0),
+            completeness: Completeness::Partial,
+        };
+        let json = serde_json::to_value(p).unwrap();
+        assert_eq!(json["origin"], "gateway_log");
+        assert_eq!(json["unit"], "requests");
+        assert_eq!(json["completeness"], "partial");
+        assert!(json["data_at"].is_null());
+    }
 
     #[test]
     fn all_unknown_reports_missing_not_zero() {

@@ -92,6 +92,8 @@ export interface LiveUsageDto {
    * 与「有记录但都没给 Token」（known=0、unknown>0，未知）。老后端不返回该字段。
    */
   today_token_coverage?: { total: number | null; known: number; unknown: number }
+  /** 今日 Token 的来源元数据（后端 `data_contract::Provenance`）；老后端缺失 */
+  today_provenance?: ProvenanceDto
   realtime_delta: boolean
   initial: boolean
   /** 本平台统计自上次推送后有变化；仅续期运行中会话的心跳为 false，统计视图据此跳过重查 */
@@ -892,6 +894,8 @@ export interface StatsSessionRowDto {
 export interface StatsOverviewDto {
   tokens: TokenSplitDto
   token_coverage: { known_total: number | null; known_requests: number; cache_hit_rate: number | null; cache_requests: number }
+  /** 来源元数据（后端 `data_contract::Provenance`）；老后端缺失 */
+  provenance?: ProvenanceDto
   requests: number
   /** 上游错误数；**不含取消** */
   failed: number
@@ -976,3 +980,22 @@ export function compactTokens(n: number): string {
   return String(n)
 }
 
+/**
+ * 一份统计的来源元数据（后端 `data_contract::Provenance`，P1-4）。
+ * 时间均为 UTC 毫秒；`data_at` 为 null 表示范围内没有记录（不是「刚刚」）。
+ */
+export interface ProvenanceDto {
+  /** official = 官方接口；local_record = 本机采集；gateway_log = 网关流水；mixed = 本机与网关记录共存 */
+  origin: "official" | "local_record" | "gateway_log" | "mixed"
+  unit: "tokens" | "requests" | "percent"
+  /** Jolu 生成这份统计的时刻 */
+  collected_at: number
+  /** 范围内最后一条记录的时间 */
+  data_at: number | null
+  window_start: number
+  window_end: number
+  /** 现存最早一条可用记录的时间 */
+  earliest_available: number | null
+  /** full = 能证明完整；partial = 已知有缺口；as_recorded = 只代表已采到的部分 */
+  completeness: "full" | "partial" | "as_recorded"
+}

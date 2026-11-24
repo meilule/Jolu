@@ -1,4 +1,4 @@
-import { invoke } from "./api"
+import { invoke, type ProvenanceDto } from "./api"
 
 /** 网关接线状态（与后端 `WiringStatus` 一致）。 */
 /** 档位自选集合（批 4，与后端 `wiring_store::TierModels` 一致）；null 档 = 跟随主模型 */
@@ -70,6 +70,8 @@ export interface DayOverviewDto {
   /** 部分流水缺少可靠请求身份，无法确定是否属于同一次请求 */
   identity_incomplete: boolean
   last_error: RouteLogDto | null
+  /** 来源元数据（网关流水、按请求计）；老后端缺失 */
+  provenance?: ProvenanceDto | null
 }
 
 /** 接线改动预览的一行：+ 新增、- 删除、空格 = 未改动上下文、… = 折叠的未改动段 */
@@ -563,5 +565,6 @@ export const gatewayApi = {
   customAgentPreview: (id: string, model: string | null) => invoke<WiringPreviewDto>("custom_agents_preview", { id, model }),
   /** 本机局域网地址（出口 IPv4）；没有网络时为 null */
   lanAddress: () => invoke<string | null>("gateway_lan_address"),
-  todayCounts: () => invoke<{ since: number; at: number; ok: number; rejected: number; failed: number }>("gateway_today_counts"),
+  /** `partial`：流水已滚动删除过今天的部分，计数只是下限（老后端缺失） */
+  todayCounts: () => invoke<{ since: number; at: number; ok: number; rejected: number; failed: number; partial?: boolean }>("gateway_today_counts"),
 }

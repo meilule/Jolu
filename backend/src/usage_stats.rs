@@ -527,6 +527,9 @@ pub struct TokenCoverage {
 pub struct Overview {
     pub tokens: TokenSplit,
     pub token_coverage: TokenCoverage,
+    /// 来源元数据（P1-4）：本机记录 / 网关记录 / 混合、数据最新时间、现存最早记录。
+    /// 本机采集只能说明「已采到的部分」，覆盖程度恒为 `as_recorded`。
+    pub provenance: crate::data_contract::Provenance,
     pub requests: i64,
     /// 上游错误数。**不含取消**：取消单独计在 `cancelled`。
     pub failed: i64,
@@ -719,10 +722,11 @@ fn empty_value(f: &StatsFilter) -> Option<i64> {
 pub fn overview(conn: &Connection, f: &StatsFilter) -> rusqlite::Result<Overview> {
     let reqs = load(conn, f, false)?;
     let empty = empty_value(f);
-    let span = f.end - f.start;
-    let previous = load(conn, &f.with_range(f.start - span, f.start), false)?;
+    let (previous_start, previous_end) = previous_window(f.start, f.end);
+    let previous = load(conn, &f.with_range(previous_start, previous_end), false)?;
     let cache_known: Vec<&Req> = reqs.iter().filter(|r| r.cache_read.is_some() && r.hit_denominator.is_some()).collect();
     Ok(Overview {
+        provenance: provenance(conn, f)?,
         tokens: split(reqs.iter(), empty),
         // 用共享契约算覆盖：`Coverage::of` 与 `SessionTokens` / 灵动岛用的是同一套
         // 「未知不是零、负数当未知」规则。这里取其中两个字段填既有 DTO，不改序列化形状。
@@ -748,6 +752,41 @@ pub fn overview(conn: &Connection, f: &StatsFilter) -> rusqlite::Result<Overview
         attributed: count_attributed(conn, f)?,
         sessions: top_sessions(conn, &reqs, 5)?,
     })
+}
+
+/// 对比用的上一周期：按**整天**往前平移，长度与本期相同。
+///
+/// 本期是「今天 00:00 → 此刻」时，上期是「昨天 00:00 → 昨天此刻」，与界面文案「较昨天同时段」一致。
+/// 以前取 `[start - span, start)`，今天上午 10 点对比的是昨天 14:00–24:00（P4 审计 D8）。
+/// 已结束的整天区间（span 恰为整天）平移结果与旧算法相同。
+fn previous_window(start: i64, end: i64) -> (i64, i64) {
+    const DAY_MS: i64 = 86_400_000;
+    let span = (end - start).max(0);
+    let days = ((span + DAY_MS - 1) / DAY_MS).max(1) as u64;
+    // 按本地日历减天数（夏令时切换日也落在同一钟点）；时区异常时退回固定 24 小时
+    let previous_start = Local
+        .timestamp_millis_opt(start)
+        .single()
+        .and_then(|at| at.checked_sub_days(chrono::Days::new(days)))
+        .map(|at| at.timestamp_millis())
+        .unwrap_or(start - days as i64 * DAY_MS);
+    (previous_start, previous_start + span)
+}
+
+/// 概览的来源元数据：与统计本身用同一组过滤条件（含退化行排除），只是另取一次「现存最早」。
+fn provenance(conn: &Connection, f: &StatsFilter) -> rusqlite::Result<crate::data_contract::Provenance> {
+    let (range, range_args) = where_clause(f, false);
+    let (scope, scope_args) = where_clause(&f.with_range(i64::MIN, i64::MAX), false);
+    crate::data_contract::requests_provenance(
+        conn,
+        f.start,
+        f.end,
+        &range,
+        &range_args,
+        &scope,
+        &scope_args,
+        Local::now().timestamp_millis(),
+    )
 }
 
 fn count_attributed(conn: &Connection, f: &StatsFilter) -> rusqlite::Result<i64> {
@@ -1178,6 +1217,35 @@ mod tests {
         assert_eq!(o.sessions[0].session_id, "s1");
         assert_eq!(o.trend.bucket, "2h");
         assert_eq!(o.trend.points.len(), 12);
+        // 来源元数据与统计同一批行：数据时间是范围内最后一条，最早可用记录不受范围限制
+        assert_eq!(o.provenance.data_at, Some(base + 2_000));
+        assert_eq!(o.provenance.earliest_available, Some(base - 86_400_000 + 1_000));
+        assert_eq!((o.provenance.window_start, o.provenance.window_end), (base, base + 86_400_000));
+        assert_eq!(o.provenance.unit, crate::data_contract::Unit::Tokens);
+        assert_eq!(
+            o.provenance.completeness,
+            crate::data_contract::Completeness::AsRecorded,
+            "本机采集无法对照源端证明完整，只能是「已采到的部分」"
+        );
+        drop(conn);
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// P4 审计 D8：今天上午 10 点对比的应是昨天 0–10 点，而不是昨天最后 10 小时。
+    #[test]
+    fn todays_comparison_uses_the_same_hours_of_yesterday() {
+        let today = local_ms(NaiveDate::from_ymd_opt(2026, 10, 21).unwrap());
+        let yesterday = local_ms(NaiveDate::from_ymd_opt(2026, 10, 20).unwrap());
+        let hour = 3_600_000;
+        let (conn, path) = seeded(&[
+            rec("claude", "y-morning", yesterday + 5 * hour, "claude-sonnet-4-5", [Some(60), Some(40), Some(0), Some(0), Some(100)], None),
+            rec("claude", "y-evening", yesterday + 20 * hour, "claude-sonnet-4-5", [Some(5), Some(2), Some(0), Some(0), Some(7)], None),
+            rec("claude", "t-morning", today + 2 * hour, "claude-sonnet-4-5", [Some(1), Some(1), Some(0), Some(0), Some(2)], None),
+        ]);
+        let o = overview(&conn, &filter(today, today + 10 * hour)).unwrap();
+        assert_eq!(o.previous_total, Some(100), "应对比昨天 0–10 点（100），不是昨天 14–24 点（7）");
+        // 整天区间平移结果不变
+        assert_eq!(previous_window(today, today + 24 * hour), (yesterday, today));
         drop(conn);
         let _ = std::fs::remove_file(path);
     }
