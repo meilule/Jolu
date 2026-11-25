@@ -13,7 +13,7 @@
 正式发行仓库为 [meilule/Jolu](https://github.com/meilule/Jolu)。应用更新端点在 `backend/tauri.conf.json`，更新包下载地址由 `scripts/release/release-assets.mjs` 生成，并由 `scripts/release/verify-release.mjs` 限定为该仓库；迁移仓库时须同步修改这三处。工作流跟随当前检出的仓库发布，更新签名继续使用原有密钥。
 
 - `main` 的每次推送使用一个新的 `vX.Y.Z` 标签和同名 GitHub Release。发行版只上传该版本的安装包、签名与 `latest.json`。
-- 版本号取 `backend/tauri.conf.json`、已有 `vX.Y.Z` 标签与已有发行版（含草稿）中的最高版本，再按上述规则递增（`scripts/release/next-release-version.mjs`）。构建时以 `--config` 注入版本号，不改写仓库里的配置文件。
+- 版本号取 `backend/tauri.conf.json`、已有 `vX.Y.Z` 标签与已公开发行版中的最高版本，再按上述规则递增（草稿不参与）（`scripts/release/next-release-version.mjs`）。构建时以 `--config` 注入版本号，不改写仓库里的配置文件。
 - 维护者手动推送 `v*` 标签时，标签必须与 `backend/tauri.conf.json` 的版本一致，工作流按该版本发行。也可以用 `gh workflow run release.yml --ref vX.Y.Z` 对已有标签重新触发。发行标签不应强制改指向或复用到别的提交。
 - 只改文档或工具、无需重打安装包的提交，可以在提交信息中加 `[skip ci]` 跳过发行。
 
@@ -23,7 +23,7 @@
 2. Windows（NSIS + Portable ZIP）、macOS arm64 / x86_64（app、dmg）、Linux x86_64（AppImage、deb）四路并行构建，使用仓库 Secret `TAURI_SIGNING_PRIVATE_KEY`（带密码的私钥）和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 签名更新包；私钥必须与 `backend/tauri.conf.json` 中的公钥成对，换钥会让已安装版本无法验证更新。由 `scripts/release/release-assets.mjs collect` 统一重命名为 `Jolu-vX.Y.Z-<平台>` 后上传。
 3. `release-assets.mjs manifest` 用四个平台的 `.sig` 生成 `latest.json`，下载地址指向 `releases/download/vX.Y.Z/…`。`verify-release.mjs` 核对标签、清单、安装包名称、签名文件和下载地址都属于这一版。
 4. 校验通过后，草稿转为公开并标记为最新。应用的更新端点 `releases/latest/download/latest.json` 由此指向新版本。任一平台失败时发行版保持草稿，现有更新端点不受影响。
-5. 构建失败留下的草稿不复用版本号。下一次构建取更高版本，避免旧包与新包混在一页。
+5. 构建失败或取消留下的草稿不占号：下一次构建先删除同号草稿，再按同一版本号重建，发行版本号保持连续，旧包也不会与新包混在一页。
 
 macOS 安装包目前没有 Apple 开发者签名和公证，首次打开需要在系统设置中手动允许。
 
@@ -34,3 +34,7 @@ macOS 安装包目前没有 Apple 开发者签名和公证，首次打开需要�
 - 工作流先构建带更新功能的安装包，再用 `JOLU_UPDATES_ENABLED=0` / `VITE_JOLU_UPDATES_ENABLED=0` 和 `--no-bundle` 编译免安装版，由 `scripts/release/package-portable.ps1` 打包。免安装版需手动下载新版 ZIP 替换程序，避免应用内更新把它变成安装版。
 - `Setup.exe.sig` 是安装包的独立更新签名，不是可执行程序，也不是另一种安装包。`latest.json` 内嵌该签名，供应用内更新验签使用；手动安装只需下载 `.exe`。
 - Portable 不进入安装版更新清单，也不生成更新 `.sig`。Tauri 更新签名与 Windows Authenticode 代码签名不是一回事。
+
+## 版本号重排记录
+
+2026-11-25 按鼠鼠要求把已公开的发行版重排成连续编号：`v0.1.8`→`v0.1.7`、`v0.1.9`→`v0.1.8`、`v0.1.10`→`v0.1.9`、`v0.1.12`→`v0.1.10`（标签指向的提交不变，附件改名并改写 `latest.json` 的版本与下载地址）。这些旧安装包内部写的仍是原版本号（如重排后的 `v0.1.10` 安装包装上显示 0.1.12）；已安装 0.1.12 的机器要等发行版到 `v0.1.13` 才会再收到自动更新；想用 `v0.1.11`、`v0.1.12` 需手动下载安装一次。
