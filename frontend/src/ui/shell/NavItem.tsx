@@ -48,14 +48,14 @@ export function NavItem({ label, icon, active, collapsed = false, onClick }: Nav
       aria-label={collapsed ? label : undefined}
       onClick={onClick}
       className={cn(
-        "jn-interactive relative isolate flex h-[42px] w-full shrink-0 items-center gap-3 overflow-hidden rounded-[14px] text-left whitespace-nowrap",
+        "jn-interactive jn-no-press relative isolate flex h-[42px] w-full shrink-0 items-center gap-3 rounded-[14px] text-left whitespace-nowrap",
         collapsed ? "justify-center px-3" : "px-3.5",
         active ? "font-semibold text-jn-text" : "text-jn-text-2 hover:bg-jn-surface/60 hover:text-jn-text",
       )}
     >
-      {active && <SlideIndicator layoutId="jn-sidebar-nav-active" className="-z-10 bg-jn-surface shadow-jn-surface" />}
+      {active && <SlideIndicator layoutId="jn-sidebar-nav-active" radius={14} className="-z-10 bg-jn-surface shadow-jn-surface" />}
       <Icon name={icon} size="lg" className={cn("shrink-0 transition-colors", active ? "text-jn-primary" : "text-jn-text-3")} />
-      {/* 收起时宽度收为 0：文字随侧栏一起被裁掉，不做 display 切换 */}
+      {/* 收起时宽度收为 0：文字自带 truncate 裁剪，不给按钮加 overflow-hidden 以免裁断滑动底板 */}
       <span className={cn("min-w-0 flex-1 truncate text-sm transition-opacity", collapsed && "w-0 flex-none opacity-0")}>{label}</span>
       {/* 选中圆点：收起时挂在右下角，展开时在最右 */}
       {active && !collapsed && <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-jn-primary" />}

@@ -14,6 +14,10 @@ pub struct Record {
     pub reasoning: Option<i64>,
     /// 工具调用提示 Token（Gemini `tokens.tool`）。来源没有该字段时为 None。
     pub tool: Option<i64>,
+    /// 源端记录的请求总耗时（毫秒，如 ZCode `completed_at - started_at`、OpenCode `time.completed - time.created`）；未知为 None。
+    pub duration_ms: Option<i64>,
+    /// 源端记录的首字延迟（毫秒，如 Antigravity `first_token_at - created_at`）；未知为 None。
+    pub first_token_ms: Option<i64>,
 }
 
 pub fn init(conn: &Connection) -> rusqlite::Result<()> {
@@ -85,23 +89,25 @@ pub fn write(conn: &Connection, records: &[Record]) -> rusqlite::Result<usize> {
         ];
         let count = conn.prepare_cached("INSERT INTO requests(platform,source,dedup_key,session_id,ts,model,
             input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,total_tokens,
-            input_known,output_known,cache_read_known,cache_write_known,total_known,effort,input_semantics)
-            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+            input_known,output_known,cache_read_known,cache_write_known,total_known,effort,input_semantics,duration_ms,first_token_ms)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
             ON CONFLICT(source,dedup_key) DO UPDATE SET
             session_id=excluded.session_id,ts=excluded.ts,model=excluded.model,
             input_tokens=excluded.input_tokens,output_tokens=excluded.output_tokens,
             cache_read_tokens=excluded.cache_read_tokens,cache_write_tokens=excluded.cache_write_tokens,
             total_tokens=excluded.total_tokens,input_known=excluded.input_known,output_known=excluded.output_known,
             cache_read_known=excluded.cache_read_known,cache_write_known=excluded.cache_write_known,
-            total_known=excluded.total_known,effort=excluded.effort,input_semantics=excluded.input_semantics
+            total_known=excluded.total_known,effort=excluded.effort,input_semantics=excluded.input_semantics,
+            duration_ms=COALESCE(requests.duration_ms,excluded.duration_ms),
+            first_token_ms=COALESCE(requests.first_token_ms,excluded.first_token_ms)
             WHERE (session_id,ts,model,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,total_tokens,
-              input_known,output_known,cache_read_known,cache_write_known,total_known,effort,input_semantics)
+              input_known,output_known,cache_read_known,cache_write_known,total_known,effort,input_semantics,duration_ms,first_token_ms)
             IS NOT (excluded.session_id,excluded.ts,excluded.model,excluded.input_tokens,excluded.output_tokens,
               excluded.cache_read_tokens,excluded.cache_write_tokens,excluded.total_tokens,excluded.input_known,
               excluded.output_known,excluded.cache_read_known,excluded.cache_write_known,excluded.total_known,
-              excluded.effort,excluded.input_semantics)")?.execute(params![r.platform,r.source,r.dedup_key,r.session_id,r.ts,r.model,
+              excluded.effort,excluded.input_semantics,COALESCE(requests.duration_ms,excluded.duration_ms),COALESCE(requests.first_token_ms,excluded.first_token_ms))")?.execute(params![r.platform,r.source,r.dedup_key,r.session_id,r.ts,r.model,
               incoming[0].unwrap_or(0),incoming[1].unwrap_or(0),incoming[2].unwrap_or(0),incoming[3].unwrap_or(0),incoming[4].unwrap_or(0),
-              incoming[0].is_some(),incoming[1].is_some(),incoming[2].is_some(),incoming[3].is_some(),incoming[4].is_some(),r.effort,item.input_semantics])?;
+              incoming[0].is_some(),incoming[1].is_some(),incoming[2].is_some(),incoming[3].is_some(),incoming[4].is_some(),r.effort,item.input_semantics,item.duration_ms.filter(|d|*d>0),item.first_token_ms.filter(|d|*d>0)])?;
         let id = match old {
             Some((id, _, _)) => id,
             None => conn.last_insert_rowid(),
@@ -247,6 +253,8 @@ mod tests {
             context_ratio: None,
             reasoning: None,
             tool: None,
+            duration_ms: None,
+            first_token_ms: None,
         }
     }
     #[test]

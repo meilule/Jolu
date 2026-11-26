@@ -9,6 +9,16 @@ pub(crate) struct BoundAuth {
 
 /// 只保存上游真实提供的数字；不保存 prompt、回答正文或凭据。
 pub(crate) fn record_usage(deps: &std::sync::Arc<crate::proxy::ProxyDeps>, entry: &super::route::PoolEntry, response: &Value, elapsed_ms: i64) {
+    record_usage_with_timing(deps, entry, response, elapsed_ms, None);
+}
+
+pub(crate) fn record_usage_with_timing(
+    deps: &std::sync::Arc<crate::proxy::ProxyDeps>,
+    entry: &super::route::PoolEntry,
+    response: &Value,
+    elapsed_ms: i64,
+    first_token_ms: Option<i64>,
+) {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let now = chrono::Utc::now();
@@ -33,7 +43,9 @@ pub(crate) fn record_usage(deps: &std::sync::Arc<crate::proxy::ProxyDeps>, entry
         input_tokens: n("input_tokens"), output_tokens: n("output_tokens"), cache_read_tokens: cached,
         cache_write_tokens: n("cache_creation_input_tokens"), total_tokens: total, effort: None,
     };
-    let saved = deps.db.lock().map_err(|_| ()).and_then(|mut conn| crate::db::insert_gateway_record(&mut conn, &record, &entry.connection_id, elapsed_ms).map_err(|_| ()));
+    let saved = deps.db.lock().map_err(|_| ()).and_then(|mut conn| {
+        crate::db::insert_gateway_record_with_timing(&mut conn, &record, &entry.connection_id, elapsed_ms, first_token_ms).map_err(|_| ())
+    });
     if saved.is_err() { eprintln!("[网关] 订阅调用已完成，但本次用量记录保存失败"); }
 }
 
@@ -54,7 +66,12 @@ pub(crate) fn record_usage_on_end(
         return response;
     }
     let (parts, body) = response.into_parts();
-    let stream = UsageRecorder { inner: body.into_data_stream(), meter: Default::default(), pending: Some((deps, entry, model, started)) };
+    let stream = UsageRecorder {
+        inner: body.into_data_stream(),
+        meter: Default::default(),
+        first_token_ms: None,
+        pending: Some((deps, entry, model, started)),
+    };
     axum::response::Response::from_parts(parts, axum::body::Body::from_stream(stream))
 }
 
@@ -63,6 +80,7 @@ type Pending = (std::sync::Arc<crate::proxy::ProxyDeps>, super::route::PoolEntry
 struct UsageRecorder {
     inner: axum::body::BodyDataStream,
     meter: super::budget::UsageMeter,
+    first_token_ms: Option<i64>,
     pending: Option<Pending>,
 }
 
@@ -79,7 +97,7 @@ impl UsageRecorder {
             "model": model,
             "usage": {"input_tokens": input, "output_tokens": output, "total_tokens": input + output},
         });
-        record_usage(&deps, &entry, &response, started.elapsed().as_millis() as i64);
+        record_usage_with_timing(&deps, &entry, &response, started.elapsed().as_millis() as i64, self.first_token_ms);
     }
 }
 
@@ -89,6 +107,11 @@ impl futures_util::Stream for UsageRecorder {
         let polled = std::pin::Pin::new(&mut self.inner).poll_next(cx);
         match &polled {
             std::task::Poll::Ready(Some(Ok(chunk))) => {
+                if !chunk.is_empty() && self.first_token_ms.is_none() {
+                    if let Some((_, _, _, started)) = self.pending.as_ref() {
+                        self.first_token_ms = Some(started.elapsed().as_millis() as i64);
+                    }
+                }
                 let chunk = chunk.clone();
                 self.meter.feed(&chunk);
             }

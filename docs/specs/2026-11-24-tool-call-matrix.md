@@ -38,13 +38,14 @@
 
 ## 1. Agent → 调用方协议
 
-以 `gateway/wiring_specs.rs` 的 `SPECS`（13 家，`:202-405`）为准。网关按调用方协议分到不同入口：Anthropic Messages、OpenAI Chat、OpenAI Responses 走 `wire::handle`（`gateway/wire.rs:473`），Gemini 原生走 `adapter/gemini.rs`。
+以 `gateway/wiring_specs.rs` 的 `SPECS`（14 家，`:202-433`）为准。网关按调用方协议分到不同入口：Anthropic Messages、OpenAI Chat、OpenAI Responses 走 `wire::handle`（`gateway/wire.rs:473`），Gemini 原生走 `adapter/gemini.rs`。
 
 | Agent（SPECS id） | 接线写入的协议 | 出处 | 进入的网关入口 |
 |---|---|---|---|
 | claude-code | Anthropic Messages（`ANTHROPIC_BASE_URL`） | `wiring_specs.rs:204-216` | `wire::handle(Anthropic)` |
 | codex | Responses（`wire_api = "responses"`） | `gateway/wiring.rs:527,556` | `wire::handle(Responses)` |
 | gemini | Gemini 原生 `/v1beta` | `wiring_specs.rs:238-250`；`adapter/gemini.rs` | `adapter/gemini.rs`（不经 `forward_one`） |
+| antigravity | Gemini 原生 `/v1beta`（`API_PROVIDER_GOOGLE_GEMINI` + `jolu-agy.cmd` 注入 `GOOGLE_GEMINI_BASE_URL`） | `wiring_specs.rs:400-415`；`gateway/wiring_antigravity.rs` | `adapter/gemini.rs`（不经 `forward_one`） |
 | opencode | OpenAI Chat（`@ai-sdk/openai-compatible`） | `gateway/wiring.rs:678` | `wire::handle(Chat)` |
 | zcode | Anthropic Messages（`api.type = anthropic-messages`） | `gateway/wiring.rs:919` | `wire::handle(Anthropic)` |
 | kimi | provider `type = "kimi"` | `gateway/wiring.rs:1190` | ?（待确认：Kimi CLI 的 `kimi` 类型实际发 Chat 还是自有格式，仓库内无抓包） |
@@ -55,7 +56,7 @@
 | qwen | OpenAI Chat（`modelProviders.openai`） | `gateway/wiring_qwen.rs:7,135-138` | `wire::handle(Chat)` |
 | workbuddy | OpenAI Chat（`url = <base>/v1/chat/completions`） | `gateway/wiring_workbuddy.rs:153` | `wire::handle(Chat)` |
 
-推论：只有 claude-code 和 zcode 两家会触发 tool_loop；codex 的服务端工具走 S7；其余 9 家都是 Chat 调用方，只用函数工具（包括它们自己挂的 MCP 工具）。
+推论：只有 claude-code 和 zcode 两家会触发 tool_loop；codex 的服务端工具走 S7；gemini 与 antigravity 走 Gemini 原生入口；其余 9 家都是 Chat 调用方，只用函数工具（包括它们自己挂的 MCP 工具）。
 
 ---
 

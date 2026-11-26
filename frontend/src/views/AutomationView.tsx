@@ -16,9 +16,9 @@ import { TaskDialog, type TaskDialogRequest } from "@/components/automation/Task
 import { CancelTaskDialog } from "@/components/automation/CancelTaskDialog"
 import { DeleteTaskDialog } from "@/components/automation/DeleteTaskDialog"
 
-/** 会话线程「创建自动化」带入的会话（画板 72） */
+/** 会话线程 / 灵动岛快捷动作「创建自动化」带入的会话（画板 72 / R2-I-06） */
 export interface AutomationPrefill {
-  session: SessionItemDto
+  session?: SessionItemDto
   nonce: number
 }
 

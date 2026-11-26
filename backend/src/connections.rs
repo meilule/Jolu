@@ -565,6 +565,23 @@ mod custom_provider_tests {
         }
     }
 
+    #[test]
+    fn ollama_cloud_api_key_is_allowed_without_faking_native_auth() {
+        let prepared = prepare_new(NewConnection { service: None,
+            platform: "ollama".into(),
+            kind: "api".into(),
+            name: "Ollama Cloud".into(),
+            secret: Some("synthetic-ollama-key".into()),
+            base_url: Some("https://ollama.com/v1".into()),
+            model: Some("gpt-oss:120b".into()),
+            effort: None,
+            context_1m: None,
+            protocol: Some("openai".into()), slug_base: None,
+        }).unwrap();
+        assert_eq!(prepared.platform, "ollama");
+        assert_eq!(prepared.base_url.as_deref(), Some("https://ollama.com/v1"));
+    }
+
     fn headers(protocol: &str) -> reqwest::header::HeaderMap {
         let client = reqwest::blocking::Client::new();
         apply_auth(client.get("https://gw.test/v1/models"), protocol, "synthetic-key").build().unwrap().headers().clone()
@@ -806,7 +823,22 @@ pub struct ConnectionDto {
     /// 模型入口的持久化菜单 id 前缀（`<slug>/<model>`）；改名不变。
     #[serde(default)]
     pub slug: Option<String>,
+    /// 连接级计费口径：`auto` / `api` / `subscription` / `free`
+    #[serde(default = "default_billing_mode")]
+    pub billing_mode: String,
+    /// 连接级价格倍率（缩放目录与全局基准价，不影响该连接专属单模型覆盖）
+    pub price_multiplier: f64,
+    /// 连接级日/月预算上限（USD）与超限动作（`alert` 仅提醒 | `block` 网关硬限额 429）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_daily_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_monthly_usd: Option<f64>,
+    #[serde(default = "default_budget_action")]
+    pub budget_action: String,
 }
+
+fn default_billing_mode() -> String { "auto".into() }
+fn default_budget_action() -> String { "alert".into() }
 
 #[derive(Debug, Deserialize)]
 pub struct NewConnection {
@@ -903,7 +935,40 @@ fn row_to_dto(r: &rusqlite::Row, now: i64) -> rusqlite::Result<ConnectionDto> {
         serve_enabled: r.get::<_, Option<i64>>("serve_enabled")?.unwrap_or(0) != 0,
         slug: r.get("slug")?,
         start_channel: r.get("start_channel")?,
+        billing_mode: r.get::<_, Option<String>>("billing_mode").ok().flatten().unwrap_or_else(default_billing_mode),
+        price_multiplier: r.get::<_, Option<f64>>("price_multiplier").ok().flatten().unwrap_or(1.0),
+        budget_daily_usd: r.get::<_, Option<f64>>("budget_daily_usd").ok().flatten(),
+        budget_monthly_usd: r.get::<_, Option<f64>>("budget_monthly_usd").ok().flatten(),
+        budget_action: r.get::<_, Option<String>>("budget_action").ok().flatten().unwrap_or_else(default_budget_action),
     })
+}
+
+pub fn validate_billing(mode: &str, multiplier: f64) -> Result<(&'static str, f64), String> {
+    let normalized = match mode.trim() {
+        "auto" => "auto",
+        "api" => "api",
+        "subscription" => "subscription",
+        "free" => "free",
+        other => return Err(format!("未知的计费口径：{other}")),
+    };
+    if !multiplier.is_finite() || !(0.0..=1000.0).contains(&multiplier) {
+        return Err("价格倍率须在 0 到 1000 之间".into());
+    }
+    Ok((normalized, multiplier))
+}
+
+pub fn set_billing(conn: &Sql, id: &str, billing_mode: &str, price_multiplier: f64) -> Result<(), String> {
+    let (mode, mult) = validate_billing(billing_mode, price_multiplier)?;
+    let changed = conn
+        .execute(
+            "UPDATE connections SET billing_mode = ?2, price_multiplier = ?3 WHERE id = ?1",
+            rusqlite::params![id, mode, mult],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("连接不存在".into());
+    }
+    Ok(())
 }
 
 
@@ -936,7 +1001,7 @@ fn list_with_account_lookup(
 ) -> rusqlite::Result<Vec<ConnectionDto>> {
     let now = chrono::Local::now().timestamp_millis();
     let mut stmt = conn.prepare(
-        "SELECT id, platform, kind, name, label, masked, status, last_sync_ms, base_url, model, effort, context_1m, protocol, service, account_email, serve_enabled, secret, slug, start_channel
+        "SELECT id, platform, kind, name, label, masked, status, last_sync_ms, base_url, model, effort, context_1m, protocol, service, account_email, serve_enabled, secret, slug, start_channel, billing_mode, price_multiplier, budget_daily_usd, budget_monthly_usd, budget_action
          FROM connections ORDER BY created_ms ASC",
     )?;
     let rows = stmt
@@ -993,9 +1058,9 @@ pub fn prepare_new(mut c: NewConnection) -> Result<NewConnection, String> {
         if !valid.contains(&base){return Err("请选择 ZCode 官方服务地址".into())}
         c.protocol=Some(if base.ends_with("/anthropic"){"anthropic"}else{"openai"}.into());
     }
-    if crate::platforms::native(&c.platform) && !(c.kind == "api" && (crate::provider_key::supported(&c.platform) || matches!(c.platform.as_str(),"zcode"|"opencode"))) { return Err("该平台请通过本机来源获取，不保存猜测的登录凭证".into()); }
+    if crate::platforms::native(&c.platform) && !(c.kind == "api" && (crate::provider_key::supported(&c.platform) || matches!(c.platform.as_str(),"zcode"|"opencode"|"ollama"))) { return Err("该平台请通过本机来源获取，不保存猜测的登录凭证".into()); }
     // 仅获取型平台（画布 18 后续）：凭证只能来自本机读取
-    if crate::creds::is_fetch_only_platform(&c.platform) && c.kind != "auth" && !crate::provider_key::supported(&c.platform) && !matches!(c.platform.as_str(),"zcode"|"opencode") {
+    if crate::creds::is_fetch_only_platform(&c.platform) && c.kind != "auth" && !crate::provider_key::supported(&c.platform) && !matches!(c.platform.as_str(),"zcode"|"opencode"|"ollama") {
         return Err("该平台只支持从本机获取凭证，不支持手动填写".into());
     }
     if !matches!(c.kind.as_str(), "auth" | "api") {

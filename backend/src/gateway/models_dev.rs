@@ -9,7 +9,35 @@
 
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::{Arc, OnceLock, RwLock};
 use tauri::Manager;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq)]
+pub struct ModelCostTier {
+    pub above: i64,
+    pub input: f64,
+    pub output: f64,
+    #[serde(default)]
+    pub cache_read: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_1h: Option<f64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq)]
+pub struct ModelCost {
+    pub input: f64,
+    pub output: f64,
+    #[serde(default)]
+    pub cache_read: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_1h: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tiers: Vec<ModelCostTier>,
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct ModelMeta {
@@ -37,23 +65,84 @@ pub struct ModelMeta {
     /// 是否支持工具调用；None = 没给
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call: Option<bool>,
+    /// models.dev 厂商键（如 anthropic / openai / google）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub vendor: String,
+    /// 标准每百万 Token 美元定价；None = 目录未提供有效定价
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<ModelCost>,
 }
 
 /// 内置兜底表：models.dev 主要厂商的快照（`scripts/dev/models-dev-builtin.mjs` 生成，表头有日期）。
 /// 只在从没拉到过 models.dev（首次离线启动）时用；拉到过就用缓存，哪怕过期。
-static BUILTIN: std::sync::LazyLock<CachedCatalog> = std::sync::LazyLock::new(|| {
+static BUILTIN: std::sync::LazyLock<Arc<CachedCatalog>> = std::sync::LazyLock::new(|| {
     #[derive(serde::Deserialize)]
     struct Snapshot {
         models: std::collections::BTreeMap<String, ModelMeta>,
     }
-    serde_json::from_str::<Snapshot>(include_str!("models_dev_builtin.json"))
-        .map(|snapshot| CachedCatalog { fetched_ms: 0, models: snapshot.models })
-        .unwrap_or_default()
+    Arc::new(
+        serde_json::from_str::<Snapshot>(include_str!("models_dev_builtin.json"))
+            .map(|snapshot| CachedCatalog { fetched_ms: 0, models: snapshot.models })
+            .unwrap_or_default(),
+    )
 });
+
+/// 进程级内存目录：启动与刷新时更新，供计价引擎与统计查询免磁盘 IO 读取。
+static ACTIVE: OnceLock<RwLock<Arc<CachedCatalog>>> = OnceLock::new();
+static LAST_MISSING_FETCH_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+fn active_slot() -> &'static RwLock<Arc<CachedCatalog>> {
+    ACTIVE.get_or_init(|| RwLock::new(Arc::clone(&BUILTIN)))
+}
 
 /// 内置兜底表（见 [`BUILTIN`]）。
 pub fn builtin() -> &'static CachedCatalog {
     &BUILTIN
+}
+
+/// 当前生效的目录快照（已加载磁盘缓存则用缓存，否则用内置快照）。
+pub fn active_catalog() -> Arc<CachedCatalog> {
+    active_slot()
+        .read()
+        .map(|guard| Arc::clone(&guard))
+        .unwrap_or_else(|_| Arc::clone(&BUILTIN))
+}
+
+fn update_active(catalog: CachedCatalog) {
+    if let Ok(mut guard) = active_slot().write() {
+        *guard = Arc::new(catalog);
+    }
+}
+
+/// 启动时加载磁盘缓存到内存；旧缓存若缺少 `cost` 字段，先用内置表的 cost 兜底并标记过期。
+pub(crate) fn init_from_dir(dir: &std::path::Path) {
+    let loaded = read_cache(&dir.join("models-dev.json"));
+    if let Some(mut catalog) = loaded {
+        fill_missing_builtin_costs(&mut catalog);
+        update_active(catalog);
+    }
+}
+
+fn has_any_cost(catalog: &CachedCatalog) -> bool {
+    catalog.models.values().any(|m| m.cost.is_some())
+}
+
+fn fill_missing_builtin_costs(catalog: &mut CachedCatalog) {
+    if has_any_cost(catalog) {
+        return;
+    }
+    for (id, meta) in &mut catalog.models {
+        if meta.cost.is_none() {
+            if let Some(base) = BUILTIN.models.get(id) {
+                if base.cost.is_some() {
+                    meta.cost = base.cost.clone();
+                }
+                if meta.vendor.is_empty() && !base.vendor.is_empty() {
+                    meta.vendor = base.vendor.clone();
+                }
+            }
+        }
+    }
 }
 
 fn is_zero(v: &i64) -> bool {
@@ -132,35 +221,81 @@ pub fn lookup_meta(catalog: &CachedCatalog, model: &str) -> Option<ModelMeta> {
 /// 只读缓存（不联网）：接线 / 目录展示用——阻塞 20 秒的拉取只能发生在后台。
 pub(crate) fn cached(app: &tauri::AppHandle) -> Option<CachedCatalog> {
     let path = cache_path(app)?;
-    // 从没拉到过时用内置快照：首次离线也能显示上下文窗口与档位（2.8）
-    read_cache(&path).or_else(|| Some(builtin().clone()))
+    let catalog = read_cache(&path)
+        .map(|mut c| {
+            fill_missing_builtin_costs(&mut c);
+            c
+        })
+        .unwrap_or_else(|| builtin().clone());
+    Some(catalog)
 }
 
 /// 不经 AppHandle 读缓存：网关转发路径上只有数据库连接，缓存与数据库在同一个应用数据目录。
 /// 读不到（隔离目录、从没拉过）时用内置快照。
 pub(crate) fn cached_in_dir(dir: &std::path::Path) -> CachedCatalog {
-    read_cache(&dir.join("models-dev.json")).unwrap_or_else(|| builtin().clone())
+    read_cache(&dir.join("models-dev.json"))
+        .map(|mut c| {
+            fill_missing_builtin_costs(&mut c);
+            c
+        })
+        .unwrap_or_else(|| builtin().clone())
 }
 
 /// 立即拉取并写缓存（「刷新模型元数据」按钮用，阻塞，调用方放到后台线程）。返回（模型数，拉取时间）。
 pub(crate) fn refresh_now(app: &tauri::AppHandle) -> Result<(usize, i64), String> {
     let path = cache_path(app).ok_or("无法定位应用数据目录")?;
     let catalog = fetch()?;
+    let count = catalog.models.len();
+    let fetched_ms = catalog.fetched_ms;
     std::fs::write(&path, serde_json::to_string(&catalog).map_err(|error| error.to_string())?)
         .map_err(|error| format!("写入模型元数据缓存失败：{error}"))?;
-    Ok((catalog.models.len(), catalog.fetched_ms))
+    update_active(catalog);
+    Ok((count, fetched_ms))
 }
 
-/// 缓存过期或缺失时在后台拉取刷新（不阻塞调用方）；失败静默——下次再试。
+/// 缓存过期、缺失或尚未包含价格字段时在后台拉取刷新（不阻塞调用方）；失败静默——下次再试。
 pub(crate) fn refresh_if_stale(app: &tauri::AppHandle) {
     let Some(path) = cache_path(app) else { return };
-    let stale = read_cache(&path).is_none_or(|c| now_ms() - c.fetched_ms >= TTL_MS);
+    let stale = read_cache(&path).is_none_or(|c| now_ms() - c.fetched_ms >= TTL_MS || !has_any_cost(&c));
     if !stale {
         return;
     }
+    let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         if let Ok(new) = fetch() {
-            let _ = std::fs::write(&path, serde_json::to_string(&new).unwrap_or_default());
+            if std::fs::write(&path, serde_json::to_string(&new).unwrap_or_default()).is_ok() {
+                update_active(new);
+                crate::events::pricing_changed(&handle);
+            }
+        }
+    });
+}
+
+/// 遇到未定价模型时的低频补拉（6 小时冷却，需开启自动同步）。
+pub(crate) fn refresh_on_missing(app: &tauri::AppHandle) {
+    const MISSING_COOLDOWN_MS: i64 = 6 * 60 * 60 * 1000;
+    let now = now_ms();
+    let prev = LAST_MISSING_FETCH_MS.load(std::sync::atomic::Ordering::Relaxed);
+    if now - prev < MISSING_COOLDOWN_MS {
+        return;
+    }
+    let Some(path) = cache_path(app) else { return };
+    if read_cache(&path).is_some_and(|c| now - c.fetched_ms < MISSING_COOLDOWN_MS && has_any_cost(&c)) {
+        return;
+    }
+    if LAST_MISSING_FETCH_MS
+        .compare_exchange(prev, now, std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Ok(new) = fetch() {
+            if std::fs::write(&path, serde_json::to_string(&new).unwrap_or_default()).is_ok() {
+                update_active(new);
+                crate::events::pricing_changed(&handle);
+            }
         }
     });
 }
@@ -170,18 +305,105 @@ fn read_cache(path: &PathBuf) -> Option<CachedCatalog> {
     serde_json::from_str(&text).ok()
 }
 
-/// 解析 models.dev：顶层是厂商 → { models: { id: { … } } }，摊平成 id → 元数据（同名先到先得）。
-///
-/// 以前只读了 limit，`name` 没读——各档显示名一律退回模型 id；现在名称、描述、推理档位、
-/// 输入模态与工具调用都读出来（2.8）。
+/// 优先采信的一线模型厂商，避免字母序靠前的三方中转/会员目录覆盖官方基准价。
+const PREFERRED_VENDORS: &[&str] = &[
+    "anthropic", "openai", "google", "deepseek", "xai",
+    "moonshotai", "zai", "zhipuai", "alibaba", "minimax", "mistral", "cohere",
+];
+
+fn is_membership_vendor(vendor: &str) -> bool {
+    let v = vendor.to_ascii_lowercase();
+    v.contains("code-plan")
+        || v.contains("coding-plan")
+        || v.contains("token-plan")
+        || v.starts_with("github-copilot")
+}
+
+fn parse_cost(cost: Option<&Value>, membership_vendor: bool) -> Option<ModelCost> {
+    let obj = cost?.as_object()?;
+    let num = |map: &serde_json::Map<String, Value>, key: &str| {
+        map.get(key)
+            .and_then(Value::as_f64)
+            .filter(|v| v.is_finite() && *v >= 0.0)
+    };
+    let input = num(obj, "input");
+    let output = num(obj, "output");
+    if input.is_none() && output.is_none() {
+        return None;
+    }
+    let base_input = input.unwrap_or(0.0);
+    let base_output = output.unwrap_or(0.0);
+    // 会员/套餐目录标 $0 不能冒充官方 API 单价
+    if membership_vendor && base_input == 0.0 && base_output == 0.0 {
+        return None;
+    }
+    let base_read = num(obj, "cache_read").unwrap_or(0.0);
+    let base_write = num(obj, "cache_write");
+    let base_write_1h = num(obj, "cache_write_1h");
+    let mut tiers = Vec::new();
+    if let Some(arr) = obj.get("tiers").and_then(Value::as_array) {
+        for item in arr {
+            let Some(tmap) = item.as_object() else { continue };
+            let above = item.pointer("/tier/size").and_then(Value::as_i64).filter(|n| *n > 0);
+            let is_ctx = item.pointer("/tier/type").and_then(Value::as_str) == Some("context");
+            let Some(above) = above.filter(|_| is_ctx) else { continue };
+            tiers.push(ModelCostTier {
+                above,
+                input: num(tmap, "input").unwrap_or(base_input),
+                output: num(tmap, "output").unwrap_or(base_output),
+                cache_read: num(tmap, "cache_read").unwrap_or(base_read),
+                cache_write: num(tmap, "cache_write").or(base_write),
+                cache_write_1h: num(tmap, "cache_write_1h").or(base_write_1h),
+            });
+        }
+    }
+    if let Some(tmap) = obj.get("context_over_200k").and_then(Value::as_object) {
+        if !tiers.iter().any(|t| t.above == 200_000) {
+            tiers.push(ModelCostTier {
+                above: 200_000,
+                input: num(tmap, "input").unwrap_or(base_input),
+                output: num(tmap, "output").unwrap_or(base_output),
+                cache_read: num(tmap, "cache_read").unwrap_or(base_read),
+                cache_write: num(tmap, "cache_write").or(base_write),
+                cache_write_1h: num(tmap, "cache_write_1h").or(base_write_1h),
+            });
+        }
+    }
+    tiers.sort_by_key(|t| t.above);
+    Some(ModelCost {
+        input: base_input,
+        output: base_output,
+        cache_read: base_read,
+        cache_write: base_write,
+        cache_write_1h: base_write_1h,
+        tiers,
+    })
+}
+
+/// 解析 models.dev：先扫一线模型厂商，再扫其余厂商；保留上下文、显示名、能力与定价。
 pub(crate) fn parse_catalog(value: &Value) -> std::collections::BTreeMap<String, ModelMeta> {
     const LEVELS: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh", "max"];
     let mut models = std::collections::BTreeMap::new();
     let Some(vendors) = value.as_object() else { return models };
-    for vendor in vendors.values() {
+    let ordered: Vec<(&str, &Value)> = PREFERRED_VENDORS
+        .iter()
+        .filter_map(|name| vendors.get(*name).map(|v| (*name, v)))
+        .chain(
+            vendors
+                .iter()
+                .filter(|(name, _)| !PREFERRED_VENDORS.contains(&name.as_str()))
+                .map(|(name, v)| (name.as_str(), v)),
+        )
+        .collect();
+    for (vendor_id, vendor) in ordered {
         let Some(list) = vendor.get("models").and_then(Value::as_object) else { continue };
+        let membership = is_membership_vendor(vendor_id);
         for (id, meta) in list {
-            if models.contains_key(id) {
+            let cost = parse_cost(meta.get("cost"), membership);
+            if let Some(existing) = models.get_mut(id) {
+                if existing.cost.is_none() && cost.is_some() {
+                    existing.cost = cost;
+                }
                 continue;
             }
             let text = |key: &str| meta.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
@@ -212,6 +434,8 @@ pub(crate) fn parse_catalog(value: &Value) -> std::collections::BTreeMap<String,
                     efforts,
                     input_modalities,
                     tool_call: meta.get("tool_call").and_then(Value::as_bool),
+                    vendor: vendor_id.to_string(),
+                    cost,
                 },
             );
         }
@@ -241,16 +465,26 @@ mod tests {
     #[test]
     fn names_descriptions_efforts_and_modalities_are_read() {
         let payload = serde_json::json!({
+            "302ai": {"models": {"claude-opus-4-5": {"name": "中转不应盖过官方", "cost": {"input": 99, "output": 99}}}},
+            "kimi-code-plan-cn": {"models": {"kimi-k2": {"name": "Kimi Plan", "cost": {"input": 0, "output": 0}}}},
             "anthropic": {"models": {"claude-opus-4-5": {
                 "name": "Claude Opus 4.5", "description": "旗舰", "reasoning": true, "tool_call": true,
                 "reasoning_options": [{"type": "effort", "values": ["low", "medium", "high", "turbo"]}, {"type": "budget_tokens", "min": 1024}],
-                "modalities": {"input": ["text", "image", "pdf"]}, "limit": {"context": 200000, "output": 64000}
+                "modalities": {"input": ["text", "image", "pdf"]}, "limit": {"context": 200000, "output": 64000},
+                "cost": {"input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25,
+                    "tiers": [{"tier": {"type": "context", "size": 200000}, "input": 10.0, "output": 37.5}]}
             }}},
             "other": {"models": {"claude-opus-4-5": {"name": "重复的不覆盖"}, "bare": {}}}
         });
         let models = parse_catalog(&payload);
         let opus = &models["claude-opus-4-5"];
-        assert_eq!(opus.label, "Claude Opus 4.5", "以前名称没读，显示名一律退回 id");
+        assert_eq!(opus.label, "Claude Opus 4.5", "官方主厂商应优先于字母序靠前的中转");
+        assert_eq!(opus.vendor, "anthropic");
+        let cost = opus.cost.as_ref().expect("应保留价格");
+        assert_eq!((cost.input, cost.output, cost.cache_read, cost.cache_write), (5.0, 25.0, 0.5, Some(6.25)));
+        assert_eq!(cost.tiers.len(), 1);
+        assert_eq!((cost.tiers[0].above, cost.tiers[0].input, cost.tiers[0].output), (200_000, 10.0, 37.5));
+        assert_eq!(models["kimi-k2"].cost, None, "会员目录的 $0 不应作为 API 价格");
         assert_eq!(opus.description, "旗舰");
         assert_eq!(opus.efforts, vec!["low", "medium", "high"], "只收档位词");
         assert_eq!(opus.input_modalities, vec!["text", "image", "pdf"]);

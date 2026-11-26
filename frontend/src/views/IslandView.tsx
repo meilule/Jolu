@@ -1,15 +1,15 @@
 /**
  * 灵动岛页 —— 设计稿 `docs/ui/jolu-new.pen` R1-26（灵动岛）。
  *
- * 左右双栏：
- * - 左栏：显示灵动岛总开关卡、经典 / 胶囊样式切换卡、连接与分身表、联动设置（待确认）；
- * - 右栏：窗口行为、显示外观、刷新与位置三个设置组卡。
+ * 左右双栏均衡排布：
+ * - 左栏：显示灵动岛总开关、样式切换、连接与分身、实时路由、联动与判定；
+ * - 右栏：窗口行为、显示外观、刷新与位置、额度预警、趣味与互动。
  *
  * 设置即时生效，真值在后端，与托盘、灵动岛右键菜单共用同一份。
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import * as Menu from "@radix-ui/react-dropdown-menu"
-import { api, DEFAULT_ISLAND_LINKAGE, isTauri, type AppSettings, type DockEdgeDto, type IslandStyle } from "@/lib/api"
+import { api, isTauri, resolveIslandLinkage, type AppSettings, type DockEdgeDto, type IslandStyle } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { PLATFORMS } from "@/lib/platforms"
 import { useToast } from "@/components/ui/Toast"
@@ -17,6 +17,7 @@ import { useSettings } from "@/hooks/useSettings"
 import { useConnections } from "@/hooks/useConnections"
 import { ContentTransition, LoadingSurface } from "@/components/ui/LoadingSurface"
 import { Icon, type IconName } from "@/icons"
+import { useGlidePill } from "@/motion"
 import {
   Banner,
   Button,
@@ -48,7 +49,8 @@ export function IslandView() {
   const s = cfg.settings
   const savePreferences = cfg.setDisplayPreferences
   const disabled = !cfg.ready
-  const linkage = s.island_linkage ?? DEFAULT_ISLAND_LINKAGE
+  const linkage = resolveIslandLinkage(s.island_linkage)
+  const linkageSaving = cfg.isSaving("island_linkage")
   const cloneCount = s.island_clones.length
 
   return (
@@ -83,8 +85,8 @@ export function IslandView() {
         {cfg.loading && !cfg.ready ? (
           <LoadingSurface layout="island" label="正在读取灵动岛配置" />
         ) : (
-          <div className="grid grid-cols-1 gap-3.5 @[900px]:grid-cols-[minmax(0,1fr)_396px] @[900px]:items-start">
-            {/* 左栏：总开关 + 样式 + 连接与分身 + 联动 */}
+          <div className="grid grid-cols-1 gap-3.5 @[900px]:grid-cols-[minmax(0,1.02fr)_minmax(396px,0.98fr)] @[900px]:items-start">
+            {/* 左栏：总开关 + 样式 + 连接与分身 + 实时路由 + 联动与判定 */}
             <div className="flex min-w-0 flex-col gap-3.5">
               {/* 显示灵动岛总开关 */}
               <Card className="flex-row items-center gap-3.5 px-[22px] py-[18px]">
@@ -116,39 +118,54 @@ export function IslandView() {
               {/* 连接与分身 */}
               <ClonesSection settings={s} ready={cfg.ready} />
 
-              {/* 4.2b 灵动岛联动（无 R1-26 对应画板，标「待确认」） */}
-              <GroupCard icon="spark" title="联动" badge="待确认">
+              {/* R2-I-04 联动设置 · 实时路由 */}
+              <GroupCard icon="navGateway" title="实时路由">
                 <Row
-                  title="阈值与事件动效"
-                  desc="额度到 80%、用尽、网关拒绝、新会话开始时岛上闪一下；免打扰或减少动效时只改颜色"
+                  title="显示请求流向"
+                  desc="胶囊里画出工具 → 分组 → 来源；关闭后只显示 Token 增量"
                   control={
                     <Switch
-                      checked={linkage.signals}
-                      disabled={disabled || cfg.isSaving("island_linkage")}
-                      label="阈值与事件动效"
-                      onChange={(on) => void cfg.setIslandLinkage({ signals: on })}
+                      checked={linkage.show_route_flow}
+                      disabled={disabled || linkageSaving}
+                      label="显示请求流向"
+                      onChange={(on) => void cfg.setIslandLinkage({ show_route_flow: on })}
                     />
                   }
                 />
                 <Row
-                  title="严格模式"
-                  desc="「正在写」只认运行中的会话或网关在途；只有最近写入记录时显示「不知道」，宁可不亮"
+                  title="改道与失败提示"
+                  desc="上游拒绝、改道成功、全部失败时变形提示 1.5 秒"
                   control={
                     <Switch
-                      checked={linkage.strict_writing}
-                      disabled={disabled || cfg.isSaving("island_linkage")}
-                      label="严格模式"
-                      onChange={(on) => void cfg.setIslandLinkage({ strict_writing: on })}
+                      checked={linkage.route_feedback}
+                      disabled={disabled || linkageSaving}
+                      label="改道与失败提示"
+                      onChange={(on) => void cfg.setIslandLinkage({ route_feedback: on, signals: on })}
                     />
                   }
                 />
+                <Row
+                  title="多工具同时在写"
+                  desc="多个工具同时经过路由写入时叠放最多 3 个工具图标"
+                  control={
+                    <Switch
+                      checked={linkage.multi_tool_stack}
+                      disabled={disabled || linkageSaving}
+                      label="多工具同时在写"
+                      onChange={(on) => void cfg.setIslandLinkage({ multi_tool_stack: on })}
+                    />
+                  }
+                />
+              </GroupCard>
+
+              <GroupCard icon="connect" title="联动与判定">
                 <Row
                   title="跟随主窗口"
-                  desc="主窗口在看某个连接的用量或供应商时，本体岛临时显示那个连接；分身不跟随"
+                  desc="主窗口在看某个连接的用量、账号或会话时，本体岛临时显示它并转头看向主窗口；分身不跟随"
                   control={
                     <Switch
                       checked={linkage.follow_main}
-                      disabled={disabled || cfg.isSaving("island_linkage")}
+                      disabled={disabled || linkageSaving}
                       label="跟随主窗口"
                       onChange={(on) => void cfg.setIslandLinkage({ follow_main: on })}
                     />
@@ -156,20 +173,56 @@ export function IslandView() {
                 />
                 <Row
                   title="按最近活跃自动选主"
-                  desc="分身比本体明显更活跃（领先 1 分钟以上且 2 分钟内有请求）时自动与本体互换；同平台不比较"
+                  desc="分身比本体明显更活跃（领先 1 分钟以上且 2 分钟内有请求）时自动与本体互换"
                   control={
                     <Switch
                       checked={linkage.auto_focus}
-                      disabled={disabled || cfg.isSaving("island_linkage")}
+                      disabled={disabled || linkageSaving}
                       label="按最近活跃自动选主"
                       onChange={(on) => void cfg.setIslandLinkage({ auto_focus: on })}
+                    />
+                  }
+                />
+                <Row
+                  title="同分组的岛显示流量去向"
+                  desc="一个岛预警时，另一个同分组岛显示它接住了多少请求"
+                  control={
+                    <Switch
+                      checked={linkage.peer_flow}
+                      disabled={disabled || linkageSaving}
+                      label="同分组的岛显示流量去向"
+                      onChange={(on) => void cfg.setIslandLinkage({ peer_flow: on })}
+                    />
+                  }
+                />
+                <Row
+                  title="自动化等额度气泡"
+                  desc="有自动化任务在等额度恢复时显示分离气泡，点击打开运行记录"
+                  control={
+                    <Switch
+                      checked={linkage.automation_bubble}
+                      disabled={disabled || linkageSaving}
+                      label="自动化等额度气泡"
+                      onChange={(on) => void cfg.setIslandLinkage({ automation_bubble: on })}
+                    />
+                  }
+                />
+                <Row
+                  title="严格模式"
+                  desc="「正在写」只认运行中的会话或网关在途；只有最近写入记录时显示「不知道」"
+                  control={
+                    <Switch
+                      checked={linkage.strict_writing}
+                      disabled={disabled || linkageSaving}
+                      label="严格模式"
+                      onChange={(on) => void cfg.setIslandLinkage({ strict_writing: on })}
                     />
                   }
                 />
               </GroupCard>
             </div>
 
-            {/* 右栏：窗口行为 / 显示外观 / 刷新与位置 */}
+            {/* 右栏：窗口行为 / 显示外观 / 刷新与位置 / 额度预警 / 趣味与互动 */}
             <div className="flex min-w-0 flex-col gap-3.5">
               <GroupCard icon="navIsland" title="窗口行为">
                 <Row
@@ -296,6 +349,95 @@ export function IslandView() {
                   desc="本体及分身回到主显示器、解除停靠并重新显示"
                   control={<ActionButton action="reset_layout" icon="scan" label="重置位置" done="已重置窗口位置" />}
                 />
+              </GroupCard>
+
+              <GroupCard icon="gauge" title="额度预警">
+                <Row
+                  title="预警阈值"
+                  desc="任一来源 5 小时或 7 天额度达到该比例时在岛上预警"
+                  control={
+                    <Select
+                      width="sm"
+                      label="预警阈值"
+                      disabled={disabled || linkageSaving}
+                      value={String(linkage.quota_warn_percent)}
+                      options={[
+                        { value: "70", label: "70%" },
+                        { value: "75", label: "75%" },
+                        { value: "80", label: "80%" },
+                        { value: "85", label: "85%" },
+                        { value: "90", label: "90%" },
+                      ]}
+                      onChange={(v) => void cfg.setIslandLinkage({ quota_warn_percent: Number(v) })}
+                    />
+                  }
+                />
+                <Row
+                  title="预警时给出接替来源"
+                  desc="只推荐同一路由分组里有余量的来源；「改用」只调整分组顺序"
+                  control={
+                    <Switch
+                      checked={linkage.quota_suggest_fallback}
+                      disabled={disabled || linkageSaving}
+                      label="预警时给出接替来源"
+                      onChange={(on) => void cfg.setIslandLinkage({ quota_suggest_fallback: on })}
+                    />
+                  }
+                />
+              </GroupCard>
+
+              <GroupCard icon="spark" title="趣味与互动">
+                <Row
+                  title="bot 道具与小剧场"
+                  desc="签到、额度重置、上下文吃撑、长任务完成、深夜加班等真实事件出现时，bot 拿着道具出现一次"
+                  control={
+                    <Switch
+                      checked={linkage.props_theater}
+                      disabled={disabled || linkageSaving}
+                      label="bot 道具与小剧场"
+                      onChange={(on) => void cfg.setIslandLinkage({ props_theater: on })}
+                    />
+                  }
+                />
+                <Row
+                  title="里程碑彩带"
+                  desc="今日 Token 第一次越过 1M、10M 时各撒一次彩带"
+                  control={
+                    <Switch
+                      checked={linkage.milestone_confetti}
+                      disabled={disabled || linkageSaving}
+                      label="里程碑彩带"
+                      onChange={(on) => void cfg.setIslandLinkage({ milestone_confetti: on })}
+                    />
+                  }
+                />
+                <Row
+                  title="戳一戳反应"
+                  desc="单击 bot 眨眼回应、连戳 3 次挤眼；告警表情期间不响应"
+                  control={
+                    <Switch
+                      checked={linkage.poke_reaction}
+                      disabled={disabled || linkageSaving}
+                      label="戳一戳反应"
+                      onChange={(on) => void cfg.setIslandLinkage({ poke_reaction: on })}
+                    />
+                  }
+                />
+                <Row
+                  title="今日回顾与成就"
+                  desc="傍晚 18:00 后第一次空闲 30 分钟时弹出今日回顾卡与本机成就"
+                  control={
+                    <Switch
+                      checked={linkage.daily_recap}
+                      disabled={disabled || linkageSaving}
+                      label="今日回顾与成就"
+                      onChange={(on) => void cfg.setIslandLinkage({ daily_recap: on })}
+                    />
+                  }
+                />
+                <p className="border-t border-jn-line/70 pt-2.5 pb-2 text-[11px] leading-relaxed text-jn-text-3">
+                  免打扰开启时，以上变形全部改为只换颜色；系统或 Jolu 的「减少动效」开启时同样只换颜色和文字。
+                </p>
               </GroupCard>
             </div>
           </div>
@@ -552,13 +694,14 @@ function ClonesSection({ settings, ready }: { settings: AppSettings; ready: bool
 
 /** 分身「更多」菜单：危险操作收起在这里 */
 function RowMenu({ name, canDestroy, onDestroy }: { name: string; canDestroy: boolean; onDestroy: () => void }) {
+  const glide = useGlidePill()
   return (
     <Menu.Root modal={false}>
       <Menu.Trigger asChild>
         <IconButton icon="more" label={`${name}的更多操作`} size="sm" kind="ghost" />
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Content align="end" sideOffset={6} collisionPadding={12} className="jn-popover z-[140] min-w-[140px] rounded-[14px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface">
+        <Menu.Content ref={glide} align="end" sideOffset={6} collisionPadding={12} className="jn-popover z-[140] min-w-[140px] rounded-[14px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface">
           <Menu.Item
             disabled={!canDestroy}
             onSelect={onDestroy}

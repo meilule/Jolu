@@ -16,13 +16,14 @@
 import { useId, type ReactNode } from "react"
 import { cn } from "@/lib/utils"
 import { Icon, type IconName } from "@/icons"
-import { SlideIndicator } from "@/motion"
+import { SlideIndicator, useGlidePill } from "@/motion"
 
 const STYLE = {
   tab: {
     item: "h-[34px] px-3.5 text-xs",
     box: "bg-jn-surface p-1 shadow-jn-surface",
     indicator: "bg-jn-primary",
+    hoverBg: "var(--jn-well)",
     activeText: "text-jn-on-primary",
     role: "tab",
   },
@@ -30,6 +31,7 @@ const STYLE = {
     item: "h-7 px-3 text-[11.5px]",
     box: "bg-jn-well p-[3px]",
     indicator: "bg-jn-surface shadow-jn-surface",
+    hoverBg: "color-mix(in oklab, var(--jn-surface) 65%, transparent)",
     activeText: "text-jn-text",
     role: "group",
   },
@@ -37,6 +39,7 @@ const STYLE = {
     item: "h-[34px] px-3.5 text-[13px]",
     box: "bg-jn-surface p-[3px] shadow-jn-surface",
     indicator: "bg-jn-primary",
+    hoverBg: "var(--jn-well)",
     activeText: "text-jn-on-primary",
     role: "group",
   },
@@ -71,14 +74,14 @@ export function TabItem({
       aria-pressed={spec.role === "tab" ? undefined : active}
       onClick={onClick}
       className={cn(
-        "jn-interactive relative isolate inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full font-semibold whitespace-nowrap",
+        "jn-interactive jn-no-press relative isolate inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full font-semibold whitespace-nowrap",
         spec.item,
         active ? spec.activeText : "text-jn-text-2 hover:text-jn-text",
         active && !indicatorId && spec.indicator,
         className,
       )}
     >
-      {active && indicatorId && <SlideIndicator layoutId={indicatorId} className={cn("-z-10", spec.indicator)} />}
+      {active && indicatorId && <SlideIndicator layoutId={indicatorId} radius={9999} className={cn("-z-10", spec.indicator)} />}
       {icon && <Icon name={icon} size="sm" />}
       {label}
     </button>
@@ -86,7 +89,7 @@ export function TabItem({
 }
 
 /**
- * 页签 / 分段栏容器。每个实例自动分配唯一的 `layoutId`，切项自带弹簧滑块。
+ * 页签 / 分段栏容器。每个实例自动分配唯一的 `layoutId`，切项带弹簧滑块，鼠标滑过带容器级平滑跟随。
  */
 export function Tabs<T extends string>({
   items,
@@ -106,10 +109,12 @@ export function Tabs<T extends string>({
 }) {
   const spec = STYLE[style]
   const groupId = useId()
+  const hoverGlide = useGlidePill({ selector: "button", background: spec.hoverBg, skipActive: true })
   return (
     <div
+      ref={hoverGlide}
       role={spec.role === "tab" ? "tablist" : "group"}
-      className={cn("inline-flex shrink-0 items-center gap-0.5 rounded-full", spec.box, className)}
+      className={cn("relative inline-flex shrink-0 items-center gap-0.5 rounded-full", spec.box, className)}
     >
       {items.map((item) => {
         const active = item.key === value

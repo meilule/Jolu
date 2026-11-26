@@ -30,27 +30,30 @@ const HEARTBEAT: Duration = Duration::from_secs(10);
 /// 其余心跳只补绑新出现或此前绑定失败的目录，不反复拆装全部递归监听。
 const FULL_REBIND_EVERY: u32 = 6;
 
-const PLATFORMS: [&str; 8] = ["claude", "codex", "gemini", "grok", "zcode", "trae", "qoder", "workbuddy"];
-
 fn home() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
 }
 
+fn claude_root(home: &Path) -> PathBuf {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"))
+}
+
 fn claude_registry() -> Option<PathBuf> {
-    std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from)
-        .or_else(|| home().map(|h| h.join(".claude")))
-        .map(|root| root.join("sessions"))
+    home().map(|h| claude_root(&h).join("sessions"))
 }
 
 /// 监听目标：Claude / Codex 会话目录、Claude 进程登记、Codex 标题索引与各本机来源目录。
 fn watch_targets() -> Vec<(PathBuf, RecursiveMode)> {
     let Some(home) = home() else { return Vec::new() };
+    let claude = claude_root(&home);
     let codex_home = crate::session_titles::codex_home().unwrap_or_else(|| home.join(".codex"));
     let mut targets = vec![
-        (home.join(".claude").join("projects"), RecursiveMode::Recursive),
-        (claude_registry().unwrap_or_else(|| home.join(".claude/sessions")), RecursiveMode::NonRecursive),
+        (claude.join("projects"), RecursiveMode::Recursive),
+        (claude.join("sessions"), RecursiveMode::NonRecursive),
         (codex_home.join("sessions"), RecursiveMode::Recursive),
         (codex_home.join("session_index.jsonl"), RecursiveMode::NonRecursive),
     ];
@@ -96,7 +99,7 @@ fn relevant(path: &Path, registry: Option<&Path>, native_roots: &[PathBuf]) -> b
 /// 自 `since` 以来有新增或更正的平台。游标是全局事件序号，删除（如 Gemini 回退）
 /// 只推进序号不留事件，此时无法定位平台，按全部平台处理。
 fn changed_platforms(reader: &crate::ReadPool, since: Option<i64>, inserted: bool) -> BTreeSet<String> {
-    let all = || PLATFORMS.iter().map(|platform| platform.to_string()).collect();
+    let all = || crate::platforms::ids().into_iter().collect();
     let Some(since) = since else {
         return if inserted { all() } else { BTreeSet::new() };
     };

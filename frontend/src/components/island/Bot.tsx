@@ -8,6 +8,7 @@ import { tickRingMarker, tickRingSegments } from "@/lib/quotaRings"
 import { formatShort, tickerNext, tickerStart, type TickerFace } from "@/lib/tokenTicker"
 import { isAlertExpr, type BotExpr, type BotProp, type BotShot } from "@/lib/botExpression"
 import type { RingGeometry } from "@/lib/providers/types"
+import { BotPropsOverlay } from "./BotPropsOverlay"
 import { RiveBotFace } from "./RiveBotFace"
 
 /**
@@ -143,6 +144,12 @@ export interface BotProps {
   reduced?: boolean
   /** 启用 R2-I-06 戳一戳（单击眨眼、连戳 3 次挤眼，告警期自动屏蔽） */
   pokeable?: boolean
+  /** R2-I-06 看向主窗口：主窗口中心的桌面物理坐标（开启跟随主窗口且不在本岛悬停时眼睛转向它） */
+  lookAtPhysical?: { x: number; y: number } | null
+  /** R2-I-06 长按 bot 呼出快捷动作轮盘 */
+  onFacePointerDown?: (event: React.PointerEvent) => void
+  /** 本轮点击是否刚触发过长按（为 true 时抑制随后的戳一戳 click） */
+  suppressPokeClickRef?: { current: boolean }
   dockEdge?: "top" | "bottom" | "left" | "right" | null
   ticker?: { countKey: string; label: string; sub?: string } | null
   focus?: number | null
@@ -159,7 +166,7 @@ const MIN_TICK_FACE = 16
 
 export function Bot({
   size, ringWidth = 0, ringGap = 0, inset = 0, rings = [], expr, prop = "none", shot = null, reduced = false,
-  pokeable = false, dockEdge = null, ticker = null, certainty,
+  pokeable = false, lookAtPhysical = null, onFacePointerDown, suppressPokeClickRef, dockEdge = null, ticker = null, certainty,
   focus = null, display = null, interactive = false, onRingHover, onRingClick, pinnedRing = null, className,
 }: BotProps) {
   const count = rings.length
@@ -193,6 +200,10 @@ export function Bot({
   }, [])
 
   const handleFaceClick = useCallback((event: React.MouseEvent) => {
+    if (suppressPokeClickRef?.current) {
+      suppressPokeClickRef.current = false
+      return
+    }
     if (!pokeable || isAlertExpr(expr) || event.detail > 1) return
     const now = Date.now()
     pokeTimes.current = [...pokeTimes.current.filter((t) => now - t <= 1200), now]
@@ -219,7 +230,7 @@ export function Bot({
   const e = EYES[shownExpr] ?? EYES.idle
 
   const gapPx = F * 0.135, eyeCy = F / 2 + (e.dy ?? 0) * F
-  useGaze(faceRef, eyesRef, { base: gazeBase(shownExpr, dockEdge), amp: gazeAmp(shownExpr), gapPx, cyPx: eyeCy }, F)
+  useGaze(faceRef, eyesRef, { base: gazeBase(shownExpr, dockEdge), amp: gazeAmp(shownExpr), gapPx, cyPx: eyeCy, lookAtPhysical }, F)
 
   const tickerOn = Boolean(ticker) && F >= MIN_TICK_FACE && !display
   const [face, setFace] = useState<TickerFace>("eyes")
@@ -334,6 +345,7 @@ export function Bot({
               stroke="var(--pn-capsule-bot-stroke)"
               strokeWidth={1}
               className={pokeable && !isAlertExpr(expr) ? "cbot-face-hit" : undefined}
+              onPointerDown={onFacePointerDown}
               onClick={handleFaceClick}
             />
             {!riveReady && (
@@ -402,6 +414,10 @@ export function Bot({
           onReadyChange={setRiveReady}
         />
       </span>
+      {/* SVG 兜底模式下的 R2-I-05 道具覆盖层（Rive 就绪后由 Rive 状态机接管） */}
+      {!riveReady && !ticking && !display && prop !== "none" && (
+        <BotPropsOverlay prop={prop} size={size} reduced={reduced} />
+      )}
     </span>
   )
 }

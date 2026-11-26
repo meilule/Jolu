@@ -44,7 +44,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::db::{RequestRecord, Store};
 use crate::session_threads::SessionItem;
+use crate::source_store::{self, Record};
 
 /// 单个会话解压后的读取上限。
 ///
@@ -78,6 +80,30 @@ struct Usage {
     output: Option<i64>,
     #[serde(default, rename = "cacheReadTokens")]
     cache_read: Option<i64>,
+    #[serde(default, rename = "cacheWriteTokens")]
+    cache_write: Option<i64>,
+    #[serde(default, rename = "totalTokens")]
+    total_tokens: Option<i64>,
+}
+
+/// 判定 dsh 的 `inputTokens` 是否包含 `cacheReadTokens`。
+/// 实测 dsh v4 样本：`inputTokens=7666, outputTokens=196, cacheReadTokens=16384, totalTokens=24246`
+/// （7666 + 196 + 16384 = 24246），明确为 `excludes_cache`；仅当 `totalTokens` 明确等于
+/// `input + output`（或无 `totalTokens` 且 `input >= cacheRead` 的旧测试夹具）时按 `includes_cache`。
+fn dsh_input_includes_cache(usage: &Usage) -> bool {
+    match (usage.input, usage.output, usage.cache_read, usage.total_tokens) {
+        (Some(i), Some(o), Some(r), Some(t)) if r > 0 => {
+            let excl = i + o + r + usage.cache_write.unwrap_or(0);
+            let incl = i + o + usage.cache_write.unwrap_or(0);
+            if excl == t {
+                false
+            } else {
+                incl == t
+            }
+        }
+        (Some(i), _, Some(r), None) if r > 0 => i >= r,
+        _ => false,
+    }
 }
 
 /// dsh 配置根目录：`DSH_HOME` 覆盖，否则 `~/.dsh`。与 `wiring_dsh::dsh_dir` 同一套判定。
@@ -185,8 +211,12 @@ fn scan(dir: &Path) -> Option<(String, Option<String>, Totals)> {
                 let Some(usage) = value.pointer("/data/usage") else { continue };
                 let Ok(usage) = serde_json::from_value::<Usage>(usage.clone()) else { continue };
                 if let Some(input) = usage.input {
-                    // inputTokens 实测不含缓存读取；扣一次并钳到 0，防止换版本后重复计数
-                    sum.0 += (input - usage.cache_read.unwrap_or(0)).max(0);
+                    let fresh = if dsh_input_includes_cache(&usage) {
+                        (input - usage.cache_read.unwrap_or(0)).max(0)
+                    } else {
+                        input
+                    };
+                    sum.0 += fresh;
                     known.0 = true;
                 }
                 if let Some(v) = usage.output {
@@ -278,6 +308,216 @@ pub(crate) fn sessions(home: &Path, since: Option<i64>) -> Vec<SessionItem> {
         }
     }
     out
+}
+
+fn file_stamp(path: &Path) -> (i64, i64) {
+    let Ok(meta) = std::fs::metadata(path) else { return (0, 0) };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    (meta.len() as i64, mtime)
+}
+
+fn save_stamp(conn: &rusqlite::Connection, key: &str, size: i64, time: i64) -> rusqlite::Result<()> {
+    conn.prepare_cached(
+        "INSERT INTO scan_state(path,offset,mtime,parser_initialized) VALUES(?1,?2,?3,1)
+         ON CONFLICT(path) DO UPDATE SET offset=?2,mtime=?3,parser_initialized=1",
+    )?
+    .execute(rusqlite::params![key, size, time])?;
+    Ok(())
+}
+
+struct ParsedDshFile {
+    session_id: String,
+    cwd: Option<String>,
+    is_subagent: bool,
+    records: Vec<Record>,
+}
+
+fn extract_dsh_model(value: &serde_json::Value) -> Option<String> {
+    for ptr in [
+        "/data/model",
+        "/data/message/model",
+        "/data/message/source/model",
+        "/data/step/model",
+        "/data/turn/model",
+    ] {
+        if let Some(m) = value
+            .pointer(ptr)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Some(m.to_string());
+        }
+    }
+    None
+}
+
+/// 解析 dsh 单个会话文件用于用量入库：**保留主会话与子代理的全部消耗**，并标出 `is_subagent`
+/// 供会话线程页隐藏子代理会话（用量完整、会话列表不刷屏）。
+fn parse_usage_file(path: &Path) -> Option<ParsedDshFile> {
+    let text = inflate(path)?;
+    let mut meta: Option<SessionEvent> = None;
+    let mut is_subagent = false;
+    let mut prev_user_ts: Option<i64> = None;
+    let mut records = Vec::new();
+    for (line_idx, line) in text.lines().enumerate() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        match value.get("type").and_then(|t| t.as_str()) {
+            Some("session") => {
+                if let Ok(event) = serde_json::from_value::<SessionEvent>(value) {
+                    is_subagent = event.origin.as_deref() == Some("subagent")
+                        || event.parent_session.as_deref().is_some_and(|p| !p.trim().is_empty());
+                    meta = Some(event);
+                }
+            }
+            Some("user/message") => {
+                if let Some(t) = value.get("time").and_then(|v| v.as_i64()).filter(|t| *t > 0) {
+                    prev_user_ts = Some(t);
+                }
+            }
+            Some("assistant/message") => {
+                let Some(ts) = value.get("time").and_then(|t| t.as_i64()).filter(|t| *t > 0) else {
+                    continue;
+                };
+                let Some(sid) = meta.as_ref().map(|m| m.id.as_str()).filter(|s| !s.trim().is_empty()) else {
+                    continue;
+                };
+                let Some(usage_val) = value.pointer("/data/usage") else { continue };
+                let Ok(usage) = serde_json::from_value::<Usage>(usage_val.clone()) else { continue };
+                let input = usage.input.filter(|v| *v >= 0);
+                let output = usage.output.filter(|v| *v >= 0);
+                let cache_read = usage.cache_read.filter(|v| *v >= 0);
+                let cache_write = usage.cache_write.filter(|v| *v >= 0);
+                if [input, output, cache_read, cache_write, usage.total_tokens]
+                    .iter()
+                    .all(Option::is_none)
+                {
+                    continue;
+                }
+                let includes_cache = dsh_input_includes_cache(&usage);
+                let semantics = if includes_cache { "includes_cache" } else { "excludes_cache" };
+                let total = usage.total_tokens.filter(|v| *v >= 0).or_else(|| {
+                    input.zip(output).map(|(i, o)| {
+                        if includes_cache {
+                            i + o + cache_write.unwrap_or(0)
+                        } else {
+                            i + o + cache_read.unwrap_or(0) + cache_write.unwrap_or(0)
+                        }
+                    })
+                });
+                let duration_ms = prev_user_ts
+                    .take()
+                    .and_then(|start| ts.checked_sub(start))
+                    .filter(|d| (100..=3_600_000).contains(d));
+                let msg_id = value
+                    .pointer("/data/message/id")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .unwrap_or_else(|| format!("msg-{line_idx}-{ts}"));
+                records.push(Record {
+                    request: RequestRecord {
+                        platform: "dsh".into(),
+                        source: "native:dsh:main".into(),
+                        dedup_key: format!("{sid}:{msg_id}"),
+                        session_id: Some(format!("dsh:{sid}")),
+                        ts,
+                        model: extract_dsh_model(&value),
+                        input_tokens: input,
+                        output_tokens: output,
+                        cache_read_tokens: cache_read,
+                        cache_write_tokens: cache_write,
+                        total_tokens: total,
+                        effort: None,
+                    },
+                    input_semantics: semantics,
+                    credits: None,
+                    original_credits: None,
+                    billable: None,
+                    context_ratio: None,
+                    reasoning: None,
+                    tool: None,
+                    duration_ms,
+                    first_token_ms: None,
+                });
+            }
+            _ => {}
+        }
+    }
+    let meta = meta?;
+    if meta.id.trim().is_empty() {
+        return None;
+    }
+    Some(ParsedDshFile {
+        session_id: meta.id,
+        cwd: meta.cwd.filter(|c| !c.trim().is_empty()),
+        is_subagent,
+        records,
+    })
+}
+
+/// 增量将 DeepSeek Harness 用量（含子代理）与会话元数据写入 `requests` / `sessions`（P2）。
+pub(crate) fn scan_usage(db: &mut impl Store, home: &Path) -> Result<(usize, Vec<String>), String> {
+    let root = dsh_home(home).join("sessions");
+    let Ok(projects) = std::fs::read_dir(&root) else {
+        return Ok((0, Vec::new()));
+    };
+    let mut changed = 0usize;
+    let errors = Vec::new();
+    for project in projects.flatten() {
+        let project_dir = project.path();
+        if !project_dir.is_dir() {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&project_dir) else { continue };
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            let file = dir.join("session.v4.jsonl.zstd");
+            if !file.is_file() {
+                continue;
+            }
+            let stamp = file_stamp(&file);
+            let key = format!("dsh-usage:{}", file.to_string_lossy());
+            if db.write(|conn| crate::db::get_scan_state(conn, &key) == Some(stamp)) {
+                continue;
+            }
+            let Some(parsed) = parse_usage_file(&file) else {
+                let _ = db.write(|conn| save_stamp(conn, &key, stamp.0, stamp.1));
+                continue;
+            };
+            let prefixed_session = format!("dsh:{}", parsed.session_id);
+            let n = db
+                .write(|conn| -> Result<usize, String> {
+                    let tx = conn.transaction().map_err(|e| e.to_string())?;
+                    let written = source_store::write(&tx, &parsed.records).map_err(|e| e.to_string())?;
+                    if let Some(cwd) = parsed.cwd.as_deref() {
+                        crate::db::set_session_cwd(&tx, "dsh", &prefixed_session, cwd)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    crate::db::set_session_subagent(&tx, "dsh", &prefixed_session, parsed.is_subagent)
+                        .map_err(|e| e.to_string())?;
+                    if let Some(last_ts) = parsed.records.iter().map(|r| r.request.ts).max() {
+                        crate::db::set_session_activity(&tx, "dsh", &prefixed_session, "done", last_ts)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    save_stamp(&tx, &key, stamp.0, stamp.1).map_err(|e| e.to_string())?;
+                    tx.commit().map_err(|e| e.to_string())?;
+                    Ok(written)
+                })
+                .map_err(|e| e.to_string())?;
+            changed += n;
+        }
+    }
+    Ok((changed, errors))
 }
 
 #[cfg(test)]
@@ -374,6 +614,39 @@ mod tests {
         std::fs::write(bad.join("session.v4.jsonl.zstd"), b"not zstd at all").unwrap();
         let list = sessions(&root, None);
         assert_eq!(list.len(), 1, "坏文件被跳过，只剩那条正常的");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn scan_usage_includes_subagent_tokens_while_hiding_subagent_from_session_threads() {
+        let root = std::env::temp_dir().join(format!("jolu-dsh-usage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let sessions_root = root.join(".dsh").join("sessions").join("--proj--");
+        write(&sessions_root.join("root-1"), ROOT_ZSTD);
+        write(&sessions_root.join("sub-1"), SUB_ZSTD);
+
+        let mut db = crate::db::open(Path::new(":memory:")).unwrap();
+        let (n, errs) = scan_usage(&mut db, &root).unwrap();
+        assert!(errs.is_empty());
+        assert!(n >= 2, "主会话与子代理用量都应写入 requests");
+
+        // 核对 sessions.is_subagent 标记
+        let sub_flag: i64 = db
+            .query_row("SELECT is_subagent FROM sessions WHERE platform='dsh' AND session_id='dsh:sub-1'", [], |r| r.get(0))
+            .unwrap();
+        let root_flag: i64 = db
+            .query_row("SELECT is_subagent FROM sessions WHERE platform='dsh' AND session_id='dsh:root-1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!((root_flag, sub_flag), (0, 1));
+
+        // 会话线程列表只展示主会话（子代理被 is_subagent = 0 隐藏）
+        let listed = crate::session_threads::list(
+            &db,
+            &crate::session_threads::SessionFilter { platform: Some("dsh".into()), skip_external: true, ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(listed.sessions.len(), 1);
+        assert_eq!(listed.sessions[0].session_id, "dsh:root-1");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

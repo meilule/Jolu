@@ -163,7 +163,7 @@ pub fn list(conn: &Connection, f: &SessionFilter) -> rusqlite::Result<SessionLis
                 s.title, s.activity_state, s.cwd, s.activity_updated_ms,
                 MAX(CASE WHEN r.source LIKE 'native:zcode:%' THEN 1 ELSE 0 END)
          FROM requests r LEFT JOIN sessions s ON s.platform = r.platform AND s.session_id = r.session_id
-         WHERE r.session_id IS NOT NULL AND r.session_id <> ''",
+         WHERE r.session_id IS NOT NULL AND r.session_id <> '' AND COALESCE(s.is_subagent, 0) = 0",
     );
     let mut args: Vec<Value> = Vec::new();
     if let Some(p) = &f.platform {
@@ -269,26 +269,40 @@ pub fn list(conn: &Connection, f: &SessionFilter) -> rusqlite::Result<SessionLis
         }
         sessions.push(item);
     }
-    // Kimi 的会话不在 `requests` 表里（`native_sources` 从未采集它），只能从它自己的
-    // 目录读。放在主查询之后追加，不参与上面的 SQL 与过滤——它是另一套数据源，
-    // 混进同一个 WHERE 里只会让那条已经够复杂的查询更难读。
-    //
-    // 只在这个筛选不针对特定平台时才加：调用方要 `platform=claude` 时不该混进 Kimi。
-    // 只在这个筛选不针对特定平台时才加：调用方要 `platform=claude` 时不该混进外部来源。
+    // Kimi / Pi / DSH 现已由 native_sources 增量写入 requests 表；仅当库里尚未采集到某平台时
+    // 回退直读原工具目录，避免重复全盘解压并在按 (platform, session_id) 去重时防止重复条目。
+    let mut seen_keys: std::collections::HashSet<(String, String)> = sessions
+        .iter()
+        .map(|s| (s.platform.clone(), s.session_id.clone()))
+        .collect();
+    let db_ingested: std::collections::HashSet<String> = conn
+        .prepare("SELECT DISTINCT platform FROM requests WHERE platform IN ('kimi', 'pi', 'dsh')")
+        .and_then(|mut q| {
+            let rows = q.query_map([], |r| r.get::<_, String>(0))?;
+            rows.collect()
+        })
+        .unwrap_or_default();
     let external: Vec<SessionItem> = if f.connection.is_none() && !f.skip_external {
         match f.platform.as_deref() {
             None => crate::creds::home()
                 .map(|home| {
-                    let mut all = crate::kimi_sessions::sessions(&home, f.since);
-                    all.extend(crate::pi_sessions::sessions(&home, f.since));
-                    all.extend(crate::dsh_sessions::sessions(&home, f.since));
+                    let mut all = Vec::new();
+                    if !db_ingested.contains("kimi") {
+                        all.extend(crate::kimi_sessions::sessions(&home, f.since));
+                    }
+                    if !db_ingested.contains("pi") {
+                        all.extend(crate::pi_sessions::sessions(&home, f.since));
+                    }
+                    if !db_ingested.contains("dsh") {
+                        all.extend(crate::dsh_sessions::sessions(&home, f.since));
+                    }
                     all
                 })
                 .unwrap_or_default(),
-            Some("kimi") => crate::creds::home().map(|h| crate::kimi_sessions::sessions(&h, f.since)).unwrap_or_default(),
-            Some("pi") => crate::creds::home().map(|h| crate::pi_sessions::sessions(&h, f.since)).unwrap_or_default(),
-            Some("dsh") => crate::creds::home().map(|h| crate::dsh_sessions::sessions(&h, f.since)).unwrap_or_default(),
-            Some(_) => Vec::new(),
+            Some("kimi") if !db_ingested.contains("kimi") => crate::creds::home().map(|h| crate::kimi_sessions::sessions(&h, f.since)).unwrap_or_default(),
+            Some("pi") if !db_ingested.contains("pi") => crate::creds::home().map(|h| crate::pi_sessions::sessions(&h, f.since)).unwrap_or_default(),
+            Some("dsh") if !db_ingested.contains("dsh") => crate::creds::home().map(|h| crate::dsh_sessions::sessions(&h, f.since)).unwrap_or_default(),
+            _ => Vec::new(),
         }
     } else {
         Vec::new()
@@ -299,7 +313,9 @@ pub fn list(conn: &Connection, f: &SessionFilter) -> rusqlite::Result<SessionLis
                 continue;
             }
         }
-        sessions.push(item);
+        if seen_keys.insert((item.platform.clone(), item.session_id.clone())) {
+            sessions.push(item);
+        }
     }
     sessions.sort_by(|a, b| b.last_ts.cmp(&a.last_ts));
     Ok(SessionList { files: used.len() as i64, sessions })
@@ -1199,31 +1215,68 @@ pub fn messages(conn: &Connection, platform: &str, session_id: &str, before: Opt
 }
 
 fn session_cost(conn: &Connection, platform: &str, session_id: &str) -> rusqlite::Result<(f64, i64, i64, Vec<String>)> {
+    let snapshot = crate::attribution::Snapshot::load(conn).ok();
+    let mut resolver = crate::pricing::PriceResolver::load(conn);
     let mut stmt = conn.prepare(
-        "SELECT r.model, r.input_tokens, r.output_tokens, r.cache_write_tokens, r.cache_read_tokens,
-                r.input_known * r.output_known * r.cache_write_known * r.cache_read_known, m.reasoning, m.tool
-         , r.ts FROM requests r LEFT JOIN request_metrics m ON m.request_id = r.id
+        "SELECT r.model, r.upstream_model, r.served_model, r.input_tokens, r.output_tokens,
+                r.cache_write_tokens, r.cache_read_tokens, r.cache_write_1h_tokens,
+                r.input_known, r.output_known, r.cache_write_known, r.cache_read_known,
+                r.input_semantics, r.connection_id, r.provider_key, m.reasoning, m.tool, r.ts
+         FROM requests r LEFT JOIN request_metrics m ON m.request_id = r.id
          WHERE r.platform = ?1 AND r.session_id = ?2",
     )?;
     let rows = stmt.query_map(rusqlite::params![platform, session_id], |r| {
-        Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?, r.get::<_, i64>(5)? != 0, r.get::<_, Option<i64>>(6)?, r.get::<_, Option<i64>>(7)?, r.get::<_, i64>(8)?))
+        let opt = |v: usize, k: usize| -> rusqlite::Result<Option<i64>> {
+            Ok(if r.get::<_, i64>(k)? != 0 { Some(r.get(v)?) } else { None })
+        };
+        Ok((
+            r.get::<_, Option<String>>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            opt(3, 8)?,
+            opt(4, 9)?,
+            opt(5, 10)?,
+            opt(6, 11)?,
+            r.get::<_, Option<i64>>(7)?.unwrap_or(0),
+            r.get::<_, String>(12)?,
+            r.get::<_, Option<String>>(13)?,
+            r.get::<_, Option<String>>(14)?,
+            r.get::<_, Option<i64>>(15)?,
+            r.get::<_, Option<i64>>(16)?,
+            r.get::<_, i64>(17)?,
+        ))
     })?;
     let (mut cost, mut priced, mut count) = (0.0, 0i64, 0i64);
     let mut models: Vec<String> = Vec::new();
     for row in rows {
-        let (model, input, output, cache_write, cache_read, known, reasoning, tool, ts) = row?;
+        let (model, upstream, served, input, output, cache_write, cache_read, cache_write_1h, semantics, conn_id, provider_key, reasoning, tool, ts) = row?;
         count += 1;
-        if known {
-            // 按请求自身时间计价（峰谷价），不随查看时刻变化
-            let at = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now);
-            if let Some(c) = crate::pricing::estimate_usage_at(Some(platform), model.as_deref(), crate::pricing::Usage {
-                input, output, cache_write, cache_read,
-                reasoning: reasoning.unwrap_or(0), tool: tool.unwrap_or(0),
-                long_prompt: input > crate::pricing::GEMINI_LONG_PROMPT_TOKENS,
-            }, at) {
-                cost += c;
-                priced += 1;
-            }
+        let attribution = snapshot
+            .as_ref()
+            .map_or_else(crate::attribution::AttributionView::platform, |snap| {
+                snap.resolve(platform, conn_id.as_deref(), provider_key.as_deref(), model.as_deref())
+            });
+        let effective_conn = attribution.is_connection().then(|| attribution.connection_id.as_deref()).flatten();
+        let at = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now);
+        let res = resolver.price_request(&crate::pricing::PriceRequest {
+            platform,
+            model: model.as_deref(),
+            upstream_model: upstream.as_deref(),
+            served_model: served.as_deref(),
+            connection_id: effective_conn,
+            input_semantics: &semantics,
+            input,
+            output,
+            cache_read,
+            cache_write,
+            cache_write_1h,
+            reasoning: reasoning.unwrap_or(0),
+            tool: tool.unwrap_or(0),
+            at,
+        });
+        if let Some(c) = res.cost {
+            cost += c;
+            priced += 1;
         }
         if let Some(m) = model.filter(|m| !models.contains(m)) {
             models.push(m);

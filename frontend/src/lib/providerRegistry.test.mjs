@@ -30,7 +30,7 @@ const RING_GREEN = "var(--pn-capsule-green)"
 
 test("registry 只填真有额度逻辑的平台", () => {
   assert.deepEqual(Object.keys(PROVIDERS).sort(), [
-    "claude", "codex", "custom", "gemini", "grok", "opencode", "qoder", "trae", "workbuddy", "zcode",
+    "claude", "codex", "custom", "gemini", "grok", "ollama", "opencode", "qoder", "trae", "workbuddy", "zcode",
   ])
   // 未接入的平台没有描述符，调用方各自兜底
   assert.equal(providerDescriptor("custom-unknown"), null)
@@ -48,6 +48,7 @@ const BEFORE = {
   qoder: { quotaSource: "connection", windowKinds: ["credit"], windows: [], placeholderWindows: true, ringGeometry: "arc" },
   trae: { quotaSource: "connection", windowKinds: ["credit"], windows: [], placeholderWindows: true, ringGeometry: "arc" },
   workbuddy: { quotaSource: "connection", windowKinds: ["credit"], windows: ["credits"], placeholderWindows: true, ringGeometry: "arc" },
+  ollama: { quotaSource: "connection", windowKinds: ["rolling-5h", "weekly-7d", "monthly", "credit"], windows: ["included", "session", "weekly", "credits"], placeholderWindows: false, ringGeometry: "arc" },
   custom: { quotaSource: "connection", windowKinds: ["rolling-5h", "daily", "weekly-7d", "monthly", "credit"], windows: ["5h", "1d", "7d", "30d", "quota"], placeholderWindows: true, ringGeometry: "arc" },
 }
 
@@ -153,16 +154,19 @@ test("胶囊文案与改动前的 LABEL / 芯片名一致", () => {
   }
 })
 
-test("套餐窗口与改动前写死的 5h / 7d 完全一致", () => {
-  assert.deepEqual([...PLAN_WINDOW_KEYS], ["5h", "7d"])
-  for (const key of ["5h", "7d"]) assert.equal(isPlanWindowKey(key), true, key)
-  // 月额度、积分额度、日额度、来源自定义窗口都不算套餐
+test("套餐窗口包含旧 5h / 7d 与 Ollama Cloud 的月度 / session / weekly", () => {
+  assert.deepEqual([...PLAN_WINDOW_KEYS], ["5h", "7d", "included", "session", "weekly"])
+  for (const key of ["5h", "7d", "included", "session", "weekly"]) assert.equal(isPlanWindowKey(key), true, key)
+  // 积分额度、日额度、来源自定义窗口不算套餐
   for (const key of ["1d", "30d", "7d-opus", "7d-sonnet", "credits", "quota", "gemini:pro"]) {
     assert.equal(isPlanWindowKey(key), false, key)
   }
   // 与 planCoverage 的对外行为对齐（新增声明后这里会一起变，正是要盯的地方）
   assert.equal(isPlanCovered([{ key: "5h" }]), true)
   assert.equal(isPlanCovered([{ key: "7d" }]), true)
+  assert.equal(isPlanCovered([{ key: "included" }]), true)
+  assert.equal(isPlanCovered([{ key: "session" }]), true)
+  assert.equal(isPlanCovered([{ key: "weekly" }]), true)
   assert.equal(isPlanCovered([{ key: "30d" }, { key: "credits" }]), false)
 })
 
@@ -268,6 +272,29 @@ test("Grok 的整句剩余与改动前完全一致", () => {
   assert.equal(unknown.reason, "来源未提供可计算的已用百分比。")
 })
 
+test("Ollama Cloud 的月度余额按 CCS 口径显示剩余百分比", () => {
+  const view = remainingDisplay("ollama", "auth", {
+    state: "ok",
+    plan: "pro",
+    windows: [{
+      key: "included",
+      window_name: "本期订阅额度",
+      used_percent: 51,
+      amount_text: "剩余 $49.00 / $100.00",
+      remaining_text: "$49.00",
+      resets_at: "2026-12-01T00:00:00Z",
+    }],
+  })
+  assert.deepEqual(view.rows, [{
+    label: "每月剩余",
+    value: "49%",
+    usedText: "剩余 $49.00 / $100.00",
+    resetsAt: "2026-12-01T00:00:00Z",
+  }])
+  assert.equal(view.state, "ok")
+  assert.equal(view.reason, "")
+})
+
 test("查不到在线剩余额度的平台文案与改动前一致", () => {
   const before = {
     gemini: ["Gemini 剩余额度", "Gemini API 项目 / 账号", "本机 Gemini CLI 记录只包含消耗；当前未接入可验证的在线剩余额度查询。"],
@@ -299,7 +326,7 @@ test("同一窗口 key 在多家的声明必须逐字段一致", () => {
       assert.deepEqual({ ...windowSpec(window.key) }, { ...known })
     }
   }
-  assert.deepEqual([...seen.keys()].sort(), ["1d", "30d", "5h", "7d", "7d-opus", "7d-sonnet", "credits", "quota"])
+  assert.deepEqual([...seen.keys()].sort(), ["1d", "30d", "5h", "7d", "7d-opus", "7d-sonnet", "credits", "included", "quota", "session", "weekly"])
 })
 
 test("Agent → 平台标识与改动前 CapsuleGateway 的写死映射一致", () => {

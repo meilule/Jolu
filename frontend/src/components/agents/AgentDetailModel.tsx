@@ -77,6 +77,7 @@ export function GenericModelSettings(props: AgentDetailProps) {
     <div className="flex items-start gap-3.5">
       <div className="flex min-w-0 flex-1 flex-col gap-3.5">
         <DriftBanners {...props} />
+        <Notice row={row} />
         <section className="flex items-center justify-between gap-4 rounded-jn-card border border-jn-line bg-jn-surface px-5 pt-[18px] pb-4 shadow-jn-surface">
           <div className="flex min-w-0 flex-col gap-[3px]">
             <h3 className="text-[14px] font-semibold text-jn-text">当前模型</h3>
@@ -213,7 +214,13 @@ function Notice({ row }: { row: AgentRow }) {
   return (
     <Banner tone="info" className="gap-2.5 rounded-[16px] px-3.5 py-[11px] text-[12.5px] font-medium">
       <span className="text-jn-text">
-        重开 {row.name} 后用 <code className="rounded-[5px] bg-jn-track px-1.5 py-px text-[11px]">/model</code> 选模型；{row.wiring.notice}
+        {row.agent === "antigravity" ? (
+          row.wiring.notice
+        ) : (
+          <>
+            重开 {row.name} 后用 <code className="rounded-[5px] bg-jn-track px-1.5 py-px text-[11px]">/model</code> 选模型；{row.wiring.notice}
+          </>
+        )}
       </span>
     </Banner>
   )

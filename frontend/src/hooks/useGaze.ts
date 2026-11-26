@@ -29,6 +29,9 @@ let lastWindowMove = 0
 /** 窗口几何版本号：resize 后 +1，后端映射前若过期则先刷新 origin/scale */
 let geoRev = 0
 let appliedGeoRev = 0
+/** 最近一次同步的窗口原点与缩放（供 R2-I-06 看向主窗口物理坐标换算） */
+let windowOrigin = { x: 0, y: 0 }
+let windowScale = 1
 
 function install() {
   if (installed) return
@@ -62,6 +65,8 @@ async function installGlobal() {
       const [position, factor] = await Promise.all([win.innerPosition(), win.scaleFactor()])
       origin = { x: position.x, y: position.y }
       scale = factor
+      windowOrigin = origin
+      windowScale = factor || 1
     } catch { /* 窗口正在销毁 */ }
   }
   await refresh()
@@ -95,6 +100,8 @@ export interface GazeInput {
   /** 球面眼睛的静息几何：眼距与垂直偏移（px）。缺省时退回整组平移的旧路径 */
   gapPx?: number
   cyPx?: number
+  /** R2-I-06 看向主窗口：主窗口中心在桌面上的物理坐标（跟随主窗口开启且未悬停本岛时生效） */
+  lookAtPhysical?: { x: number; y: number } | null
 }
 
 export function useGaze(
@@ -128,9 +135,17 @@ export function useGaze(
       retries = 0
       const rect = face.getBoundingClientRect()
       const reduced = reducedMotion()
+      // R2-I-06 看向主窗口：开启跟随主窗口且指针不在本岛内时，眼睛转向主窗口所在方位
+      const lookOverride = !reduced && latest.current.lookAtPhysical && performance.now() - lastWindowMove >= 400
+        ? {
+            x: (latest.current.lookAtPhysical.x - windowOrigin.x) / (windowScale || 1),
+            y: (latest.current.lookAtPhysical.y - windowOrigin.y) / (windowScale || 1),
+          }
+        : null
+      const gazePoint = lookOverride ?? (pointer.on && !reduced ? { x: pointer.x, y: pointer.y } : null)
       const target = gazeTarget(
         { cx: rect.left + rect.width / 2, cy: rect.top + rect.height / 2, width: rect.width },
-        pointer.on && !reduced ? { x: pointer.x, y: pointer.y } : null,
+        gazePoint,
         latest.current,
       )
       // 球面眼睛（EyeTracker 移植）：每只眼是球面上的点，透视变形由各自 transform 承担；

@@ -122,6 +122,7 @@ pub(crate) async fn forward(
         deps: deps.clone(),
         connection_id,
         platform,
+        upstream_model,
         started,
         first_byte_ms: None,
         status: status.as_u16() as i64,
@@ -142,6 +143,7 @@ struct GatewayTiming {
     deps: Arc<ProxyDeps>,
     connection_id: String,
     platform: String,
+    upstream_model: String,
     started: std::time::Instant,
     first_byte_ms: Option<i64>,
     status: i64,
@@ -180,12 +182,13 @@ where
             std::task::Poll::Ready(None) | std::task::Poll::Ready(Some(Err(_))) => {
                 if !this.settled {
                     this.settled = true;
-                    crate::gateway::adapter::settle_gateway_timing(
+                    crate::gateway::adapter::settle_gateway_timing_with_model(
                         &this.timing.deps,
                         &this.timing.connection_id,
                         &this.timing.platform,
+                        Some(&this.timing.upstream_model),
                         &this.head,
-                        this.timing.first_byte_ms.unwrap_or_default(),
+                        this.timing.first_byte_ms,
                         this.timing.started.elapsed().as_millis() as i64,
                         this.timing.status,
                     );

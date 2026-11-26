@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import { DASH, callStatus, effortLabel, formatMoney, formatSeconds, formatTokens, modelDisplayName, outputTps } from "@/lib/usageStats"
+import { billingModeLabel, callSourceLabel, callStatus, effortLabel, formatMoney, formatSeconds, formatSpeed, formatTokens, formatUnitPrice, modelDisplayName, outputSpeed, overallSpeed, unpricedReasonText } from "@/lib/usageStats"
 import { convertFromUsd, type FxState } from "@/lib/costCurrency"
 import type { StatsCallPageDto, StatsCallRowDto } from "@/lib/api"
 import { PlatformLogo } from "@/components/brand/PlatformLogo"
@@ -7,13 +7,11 @@ import type { PlatformId } from "@/types"
 import { Card } from "./usageControls"
 import { Button, Pagination, StatusPill } from "@/ui"
 
-/** 画板 34 表头列宽 */
+/** 调用明细表头列宽（R1-53：缓存拆分为缓存读与缓存写，1280px 窗口零裁切） */
 const COLUMNS = [
-  ["时间 ↓", "w-[76px]"], ["模型", "w-[188px]"], ["输入", "w-[72px]"], ["缓存", "w-[72px]"], ["输出", "w-[72px]"],
-  ["总 Token", "w-[80px]"], ["总成本", "w-[84px]"], ["延迟", "w-[132px]"], ["思考强度", "w-[72px]"], ["状态", "w-[74px]"],
+  ["时间 ↓", "w-[66px] shrink-0"], ["模型", "min-w-[152px] flex-1"], ["输入", "w-[56px] shrink-0"], ["缓存读", "w-[58px] shrink-0"], ["缓存写", "w-[56px] shrink-0"], ["输出", "w-[52px] shrink-0"],
+  ["总 Token", "w-[68px] shrink-0"], ["总成本", "w-[64px] shrink-0"], ["延迟", "w-[132px] shrink-0"], ["思考强度", "w-[56px] shrink-0"], ["状态", "w-[78px] shrink-0"],
 ] as const
-
-const sumKnown = (a: number | null, b: number | null) => (a === null && b === null ? null : (a ?? 0) + (b ?? 0))
 
 function time(ts: number): string {
   const d = new Date(ts)
@@ -26,13 +24,14 @@ function monthDay(ts: number): string {
 }
 
 /** 调用明细表格与选中调用的详情（画板 34）。「—」表示未取得或未计价，失败请求不默认免费 */
-export function CallsPanel({ data, selectedId, fx, onSelect, onPage, onOpenSession }: {
+export function CallsPanel({ data, selectedId, fx, onSelect, onPage, onOpenSession, onOpenPricing }: {
   data: StatsCallPageDto
   selectedId: number | null
   fx: FxState
   onSelect: (id: number) => void
   onPage: (page: number) => void
   onOpenSession: (target: { platform: string; sessionId: string }) => void
+  onOpenPricing?: (model: string | null) => void
 }) {
   const selected = data.rows.find((r) => r.id === selectedId) ?? null
   return (
@@ -44,9 +43,9 @@ export function CallsPanel({ data, selectedId, fx, onSelect, onPage, onOpenSessi
         </div>
         {/* 列宽固定且总宽超过容器时横向滚动：内容不再被右侧裁掉 */}
         <div className="overflow-x-auto">
-          <div className="flex min-w-[1000px] flex-col gap-0.5">
+          <div className="flex min-w-[920px] flex-col gap-0.5">
             <div className="flex h-8 items-center gap-1.5 px-3">
-              {COLUMNS.map(([label, width]) => <span key={label} className={cn("shrink-0 text-[11.5px] font-medium text-jn-text-3", width)}>{label}</span>)}
+              {COLUMNS.map(([label, width]) => <span key={label} className={cn("text-[11.5px] font-medium text-jn-text-3", width)}>{label}</span>)}
             </div>
             {data.rows.map((row, index) => <CallRow key={row.id} row={row} striped={index % 2 === 0} active={row.id === selectedId} fx={fx} onSelect={() => onSelect(row.id)} />)}
             {!data.rows.length && <div className="px-4 py-8 text-center text-xs text-jn-text-3">没有符合筛选条件的调用</div>}
@@ -58,7 +57,7 @@ export function CallsPanel({ data, selectedId, fx, onSelect, onPage, onOpenSessi
           </div>
         )}
       </Card>
-      {selected && <CallDetail row={selected} fx={fx} onOpenSession={onOpenSession} />}
+      {selected && <CallDetail row={selected} fx={fx} onOpenSession={onOpenSession} onOpenPricing={onOpenPricing} />}
       <p className="text-[11px] text-jn-text-3" title="导出遵循当前筛选，不包含 API Key 或对话正文。">— 表示未取得或未计价 · 失败请求不默认免费</p>
     </>
   )
@@ -70,9 +69,16 @@ function Num({ value, className }: { value: number | null; className?: string })
 
 function CallRow({ row, striped, active, fx, onSelect }: { row: StatsCallRowDto; striped: boolean; active: boolean; fx: FxState; onSelect: () => void }) {
   const status = callStatus(row)
-  const tps = outputTps(row)
-  const metric = (label: string, value: string, known: boolean) => (
-    <span className="flex h-3.5 items-center gap-1.5">
+  const firstMs = row.first_token_ms !== null && row.first_token_ms > 0 ? row.first_token_ms : null
+  const speed = outputSpeed(row)
+  const overall = overallSpeed(row)
+  const speedTip = speed?.estimated
+    ? "来源未提供首字时间，按总耗时估算输出速率（含首字等待，实际生成更快）"
+    : speed && overall !== null
+      ? `纯生成速度（已扣首字）${speed.tps.toFixed(1)} tok/s · 含首字均速 ≈ ${overall.toFixed(1)} tok/s（与 CCS 同口径）`
+      : undefined
+  const metric = (label: string, value: string, known: boolean, tip?: string) => (
+    <span className="flex h-3.5 items-center gap-1.5" title={tip}>
       <span className="text-[11px] text-jn-text-3">{label}</span>
       <span className={cn("tnum text-[11.5px] font-medium", known ? "text-jn-primary-ink" : "text-jn-text-3")}>{value}</span>
     </span>
@@ -91,26 +97,27 @@ function CallRow({ row, striped, active, fx, onSelect }: { row: StatsCallRowDto;
             : "border-transparent bg-transparent hover:bg-jn-well",
       )}
     >
-      <span className="tnum w-[76px] shrink-0 font-mono text-[11.5px] text-jn-text-2">{time(row.ts)}</span>
-      <span className="flex w-[188px] shrink-0 items-center gap-2" title={row.model ?? undefined}>
-        <span className="grid size-5 place-items-center"><PlatformLogo platform={row.platform as PlatformId} size={16} /></span>
+      <span className="tnum w-[66px] shrink-0 font-mono text-[11.5px] text-jn-text-2">{time(row.ts)}</span>
+      <span className="flex min-w-[152px] flex-1 items-center gap-2 overflow-hidden" title={row.model ?? undefined}>
+        <span className="grid size-5 shrink-0 place-items-center"><PlatformLogo platform={row.platform as PlatformId} size={16} /></span>
         <span className="truncate font-mono text-xs font-medium text-jn-text">{modelDisplayName(row.model)}</span>
       </span>
-      <Num value={row.fresh_input} className="w-[72px] shrink-0" />
-      <Num value={sumKnown(row.cache_read, row.cache_write)} className="w-[72px] shrink-0" />
-      <Num value={row.output} className="w-[72px] shrink-0" />
-      <Num value={row.total} className="w-[80px] shrink-0 font-semibold" />
-      <span className={cn("tnum w-[84px] shrink-0 text-xs", row.cost === null ? "text-jn-text-3" : "font-semibold text-jn-primary-ink")}>{formatMoney(convertFromUsd(row.cost, fx), fx.currency)}</span>
+      <Num value={row.fresh_input} className="w-[56px] shrink-0" />
+      <Num value={row.cache_read} className={cn("w-[58px] shrink-0", (row.cache_read ?? 0) > 0 && "font-medium text-jn-primary-ink")} />
+      <Num value={row.cache_write} className={cn("w-[56px] shrink-0", (row.cache_write ?? 0) > 0 && "font-medium text-jn-warning")} />
+      <Num value={row.output} className="w-[52px] shrink-0" />
+      <Num value={row.total} className="w-[68px] shrink-0 font-semibold" />
+      <span className={cn("tnum w-[64px] shrink-0 text-xs", row.cost === null ? "text-jn-text-3" : "font-semibold text-jn-primary-ink")}>{formatMoney(convertFromUsd(row.cost, fx), fx.currency)}</span>
       <span className="flex w-[132px] shrink-0 items-center gap-[7px]">
         <span className="h-10 w-[3px] rounded-full bg-jn-viz-2" />
         <span className="flex flex-col gap-px">
-          {metric("首字", formatSeconds(row.first_token_ms), row.first_token_ms !== null)}
+          {metric("首字", formatSeconds(firstMs), firstMs !== null, firstMs === null ? "本机/原生日志未记录首字时间；经本地代理或模型路由可测得精确首字" : undefined)}
           {metric("总耗时", formatSeconds(row.duration_ms), row.duration_ms !== null)}
-          {metric("输出 TPS", tps === null ? DASH : `${tps.toFixed(1)} tok/s`, false)}
+          {metric("输出 TPS", formatSpeed(speed), speed !== null, speedTip)}
         </span>
       </span>
-      <span className={cn("w-[72px] shrink-0 text-[12px]", row.effort ? "text-jn-text" : "text-jn-text-3")}>{effortLabel(row.effort)}</span>
-      <span className="w-[74px] shrink-0">
+      <span className={cn("w-[56px] shrink-0 text-[12px]", row.effort ? "text-jn-text" : "text-jn-text-3")}>{effortLabel(row.effort)}</span>
+      <span className="w-[78px] shrink-0">
         <StatusPill tone={status.tone === "ok" ? "success" : status.tone === "error" ? "danger" : "neutral"}>
           {status.label}
         </StatusPill>
@@ -119,12 +126,29 @@ function CallRow({ row, striped, active, fx, onSelect }: { row: StatsCallRowDto;
   )
 }
 
-function CallDetail({ row, fx, onOpenSession }: { row: StatsCallRowDto; fx: FxState; onOpenSession: (target: { platform: string; sessionId: string }) => void }) {
-  const tps = outputTps(row)
-  const latencyItems: [string, string, boolean][] = [
-    ["首字", formatSeconds(row.first_token_ms), row.first_token_ms !== null],
-    ["总耗时", formatSeconds(row.duration_ms), row.duration_ms !== null],
-    ["输出 TPS", tps === null ? DASH : `${tps.toFixed(1)} tok/s`, tps !== null],
+function CallDetail({ row, fx, onOpenSession, onOpenPricing }: {
+  row: StatsCallRowDto
+  fx: FxState
+  onOpenSession: (target: { platform: string; sessionId: string }) => void
+  onOpenPricing?: (model: string | null) => void
+}) {
+  const firstMs = row.first_token_ms !== null && row.first_token_ms > 0 ? row.first_token_ms : null
+  const speed = outputSpeed(row)
+  const overall = overallSpeed(row)
+  const latencyItems: [string, string, boolean, string | undefined, string | undefined][] = [
+    ["首字", formatSeconds(firstMs), firstMs !== null, firstMs === null ? "本机/原生日志不记录首字；经本地代理或模型路由可测得精确首字" : undefined, undefined],
+    ["总耗时", formatSeconds(row.duration_ms), row.duration_ms !== null, firstMs === null && row.duration_ms !== null ? "由源端起止时间或会话消息时间差计算" : undefined, undefined],
+    [
+      speed?.estimated ? "输出 TPS（估算）" : "输出 TPS",
+      formatSpeed(speed),
+      speed !== null,
+      speed?.estimated
+        ? "不含首字扣除，按总耗时计算的下限速率"
+        : speed && overall !== null
+          ? `纯生成速度（已扣首字）${speed.tps.toFixed(1)} tok/s · 含首字均速 ≈ ${overall.toFixed(1)} tok/s（与 CCS 同口径）`
+          : undefined,
+      speed && !speed.estimated && overall !== null ? `含首字均速 ≈ ${overall.toFixed(1)} tok/s（同 CCS）` : undefined,
+    ],
   ]
   const items: [string, number | null][] = [
     ["普通输入", row.fresh_input], ["输出", row.output], ["缓存读取", row.cache_read], ["缓存写入", row.cache_write], ["合计", row.total],
@@ -138,7 +162,11 @@ function CallDetail({ row, fx, onOpenSession }: { row: StatsCallRowDto; fx: FxSt
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <h3 className="text-sm font-semibold text-jn-text">调用详情 · {time(row.ts)}</h3>
           <span className="truncate text-xs text-jn-text-3" title={row.call_id}>
-            来源：本机日志 · {monthDay(row.ts)} · {row.call_id} · {row.cost === null ? "未计价" : `估算 ${formatMoney(convertFromUsd(row.cost, fx), fx.currency)}`}
+            来源：{callSourceLabel(row.source)}
+            {row.billing_mode ? ` · ${billingModeLabel(row.billing_mode)}` : ""}
+            {row.attribution?.name ? ` · ${row.attribution.name}` : ""}
+            {" · "}
+            {monthDay(row.ts)} · {row.call_id} · {row.cost === null ? "未计价" : `估算 ${formatMoney(convertFromUsd(row.cost, fx), fx.currency)}`}
           </span>
         </div>
         <Button
@@ -152,10 +180,11 @@ function CallDetail({ row, fx, onOpenSession }: { row: StatsCallRowDto; fx: FxSt
         </Button>
       </div>
       <div className="grid grid-cols-3 gap-2.5">
-        {latencyItems.map(([label, value, known]) => (
-          <div key={label} className="flex min-w-0 flex-col gap-1 rounded-[14px] bg-jn-well px-3.5 py-2.5">
+        {latencyItems.map(([label, value, known, tip, sub]) => (
+          <div key={label} title={tip} className="flex min-w-0 flex-col gap-1 rounded-[14px] bg-jn-well px-3.5 py-2.5">
             <span className="text-[11px] text-jn-text-3">{label}</span>
             <span className={cn("tnum font-mono text-[15px] font-bold", known ? "text-jn-primary-ink" : "text-jn-text-3")}>{value}</span>
+            {sub && <span className="tnum text-[11px] text-jn-text-3">{sub}</span>}
           </div>
         ))}
       </div>
@@ -167,7 +196,7 @@ function CallDetail({ row, fx, onOpenSession }: { row: StatsCallRowDto; fx: FxSt
           </div>
         ))}
       </div>
-      <CostBreakdown row={row} fx={fx} />
+      <CostBreakdown row={row} fx={fx} onOpenPricing={onOpenPricing} />
     </Card>
   )
 }
@@ -177,44 +206,62 @@ function CallDetail({ row, fx, onOpenSession }: { row: StatsCallRowDto; fx: FxSt
  * 金额以 `row.cost` 为准；这里只解释"怎么算的"，前端不重算总额，
  * 避免浮点/单位差异造成"明细加起来不等于总额"。
  */
-function CostBreakdown({ row, fx }: { row: StatsCallRowDto; fx: FxState }) {
+function CostBreakdown({ row, fx, onOpenPricing }: { row: StatsCallRowDto; fx: FxState; onOpenPricing?: (model: string | null) => void }) {
   const p = row.price
   if (!p || row.cost === null) {
     return (
-      <div className="rounded-[14px] bg-jn-well px-3.5 py-2.5 text-meta text-jn-text-3">
-        {row.model ? `「${row.model}」未收录价目，无法估算费用` : "该记录没有模型信息，无法估算费用"}
+      <div className="flex items-center justify-between gap-2 rounded-[14px] bg-jn-well px-3.5 py-2.5 text-meta text-jn-text-3">
+        <span>{unpricedReasonText(row)}</span>
+        {onOpenPricing && row.unpriced_reason === "no_price" && (
+          <Button kind="soft" size="sm" onClick={() => onOpenPricing(row.upstream_model || row.model)}>
+            去补价 / 映射
+          </Button>
+        )}
       </div>
     )
   }
-  // 四项用量 × 生效单价；单价为每百万 token
+  const cwTotal = row.cache_write ?? 0
+  const cw1h = Math.min(Math.max(row.cache_write_1h ?? 0, 0), cwTotal)
+  const cw5m = Math.max(0, cwTotal - cw1h)
   const lines: { label: string; tokens: number | null; unit: number }[] = [
     { label: "输入", tokens: row.fresh_input, unit: p.input },
+    { label: "工具提示", tokens: row.tool ?? 0, unit: p.input },
     { label: "输出", tokens: row.output, unit: p.output },
+    { label: "思考", tokens: row.reasoning ?? 0, unit: p.output },
     { label: "缓存读", tokens: row.cache_read, unit: p.cached_input },
-    { label: "缓存写", tokens: row.cache_write, unit: p.cache_write ?? 0 },
+    { label: cw1h > 0 ? "缓存写 5m" : "缓存写", tokens: cw5m, unit: p.cache_write ?? p.input },
+    ...(cw1h > 0 ? [{ label: "缓存写 1h", tokens: cw1h, unit: p.cache_write_1h ?? p.cache_write ?? p.input }] : []),
   ].filter((line) => (line.tokens ?? 0) > 0 && line.unit > 0)
+
+  const routedDifferent = p.pricing_model && row.model && p.pricing_model.toLowerCase() !== row.model.toLowerCase()
 
   return (
     <div className="flex flex-col gap-1.5 rounded-[14px] bg-jn-well px-3.5 py-2.5">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-1.5">
         <span className="text-meta font-medium text-jn-text">费用拆解</span>
         {p.long_context && <Tag tone="warn">长上下文加价</Tag>}
         {p.off_peak && <Tag tone="on">谷时半价</Tag>}
+        {p.multiplier !== undefined && p.multiplier !== 1 && p.source_kind !== "connection_free" && (
+          <Tag tone="on">倍率 {p.multiplier}×</Tag>
+        )}
+        {p.source_kind === "connection_free" && <Tag tone="on">连接设为免费</Tag>}
+        {p.alias_from && <Tag tone="on">映射自 {p.alias_from}</Tag>}
+        {routedDifferent && <Tag tone="on">计价模型：{p.pricing_model}</Tag>}
         <span className="flex-1" />
-        <span className="text-note text-jn-text-3">{shortSource(p.source)}</span>
+        <span className="text-note text-jn-text-3" title={p.source}>{shortSource(p.source)}</span>
       </div>
       {lines.map((line) => (
         <div key={line.label} className="flex items-baseline gap-2 text-note">
-          <span className="w-12 shrink-0 text-jn-text-3">{line.label}</span>
+          <span className="w-16 shrink-0 text-jn-text-3">{line.label}</span>
           <span className="tnum w-16 shrink-0 text-right text-jn-text">{formatTokens(line.tokens)}</span>
           <span className="text-jn-text-3">×</span>
-          <span className="tnum w-20 shrink-0 text-right text-jn-text">${line.unit.toFixed(3)}/M</span>
+          <span className="tnum w-24 shrink-0 text-right text-jn-text">{formatUnitPrice(line.unit, fx)}</span>
           <span className="text-jn-text-3">=</span>
           <span className="tnum text-jn-text">{formatMoney(convertFromUsd(((line.tokens ?? 0) * line.unit) / 1_000_000, fx), fx.currency)}</span>
         </div>
       ))}
       <div className="flex items-baseline gap-2 border-t border-jn-line pt-1.5 text-meta">
-        <span className="w-12 shrink-0 text-jn-text-3">合计</span>
+        <span className="w-16 shrink-0 text-jn-text-3">合计</span>
         <span className="flex-1" />
         <span className="tnum font-semibold text-jn-primary-ink">{formatMoney(convertFromUsd(row.cost, fx), fx.currency)}</span>
       </div>

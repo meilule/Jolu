@@ -202,6 +202,27 @@ pub struct Settings {
     /// 文件缺字段按关闭处理。
     #[serde(default)]
     pub zcode_free_first: bool,
+    /// 网关路由请求的计价模型基准：`upstream`（优先实际路由/上游返回模型）或 `request`（优先客户端请求模型）。
+    #[serde(default = "default_pricing_model_source")]
+    pub pricing_model_source: String,
+    /// 是否自动从 models.dev 后台同步模型目录与价格。
+    #[serde(default = "yes")]
+    pub models_dev_auto_sync: bool,
+    /// USD → CNY 汇率来源：`auto`（自动在线汇率）或 `fixed`（自定义固定汇率）。
+    #[serde(default = "default_fx_mode")]
+    pub fx_mode: String,
+    /// 自定义固定 USD → CNY 汇率（1.0–20.0）；仅 `fx_mode = "fixed"` 时生效。
+    #[serde(default)]
+    pub fx_fixed_usd_cny: Option<f64>,
+    /// 全局实付 API 预算开关与日/月上限（USD）；预警阈值 50–99%。
+    #[serde(default)]
+    pub global_budget_enabled: bool,
+    #[serde(default)]
+    pub global_budget_daily_usd: Option<f64>,
+    #[serde(default)]
+    pub global_budget_monthly_usd: Option<f64>,
+    #[serde(default = "default_global_budget_warn_percent")]
+    pub global_budget_warn_percent: u8,
 }
 
 fn default_kind() -> String { "api".into() }
@@ -213,26 +234,83 @@ fn default_scale() -> u16 { 100 }
 fn default_shrink_scale() -> u16 { 100 }
 fn default_island_style() -> String { "classic".into() }
 
-/// 灵动岛联动的几项开关（4.2b）。缺省值按调研的推荐：动效开、严格模式关、跟随主窗口关。
+/// 灵动岛联动与趣味设置（R2-I-04）。旧配置文件缺字段时自动按「打扰最少」补齐默认值。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct IslandLinkage {
     /// 严格模式：「正在写」只认确证（运行中会话 / 网关在途），推测一律显示「不知道」，宁可不亮
     pub strict_writing: bool,
-    /// 阈值 / 事件短时动效（额度 80%、用尽、网关拒绝、新会话）；免打扰或减少动效时只改颜色不播动画
+    /// 阈值 / 事件短时动效（额度预警、用尽、网关拒绝、新会话）；免打扰或减少动效时只改颜色不播动画
     pub signals: bool,
-    /// 跟随主窗口：主窗口在看某个连接的用量 / 供应商时，本体岛临时显示那个连接
+    /// 跟随主窗口：主窗口在看某个连接的用量 / 供应商 / 会话时，本体岛临时显示它并转头看向主窗口
     pub follow_main: bool,
     /// 旧版筛选值，仅为兼容既有设置保留。
     pub zcode_provider: Option<String>,
     /// 按最近活跃自动选主：某个分身所在平台明显更活跃时，自动「以此分身为主」（默认关）
     pub auto_focus: bool,
+    /// 实时路由：胶囊里画出工具 → 分组 → 来源；关闭后只显示 Token 增量
+    #[serde(default = "yes")]
+    pub show_route_flow: bool,
+    /// 实时路由：上游拒绝、改道成功、全部失败时变形提示 1.5 秒
+    #[serde(default = "yes")]
+    pub route_feedback: bool,
+    /// 实时路由：多工具同时在写时叠放最多 3 个工具图标
+    #[serde(default = "yes")]
+    pub multi_tool_stack: bool,
+    /// 额度预警阈值（60–95%，默认 80）
+    #[serde(default = "default_quota_warn_percent")]
+    pub quota_warn_percent: u8,
+    /// 额度预警时推荐同路由分组里有余量的接替来源
+    #[serde(default = "yes")]
+    pub quota_suggest_fallback: bool,
+    /// 联动：同分组的岛显示流量去向
+    #[serde(default = "yes")]
+    pub peer_flow: bool,
+    /// 联动：有自动化任务在等额度时显示分离气泡
+    #[serde(default = "yes")]
+    pub automation_bubble: bool,
+    /// 趣味：签到、额度重置、上下文吃撑、长任务完成、深夜咖啡等 bot 道具与小剧场
+    #[serde(default = "yes")]
+    pub props_theater: bool,
+    /// 趣味：今日 Token 越过 1M、10M 时各撒一次彩带
+    #[serde(default = "yes")]
+    pub milestone_confetti: bool,
+    /// 趣味：单击 bot 眨眼 / 连戳 3 次挤眼；告警表情期间不响应
+    #[serde(default = "yes")]
+    pub poke_reaction: bool,
+    /// 趣味：傍晚 18:00 后第一次空闲 30 分钟时弹出今日回顾卡与成就
+    #[serde(default = "yes")]
+    pub daily_recap: bool,
 }
+
+fn default_quota_warn_percent() -> u8 { 80 }
 
 impl Default for IslandLinkage {
     fn default() -> Self {
-        Self { strict_writing: false, signals: true, follow_main: false, zcode_provider: None, auto_focus: false }
+        Self {
+            strict_writing: false,
+            signals: true,
+            follow_main: false,
+            zcode_provider: None,
+            auto_focus: false,
+            show_route_flow: true,
+            route_feedback: true,
+            multi_tool_stack: true,
+            quota_warn_percent: default_quota_warn_percent(),
+            quota_suggest_fallback: true,
+            peer_flow: true,
+            automation_bubble: true,
+            props_theater: true,
+            milestone_confetti: true,
+            poke_reaction: true,
+            daily_recap: true,
+        }
     }
+}
+
+pub fn normalize_island_linkage(mut linkage: IslandLinkage) -> IslandLinkage {
+    linkage.quota_warn_percent = linkage.quota_warn_percent.clamp(60, 95);
+    linkage
 }
 fn default_refresh() -> u32 { 5 }
 fn default_currency() -> String { "USD".into() }
@@ -242,6 +320,9 @@ fn default_proxy_fallback() -> bool { true }
 fn default_proxy_mode() -> String { "observe".into() }
 fn default_update_interval() -> u32 { 30 }
 fn default_cost_currency() -> String { "USD".into() }
+fn default_pricing_model_source() -> String { "upstream".into() }
+fn default_fx_mode() -> String { "auto".into() }
+fn default_global_budget_warn_percent() -> u8 { 80 }
 fn default_gateway_circuit() -> u32 { 5 }
 /// warm-up 默认在本地 9 点触发；只在用户打开开关后才生效。
 fn default_warmup_hour() -> u32 { 9 }
@@ -369,6 +450,14 @@ impl Default for Settings {
             privacy_allow: Vec::new(),
             privacy_first_noticed: false,
             zcode_free_first: false,
+            pricing_model_source: default_pricing_model_source(),
+            models_dev_auto_sync: true,
+            fx_mode: default_fx_mode(),
+            fx_fixed_usd_cny: None,
+            global_budget_enabled: false,
+            global_budget_daily_usd: None,
+            global_budget_monthly_usd: None,
+            global_budget_warn_percent: default_global_budget_warn_percent(),
         }
     }
 }
@@ -762,6 +851,13 @@ mod tests {
         .expect("旧设置应可迁移");
         assert!(settings.dock_enabled);
         assert!(settings.island_horizontal_dock_full);
+        assert_eq!(settings.island_linkage, super::IslandLinkage::default());
+        assert_eq!(settings.island_linkage.quota_warn_percent, 80);
+        assert!(settings.island_linkage.poke_reaction);
+        assert!(settings.island_linkage.props_theater);
+        assert!(settings.island_linkage.daily_recap);
+        assert_eq!(super::normalize_island_linkage(super::IslandLinkage { quota_warn_percent: 30, ..Default::default() }).quota_warn_percent, 60);
+        assert_eq!(super::normalize_island_linkage(super::IslandLinkage { quota_warn_percent: 99, ..Default::default() }).quota_warn_percent, 95);
         assert_eq!(settings.theme, "light");
         assert_eq!(settings.island_connection_name, None);
     }

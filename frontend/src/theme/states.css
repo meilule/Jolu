@@ -32,7 +32,7 @@
   transition-duration: var(--motion-feedback);
   transition-timing-function: var(--motion-ease-standard);
 }
-.jn-interactive:active:not(:disabled):not([aria-disabled="true"]) {
+.jn-interactive:active:not(:disabled):not([aria-disabled="true"]):not(.jn-no-press) {
   transform: scale(0.97);
 }
 

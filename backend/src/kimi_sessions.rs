@@ -33,12 +33,14 @@
 //! - **不猜缺失值**：没有 `usage.record` 的请求不计 Token（None 而不是 0）。
 //! - **不读子代理的 wire**：只读 `agents/main/`，子代理有自己的 wire 文件但不算用户会话。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::db::{RequestRecord, Store};
 use crate::session_threads::SessionItem;
+use crate::source_store::{self, Record};
 
 /// 索引里的一行。
 #[derive(Debug, Deserialize)]
@@ -64,13 +66,19 @@ struct State {
     created_at: Option<serde_json::Value>,
 }
 
-/// `wire.jsonl` 里的一个事件（只关心两个 type，其余忽略）。
+/// `wire.jsonl` 里的一个事件（只关心 `llm.request` 与 `usage.record`，其余忽略）。
 #[derive(Debug, Deserialize)]
 struct WireEvent {
     #[serde(rename = "type")]
     kind: String,
     #[serde(default)]
     time: Option<i64>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default, rename = "modelAlias")]
+    model_alias: Option<String>,
+    #[serde(default, rename = "thinkingEffort")]
+    thinking_effort: Option<String>,
     #[serde(default)]
     usage: Option<WireUsage>,
 }
@@ -83,7 +91,8 @@ struct WireUsage {
     output: Option<i64>,
     #[serde(default, rename = "inputCacheRead")]
     cache_read: Option<i64>,
-    #[serde(default, rename = "inputCreation")]
+    /// 实测 Kimi Code 2.x 写入的键名是 `inputCacheCreation`，兼容旧键名 `inputCreation`。
+    #[serde(default, rename = "inputCacheCreation", alias = "inputCreation")]
     cache_write: Option<i64>,
 }
 
@@ -262,6 +271,223 @@ pub(crate) fn sessions(home: &Path, since: Option<i64>) -> Vec<SessionItem> {
     out
 }
 
+fn file_stamp(path: &Path) -> (i64, i64) {
+    let Ok(meta) = std::fs::metadata(path) else { return (0, 0) };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    (meta.len() as i64, mtime)
+}
+
+fn save_stamp(conn: &rusqlite::Connection, key: &str, size: i64, time: i64) -> rusqlite::Result<()> {
+    conn.prepare_cached(
+        "INSERT INTO scan_state(path,offset,mtime,parser_initialized) VALUES(?1,?2,?3,1)
+         ON CONFLICT(path) DO UPDATE SET offset=?2,mtime=?3,parser_initialized=1",
+    )?
+    .execute(rusqlite::params![key, size, time])?;
+    Ok(())
+}
+
+/// 枚举某个 Kimi 会话目录下的全部 `agents/<agent>/wire.jsonl`（包含主代理与子代理，确保用量不漏）。
+fn collect_wire_files(session_dir: &Path) -> Vec<(String, PathBuf)> {
+    let agents_dir = session_dir.join("agents");
+    let Ok(entries) = std::fs::read_dir(&agents_dir) else { return Vec::new() };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let wire = dir.join("wire.jsonl");
+        if wire.is_file() {
+            let agent = entry.file_name().to_string_lossy().into_owned();
+            out.push((agent, wire));
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// 枚举 Kimi 全部会话目录（合并 `session_index.jsonl` 与 `sessions/<wd>/<sid>`，按规范路径去重）。
+fn discover_session_dirs(home: &Path) -> Vec<(String, PathBuf)> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    let mut push = |sid: String, dir: PathBuf| {
+        if !dir.is_dir() {
+            return;
+        }
+        let canon = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        if seen.insert(canon) {
+            out.push((sid, dir));
+        }
+    };
+    for entry in index(home) {
+        let dir = PathBuf::from(&entry.session_dir);
+        if dir.is_absolute() {
+            push(entry.session_id, dir);
+        }
+    }
+    let root = kimi_home(home).join("sessions");
+    if let Ok(wds) = std::fs::read_dir(&root) {
+        for wd in wds.flatten() {
+            let wd_path = wd.path();
+            if !wd_path.is_dir() {
+                continue;
+            }
+            if let Ok(sids) = std::fs::read_dir(&wd_path) {
+                for s in sids.flatten() {
+                    let s_path = s.path();
+                    if s_path.is_dir() {
+                        let sid = s.file_name().to_string_lossy().into_owned();
+                        push(sid, s_path);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn parse_wire_records(wire: &Path, session_id: &str, agent: &str) -> Vec<Record> {
+    let Ok(text) = crate::steady::read_to_string(wire) else { return Vec::new() };
+    let prefixed_session = format!("kimi:{session_id}");
+    let mut last_req_ts: Option<i64> = None;
+    let mut last_model: Option<String> = None;
+    let mut last_effort: Option<String> = None;
+    let mut out = Vec::new();
+    for (line_idx, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<WireEvent>(trimmed) else { continue };
+        match event.kind.as_str() {
+            "llm.request" => {
+                last_req_ts = event.time.filter(|t| *t > 0);
+                if let Some(m) = event.model.or(event.model_alias).filter(|s| !s.trim().is_empty()) {
+                    last_model = Some(m);
+                }
+                if let Some(e) = event.thinking_effort.filter(|s| !s.trim().is_empty()) {
+                    last_effort = Some(e);
+                }
+            }
+            "usage.record" => {
+                let Some(usage) = event.usage else { continue };
+                let input = usage.input_other.filter(|v| *v >= 0);
+                let output = usage.output.filter(|v| *v >= 0);
+                let cache_read = usage.cache_read.filter(|v| *v >= 0);
+                let cache_write = usage.cache_write.filter(|v| *v >= 0);
+                if [input, output, cache_read, cache_write].iter().all(Option::is_none) {
+                    continue;
+                }
+                let Some(ts) = event.time.filter(|t| *t > 0).or(last_req_ts) else {
+                    continue;
+                };
+                let duration_ms = event
+                    .time
+                    .zip(last_req_ts.take())
+                    .and_then(|(end, start)| end.checked_sub(start))
+                    .filter(|d| (10..=3_600_000).contains(d));
+                let model = event
+                    .model
+                    .or(event.model_alias)
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| last_model.clone());
+                let effort = event
+                    .thinking_effort
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| last_effort.clone());
+                let total = input
+                    .zip(output)
+                    .map(|(i, o)| i + o + cache_read.unwrap_or(0) + cache_write.unwrap_or(0));
+                out.push(Record {
+                    request: RequestRecord {
+                        platform: "kimi".into(),
+                        source: "native:kimi:code".into(),
+                        dedup_key: format!("{session_id}:{agent}:{line_idx}:{ts}"),
+                        session_id: Some(prefixed_session.clone()),
+                        ts,
+                        model,
+                        input_tokens: input,
+                        output_tokens: output,
+                        cache_read_tokens: cache_read,
+                        cache_write_tokens: cache_write,
+                        total_tokens: total,
+                        effort,
+                    },
+                    input_semantics: "excludes_cache",
+                    credits: None,
+                    original_credits: None,
+                    billable: None,
+                    context_ratio: None,
+                    reasoning: None,
+                    tool: None,
+                    duration_ms,
+                    first_token_ms: None,
+                });
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// 增量将 Kimi Code 用量与会话元数据写入 `requests` / `sessions`（P2）。
+pub(crate) fn scan_usage(db: &mut impl Store, home: &Path) -> Result<(usize, Vec<String>), String> {
+    let mut changed = 0usize;
+    let errors = Vec::new();
+    for (sid, dir) in discover_session_dirs(home) {
+        let wires = collect_wire_files(&dir);
+        if wires.is_empty() {
+            continue;
+        }
+        let state_path = dir.join("state.json");
+        let mut state_loaded: Option<State> = None;
+        for (agent, wire) in wires {
+            let stamp = file_stamp(&wire);
+            let key = format!("kimi-usage:{}", wire.to_string_lossy());
+            if db.write(|conn| crate::db::get_scan_state(conn, &key) == Some(stamp)) {
+                continue;
+            }
+            let records = parse_wire_records(&wire, &sid, &agent);
+            if state_loaded.is_none() {
+                let text = crate::steady::read_to_string(&state_path).unwrap_or_default();
+                state_loaded = Some(serde_json::from_str::<State>(&text).unwrap_or_default());
+            }
+            let state = state_loaded.as_ref();
+            let prefixed_session = format!("kimi:{sid}");
+            let n = db
+                .write(|conn| -> Result<usize, String> {
+                    let tx = conn.transaction().map_err(|e| e.to_string())?;
+                    let written = source_store::write(&tx, &records).map_err(|e| e.to_string())?;
+                    if let Some(st) = state {
+                        if let Some(title) = st.title.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                            crate::db::upsert_session_title(&tx, "kimi", &prefixed_session, title)
+                                .map_err(|e| e.to_string())?;
+                        }
+                        if let Some(cwd) = st.work_dir.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                            crate::db::set_session_cwd(&tx, "kimi", &prefixed_session, cwd)
+                                .map_err(|e| e.to_string())?;
+                        }
+                    }
+                    if let Some(last_ts) = records.iter().map(|r| r.request.ts).max() {
+                        crate::db::set_session_activity(&tx, "kimi", &prefixed_session, "done", last_ts)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    save_stamp(&tx, &key, stamp.0, stamp.1).map_err(|e| e.to_string())?;
+                    tx.commit().map_err(|e| e.to_string())?;
+                    Ok(written)
+                })
+                .map_err(|e| e.to_string())?;
+            changed += n;
+        }
+    }
+    Ok((changed, errors))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,6 +597,63 @@ mod tests {
         )
         .unwrap();
         assert!(sessions(&root, None).is_empty(), "读不到的会话不列出来");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn scan_usage_reads_input_cache_creation_duration_and_subagents() {
+        let root = std::env::temp_dir().join(format!("jolu-kimi-usage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let home = fixture(&root);
+        let dir = home.join("sessions").join("wd_x").join("session_test-1");
+        // 主代理用真实字段名 inputCacheCreation + thinkingEffort
+        std::fs::write(
+            dir.join("agents").join("main").join("wire.jsonl"),
+            [
+                r#"{"type":"llm.request","modelAlias":"kimi-k2.5","thinkingEffort":"high","time":10000}"#,
+                r#"{"type":"usage.record","usage":{"inputOther":1500,"output":200,"inputCacheRead":8000,"inputCacheCreation":400},"time":12500}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        // 子代理的 wire.jsonl 也要计入用量
+        std::fs::create_dir_all(dir.join("agents").join("sub-1")).unwrap();
+        std::fs::write(
+            dir.join("agents").join("sub-1").join("wire.jsonl"),
+            [
+                r#"{"type":"llm.request","modelAlias":"kimi-k2.5","time":20000}"#,
+                r#"{"type":"usage.record","usage":{"inputOther":500,"output":100,"inputCacheRead":2000,"inputCacheCreation":0},"time":21200}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let mut db = crate::db::open(Path::new(":memory:")).unwrap();
+        let (n, errs) = scan_usage(&mut db, &root).unwrap();
+        assert!(errs.is_empty());
+        assert_eq!(n, 2, "主代理与子代理用量都应写入 requests");
+        assert_eq!(scan_usage(&mut db, &root).unwrap().0, 0, "二次扫描按文件戳记幂等跳过");
+
+        let ov = crate::usage_stats::overview(
+            &db,
+            &crate::usage_stats::StatsFilter { start: 0, end: 50_000, platform: Some("kimi".into()), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(ov.requests, 2);
+        assert_eq!(ov.tokens.fresh_input, Some(2_000));
+        assert_eq!(ov.tokens.cache_read, Some(10_000));
+        assert_eq!(ov.tokens.cache_write, Some(400), "inputCacheCreation 必须被正确解析");
+        assert_eq!(ov.tokens.output, Some(300));
+        assert_eq!(ov.tokens.total, Some(12_700));
+        let page = crate::usage_stats::calls(
+            &db,
+            &crate::usage_stats::StatsFilter { start: 0, end: 50_000, platform: Some("kimi".into()), ..Default::default() },
+            1,
+        )
+        .unwrap();
+        assert_eq!(page.rows[1].duration_ms, Some(2_500));
+        assert_eq!(page.rows[1].effort.as_deref(), Some("high"));
+
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -165,7 +165,8 @@ export function PageActions({ children }: { children: ReactNode }) {
 
 /**
  * 页面把页签栏送进页头「页签」槽。
- * 超过 3 个页签时传 `wide`，常规宽度下自动落到标题下方的副栏，避免挤压页头与窗口按钮。
+ * 页签较多或页头同时带有多个页面操作时传 `wide`，常规宽度下稳定落在标题正下方，
+ * 避免挤压页头、窗口按钮或在切换页签时上下跳动。
  * 若页头宿主尚未就绪（独立预览），直接原位渲染兜底，确保页签永远可见可点。
  */
 export function PageTabs({ children, wide = false }: { children: ReactNode; wide?: boolean }) {

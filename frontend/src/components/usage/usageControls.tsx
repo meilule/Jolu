@@ -4,10 +4,11 @@ import { forwardRef, type ReactNode } from "react"
 import { Check, ChartNoAxesCombined, ChevronDown, LoaderCircle, RefreshCw, RotateCcw, Square, SquareCheck } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useGlidePill } from "@/hooks/useGlidePill"
-import { providerPlatformOptions } from "@/lib/providerCatalog"
+import { usagePlatformOptions } from "@/lib/providerCatalog"
+import { PlatformLogo } from "@/components/brand/PlatformLogo"
 import { UNATTRIBUTED_ACCOUNT, accountLabel, accountsTriggerLabel } from "@/lib/usageFilters"
 import { JoluButton } from "@/components/ui/JoluButton"
-import type { Connection } from "@/types"
+import type { Connection, PlatformId } from "@/types"
 
 /** 统计卡片：24px 圆角、1px 描边、表面投影（R1-04 / R1-C） */
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
@@ -88,15 +89,18 @@ export interface MenuOption {
   value: string
   label: string
   icon?: ReactNode
+  meta?: string
 }
 
-/** 单选下拉：全部供应商 / 全部模型 / 全部状态 */
-export function MenuFilter({ value, options, onChange, label, trailingChevron }: {
+/** 单选下拉：全部供应商 / 全部模型 / 全部状态（方案 A：选中带图标与主色描边，菜单内展示图标与计数） */
+export function MenuFilter({ value, options, onChange, label, trailingChevron, active, menuClassName }: {
   value: string
   options: MenuOption[]
   onChange: (value: string) => void
   label: string
   trailingChevron?: boolean
+  active?: boolean
+  menuClassName?: string
 }) {
   // 共享滑块动效：只往菜单里插一个滑块，菜单与行的类名一字不改
   const glide = useGlidePill()
@@ -104,15 +108,23 @@ export function MenuFilter({ value, options, onChange, label, trailingChevron }:
   return (
     <Menu.Root modal={false}>
       <Menu.Trigger asChild>
-        <FilterTrigger aria-label={label} trailingChevron={trailingChevron}>{selected?.label}</FilterTrigger>
+        <FilterTrigger
+          aria-label={label}
+          leading={selected?.icon}
+          trailingChevron={trailingChevron}
+          className={active ? "border-jn-primary text-jn-text" : undefined}
+        >
+          {selected?.label}
+        </FilterTrigger>
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Content ref={glide} align="start" sideOffset={6} collisionPadding={12} className={MENU_CLASS} style={{ maxHeight: "min(320px, var(--radix-dropdown-menu-content-available-height))" }}>
+        <Menu.Content ref={glide} align="start" sideOffset={6} collisionPadding={12} className={cn(MENU_CLASS, menuClassName)} style={{ maxHeight: "min(360px, var(--radix-dropdown-menu-content-available-height))" }}>
           <Menu.RadioGroup value={value} onValueChange={onChange}>
             {options.map((option) => (
               <Menu.RadioItem key={option.value} value={option.value} className={cn(ITEM_CLASS, "pr-7 data-[state=checked]:text-jn-primary-ink")}>
-                {option.icon && <span aria-hidden className="grid size-4 place-items-center">{option.icon}</span>}
-                <span className="truncate">{option.label}</span>
+                {option.icon && <span aria-hidden className="grid size-4 shrink-0 place-items-center">{option.icon}</span>}
+                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                {option.meta && <span className="tnum shrink-0 font-mono text-[11px] text-jn-text-3">{option.meta}</span>}
                 <Menu.ItemIndicator className="absolute right-2"><Check aria-hidden className="size-3.5" /></Menu.ItemIndicator>
               </Menu.RadioItem>
             ))}
@@ -125,8 +137,24 @@ export function MenuFilter({ value, options, onChange, label, trailingChevron }:
 
 export const ALL = "__all__"
 
-export function providerOptions(): MenuOption[] {
-  return [{ value: ALL, label: "全部供应商" }, ...providerPlatformOptions()]
+export function providerOptions(counts?: ReadonlyMap<string, number>, totalCount?: number): MenuOption[] {
+  const base = usagePlatformOptions().map((option, index) => ({
+    ...option,
+    index,
+    count: counts?.get(option.value) ?? 0,
+  }))
+  if (counts && counts.size > 0) {
+    base.sort((a, b) => (b.count > 0 ? 1 : 0) - (a.count > 0 ? 1 : 0) || b.count - a.count || a.index - b.index)
+  }
+  return [
+    { value: ALL, label: "全部供应商", meta: totalCount && totalCount > 0 ? `${totalCount} 次` : undefined },
+    ...base.map((option) => ({
+      value: option.value,
+      label: option.label,
+      icon: <PlatformLogo platform={option.value as PlatformId} size={15} />,
+      meta: option.count > 0 ? `${option.count} 次` : undefined,
+    })),
+  ]
 }
 
 /** 账号筛选：多选（画板 38「账号筛选」）；勾选「全部账号」即清空选择 */
@@ -135,6 +163,7 @@ export function AccountFilter({ accounts, value, onChange }: {
   value: readonly string[]
   onChange: (next: string[]) => void
 }) {
+  const glide = useGlidePill()
   const toggle = (id: string) => onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id])
   const row = (id: string, label: string, checked: boolean, onSelect: () => void) => (
     <Menu.CheckboxItem
@@ -156,7 +185,7 @@ export function AccountFilter({ accounts, value, onChange }: {
         <FilterTrigger aria-label="账号筛选">{accountsTriggerLabel(value, accounts)}</FilterTrigger>
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Content align="start" sideOffset={6} collisionPadding={12} className={cn(MENU_CLASS, "w-[260px]")} style={{ maxHeight: "min(360px, var(--radix-dropdown-menu-content-available-height))" }}>
+        <Menu.Content ref={glide} align="start" sideOffset={6} collisionPadding={12} className={cn(MENU_CLASS, "w-[260px]")} style={{ maxHeight: "min(360px, var(--radix-dropdown-menu-content-available-height))" }}>
           {row("all", "全部账号", value.length === 0, () => onChange([]))}
           {accounts.map((account) => row(account.id, accountLabel(account), value.includes(account.id), () => toggle(account.id)))}
           {row(UNATTRIBUTED_ACCOUNT, "未归属账号", value.includes(UNATTRIBUTED_ACCOUNT), () => toggle(UNATTRIBUTED_ACCOUNT))}

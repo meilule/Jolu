@@ -78,7 +78,7 @@ export function Dialog({
     <DialogPrimitive.Root open={open} onOpenChange={(next) => { if (!next && preventClose) return; onOpenChange(next) }}>
       <Presence>
         {open && (
-          <DialogPrimitive.Portal forceMount>
+          <DialogPrimitive.Portal key="dialog-portal" forceMount>
             <DialogPrimitive.Overlay forceMount asChild>
               <DialogBackdrop className="fixed inset-0 z-[150] bg-black/40 backdrop-blur-[2px]" />
             </DialogPrimitive.Overlay>

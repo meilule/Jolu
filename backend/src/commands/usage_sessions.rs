@@ -82,9 +82,17 @@ pub(crate) async fn island_source_breakdown(db: State<'_, DbRead>, platform: Opt
 }
 
 #[tauri::command]
-pub(crate) async fn stats_overview(db: State<'_, DbRead>, filter: usage_stats::StatsFilter) -> Result<usage_stats::Overview, String> {
+pub(crate) async fn stats_overview(
+    app: tauri::AppHandle,
+    db: State<'_, DbRead>,
+    filter: usage_stats::StatsFilter,
+) -> Result<usage_stats::Overview, String> {
     filter.validate()?;
-    with_reader(db.0.clone(), move |conn| usage_stats::overview(conn, &filter).map_err(|e| e.to_string())).await
+    let view = with_reader(db.0.clone(), move |conn| usage_stats::overview(conn, &filter).map_err(|e| e.to_string())).await?;
+    if !view.cost.unpriced_no_price.is_empty() && app.state::<Cfg>().0.get().models_dev_auto_sync {
+        crate::gateway::models_dev::refresh_on_missing(&app);
+    }
+    Ok(view)
 }
 
 /// 全年活跃日历；日期固定为一年，只按供应商与账号筛选

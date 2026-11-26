@@ -21,8 +21,8 @@ export function Switch({ checked, onChange, label, className, disabled, ...rest 
   return (
     <label
       className={cn(
-        "relative inline-flex h-7 w-[46px] shrink-0 cursor-pointer items-center rounded-full border p-[2px] transition-colors duration-[var(--motion-feedback)] ease-[var(--motion-ease-standard)]",
-        checked ? "justify-end border-transparent bg-jn-primary" : "justify-start border-jn-line bg-jn-track",
+        "relative inline-flex h-7 w-[46px] shrink-0 cursor-pointer items-center justify-start rounded-full border p-[2px] transition-colors duration-[var(--motion-feedback)] ease-[var(--motion-ease-standard)]",
+        checked ? "border-transparent bg-jn-primary" : "border-jn-line bg-jn-track",
         disabled && "pointer-events-none opacity-45",
         className,
       )}
@@ -38,6 +38,7 @@ export function Switch({ checked, onChange, label, className, disabled, ...rest 
         {...rest}
       />
       <SpringThumb
+        checked={checked}
         className={cn(
           "pointer-events-none block size-[22px] rounded-full shadow-[0_1px_3px_rgba(15,42,28,0.22)]",
           checked ? "bg-white" : "bg-jn-surface",

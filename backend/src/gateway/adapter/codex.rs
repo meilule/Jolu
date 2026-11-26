@@ -373,8 +373,14 @@ pub(crate) async fn forward_at(
         builder = builder.header("x-jolu-gateway", entry.slug.as_str());
         let usage_deps = deps.clone();
         let usage_entry = entry.clone();
-        let recorded = super::codex_stream::observe_completed(upstream.bytes_stream(), move |response| {
-            crate::gateway::subscription::record_usage(&usage_deps, &usage_entry, response, started.elapsed().as_millis() as i64);
+        let recorded = super::codex_stream::observe_completed(upstream.bytes_stream(), started, move |response, first_token_ms| {
+            crate::gateway::subscription::record_usage_with_timing(
+                &usage_deps,
+                &usage_entry,
+                response,
+                started.elapsed().as_millis() as i64,
+                first_token_ms,
+            );
         });
         let body = if caller == CallerProtocol::Chat {
             let model = parsed.get("model").and_then(|v| v.as_str()).unwrap_or_default().to_string();
@@ -392,8 +398,14 @@ pub(crate) async fn forward_at(
     let mut stream = upstream.bytes_stream();
     use futures_util::StreamExt;
     let mut completed: Option<serde_json::Value> = None;
+    let mut first_token_ms: Option<i64> = None;
     while let Some(chunk) = stream.next().await {
-        let events = match chunk.map_err(|_| "上游响应中断".to_string()).and_then(|bytes| decoder.feed(&bytes)) {
+        let events = match chunk.map_err(|_| "上游响应中断".to_string()).and_then(|bytes| {
+            if !bytes.is_empty() && first_token_ms.is_none() {
+                first_token_ms = Some(started.elapsed().as_millis() as i64);
+            }
+            decoder.feed(&bytes)
+        }) {
             Ok(events) => events,
             Err(_) => return crate::gateway::wire::error_response(StatusCode::BAD_GATEWAY, "Codex 响应中断或格式无效"),
         };
@@ -412,7 +424,7 @@ pub(crate) async fn forward_at(
             "Codex 订阅流式响应未包含完成事件；请重试或改用流式请求",
         );
     };
-    crate::gateway::subscription::record_usage(&deps, entry, &response_value, started.elapsed().as_millis() as i64);
+    crate::gateway::subscription::record_usage_with_timing(&deps, entry, &response_value, started.elapsed().as_millis() as i64, first_token_ms);
     let out_body = match caller {
         CallerProtocol::Chat => responses_to_chat(&response_value),
         _ => response_value,

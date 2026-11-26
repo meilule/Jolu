@@ -200,8 +200,10 @@ pub(crate) async fn connection_quota(app: tauri::AppHandle, db: State<'_, Db>, i
         || match route {
             QuotaRoute::ApiBaseUrl => {
                 let base = c.base_url.as_deref().unwrap_or_default();
-                // 套餐供应商优先于 sub2api 网关：按 base_url 域名识别（智谱/Kimi/MiniMax 等）
-                if coding_plan::detect_provider(base).is_some() {
+                if c.platform == "ollama" {
+                    crate::ollama_quota::api_quota(base, &secret)
+                } else if coding_plan::detect_provider(base).is_some() {
+                    // 套餐供应商优先于 sub2api 网关：按 base_url 域名识别（智谱/Kimi/MiniMax 等）
                     coding_plan::coding_plan_quota(base, &secret)
                 } else {
                     // 未知网关只向用户配置的服务查询，不将它的密钥发送给其他供应商试探。
@@ -370,8 +372,23 @@ pub(crate) async fn connection_api_usage(app: tauri::AppHandle, db: State<'_, Db
     )).await.map_err(|e| e.to_string())?;
     let valid = matches!(state, quota::ApiUsageState::Ok { .. });
     let unauthorized = matches!(state, quota::ApiUsageState::Unauthorized { .. });
+    let official_cost = match &state {
+        quota::ApiUsageState::Ok { cost_usd: Some(cost), source, .. } => Some((*cost, source.clone())),
+        _ => None,
+    };
     let outcome = (valid || unauthorized).then_some(valid);
-    let changed = with_database(pool, move |conn| connections::record_query_result(conn, &id, &expected, outcome)).await?;
+    let changed = with_database(pool, move |conn| {
+        if let Some((cost, source)) = official_cost {
+            let _ = crate::pricing::budget::record_official_cost(
+                conn,
+                &id,
+                cost,
+                &source,
+                chrono::Utc::now().timestamp_millis(),
+            );
+        }
+        connections::record_query_result(conn, &id, &expected, outcome)
+    }).await?;
     if changed { let _ = app.emit(crate::events::CONNECTIONS_CHANGED, ()); }
     Ok(state)
 }
@@ -389,6 +406,11 @@ pub(crate) async fn connection_balance(app: tauri::AppHandle, db: State<'_, Db>,
         return Ok(quota::BalanceState::Failed { reason: "连接不存在".into() });
     };
     let expected = c.clone();
+    if c.platform == "ollama" && c.kind == "api" {
+        return Ok(quota::BalanceState::Unsupported {
+            reason: "Ollama Cloud 的套餐与已购额度在额度窗口中展示，不走通用钱包余额。".into(),
+        });
+    }
     // 自定义供应商复用同源余额适配器；本机订阅平台没有通用钱包余额。
     if platforms::uses_native_quota(&c.platform,&c.kind) {
         return Ok(quota::BalanceState::Unsupported {reason:platforms::limitation(&c.platform)});

@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react"
 import * as Menu from "@radix-ui/react-dropdown-menu"
 import { Check, ChevronDown, Search } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useGlidePill } from "@/motion"
 
 export interface SelectOption {
   value: string
@@ -63,7 +64,7 @@ export function SelectField({ value, options, onValueChange, label, disabled,
   triggerIcon?: ReactNode
   searchable?: boolean
 }) {
-  void glide
+  const glidePill = useGlidePill()
   const [query, setQuery] = useState("")
   const selected = options.find((option) => option.value === value)
   if (readOnlySingle && value && selected && options.filter((option) => option.value && !option.disabled).length === 1) {
@@ -92,6 +93,7 @@ export function SelectField({ value, options, onValueChange, label, disabled,
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Content
+          ref={glide ? glidePill : undefined}
           sideOffset={6} align="start" collisionPadding={8}
           style={{ minWidth: menuWidth ?? undefined }}
           className="jn-popover z-[140] max-h-[300px] w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto overscroll-contain rounded-[14px] border border-jn-line bg-jn-surface p-1.5 text-jn-text shadow-jn-surface"

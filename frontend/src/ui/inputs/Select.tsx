@@ -25,6 +25,7 @@ import type { ReactNode } from "react"
 import * as Menu from "@radix-ui/react-dropdown-menu"
 import { cn } from "@/lib/utils"
 import { Icon } from "@/icons"
+import { useGlidePill } from "@/motion"
 
 const VARIANT = {
   /** 表单与设置：well 底、圆角 14（与 Input lg 对齐） */
@@ -77,6 +78,7 @@ export function Select({
   className,
 }: SelectProps) {
   const selected = options.find((option) => option.value === value)
+  const glide = useGlidePill()
   return (
     <Menu.Root>
       <Menu.Trigger
@@ -97,6 +99,7 @@ export function Select({
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Content
+          ref={glide}
           sideOffset={6}
           align="start"
           // 菜单面板与触发器同宽：宽度挡位已经约束好了，菜单跟着走才不会错位。

@@ -2,7 +2,7 @@
  * Toast —— 设计稿 R1-C「分区 · 5 · 容器与反馈 / 通知 Toast」。
  *
  * 规格取自画板：宽 340、`jn-surface`、圆角 18、1px `jn-line`、内边距 14、间距 12。
- * 右下角堆叠，**4 秒自动消失，错误需手动关**。
+ * 右上角向下堆叠，**4 秒自动消失，错误需手动关**。
  *
  * ## 为什么错误不自动消失
  *
@@ -18,8 +18,7 @@
  *
  * ## 定位
  *
- * 视口用 `fixed bottom-4 right-4`，与灵动岛窗口同一角落——两者不会同时
- * 长时间出现（灵动岛是常驻，Toast 是瞬时），视觉上不冲突。
+ * 视口用 `fixed right-5 top-[110px]`，固定在主窗口右上角且避开页头与工具栏。
  */
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react"
 import { cn } from "@/lib/utils"
@@ -100,7 +99,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div className="pointer-events-none fixed right-4 bottom-4 z-[200] flex w-[340px] flex-col gap-2">
+      <div className="pointer-events-none fixed right-5 top-[110px] z-[200] flex w-[340px] flex-col gap-2">
         {items.map((item) => (
           <ToastCard
             key={item.id}

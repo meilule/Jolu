@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils"
 import { SAVE_STATE_LABEL, SETTINGS_TABS, saveState, tabForSection, type SettingsTab } from "@/lib/settingsPage"
 import { useSettings } from "@/hooks/useSettings"
 import { Icon, type IconName } from "@/icons"
-import { SlideIndicator } from "@/motion"
+import { SlideIndicator, useGlidePill } from "@/motion"
 import { Banner, Button } from "@/ui"
 import { GeneralSection } from "@/components/settings/GeneralSection"
 import { AppearanceSection } from "@/components/settings/AppearanceSection"
@@ -44,6 +44,7 @@ export function SettingsPage({ section, navigationRequest, onOpenSkills }: {
 }) {
   const cfg = useSettings()
   const [tab, setTab] = useState<SettingsTab>(() => tabForSection(section))
+  const navGlide = useGlidePill({ selector: "button", background: "var(--jn-well)", skipActive: true })
   const [dirtyKeys, setDirtyKeys] = useState<ReadonlySet<string>>(new Set())
 
   useEffect(() => { if (navigationRequest > 0) setTab(tabForSection(section)) }, [navigationRequest, section])
@@ -79,7 +80,11 @@ export function SettingsPage({ section, navigationRequest, onOpenSkills }: {
       )}
 
       <div className="flex min-h-[560px] items-start gap-4">
-        <nav aria-label="设置分类" className="sticky top-0 flex w-[200px] shrink-0 flex-col gap-0.5 rounded-[20px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface">
+        <nav
+          ref={navGlide}
+          aria-label="设置分类"
+          className="sticky top-0 flex w-[200px] shrink-0 flex-col gap-0.5 rounded-[20px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface"
+        >
           {SETTINGS_TABS.map((entry) => {
             const active = entry.id === tab
             return (
@@ -89,11 +94,11 @@ export function SettingsPage({ section, navigationRequest, onOpenSkills }: {
                 aria-current={active ? "page" : undefined}
                 onClick={() => setTab(entry.id)}
                 className={cn(
-                  "jn-interactive relative isolate flex h-[38px] items-center gap-2.5 rounded-[13px] px-3 text-left text-[13px]",
-                  active ? "font-semibold text-jn-primary-ink" : "text-jn-text hover:bg-jn-well",
+                  "jn-interactive jn-no-press relative isolate flex h-[38px] items-center gap-2.5 rounded-[13px] px-3 text-left text-[13px]",
+                  active ? "font-semibold text-jn-primary-ink" : "text-jn-text",
                 )}
               >
-                {active && <SlideIndicator layoutId="jn-settings-nav-active" className="-z-10 bg-jn-primary-wash" />}
+                {active && <SlideIndicator layoutId="jn-settings-nav-active" radius={13} className="-z-10 bg-jn-primary-wash" />}
                 <Icon name={ICONS[entry.id]} size="md" className={active ? "text-jn-primary" : "text-jn-text-2"} />
                 {entry.label}
               </button>

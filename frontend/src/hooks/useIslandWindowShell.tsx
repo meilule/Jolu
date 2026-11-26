@@ -26,7 +26,7 @@ export interface IslandMenuBusy {
  * 这里**不放探出计时器**：经典是 150ms / 500ms，胶囊是 400ms 且只对左右贴边生效，
  * 两套节奏写在各自的视图里，只共用 `setPeek` / `peekTimer` / `dockedRef` 这几件工具。
  */
-export function useIslandWindowShell(menuBusy: IslandMenuBusy) {
+export function useIslandWindowShell(menuBusy: IslandMenuBusy, dragBlockedRef?: { current: boolean }) {
   const [mode, setMode] = useState<IslandMode>("collapsed")
   const [edge, setEdge] = useState<DockEdge>("top")
   const [peek, setPeek] = useState(false)
@@ -69,9 +69,14 @@ export function useIslandWindowShell(menuBusy: IslandMenuBusy) {
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     if (!isTauri || e.button !== 0 || e.detail > 1) return
-    if ((e.target as HTMLElement).closest("button, input, a")) return
+    if (dragBlockedRef?.current) return
+    if ((e.target as HTMLElement).closest("button, input, a, [data-quick-wheel], [data-island-recap]")) return
     const x = e.clientX, y = e.clientY
     const move = (event: PointerEvent) => {
+      if (dragBlockedRef?.current) {
+        cleanup()
+        return
+      }
       if (Math.hypot(event.clientX - x, event.clientY - y) < 4) return
       cleanup()
       // 清掉上一次拖动可能延迟到达的提示，等待本轮原生移动事件给出新位置。

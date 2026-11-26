@@ -235,3 +235,44 @@ test("采集失败时用量页给出提示，只看当前筛选的平台（P4 �
   assert.equal(collectionWarning({ ok: true, failed_sources: [], last_success_ms: 1 }, null), null)
   assert.equal(collectionWarning(null, null), null)
 })
+
+test("单价格式化遵循 USD/CNY，未计价原因区分缺价目与缺用量，来源标签不再写死本机日志", async () => {
+  const { formatUnitPrice, billingModeLabel, callSourceLabel, unpricedReasonText } = await import("./usageStats.ts")
+  assert.equal(formatUnitPrice(3, { rate: 1, currency: "USD" }), "$3.00/M")
+  assert.equal(formatUnitPrice(0.125, { rate: 1, currency: "USD" }), "$0.125/M")
+  assert.equal(formatUnitPrice(3, { rate: 7.2, currency: "CNY" }), "¥21.60/M")
+  assert.equal(formatUnitPrice(null, { rate: 1, currency: "USD" }), "—")
+
+  assert.equal(billingModeLabel("api"), "API 实付")
+  assert.equal(billingModeLabel("subscription"), "订阅等价")
+  assert.equal(billingModeLabel("free"), "免费 / $0")
+
+  assert.equal(callSourceLabel("gateway-subscription"), "模型路由")
+  assert.equal(callSourceLabel("native:zcode:main"), "原生采集")
+  assert.equal(callSourceLabel("local-session"), "本机日志")
+
+  assert.match(unpricedReasonText({ model: "gpt-5", unpriced_reason: "no_usage" }), /未返回可用 Token/)
+  assert.match(unpricedReasonText({ model: "gpt-5", unpriced_reason: "partial_usage" }), /部分 Token/)
+  assert.match(unpricedReasonText({ model: "m-custom", unpriced_reason: "no_price" }), /未收录价目/)
+  assert.match(unpricedReasonText({ model: "claude-sonnet", upstream_model: "my-relay", unpriced_reason: "no_price" }), /my-relay/)
+})
+
+test("输出速率：有首字算精确生成速度，无首字按总耗时算估算下限，过短/过少返回 null", async () => {
+  const { bucketLabel, outputSpeed, overallSpeed, formatSpeed } = await import("./usageStats.ts")
+  const exact = outputSpeed({ output: 100, duration_ms: 3_000, first_token_ms: 500 })
+  assert.deepEqual(exact, { tps: 40, estimated: false })
+  assert.equal(formatSpeed(exact), "40.0 tok/s")
+
+  const est = outputSpeed({ output: 200, duration_ms: 4_000, first_token_ms: null })
+  assert.deepEqual(est, { tps: 50, estimated: true })
+  assert.equal(formatSpeed(est), "≈ 50.0 tok/s")
+
+  assert.equal(outputSpeed({ output: 10, duration_ms: 2_000, first_token_ms: null }), null, "无首字且输出过少不估算")
+  assert.equal(outputSpeed({ output: 100, duration_ms: 300, first_token_ms: null }), null, "无首字且耗时过短不估算")
+  assert.equal(formatSpeed(null), "—")
+
+  assert.equal(bucketLabel("1h"), "每小时")
+  assert.equal(bucketLabel("2h"), "每 2 小时")
+  assert.equal(overallSpeed({ output: 795, duration_ms: 16_900 })?.toFixed(1), "47.0")
+  assert.equal(overallSpeed({ output: 100, duration_ms: 400 }), null)
+})

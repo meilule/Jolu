@@ -66,6 +66,7 @@ pub(crate) fn local_login(platform: &str) -> Option<fn() -> QuotaState> {
         "grok" => Some(crate::grok_quota::local_grok_quota),
         "gemini" => Some(crate::gemini_quota::local_gemini_quota),
         "opencode" => Some(crate::opencode::local_openai_quota),
+        "ollama" => Some(crate::ollama_quota::local_quota),
         _ => None,
     }
 }
@@ -97,7 +98,7 @@ mod tests {
         assert_eq!(route("qoder", "auth", "x", false), QuotaRoute::QoderSource);
         assert_eq!(route("zcode", "auth", ZCODE_ACCOUNT_SOURCE, false), QuotaRoute::NativeSource);
         assert_eq!(route("zcode", "auth", "monitor:native:zcode:main", false), QuotaRoute::ZcodeLocal);
-        for platform in ["grok", "gemini", "opencode"] {
+        for platform in ["grok", "gemini", "opencode", "ollama"] {
             assert_eq!(route(platform, "auth", "x", false), QuotaRoute::LocalLogin, "{platform}");
         }
         assert_eq!(route("claude", "auth", "x", false), QuotaRoute::ClaudeOauth);

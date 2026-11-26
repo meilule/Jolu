@@ -521,17 +521,19 @@ struct Meter {
     deps: Arc<ProxyDeps>,
     entry: PoolEntry,
     started: std::time::Instant,
+    first_token_ms: Option<i64>,
     id: String,
     model: String,
 }
 
 impl Meter {
     fn record(&self, usage: &Value) {
-        crate::gateway::subscription::record_usage(
+        crate::gateway::subscription::record_usage_with_timing(
             &self.deps,
             &self.entry,
             &json!({"id":self.id,"model":self.model,"usage":qoder_chat::metered(usage)}),
             self.started.elapsed().as_millis() as i64,
+            self.first_token_ms,
         );
     }
 }
@@ -793,6 +795,7 @@ async fn forward_at(deps: Arc<ProxyDeps>, entry: &PoolEntry, protocol: CallerPro
             deps: deps.clone(),
             entry: entry.clone(),
             started,
+            first_token_ms: Some(started.elapsed().as_millis() as i64),
             id: format!("chatcmpl-{}", qoder_cosy::random_uuid().replace('-', "")),
             model: info.key.clone(),
         };

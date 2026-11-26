@@ -23,9 +23,13 @@ fn parse(v:&Value,id:&str,session:&str,ts:i64)->Option<Record>{
     // 来源显式 total 优先；否则缺失字段保持未知，不用零补齐。
     let total=n("/total").or_else(||[input,visible,reasoning,read,write].into_iter().try_fold(0i64,|a,b|a.checked_add(b?)));
     let provider=v.get("providerID").or_else(||v.pointer("/model/providerID")).and_then(Value::as_str).unwrap_or("unknown");
+    let created = v.pointer("/time/created").and_then(Value::as_i64).unwrap_or(ts);
+    let duration_ms = v.pointer("/time/completed").and_then(Value::as_i64)
+        .and_then(|end| end.checked_sub(created))
+        .filter(|d| (10..=3_600_000).contains(d));
     Some(Record {request:RequestRecord{platform:"opencode".into(),source:format!("native:opencode:{provider}"),dedup_key:format!("{session}:{id}"),session_id:Some(format!("opencode:{session}")),ts,
         model:v.get("modelID").or_else(||v.pointer("/model/id")).and_then(Value::as_str).map(str::to_owned),input_tokens:input,output_tokens:output,cache_read_tokens:read,cache_write_tokens:write,total_tokens:total,effort:None},
-        input_semantics:"excludes_cache",credits:None,original_credits:None,billable:None,context_ratio:None,reasoning:n("/reasoning"),tool:None})
+        input_semantics:"excludes_cache",credits:None,original_credits:None,billable:None,context_ratio:None,reasoning:n("/reasoning"),tool:None,duration_ms,first_token_ms:None})
 }
 pub fn read_usage(db:&Connection,layout:OpenCodeLayout,since_ms:i64)->Result<Vec<Record>,String>{
     let table=match layout{OpenCodeLayout::SqliteV1=>"message",OpenCodeLayout::SqliteV2=>"session_message",OpenCodeLayout::JsonFiles=>return Err("JSON 来源需按文件读取".into())};
@@ -77,6 +81,6 @@ pub fn read_json_files(root:&Path)->Result<Vec<Record>,String>{
         let total:i64=dest.query_row("SELECT sum(total_tokens) FROM requests",[],|r|r.get(0)).unwrap();
         assert_eq!(total,rows.iter().filter_map(|r|r.request.total_tokens).sum::<i64>());
     }
-    #[test] fn layouts_and_token_semantics(){for (table,layout) in [("message",OpenCodeLayout::SqliteV1),("session_message",OpenCodeLayout::SqliteV2)]{let db=Connection::open_in_memory().unwrap();db.execute_batch(&format!("CREATE TABLE {table}(id TEXT,session_id TEXT,time_created INTEGER,data TEXT);")).unwrap();db.execute(&format!("INSERT INTO {table} VALUES('m','s',123,?1)"),[r#"{"role":"assistant","tokens":{"input":100,"output":30,"reasoning":5,"cache":{"read":20,"write":0}}}"#]).unwrap();assert_eq!(detect_layout(&db).unwrap(),layout);let v=read_usage(&db,layout,0).unwrap();assert_eq!(v[0].request.output_tokens,Some(35));assert_eq!(v[0].request.total_tokens,Some(155));assert!(read_usage(&db,layout,124).unwrap().is_empty());}}
+    #[test] fn layouts_and_token_semantics(){for (table,layout) in [("message",OpenCodeLayout::SqliteV1),("session_message",OpenCodeLayout::SqliteV2)]{let db=Connection::open_in_memory().unwrap();db.execute_batch(&format!("CREATE TABLE {table}(id TEXT,session_id TEXT,time_created INTEGER,data TEXT);")).unwrap();db.execute(&format!("INSERT INTO {table} VALUES('m','s',123,?1)"),[r#"{"role":"assistant","time":{"created":1000,"completed":3500},"tokens":{"input":100,"output":30,"reasoning":5,"cache":{"read":20,"write":0}}}"#]).unwrap();assert_eq!(detect_layout(&db).unwrap(),layout);let v=read_usage(&db,layout,0).unwrap();assert_eq!(v[0].request.output_tokens,Some(35));assert_eq!(v[0].request.total_tokens,Some(155));assert_eq!(v[0].duration_ms,Some(2500));assert!(read_usage(&db,layout,124).unwrap().is_empty());}}
     #[test] fn missing_tokens_are_unknown(){assert!(parse(&serde_json::json!({"role":"assistant"}),"m","s",1).is_none());assert!(detect_layout(&Connection::open_in_memory().unwrap()).is_err());}
 }

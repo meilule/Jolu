@@ -73,8 +73,13 @@ test("长对话三态与大小解析（与后端 parse_tokens 同口径）", () 
 })
 
 test("接入说明每家都写清还原方式；隐藏列表存取失败不抛错", () => {
-  for (const agent of ["claude-code", "codex", "gemini", "opencode", "zcode"]) {
-    assert.ok(wireExplanation(agent).some((item) => item.icon === "undo"), agent)
+  for (const agent of [
+    "claude-code", "codex", "gemini", "antigravity", "opencode", "zcode",
+    "kimi", "dsh", "pi", "pencil", "qoder", "qoder-cn", "qwen", "workbuddy",
+  ]) {
+    const items = wireExplanation(agent)
+    assert.ok(items.length >= 3, `${agent} 应有完整三条接入说明`)
+    assert.ok(items.some((item) => item.icon === "undo"), agent)
   }
   const map = new Map()
   const storage = { getItem: (key) => map.get(key) ?? null, setItem: (key, value) => map.set(key, value) }
@@ -116,7 +121,7 @@ test("自定义工具预设：每条键名完整，未验证的必须标出来",
   const verified = presets.filter((p) => p.verified).map((p) => p.id)
   assert.deepEqual(verified, [], `剩下的预设都是推测的键名，实际 ${verified}`)
   // 有专用接线的工具不再出现在预设里
-  for (const id of ["kimi", "crush", "pencil", "qoder", "qoder-cn", "qwen", "workbuddy"]) assert.equal(customPresetFor(id), null, id)
+  for (const id of ["kimi", "crush", "pencil", "qoder", "qoder-cn", "qwen", "antigravity", "workbuddy"]) assert.equal(customPresetFor(id), null, id)
 })
 
 test("customPresetFor 只认已知 id", () => {
@@ -220,8 +225,8 @@ test("会话记录能力：不支持的要明说，能观测的不占位置", ()
   assert.equal(sessionRecordCapability("pencil"), "no-record", "Pencil 只有模型配置，没有会话存储")
   assert.equal(sessionRecordCapability("qwen"), "not-yet")
   assert.equal(sessionRecordCapability("workbuddy"), "not-yet")
-  // 能读到会话的 8 家都不该有说明（不占位置）
-  for (const agent of ["claude-code", "codex", "zcode", "gemini", "opencode", "kimi", "pi", "dsh", "qoder"]) {
+  // 能读到会话的 10 家都不该有说明（不占位置）
+  for (const agent of ["claude-code", "codex", "zcode", "gemini", "antigravity", "opencode", "kimi", "pi", "dsh", "qoder"]) {
     assert.equal(sessionRecordCapability(agent), "observable", agent)
     assert.equal(sessionRecordNote(agent), null, `${agent} 不该有说明`)
   }
@@ -239,8 +244,9 @@ test("详情页的平台 id 与后端产出的 platform 一致", () => {
   assert.equal(AGENT_PLATFORM["claude-code"], "claude")
   assert.equal(AGENT_PLATFORM.kimi, "kimi")
   assert.equal(AGENT_PLATFORM.pi, "pi")
+  assert.equal(AGENT_PLATFORM.antigravity, "antigravity")
   // 不能出现只有图标表才认识、后端不产出的 id
-  const backendPlatforms = new Set(["claude", "codex", "gemini", "opencode", "zcode", "kimi", "dsh", "pi", "pencil", "qoder", "qoder-cn", "qwen", "workbuddy"])
+  const backendPlatforms = new Set(["claude", "codex", "gemini", "opencode", "zcode", "kimi", "dsh", "pi", "pencil", "qoder", "qoder-cn", "qwen", "workbuddy", "antigravity"])
   for (const [agent, platform] of Object.entries(AGENT_PLATFORM)) {
     assert.ok(backendPlatforms.has(platform), `${agent} 映射到 ${platform}，但后端不会产出这个 platform`)
   }

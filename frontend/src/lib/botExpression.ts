@@ -145,6 +145,8 @@ export interface BotInput {
   hover?: boolean
   /** 模型入口：请求转发中 / 刚转发成功 / 被网关拒绝 */
   relay?: "in" | "ok" | "rejected" | null
+  /** 额度预警阈值（R2-I-04，默认 80%） */
+  warnThreshold?: number
 }
 
 export interface BotResult {
@@ -153,12 +155,13 @@ export interface BotResult {
 }
 
 export function botExpression(input: BotInput): BotResult {
+  const warnAt = input.warnThreshold ?? 80
   const known = input.quotaUsed.filter((value): value is number => value !== null)
   if (input.connected && input.queryFailed) return { expr: "error", reason: "额度查询失败" }
   if (input.relay === "rejected") return { expr: "worry", reason: "网关拒绝了请求" }
   if (known.some((value) => value >= 100)) return { expr: "sad", reason: "额度用尽（100%）" }
   if (input.dragging) return { expr: "drag", reason: "拖动窗口中" }
-  if (known.some((value) => value >= 80)) return { expr: "worry", reason: "任一额度窗口 ≥ 80%" }
+  if (known.some((value) => value >= warnAt)) return { expr: "worry", reason: `任一额度窗口 ≥ ${warnAt}%` }
   if (input.waiting) return { expr: "wait", reason: "自动化任务在等额度恢复" }
   if (input.refreshing) return { expr: "refresh", reason: "正在刷新额度" }
   if (input.relay === "in") return { expr: "relay", reason: "请求正在经模型入口转发" }

@@ -3,6 +3,7 @@ import * as Menu from "@radix-ui/react-dropdown-menu"
 import { AlertTriangle, Blocks, Check, ChevronDown, CircleAlert, EyeClosed, Globe, KeyRound, Mail, LoaderCircle, Pencil, Plus, RefreshCw, ScanEye, Search, Ticket, Trash2 } from "lucide-react"
 import { api, isTauri, type QuotaWindowDto } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { useGlidePill } from "@/motion"
 import { PROVIDERS, connectionLogoId, connectionProviderId, connectionProviderEntry, editSaveState, fallsBackToManualModel, modelFetchErrorText, protocolLabel, providerEntry, requestGate, canStartVerify, modelBusyAfter, validateConnectionName, type ProviderId, type ModelBusy } from "@/lib/providerCatalog"
 import { accountQueries, quotaValue, subscriptionDisplay, resetCreditsText, filterAccounts, formatMoney, formatResetAt, formatSyncedAt, quotaTitle, redactAccountMessage } from "@/lib/accountDisplay"
 import { accountCardPolicy } from "@/lib/accountCardPolicy"
@@ -26,6 +27,7 @@ import { SlideIndicator } from "@/motion"
 import { Button as UiButton, Checkbox as UiCheckbox, Dialog as UiDialog, StatusPill } from "@/ui"
 import type { Connection, ConnectionKind, PlatformId } from "@/types"
 import { RoutingCardRow, RoutingEditSection, useRoutingIndex, type RoutingIndex } from "./RoutingBlock"
+import { BillingEditSection } from "./BillingEditSection"
 
 const PrivacyContext = createContext(false)
 const PRIVACY_KEY = "jolu.accounts.hide-sensitive"
@@ -161,30 +163,7 @@ export function AccountsPanel({ conn, onConnect, target, onTargetHandled }: {
           <Search aria-hidden className="size-3.5 shrink-0 text-jn-text-3" />
           <input type={hidden ? "password" : "text"} autoComplete="off" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索用户名、邮箱、连接名称" aria-label="搜索账号" className="min-w-0 flex-1 bg-transparent text-xs text-jn-text outline-none placeholder:text-jn-text-3" />
         </label>
-        <div role="group" aria-label="账号类型" className="inline-flex h-9 items-center gap-0.5 rounded-full bg-jn-well p-1">
-          {([
-            [null, "全部类型"],
-            ["auth", "Auth官方订阅"],
-            ["api", "第三方ApiKey"],
-          ] as const).map(([value, label]) => {
-            const active = kind === value
-            return (
-              <button
-                key={label}
-                type="button"
-                aria-pressed={active}
-                onClick={() => setKind(value)}
-                className={cn(
-                  "jn-interactive relative inline-flex h-7 items-center rounded-full px-3 text-xs font-semibold outline-none",
-                  active ? "text-jn-text" : "text-jn-text-2 hover:text-jn-text",
-                )}
-              >
-                {active && <SlideIndicator layoutId="accounts-kind-seg" className="bg-jn-surface shadow-jn-surface" />}
-                <span className="relative z-[1]">{label}</span>
-              </button>
-            )
-          })}
-        </div>
+        <KindSegment kind={kind} onChange={setKind} />
         <FilterChip active={platform === null} onClick={() => setPlatform(null)}>全部供应商</FilterChip>
         {QUICK_FILTERS.map((id) => (
           <FilterChip key={id} active={platform === id} onClick={() => setPlatform(id)}><span aria-hidden className="grid size-4 shrink-0 place-items-center"><PlatformLogo platform={id} size={16} /></span>{providerEntry(id).name}</FilterChip>
@@ -287,7 +266,12 @@ export function AccountsPanel({ conn, onConnect, target, onTargetHandled }: {
       {editing && (
         <EditDialog
           account={editing}
-          routing={<RoutingEditSection account={accounts.find((a) => a.id === editing.id) ?? editing} onChanged={() => { routing.reload(); void conn.reload() }} />}
+          routing={
+            <>
+              <RoutingEditSection account={accounts.find((a) => a.id === editing.id) ?? editing} onChanged={() => { routing.reload(); void conn.reload() }} />
+              <BillingEditSection account={accounts.find((a) => a.id === editing.id) ?? editing} onChanged={() => void conn.reload()} />
+            </>
+          }
           others={accounts.filter((a) => a.id !== editing.id)}
           onClose={() => setEditing(null)}
           onSave={async (name, secret, model) => {
@@ -347,6 +331,40 @@ function FilterChip({ active, onClick, children }: { active: boolean; onClick: (
     >
       {children}
     </button>
+  )
+}
+
+function KindSegment({ kind, onChange }: { kind: "auth" | "api" | null; onChange: (next: "auth" | "api" | null) => void }) {
+  const hoverGlide = useGlidePill({
+    selector: "button",
+    background: "color-mix(in oklab, var(--jn-surface) 65%, transparent)",
+    skipActive: true,
+  })
+  return (
+    <div ref={hoverGlide} role="group" aria-label="账号类型" className="relative inline-flex h-9 items-center gap-0.5 rounded-full bg-jn-well p-1">
+      {([
+        [null, "全部类型"],
+        ["auth", "Auth官方订阅"],
+        ["api", "第三方ApiKey"],
+      ] as const).map(([value, label]) => {
+        const active = kind === value
+        return (
+          <button
+            key={label}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(value)}
+            className={cn(
+              "jn-interactive jn-no-press relative isolate inline-flex h-7 items-center rounded-full px-3 text-xs font-semibold outline-none",
+              active ? "text-jn-text" : "text-jn-text-2 hover:text-jn-text",
+            )}
+          >
+            {active && <SlideIndicator layoutId="accounts-kind-seg" radius={9999} className="-z-10 bg-jn-surface shadow-jn-surface" />}
+            {label}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 

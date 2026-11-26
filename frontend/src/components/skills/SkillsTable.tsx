@@ -1,6 +1,7 @@
 import * as Menu from "@radix-ui/react-dropdown-menu"
 import { ChevronRight, Copy, Ellipsis, FolderOpen, Pencil, Square, SquareCheck, SquareMinus, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useGlidePill } from "@/motion"
 import { scopeLabel, sourceLabel, statusLabel, toggleBlocked } from "@/lib/skillsManager"
 import type { SkillItemDto } from "@/lib/skillsApi"
 import { providerName } from "@/lib/providerCatalog"
@@ -29,6 +30,7 @@ export function SkillsTable({ items, total, selected, busy, showPlatform, onSele
   onRemove: (item: SkillItemDto) => void
   onOpenDir: (item: SkillItemDto) => void
 }) {
+  const glide = useGlidePill()
   const picked = items.filter((i) => selected.has(skillKey(i))).length
   const HeadBox = picked === 0 ? Square : picked === items.length ? SquareCheck : SquareMinus
   return (
@@ -88,7 +90,7 @@ export function SkillsTable({ items, total, selected, busy, showPlatform, onSele
                   <Ellipsis aria-hidden className="size-4" />
                 </Menu.Trigger>
                 <Menu.Portal>
-                  <Menu.Content align="end" sideOffset={6} collisionPadding={12} className="jn-popover z-[140] w-[176px] rounded-[14px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface">
+                  <Menu.Content ref={glide} align="end" sideOffset={6} collisionPadding={12} className="jn-popover z-[140] w-[176px] rounded-[14px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface">
                     <Menu.Item className={MENU_ITEM} onSelect={() => onOpenDir(item)}><FolderOpen aria-hidden className="size-4 text-jn-text-3" />打开目录</Menu.Item>
                     <Menu.Item className={MENU_ITEM} disabled={item.readonly} onSelect={() => onEdit(item)}><Pencil aria-hidden className="size-4 text-jn-text-3" />编辑 Skill</Menu.Item>
                     <Menu.Item className={MENU_ITEM} onSelect={() => onCopy(item)}><Copy aria-hidden className="size-4 text-jn-text-3" />复制到供应商</Menu.Item>

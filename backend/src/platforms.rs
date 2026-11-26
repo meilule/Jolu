@@ -18,8 +18,7 @@ static CATALOG: LazyLock<Vec<Platform>> = LazyLock::new(|| {
 pub fn get(id: &str) -> Option<&'static Platform> {
     CATALOG.iter().find(|p| p.id == id)
 }
-/// 目录里的全部平台 id（注册表一致性测试用）。
-#[cfg(test)]
+/// 目录里的全部平台 id（实时监听与注册表一致性共用，避免各处手写白名单遗漏新平台）。
 pub fn ids() -> Vec<String> {
     CATALOG.iter().map(|p| p.id.clone()).collect()
 }
@@ -53,8 +52,8 @@ mod tests {
         }
     }
     #[test]
-    fn all_ten_platforms_have_unique_ids() {
-        assert_eq!(CATALOG.len(), 10);
+    fn all_fifteen_platforms_have_unique_ids() {
+        assert_eq!(CATALOG.len(), 15);
         for id in [
             "claude",
             "codex",
@@ -65,14 +64,22 @@ mod tests {
             "trae",
             "qoder",
             "workbuddy",
+            "ollama",
             "custom",
+            "antigravity",
+            "kimi",
+            "pi",
+            "dsh",
         ] {
             assert_eq!(CATALOG.iter().filter(|p| p.id == id).count(), 1);
         }
         assert!(!known("tare"));
         assert!(!supports("trae", "local_sessions"));
-        // OpenCode 已列入目录但尚未接入，不声明任何能力
         assert!(supports("opencode","local_sessions"));
+        for id in ["antigravity", "kimi", "pi", "dsh"] {
+            assert!(known(id) && native(id) && supports(id, "local_sessions"));
+            assert!(!supports(id, "auth_connection") && !supports(id, "subscription_quota"));
+        }
         // 自定义供应商只有用户填写的 API Key 连接，不是本机来源平台
         assert!(known("custom") && !native("custom"));
         assert!(supports("custom", "api_connection") && !supports("custom", "local_sessions"));

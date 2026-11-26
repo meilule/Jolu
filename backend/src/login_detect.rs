@@ -24,6 +24,7 @@ pub fn detect(platform: &str) -> LoginDetection {
         "opencode" => {let found=crate::opencode::openai_logged_in();LoginDetection {found,sources:if found{vec!["已在 OpenCode 中登录 OpenAI".into()]}else{vec![]},message:(!found).then(||"请先在 OpenCode 中登录 OpenAI".into()),..Default::default()}},
         "claude" => detect_claude(),
         "codex" => detect_codex(),
+        "ollama" => crate::ollama_quota::detect(),
         other if crate::platforms::native(other) => detect_native(other),
         _ => LoginDetection { message: Some("该平台暂不支持订阅连接".into()), ..Default::default() },
     }

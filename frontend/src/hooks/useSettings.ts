@@ -174,7 +174,13 @@ export function useSettings() {
   const setIslandVisible = useCallback((visible: boolean) => save("island_visible", () => api.setIslandVisibility(visible)), [save])
   const setAutoCheckUpdates = useCallback((on: boolean) => save("auto_check_updates", () => api.setAutoCheckUpdates(on)), [save])
   const setUpdateInterval = useCallback((minutes: number) => save("update_interval", () => api.setUpdateInterval(minutes)), [save])
-  const setCostCurrency = useCallback((currency: "USD" | "CNY") => save("cost_currency", () => api.setCostCurrency(currency)), [save])
+  const setCostCurrency = useCallback((currency: "USD" | "CNY") => {
+    if (!isTauri) {
+      publish({ settings: { ...shared.settings, cost_currency: currency } })
+      return Promise.resolve(true)
+    }
+    return save("cost_currency", () => api.setCostCurrency(currency))
+  }, [save])
   const setSilentStartup = useCallback((on: boolean) => save("silent_startup", () => api.setSilentStartup(on)), [save])
   const setProxy = useCallback(
     (port: number, enabled: boolean, fallbackDirect: boolean) => save("proxy", () => api.setProxy(port, enabled, fallbackDirect)),
@@ -193,11 +199,18 @@ export function useSettings() {
     }
     return save("island_style", () => api.setIslandStyle(style))
   }, [save])
-  /** 4.2b：联动开关按「现读最新 + 补丁」写，免得两个开关连续切换时互相覆盖 */
-  const setIslandLinkage = useCallback((patch: Partial<IslandLinkageDto>) => save("island_linkage", async () => {
-    const current = (await api.getSettings()).island_linkage ?? DEFAULT_ISLAND_LINKAGE
-    return api.setIslandLinkage({ ...DEFAULT_ISLAND_LINKAGE, ...current, ...patch })
-  }), [save])
+  /** 联动与趣味开关（R2-I-04）：浏览器预览即时写入，桌面端按「现读最新 + 补丁」落盘 */
+  const setIslandLinkage = useCallback((patch: Partial<IslandLinkageDto>) => {
+    if (!isTauri) {
+      const current = shared.settings.island_linkage ?? DEFAULT_ISLAND_LINKAGE
+      publish({ settings: { ...shared.settings, island_linkage: { ...DEFAULT_ISLAND_LINKAGE, ...current, ...patch } } })
+      return Promise.resolve(true)
+    }
+    return save("island_linkage", async () => {
+      const current = (await api.getSettings()).island_linkage ?? DEFAULT_ISLAND_LINKAGE
+      return api.setIslandLinkage({ ...DEFAULT_ISLAND_LINKAGE, ...current, ...patch })
+    })
+  }, [save])
   const setDefaultPage = useCallback((page: DefaultPage) => save("default_page", () => settingsApi.setDefaultPage(page)), [save])
   const setAppearance = useCallback((patch: Partial<Pick<AppSettings, "main_zoom" | "list_density" | "reduce_motion">>) => save(Object.keys(patch).sort().join(","), async () => {
     const next = { ...await api.getSettings(), ...patch }

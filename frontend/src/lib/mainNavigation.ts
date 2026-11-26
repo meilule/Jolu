@@ -64,6 +64,8 @@ export type NavigationIntent =
   | { kind: "settings"; section: string }
   /** 点击任务通知：打开自动化页并选中对应任务。 */
   | { kind: "automation"; task_id: number }
+  /** 灵动岛快捷动作「建自动化」：打开自动化页并唤起新建任务弹窗。 */
+  | { kind: "automation_new"; platform: string | null; session_id: string | null }
   /** 灵动岛点会话：打开会话线程并定位。 */
   | { kind: "sessions"; platform: string; session_id: string }
   /** 灵动岛「查看用量」：打开用量统计并按今天预筛。 */
@@ -72,12 +74,15 @@ export type NavigationIntent =
 export function pageForIntent(intent: NavigationIntent): MainPage {
   if (intent.kind === "providers") return "providers"
   if (intent.kind === "overview") return resolveOpenPage(intent.settings?.default_page ?? "last", intent.settings?.last_page ?? null)
-  if (intent.kind === "automation") return "automation"
+  if (intent.kind === "automation" || intent.kind === "automation_new") return "automation"
   if (intent.kind === "sessions") return "sessions"
   if (intent.kind === "usage") return "usage"
   if (intent.section === "island") return "island"
   if (intent.section === "gateway") return "gateway"
   if (intent.section === "connections") return "providers"
+  if (intent.section === "checkin") return "checkin"
+  if (intent.section === "sessions") return "sessions"
+  if (intent.section === "automation") return "automation"
   return "settings"
 }
 

@@ -9,7 +9,7 @@ import { useConnections } from "@/hooks/useConnections"
 import { shouldRefreshConnection } from "@/lib/refreshScope"
 import { useApiUsage, useBalance, useCostEstimate, useQuota } from "@/hooks/useQuota"
 import { toQuotaWindows } from "@/lib/quotaMap"
-import { api, compactTokens, DEFAULT_ISLAND_LINKAGE, isTauri, listenEvent, type SourceBreakdownDto } from "@/lib/api"
+import { api, compactTokens, isTauri, listenEvent, resolveIslandLinkage, type SourceBreakdownDto } from "@/lib/api"
 import type { MainContextDto } from "@/lib/events"
 import { SIGNAL_LABEL, SIGNAL_SHOW_MS, emptySignals, stepSignals, type ActiveSignal } from "@/lib/islandSignals"
 import { islandIdFromSearch, islandProfile } from "@/lib/islandProfile"
@@ -62,7 +62,7 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
   // 本岛身份：URL 带 clone 参数的是分身，否则是本体；连接与停靠按身份从设置里取
   const { settings } = useSettings()
   const cloneId = useMemo(() => islandIdFromSearch(window.location.search), [])
-  const linkage = settings.island_linkage ?? DEFAULT_ISLAND_LINKAGE
+  const linkage = resolveIslandLinkage(settings.island_linkage)
   const ownProfile = islandProfile(settings, cloneId)
   const { connections, loading: connectionsLoading } = useConnections()
   // 4.2b #9 跟随主窗口：只有本体岛、开关打开时才听主窗口在看哪个连接；用户点「解除」后，
@@ -410,10 +410,16 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
         sourceText: `统计来源：${LOCAL_SOURCE.name}（${LOCAL_SOURCE.scope}）· 设计示例`,
       }
 
+  const mainWindowCenter = followed && mainContext?.main_center
+    ? { x: mainContext.main_center[0], y: mainContext.main_center[1] }
+    : null
+
   // 模型入口的数据在上面已经订阅（`working` 要读它的 inFlight），这里只把结果交给容器
   return {
     data,
     settings,
+    linkage,
+    mainWindowCenter,
     profile,
     cloneId,
     islandPlatform,

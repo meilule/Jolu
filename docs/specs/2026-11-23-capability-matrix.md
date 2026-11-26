@@ -1,7 +1,7 @@
 # Jolu 能力矩阵与验证基线
 
-日期：2026-11-23（2026-11-24 按 P0-1 要求补齐）
-状态：**P0-1 交付物。11 项能力 × 7 档验证已覆盖两个维度：13 家 Agent（§1）与 22 种「平台 × 地区 × 连接类型」（§2）。实现列以代码为准（文件:行号或函数名）；验证列以 `docs/verification/` 及其他已有执行记录为准，两者分开标注。剩余差距是缺真实账号 / 真实样本的组合，见 §4「未验证清单」。**
+日期：2026-11-23（2026-11-24 按 P0-1 要求补齐；2026-11-26 补入 Antigravity CLI 与 Kimi / dsh / pi 用量采集更新）
+状态：**P0-1 交付物。11 项能力 × 7 档验证已覆盖两个维度：14 家 Agent（§1）与 22 种「平台 × 地区 × 连接类型」（§2）。实现列以代码为准（文件:行号或函数名）；验证列以 `docs/verification/` 及其他已有执行记录为准，两者分开标注。剩余差距是缺真实账号 / 真实样本的组合，见 §4「未验证清单」。**
 配套计划：[产品对齐执行计划](../plans/2026-11-23-product-alignment-execution-plan.md)
 配套：[连接能力矩阵](2026-11-23-connection-capability-matrix.md)（额度 / 模型发现 / 转发三列的原始核查，本文 §2 已吸收并按地区、连接类型拆开）
 
@@ -95,7 +95,7 @@
 
 ---
 
-## 1. Agent 维度（13 家）
+## 1. Agent 维度（14 家）
 
 ### 1.1 实现矩阵 A：探测、接线、用量采集、会话、Skills、签到、订阅转发
 
@@ -103,25 +103,26 @@
 
 | Agent | 探测 | 接线 | 用量采集 | 会话读取 | Skills | 签到 | 订阅转发 |
 |---|---|---|---|---|---|---|---|
-| **claude-code** | ✅ `agent_discovery.rs:334` Standard，`bin=claude` | ✅ `wiring_specs.rs:203` → `adapters.rs:19/395`，1 文件，`LegacyLiteral` | ✅ `collector.rs:544`（`~/.claude/projects/*.jsonl`） | ✅ 正文可读 `session_threads.rs:95` | ✅ 可写 `skills.rs:105` | — | ✅ `adapter/claude.rs:207` |
-| **codex** | ✅ `:335` Standard，`sign_in=auth.json` | ✅ `:218` → `adapters.rs:101/432`，1 文件，`Ignored` | ✅ `collector.rs:545`（`rollout-*.jsonl`） | ✅ 正文可读 `:97` | ✅ 可写 `:117` | — | ✅ `adapter/codex.rs:260` |
-| **gemini** | ✅ `:337` **CliOnly** | ✅ `:237` → `adapters.rs:135/635`，**2 文件** | ✅ `native_sources.rs:42`（整份快照重建） | 🟡 列表有、**正文不可读** | ✅ 可写 `:130` | — | ✅ `adapter/gemini_subscription.rs:329` |
-| **opencode** | ✅ `:338` Standard | ✅ `:252` → `adapters.rs:160/451`，1 文件 | ✅ `:40`（sqlite v1/v2 双分支） | 🟡 列表有、正文不可读 | ✅ 可写 `:131` | — | ✅ 复用 codex 适配器 `wire.rs:1135` |
-| **zcode** | ✅ `:336` Standard | ✅ `:267` → `adapters.rs:179/608`，**2 文件** | ✅ `:45`（`cli/db/db.sqlite`） | ✅ 正文读 sqlite `:1164`，含子代理过滤 | ✅ 可写 `:134` | ⚠️ **礼包领取**非每日签到 | ✅ `adapter/zcode.rs:595` |
-| **kimi** | ✅ `:340` Standard | ✅ `:282` → `adapters.rs:224/470`，1 文件，`Exact` | — **不入库**（见 §6.8） | ✅ `kimi_sessions.rs:193`（`has_source=false`） | — | — | — |
-| **dsh** | ✅ `:345` Standard（**file 证据已过期**，见 §6.6） | ✅ `:297` → `adapters.rs:336/555`，**多文件**（N profile + `.env` + credentials） | — | ✅ `dsh_sessions.rs:215`（zstd 多帧） | — | — | — |
-| **pi** | ✅ `:342` Standard | ✅ `:312` → `adapters.rs:298/488`，**2 文件** | — | ✅ `pi_sessions.rs:196` | — | — | — |
-| **pencil** | ✅ `:344`（**无 CLI**） | ✅ `:327` → `adapters.rs:370/588`，1 文件 | — | — **不产生会话** | — | — | — |
-| **qoder** | ✅ `:348` Standard | ✅ `:342` → `adapters.rs:370/588`，1 文件 | ✅ `:54` jsonl + **`qoder_usage.rs` 桌面账本**（见 §6.9） | 🟡 列表有、正文不可读 | ✅ 可写 `:132` | ✅ `checkin_qoder.rs:40` | ✅ `adapter/qoder.rs:650` |
-| **qoder-cn** | ✅ `:349` Standard | ✅ `:357` → 同上，1 文件 | ✅ `:60`（`native:qoder:cn`） | 🟡 同 qoder | ⚠️ **无独立入口**（见 §6.5） | ✅ 走 `edition=cn` | ✅ 同一适配器 |
-| **qwen** | ✅ `:339` Standard | ✅ `:372` → `adapters.rs:253/519`，1 文件，`Exact` | — | — | — | — | — |
-| **workbuddy** | ✅ `:350`（**无 CLI**） | ✅ `:389` → `adapters.rs:276/534`，1 文件，`Prefixed` | ⚠️ `:66` 有读取器，**本机无客户端目录**（见 §6.10） | 🟡 列表有、正文不可读 | 🟡 **只读** `:135` | ✅ `checkin_workbuddy.rs:129` | ✅ `adapter/workbuddy.rs:368` |
+| **claude-code** | ✅ `agent_discovery.rs:342` Standard，`bin=claude` | ✅ `wiring_specs.rs:217` → `adapters.rs:19/395`，1 文件，`LegacyLiteral` | ✅ `collector.rs:544`（`~/.claude/projects/*.jsonl`，支持 `CLAUDE_CONFIG_DIR`） | ✅ 正文可读 `session_threads.rs:95` | ✅ 可写 `skills.rs:105` | — | ✅ `adapter/claude.rs:207` |
+| **codex** | ✅ `:343` Standard，`sign_in=auth.json` | ✅ `:232` → `adapters.rs:101/432`，1 文件，`Ignored` | ✅ `collector.rs:545`（`rollout-*.jsonl`） | ✅ 正文可读 `:97` | ✅ 可写 `:117` | — | ✅ `adapter/codex.rs:260` |
+| **gemini** | ✅ `:345` **CliOnly** | ✅ `:251` → `adapters.rs:135/635`，**2 文件** | ✅ `native_sources.rs:42`（整份快照重建） | 🟡 列表有、**正文不可读** | ✅ 可写 `:130` | — | ✅ `adapter/gemini_subscription.rs:329` |
+| **antigravity** | ✅ `:346` Standard，`bin=agy`（含 `%LOCALAPPDATA%\agy\bin` 与双数据目录） | ✅ `:403` → `wiring_antigravity.rs`，**2 文件**（`settings.json` + `jolu-agy.cmd`），`Exact` | ✅ `antigravity_usage.rs`（`conversations/*.db` Protobuf + `transcript.jsonl` + `conversation_summaries.db`） | 🟡 列表有（标题与 `cwd` 同步）、**正文不可读** | — | — | — |
+| **opencode** | ✅ `:347` Standard | ✅ `:266` → `adapters.rs:160/451`，1 文件 | ✅ `:40`（sqlite v1/v2 双分支） | 🟡 列表有、正文不可读 | ✅ 可写 `:131` | — | ✅ 复用 codex 适配器 `wire.rs:1135` |
+| **zcode** | ✅ `:344` Standard | ✅ `:281` → `adapters.rs:179/608`，**2 文件** | ✅ `:45`（`cli/db/db.sqlite`） | ✅ 正文读 sqlite `:1164`，含子代理过滤 | ✅ 可写 `:134` | ⚠️ **礼包领取**非每日签到 | ✅ `adapter/zcode.rs:595` |
+| **kimi** | ✅ `:349` Standard | ✅ `:296` → `adapters.rs:224/470`，1 文件，`Exact` | ✅ `kimi_sessions.rs::scan_usage`（全量 `agents/*/wire.jsonl` 增量入库） | ✅ `kimi_sessions.rs:193`（入库去重，`has_source=false`） | — | — | — |
+| **dsh** | ✅ `:354` Standard（**file 证据已过期**，见 §6.6） | ✅ `:311` → `adapters.rs:336/555`，**多文件**（N profile + `.env` + credentials） | ✅ `dsh_sessions.rs::scan_usage`（含 subagent 增量入库） | ✅ `dsh_sessions.rs:215`（zstd 多帧，隐藏 `is_subagent=1`） | — | — | — |
+| **pi** | ✅ `:351` Standard | ✅ `:326` → `adapters.rs:298/488`，**2 文件** | ✅ `pi_sessions.rs::scan_usage`（增量入库） | ✅ `pi_sessions.rs:196`（入库去重） | — | — | — |
+| **pencil** | ✅ `:353`（**无 CLI**） | ✅ `:341` → `adapters.rs:370/588`，1 文件 | — | — **不产生会话** | — | — | — |
+| **qoder** | ✅ `:357` Standard | ✅ `:356` → `adapters.rs:370/588`，1 文件 | ✅ `:54` jsonl + **`qoder_usage.rs` 桌面账本**（见 §6.9） | 🟡 列表有、正文不可读 | ✅ 可写 `:132` | ✅ `checkin_qoder.rs:40` | ✅ `adapter/qoder.rs:650` |
+| **qoder-cn** | ✅ `:358` Standard | ✅ `:371` → 同上，1 文件 | ✅ `:60`（`native:qoder:cn`） | 🟡 同 qoder | ⚠️ **无独立入口**（见 §6.5） | ✅ 走 `edition=cn` | ✅ 同一适配器 |
+| **qwen** | ✅ `:348` Standard | ✅ `:386` → `adapters.rs:253/519`，1 文件，`Exact` | — | — | — | — | — |
+| **workbuddy** | ✅ `:359`（**无 CLI**） | ✅ `:419` → `adapters.rs:276/534`，1 文件，`Prefixed` | ⚠️ `:66` 有读取器，**本机无客户端目录**（见 §6.10） | 🟡 列表有、正文不可读 | 🟡 **只读** `:135` | ✅ `checkin_workbuddy.rs:129` | ✅ `adapter/workbuddy.rs:368` |
 
 行号说明：探测列的 `:NNN` 指 `agent_discovery.rs`，接线列指 `gateway/wiring_specs.rs`，用量列指 `native_sources.rs`（另注明的除外），会话列指 `session_threads.rs`，Skills 列指 `skills.rs`。opencode 的订阅转发行号已由旧版的 `wire.rs:1088` 更正为当前的 `:1135`。
 
 ### 1.2 实现矩阵 B：账号识别、额度、模型发现、路由、续跑、工具调用
 
-三条公共路径（适用于全部 13 家，下表只写各家差异）：
+三条公共路径（适用于全部 14 家，下表只写各家差异）：
 
 - **调用方识别**：`gateway/wire.rs:294` `agent_from_headers`（接线令牌 `jolu-<agent>.<实例>` → originator → UA 前缀；UA 前缀登记在 `wiring_specs.rs` 各行的 `ua` 字段）。
 - **原生会话识别**：`wire.rs:197` `session_identity`，**只认 claude-code / codex / opencode**，其余 Agent 返回 `None`（`wire.rs:218`），只记流水，不建会话。
@@ -132,6 +133,7 @@
 | **claude-code** | UA `claude-cli` / `claude-code`（`wiring_specs.rs:216`）；会话 `x-claude-code-session-id` 或 `metadata.user_id`（`wire.rs:199-204`） | ↘ | 接线写默认模型、档位、Subagent 模型（`wiring/adapters.rs:19-99` `wire_claude`，`uses_catalog=false` `wiring_specs.rs:215`）；可选项来自网关 `/v1/models`（`server.rs:21`） | Anthropic Messages `/v1/messages`（`server.rs:23`） | ✅ 在原工具继续 `claude --resume`（`session_threads.rs:1239`、`:1275` `continue_session`；前端 `lib/sessionThreads.ts:173` `canContinue`）；自动化续接 / 等额度续跑（`automation.rs:52`、`:1181` `--resume`、`:834-888` 等待额度） | ✅ 透传；上游非真 Claude 时 `tool_loop` 代执行 WebSearch / WebFetch（`wire.rs:905-917`）；可装 MCP 搜索（`library/agents.rs` `mcpServers`） |
 | **codex** | UA `codex` / `codex_cli_rs` / `acp-extension-codex`（`wiring_specs.rs:235`）；会话 `session-id`（`wire.rs:205-210`） | ↘ | 只写地址与令牌（`adapters.rs:101-133`），模型由网关 `/v1/models`、`/backend-api/codex/models` 提供（`server.rs:21,31`） | Responses `/v1/responses`；保留 ChatGPT 登录时 `/backend-api/codex/responses`（`server.rs:27-30`） | ✅ `codex resume`（`session_threads.rs:1240`）；自动化（`automation.rs:53`、`:1172`）；第三方模型的远程压缩代办（`gateway/responses_chat.rs`，CX） | ✅ 透传；Responses→Chat 时保留 custom tools（`wire.rs:1245` `original_custom_tools`）；可装 MCP 搜索（`mcp_servers`）；`tool_loop` 不涉及（只管 Anthropic 调用方） |
 | **gemini** | UA `geminicli` / `gemini-cli` 及 `proxy_client=geminicli`（`wire.rs:323-331`）；**无会话标识**（API Key 模式请求不带，GD:35） | ↘ | 网关 `/v1beta/models`（`server.rs:33`） | Gemini 原生 `/v1beta/models/{*call}` → `adapter/gemini.rs:28` `handle` | — 未实现（`session_threads.rs:1237-1241` 与 `automation.rs:50-56` 只收 claude / codex） | ✅ `functionDeclarations` ↔ Chat 工具互转（`adapter/gemini.rs:388-410`）；`googleSearch` 等内置工具明确拒绝（`:392`）；可装 MCP 搜索 |
+| **antigravity** | **UA 未登记**（`wiring_specs.rs:416` `ua: &[]`），靠 `jolu-agy.cmd` 里的接线令牌 `jolu-antigravity.<实例>` 识别；无原生会话识别 | 不适用 | 网关目录写入 `settings.json` 的 `customModelsConfig.customModels["jolu/<id>"]`（`wiring_antigravity.rs`，`uses_catalog=true`） | Gemini 原生 `/v1beta/models/{*call}`（`API_PROVIDER_GOOGLE_GEMINI` + `GOOGLE_GEMINI_BASE_URL`） | — 未实现 | 透传；无 MCP 搜索 |
 | **opencode** | UA `opencode`；会话 `x-opencode-session-id`（子会话归父，`wire.rs:211-217`） | ↘ | 只写 `provider.jolu`（`@ai-sdk/openai-compatible`，`wiring.rs:666-683`），**不写模型清单**；?（待确认：OpenCode 对该 provider 是否自动请求 `/models`，未核实） | Chat `/v1/chat/completions` | — 未实现 | ✅ 透传；可装 MCP 搜索（`opencode.json` 的 `mcp`） |
 | **zcode** | UA `zcode`（`wiring_specs.rs:280`）；无原生会话识别 | ↘ | 网关目录写入配置（`uses_catalog=true`；`escape.rs:190-194`；`wiring.rs:919/968` `anthropic-messages`） | Anthropic Messages | — 未实现 | ✅ 透传；MCP 搜索**不支持**（`library/agents.rs` 头注释：zcode 的 `mcp.servers` 形状未实测） |
 | **kimi** | UA `kimicli`（`wiring_specs.rs:295`） | 不适用 | 网关目录写入 `models."jolu/<id>"`（`wiring.rs:1190-1237`，`uses_catalog=true`） | `providers.jolu`（`type=kimi`，`wiring.rs:1190`）；协议未在本次核实 | — 未实现 | 透传；无 MCP 搜索 |
@@ -159,27 +161,29 @@
 
 - **claude-code**：唯一用 `TokenMatch::LegacyLiteral`（兼容历史字面量 `jolu-claude-code`）。会话与工具调用解析最完整。
 - **codex**：`token_match=Ignored` 且带 OAuth 分支——登录 ChatGPT 时只改地址、不写 token。
-- **gemini**：13 家里唯一 `Detect::CliOnly`（`~/.gemini` 也被 Antigravity / Code Assist 用）。用量是整份快照重建，rewind 会删消息。请求不带会话标识，网关只记流水。
+- **gemini**：14 家里唯一 `Detect::CliOnly`（`~/.gemini` 也被 Antigravity / Code Assist 用）。用量是整份快照重建，rewind 会删消息。请求不带会话标识，网关只记流水。
+- **antigravity**：地址与 Key 只从环境变量读（`GOOGLE_GEMINI_BASE_URL` / `GEMINI_API_KEY`），`settings.json` 只写 `jolu/` 自定义模型与选择键，同目录生成 `jolu-agy.cmd` 启动脚本；用量采集同时覆盖 `~/.gemini/antigravity` 与 `~/.cc-switch/agy/*/antigravity-cli`，支持精确首字与总耗时。
 - **opencode**：sqlite v1/v2 与旧 JSON 三种格式，共存时只读 sqlite 防重复。
 - **zcode**：唯一「库型」会话来源。签到是**礼包领取**（`checkin_zcode.rs:1-24`）而非每日签到。
-- **kimi**：会话只能从 `~/.kimi-code/` 只读解析，**用量采集器完全缺失**。
+- **kimi**：会话从 `~/.kimi-code/` 或 `~/.kimi/` 只读解析，用量由 `kimi_sessions.rs::scan_usage` 增量入库（覆盖 `agents/*/wire.jsonl`）。
 - **dsh**：令牌在 `$DSH_HOME/.env` 而非主文件，所以整个 `is_wired` 交给 adapter 自己判。会话是 **zstd 多帧压缩**，需逐帧解压。
 - **pi**：接线要写两个文件（`models.json` + `settings.json`），状态判定要读第二个文件。没有登记 UA，未带令牌的请求认不出来。
 - **pencil**：没有 CLI，只能靠配置文件判装。**它本身不产生会话记录。**
 - **workbuddy**：`models.json` 是顶层数组（或包装对象），两种形状都要认。Skills 只读。
 
-### 1.5 Agent 验证矩阵（13 × 11）
+### 1.5 Agent 验证矩阵（14 × 11）
 
 | Agent | 账号识别 | 额度 | 签到 | 模型发现 | 路由 | 接线 | 用量 | 会话 | 续跑 | Skills | 工具调用 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | **claude-code** | 部分 [GD:22，真实 CLI + 合成上游] | ↘ | 不适用 | 模拟 [J：`agents-routing-r2.e2e.mjs` 预览] | 部分 [GD:20-22] | 模拟 [J：生产路径往返测试] | 只读 [P3 §1，3,295/3,295] | 只读 [PF:18，149 个会话] | 部分 [AR:17 续接真实通过；AR:19 耗尽后续跑未测；在原工具继续无记录] | 部分 [DA:13-15，隔离目录] | 模拟 [CO:22，假上游] |
 | **codex** | 部分 [GD:23] | ↘ | 不适用 | 无记录 | 部分 [GD:20,23] | 模拟 [J] | 部分 [PF:19 只读统计；P3 未覆盖 Codex，未按 ID 对账] | 只读 [PF:19，39 个会话] | 部分 [AR:17,19；CX 真实 Codex 0.169 + 合成上游] | 部分 [DA，隔离目录] | 模拟 [CO:22] |
 | **gemini** | 部分 [GD:25-26] | ↘ | 不适用 | 无记录 | 部分 [GD:25] | 模拟 [J] | 无记录 | 无记录 | 不适用（未实现） | 模拟 [UI，合成] | 模拟 [CO:22] |
+| **antigravity** | 无记录（有单测） | 不适用 | 不适用 | 模拟（有单测：`wiring_antigravity`） | 无记录 | 模拟（`every_agent_round_trips_through_production_plan` 生产路径往返） | 只读（真机只读对账 136 条 / 29.37M / 95.0% 命中率） | 只读（`conversation_summaries.db` 标题与 `cwd` 同步） | 不适用（未实现） | 不适用（未实现） | 无记录 |
 | **opencode** | 部分 [GD:24] | ↘ | 不适用 | 无记录 | 部分 [GD:20,24] | 模拟 [J] | 只读 [P3 §2，132/132] | 部分 [RV:48；GD:24] | 不适用（未实现） | 模拟 [RV，读写启停只有合成] | 模拟 [CO:22] |
 | **zcode** | 无记录（有单测） | ↘ | ↘ | 模拟 [J] | 无记录（CO 未抓 ZCode） | 模拟 [J] | 只读 [P3 §5，18,872] | 部分 [ZS，运行态真机；正文 sqlite 未真机] | 不适用（未实现） | 模拟 [UI] | 无记录 |
-| **kimi** | 无记录（有单测） | 不适用 | 不适用 | 部分 [J：真机写入 28 张模型表；Kimi 侧显示 / 选用未记录] | 无记录 | 端到端 [J：真机接入 / 断开往返，0 残留] | 不适用（未实现，§6.8） | 无记录 | 不适用（未实现） | 不适用（未实现） | 无记录 |
-| **dsh** | 无记录（有单测） | 不适用 | 不适用 | 部分 [J：副本 + `DSH_HOME` 隔离往返] | 无记录 | 部分 [J：同左，非原配置] | 不适用（未实现，§6.8） | 无记录 | 不适用（未实现） | 不适用（未实现） | 无记录 |
-| **pi** | 无记录 | 不适用 | 不适用 | 模拟 [J] | 无记录 | 模拟 [J] | 不适用（未实现，§6.8） | 无记录 | 不适用（未实现） | 不适用（未实现） | 无记录 |
+| **kimi** | 无记录（有单测） | 不适用 | 不适用 | 部分 [J：真机写入 28 张模型表；Kimi 侧显示 / 选用未记录] | 无记录 | 端到端 [J：真机接入 / 断开往返，0 残留] | 只读（真机只读对账 90 条 / 4.24M / 95.0% 命中率） | 只读（入库去重，0 重复） | 不适用（未实现） | 不适用（未实现） | 无记录 |
+| **dsh** | 无记录（有单测） | 不适用 | 不适用 | 部分 [J：副本 + `DSH_HOME` 隔离往返] | 无记录 | 部分 [J：同左，非原配置] | 只读（真机只读对账 4,465 条 / 845.49M / 98.4% 命中率） | 只读（41 条 subagent 隐藏，0 泄漏） | 不适用（未实现） | 不适用（未实现） | 无记录 |
+| **pi** | 无记录 | 不适用 | 不适用 | 模拟 [J] | 无记录 | 模拟 [J] | 只读（真机只读对账 401 条 / 40.89M / 84.6% 命中率） | 只读（入库去重，0 重复） | 不适用（未实现） | 不适用（未实现） | 无记录 |
 | **pencil** | 无记录 | 不适用 | 不适用 | 模拟 [J：未做真实工具验收] | 无记录 | 模拟 [J] | 不适用（不产生会话） | 不适用（不产生会话） | 不适用 | 不适用（未实现） | 无记录 |
 | **qoder** | 无记录 | ↘ | ↘ | 模拟 [J] | 无记录 | 模拟 [J] | 只读 [P3 §3.2c，999/999] | 无记录 | 不适用（未实现） | 模拟 [UI] | 无记录 |
 | **qoder-cn** | 无记录 | ↘ | ↘ | 模拟 [J] | 无记录 | 模拟 [J] | 无记录（本机无 `~/.qoder-cn` 样本） | 不适用（缺入口，§6.5） | 不适用（未实现） | 不适用（缺入口，§6.5） | 无记录 |
@@ -311,30 +315,30 @@
 | 档 | Agent 表（§1.5） | 连接表（§2.4） | 合计 |
 |---|---:|---:|---:|
 | 真实端到端通过 | 1 | 2 | 3 |
-| 真实只读通过 | 6 | 19 | 25 |
+| 真实只读通过 | 14 | 19 | 33 |
 | 部分通过 | 18 | 8 | 26 |
-| 模拟通过 | 28 | 36 | 64 |
+| 模拟通过 | 30 | 36 | 66 |
 | 无验证记录 | 39 | 74 | 113 |
-| 不适用 | 39 | 64 | 103 |
+| 不适用 | 40 | 64 | 104 |
 | 失败 | 0 | 5 | 5 |
-| 计档格数 | 131 | 208 | 339 |
+| 计档格数 | 142 | 208 | 350 |
 | `↗` / `↘`（不计） | 12 | 34 | 46 |
 
-计数方法：逐格取首个档位词，脚本逐行解析 §1.5 与 §2.4；两表共 13 × 11 + 22 × 11 = 385 格。三格真实端到端是 Kimi 接线、WorkBuddy 国内签到、Trae CN 签到；五格失败是 Claude API 模型拉取、Gemini 登录的账号识别与额度、ZCode 国际 API Key 额度、Qoder 国际额度。
+计数方法：逐格取首个档位词，逐行统计 §1.5 与 §2.4；两表共 14 × 11 + 22 × 11 = 396 格。三格真实端到端是 Kimi 接线、WorkBuddy 国内签到、Trae CN 签到；五格失败是 Claude API 模型拉取、Gemini 登录的账号识别与额度、ZCode 国际 API Key 额度、Qoder 国际额度。
 
 ### 3.2 每项能力一句话
 
 | 能力 | 结论 |
 |---|---|
-| **账号识别** | 连接侧 22 种都有实现；真实只读覆盖 Qoder 双版、WorkBuddy 双版、Trae 国际、ZCode 账号与 Start Plan、Claude API，Codex 订阅与 Trae CN 部分通过，Gemini 登录失败（无登录），Claude 订阅与全部其他 API Key 无记录；Agent 侧只有 4 家 CLI 有真实 CLI 记录（合成上游），pi / pencil / qoder / qoder-cn 连 UA 都没登记。 |
+| **账号识别** | 连接侧 22 种都有实现；真实只读覆盖 Qoder 双版、WorkBuddy 双版、Trae 国际、ZCode 账号与 Start Plan、Claude API，Codex 订阅与 Trae CN 部分通过，Gemini 登录失败（无登录），Claude 订阅与全部其他 API Key 无记录；Agent 侧只有 4 家 CLI 有真实 CLI 记录（合成上游），antigravity / pi / pencil / qoder / qoder-cn 连 UA 都没登记。 |
 | **额度** | 订阅额度的真实只读覆盖 Codex、Qoder CN、Trae 双版、WorkBuddy 国内、ZCode Start Plan，ZCode 两个账号家族只拿到「未开通 / 无窗口」；Gemini 登录、Qoder 国际、ZCode 国际 API Key 为真实失败；Claude 订阅、Grok、OpenCode、WorkBuddy AI 国际无记录。 |
 | **签到** | 只有 WorkBuddy 国内与 Trae CN 真实领取过，Qoder 双版真实只读；WorkBuddy AI、Trae 国际经真实确认为不支持；ZCode 礼包领取有实现、无任何验收。 |
 | **模型发现** | 实时拉取只有 Qoder CN 真实只读通过；WorkBuddy 国内、ZCode Start Plan 部分通过；Claude API 唯一一次真实拉取因上游 Key 停用失败；其余订阅只有模拟或无记录，Agent 侧只有 Kimi / dsh 的目录写入有真机记录。 |
 | **路由** | 没有任何一种连接有完整的真实转发通过；WorkBuddy 国内 hy3 真实 200 记为部分，其余订阅全部是模拟（假 CLI / 回环上游）；Agent 侧 Claude Code / Codex / OpenCode / Gemini 的识别与选路在真实 CLI + 合成上游下部分通过。 |
-| **接线** | 13 家都有接线实现；只有 Kimi 做过真机接入 / 断开往返，dsh 用副本做过，其余靠生产路径往返测试（模拟）；连接侧「启用到原 CLI」只有 Claude / Codex 有，均无真实写入记录。 |
-| **用量** | 本机采集真实只读对账通过 Claude Code、OpenCode、Qoder、ZCode，Codex 只有只读统计；Kimi / dsh / pi / qwen 未实现入库，WorkBuddy 缺客户端样本；转发归账除 Trae / Qoder 外只有模拟或无记录。 |
-| **会话** | Claude Code、Codex 真实只读，OpenCode、ZCode 部分通过；Gemini、Kimi、dsh、pi、Qoder、WorkBuddy 的会话读取无记录，qoder-cn 缺入口。 |
-| **续跑** | 只对 Claude Code / Codex 实现；自动化「续接原会话」真实通过，「额度耗尽 → 等待 → 续跑」与会话页「在原工具继续」都无真实记录；其余 11 家未实现。 |
+| **接线** | 14 家都有接线实现；只有 Kimi 做过真机接入 / 断开往返，dsh 用副本做过，其余靠生产路径往返测试（模拟）；连接侧「启用到原 CLI」只有 Claude / Codex 有，均无真实写入记录。 |
+| **用量** | 本机采集真实只读对账通过 Claude Code、Antigravity、OpenCode、Qoder、ZCode、Kimi、dsh、pi，Codex 只有只读统计；qwen 未实现入库，WorkBuddy 缺客户端样本；转发归账除 Trae / Qoder 外只有模拟或无记录。 |
+| **会话** | Claude Code、Codex、Antigravity、Kimi、dsh、pi 真实只读，OpenCode、ZCode 部分通过；Gemini、Qoder、WorkBuddy 的会话读取无记录，qoder-cn 缺入口。 |
+| **续跑** | 只对 Claude Code / Codex 实现；自动化「续接原会话」真实通过，「额度耗尽 → 等待 → 续跑」与会话页「在原工具继续」都无真实记录；其余 12 家未实现。 |
 | **Skills** | 8 个平台有实现；Claude / Codex 只在隔离目录做过真实文件读写（部分），其余只有合成测试，原工具真实目录的发现与热加载全平台都没核对。 |
 | **工具调用** | 五种能力（MCP 搜索、tool_loop、Claude 工具桥、订阅工具转换、文本工具解析）里没有一种有真实上游的记录；最接近的是四个真实 CLI + 假上游的两轮工具调用（模拟）。 |
 
@@ -369,8 +373,8 @@
 | Skills：原工具真实目录的发现与热加载 | 部分 / 模拟 | 在 `~/.claude/skills`、`~/.codex`、`.codebuddy/skills` 等真实目录核对 | DA；UI |
 | 工具调用：模型发起 → 执行 → 回传 → 最终回答 | 模拟 / 无记录 | 任一真实上游跑通一次完整链路（含流式与失败） | CO:22 |
 | MCP 搜索、tool_loop、Claude 工具桥 | 无记录 | 在真实 Agent 中各触发一次 | §1.3 |
-| Agent 侧路由：ZCode / Kimi / dsh / pi / Pencil / Qoder / qwen / WorkBuddy | 无记录 | 各工具真实经网关发一次请求 | §1.5 |
-| 接线：除 Kimi 外 12 家在原配置上的真实往返 | 部分 / 模拟 | 在真实工具配置上接入 / 断开并核对还原 | J |
+| Agent 侧路由：Antigravity / ZCode / Kimi / dsh / pi / Pencil / Qoder / qwen / WorkBuddy | 无记录 | 各工具真实经网关发一次请求 | §1.5 |
+| 接线：除 Kimi 外 13 家在原配置上的真实往返 | 部分 / 模拟 | 在真实工具配置上接入 / 断开并核对还原 | J |
 | OpenCode 用量：SQLite V2 新表 | 部分 | V2 新表有数据的样本 | RV |
 | Qoder：`local.db` 布局跨机器稳定性；旧 projects 日志去重键 | 只读（单机） | 第二台装 Qoder 的机器；旧 projects 日志样本 | P3 §3.2c；`2026-11-23-p0-p1-review.md` P-9 |
 
@@ -382,21 +386,21 @@
 
 ### 5.1 与 P0-1 要求的差距（剩余）
 
-- **结构已齐**：11 项能力 × 7 档，Agent（13 家）与连接（22 种，按平台、地区、连接类型拆开）两个维度都已列出，每格有代码出处与验证依据。
+- **结构已齐**：11 项能力 × 7 档，Agent（14 家）与连接（22 种，按平台、地区、连接类型拆开）两个维度都已列出，每格有代码出处与验证依据。
 - **剩下的都是样本缺口**，即 §4 的未验证清单。按计划 §3，这些记为「未验证」，不写成通过。
 - **两处没核实的实现细节**标了「?」：OpenCode 的 `openai-compatible` provider 是否自动请求 `/models`；ZCode BigModel 账号能否领取 `zcode.z.ai` 礼包。kimi / workbuddy 接线后的请求协议本次也没核实。
 
 ### 5.2 实现完成度
 
-13 家 Agent 全部可探测、全部可接线。**用量采集覆盖 8 家**（claude / codex / gemini / opencode / zcode / qoder / qoder-cn / workbuddy），**会话读取覆盖 11 家**（gemini / opencode / qoder / workbuddy 正文不可读），**Skills 覆盖 8 个平台**（claude / codex / gemini / opencode / qoder / trae / zcode / workbuddy，其中 workbuddy 只读），**签到覆盖 4 个平台**（WorkBuddy 国内、Qoder 双版、Trae 国内、ZCode 礼包），**续跑只覆盖 Claude Code / Codex**，**MCP 搜索只装进 4 家**。连接侧 22 种全部有账号识别与转发路径；实时模型拉取覆盖 6 个订阅平台和全部 API Key 连接；额度覆盖除 Gemini / Grok API Key 外的全部连接。
+14 家 Agent 全部可探测、全部可接线。**用量采集覆盖 12 家**（claude / codex / gemini / antigravity / opencode / zcode / kimi / dsh / pi / qoder / qoder-cn / workbuddy），**会话读取覆盖 12 家**（gemini / antigravity / opencode / qoder / workbuddy 正文不可读），**Skills 覆盖 8 个平台**（claude / codex / gemini / opencode / qoder / trae / zcode / workbuddy，其中 workbuddy 只读），**签到覆盖 4 个平台**（WorkBuddy 国内、Qoder 双版、Trae 国内、ZCode 礼包），**续跑只覆盖 Claude Code / Codex**，**MCP 搜索只装进 4 家**。连接侧 22 种全部有账号识别与转发路径；实时模型拉取覆盖 6 个订阅平台和全部 API Key 连接；额度覆盖除 Gemini / Grok API Key 外的全部连接。
 
 ### 5.3 已知未实现（不是样本问题）
 
-- 续跑：gemini、opencode、zcode、kimi、dsh、pi、qoder、qoder-cn、qwen、workbuddy。
-- 用量入库：kimi、dsh、pi、qwen（§6.8）。
+- 续跑：gemini、antigravity、opencode、zcode、kimi、dsh、pi、qoder、qoder-cn、qwen、workbuddy。
+- 用量入库：qwen（kimi / dsh / pi 已于 2026-11-26 补齐入库，见 §6.8）。
 - 会话 / Skills：qoder-cn 无独立入口（§6.5）；qwen、WorkBuddy 会话前端标「还没接入」（§6.2）。
-- MCP 搜索：zcode 及接线清单里其余 8 家。
-- UA 识别：pi、pencil、qoder、qoder-cn 没有登记 UA。
+- MCP 搜索：zcode 及接线清单里其余 9 家。
+- UA 识别：antigravity、pi、pencil、qoder、qoder-cn 没有登记 UA。
 - 版本探测：只有 5 家（§6.7）。
 
 ### 5.4 最大的三个缺口
@@ -417,7 +421,7 @@
 
 ## 6. 声明与实现的不一致
 
-2026-11-24 按当前代码逐条复核。**已修复：6.1、6.9。仍存在：6.2–6.8。** 6.11–6.13 是本次复核新发现的。
+2026-11-24 按当前代码逐条复核（2026-11-26 更新 6.7 / 6.8）。**已修复：6.1、6.8、6.9。仍存在：6.2–6.7。** 6.11–6.13 是本次复核新发现的。
 
 ### 6.1 dsh 平台 id 不一致（已修复 2026-11-23）
 
@@ -458,14 +462,13 @@
 ### 6.7 版本探测只覆盖 5 家（仍存在）
 
 - `agent_version.rs:28-34` 的 `AGENTS` 仍只有 claude / codex / gemini / opencode / zcode
-- 可接线清单是 13 家
-- 后果：kimi / dsh / pi / pencil / qoder / qoder-cn / qwen / workbuddy 八家的卡片**拿不到版本号**
+- 可接线清单是 14 家
+- 后果：antigravity / kimi / dsh / pi / pencil / qoder / qoder-cn / qwen / workbuddy 九家的卡片**拿不到版本号**
 
-### 6.8 Kimi / Pi / dsh 的用量「可读但不入库」（仍存在）
+### 6.8 Kimi / Pi / dsh 的用量「可读但不入库」（已修复 2026-11-26）
 
-- 三个读取器都会算 requests / Tokens 并返回 `SessionItem`
-- 但 `kimi_sessions.rs`、`pi_sessions.rs`、`dsh_sessions.rs` 里**仍无任何 DB 写入**（无 `INSERT`、无 `source_store::write`；对比 `native_sources.rs:524-577`）
-- 后果：会话列表有数字，但**用量统计、成本、归因里没有它们的任何记录**
+- 已为 `kimi_sessions.rs`、`pi_sessions.rs`、`dsh_sessions.rs` 补齐 `scan_usage` 增量入库，并统一接入 `usage_stats` 采集与对账链路
+- 真机只读对账通过：Kimi 90 条 / 4.24M / 95.0%、dsh 4,465 条 / 845.49M / 98.4%、Pi 401 条 / 40.89M / 84.6%（详见本轮验收记录）；会话页同步改为从已入库记录去重读取并隐藏 dsh 子代理
 
 ### 6.9 Qoder 采集器读的路径在本机不存在（2026-11-23 发现并修复，正式库已复验）
 

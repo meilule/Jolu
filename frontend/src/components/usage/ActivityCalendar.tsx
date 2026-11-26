@@ -1,26 +1,32 @@
 import { useMemo, useState } from "react"
-import { activityLevel, calendarWeeks, formatMinutes, formatTokens, monthLabels } from "@/lib/usageStats"
+import { activityLevel, calendarWeeks, formatMinutes, formatMoney, formatTokens, monthLabels } from "@/lib/usageStats"
+import { convertFromUsd, type FxState } from "@/lib/costCurrency"
 import type { StatsActivityDto } from "@/lib/api"
 import { Tip } from "@/components/ui/Tip"
 import { ContentTransition, LoadingSurface } from "@/components/ui/LoadingSurface"
 import { Card } from "./usageControls"
 import { Tabs } from "@/ui"
 
-/** R1-C 热力格五档活跃色：0 档用轨道色，其余按主色深浅渐变，不画边框 */
 const LEVEL_COLORS = ["var(--jn-track)", "var(--jn-mint-2)", "var(--jn-mint)", "var(--jn-primary)", "var(--jn-primary-ink)"] as const
 
-type ActivityMetric = "tokens" | "requests"
+type ActivityMetric = "tokens" | "requests" | "cost"
 
-/** 本机活跃趋势 · 全年日历（R1-23）：支持按 Token / 请求次数切换着色，按周分列，周一在上 */
-export function ActivityCalendar({ activity, error }: { error?: string | null; activity: StatsActivityDto | null }) {
+/** 本机活跃趋势 · 全年日历（R1-23 / R1-48）：支持 Token / 请求 / 费用三档着色。 */
+export function ActivityCalendar({ activity, error, fx }: {
+  error?: string | null
+  activity: StatsActivityDto | null
+  fx: FxState
+}) {
   const [metric, setMetric] = useState<ActivityMetric>("tokens")
 
   const view = useMemo(() => {
     if (!activity) return null
     const weeks = calendarWeeks(activity.first_date, activity.last_date)
     const byDate = new Map(activity.days.map((d) => [d.date, d]))
+    const pick = (d: StatsActivityDto["days"][number]) =>
+      metric === "tokens" ? d.tokens : metric === "requests" ? d.requests : (d.cost ?? 0)
     const sorted = activity.days
-      .map((d) => (metric === "tokens" ? d.tokens : d.requests))
+      .map(pick)
       .filter((v) => v > 0)
       .sort((a, b) => a - b)
     return { weeks, labels: monthLabels(weeks), byDate, sorted }
@@ -39,6 +45,7 @@ export function ActivityCalendar({ activity, error }: { error?: string | null; a
           items={[
             { key: "tokens", label: "Token" },
             { key: "requests", label: "请求" },
+            { key: "cost", label: "费用" },
           ]}
         />
       </div>
@@ -56,19 +63,29 @@ export function ActivityCalendar({ activity, error }: { error?: string | null; a
                   {week.map((key, row) => {
                     if (!key) return <span key={row} className="h-[19px]" />
                     const day = view.byDate.get(key)
-                    const val = day ? (metric === "tokens" ? day.tokens : day.requests) : 0
+                    const val = day
+                      ? (metric === "tokens" ? day.tokens : metric === "requests" ? day.requests : (day.cost ?? 0))
+                      : 0
                     const level = activityLevel(val, view.sorted)
+                    const dayCost = day && day.cost !== undefined ? formatMoney(convertFromUsd(day.cost, fx), fx.currency) : "—"
                     return (
-                      <Tip key={key} side="top" className="min-w-[190px] rounded-xl px-3.5 py-3" label={
+                      <Tip key={key} side="top" className="min-w-[204px] rounded-xl px-3.5 py-3" label={
                         <span className="flex flex-col gap-2">
                           <span className="tnum border-b border-jn-line pb-2 text-xs font-semibold">{key}</span>
                           <span className="flex items-center justify-between gap-6"><span className="text-jn-text-3">Token 用量</span><span className="tnum font-medium">{day ? formatTokens(day.tokens) : "无记录"}</span></span>
                           <span className="flex items-center justify-between gap-6"><span className="text-jn-text-3">调用次数</span><span className="tnum font-medium">{day ? `${day.requests} 次` : "无记录"}</span></span>
+                          <span className="flex items-center justify-between gap-6">
+                            <span className="text-jn-text-3">估算费用</span>
+                            <span className="tnum font-medium">
+                              {day ? `≈ ${dayCost}` : "无记录"}
+                              {day && (day.unpriced_requests ?? 0) > 0 ? ` (+${day.unpriced_requests} 未计价)` : ""}
+                            </span>
+                          </span>
                         </span>
                       }>
                         <span
                           tabIndex={0}
-                          aria-label={day ? `${key}，${formatTokens(day.tokens)} Token，${day.requests} 次调用` : `${key}，无记录`}
+                          aria-label={day ? `${key}，${formatTokens(day.tokens)} Token，${day.requests} 次调用，估算费用 ${dayCost}` : `${key}，无记录`}
                           className="h-[19px] rounded-[3px] outline-none transition-[background-color,box-shadow] duration-200 hover:ring-2 hover:ring-jn-primary focus-visible:ring-2 focus-visible:ring-jn-primary"
                           style={{ background: LEVEL_COLORS[level] }}
                         />

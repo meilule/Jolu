@@ -42,6 +42,8 @@ enum NoticeBody {
     Task { task_id: i64, state: &'static str, platform: String, task_name: String, reason: Option<String> },
     /// 额度主动提醒（P2-2）：`alert` = low（将尽）/ expired（登录失效）/ failed（连续查询失败）
     Quota { connection_id: String, connection_name: String, platform: String, alert: &'static str, detail: String },
+    /// 费用预算提醒（P2）：全局或单连接触及预警线 / 上限
+    Budget { scope_key: String, title: String, detail: String },
 }
 
 static NEXT_NOTICE: AtomicU64 = AtomicU64::new(1);
@@ -161,6 +163,7 @@ fn allowed(settings: &Settings, notice: &AppNotice) -> bool {
         NoticeBody::Balance { threshold, currency, .. } => settings.balance_alert_threshold == Some(*threshold) && settings.balance_alert_currency == *currency,
         NoticeBody::Task { state, .. } => if *state == "resumed" { settings.notify_task_resumed } else { settings.notify_task_finished },
         NoticeBody::Quota { .. } => settings.notify_quota_alerts,
+        NoticeBody::Budget { .. } => true,
     }
 }
 
@@ -195,6 +198,9 @@ fn native_notice(app: &AppHandle, notice: &AppNotice) {
             let kind = match *state { "resumed" => TaskNotice::Resumed, "completed" => TaskNotice::Completed, _ => TaskNotice::Failed { reason: reason.clone().unwrap_or_default() } };
             let (title, body) = task_message(&kind, platform, task_name);
             show(app, title, body, Some(*task_id));
+        }
+        NoticeBody::Budget { title, detail, .. } => {
+            show(app, title.clone(), detail.clone(), None);
         }
     }
 }
@@ -313,6 +319,70 @@ pub fn check_quota(app: &AppHandle, connection_id: &str, connection_name: &str, 
         alert,
         detail: mask_secrets(&detail),
     });
+}
+
+static BUDGET_ALERTS: LazyLock<Mutex<HashMap<String, i64>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 检查全局与单连接预算，触及预警线或上限时按 24 小时冷却提醒一次（免打扰期间不弹）。
+pub fn check_budgets(app: &AppHandle, status: &crate::pricing::budget::BudgetStatus) {
+    let Some(cfg) = app.try_state::<crate::Cfg>() else { return };
+    if cfg.0.get().dnd {
+        return;
+    }
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut pending: Vec<(String, String, String)> = Vec::new();
+
+    if status.global_enabled {
+        if status.global_exceeded {
+            let (used, lim) = match (status.global_monthly_limit, status.global_daily_limit) {
+                (Some(m), _) if status.global_month_spend >= m => (status.global_month_spend, m),
+                (_, Some(d)) => (status.global_today_spend, d),
+                _ => (status.global_month_spend, 0.0),
+            };
+            pending.push((
+                "global:exceeded".into(),
+                "全局实付预算已超限".into(),
+                format!("已用 ${used:.2} / 上限 ${lim:.2}（仅实付 API）"),
+            ));
+        } else if status.global_warned {
+            pending.push((
+                "global:warn".into(),
+                format!("全局实付预算接近 {}% 预警线", status.warn_percent),
+                format!("本月已用 ${:.2}，请留意实付 API 消耗", status.global_month_spend),
+            ));
+        }
+    }
+
+    for row in &status.connections {
+        if row.exceeded {
+            pending.push((
+                format!("conn:{}:exceeded", row.connection_id),
+                format!("连接「{}」已达预算上限", mask_secrets(&row.name)),
+                format!("今日 ${:.2} · 本月 ${:.2}", row.today_spend, row.month_spend),
+            ));
+        } else if row.warned {
+            pending.push((
+                format!("conn:{}:warn", row.connection_id),
+                format!("连接「{}」接近预算预警线", mask_secrets(&row.name)),
+                format!("今日 ${:.2} · 本月 ${:.2}", row.today_spend, row.month_spend),
+            ));
+        }
+    }
+
+    let mut fired = Vec::new();
+    {
+        let mut map = BUDGET_ALERTS.lock().unwrap_or_else(|p| p.into_inner());
+        for item in pending {
+            let recent = map.get(&item.0).is_some_and(|at| now - *at < QUOTA_REPEAT_MS);
+            if !recent {
+                map.insert(item.0.clone(), now);
+                fired.push(item);
+            }
+        }
+    }
+    for (scope_key, title, detail) in fired {
+        dispatch(app, NoticeBody::Budget { scope_key, title, detail });
+    }
 }
 
 #[cfg(test)]

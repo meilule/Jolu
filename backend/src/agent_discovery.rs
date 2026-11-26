@@ -316,6 +316,18 @@ fn dir_qoder(home: &Path) -> Option<PathBuf> { env_or_home("QODER_CONFIG_DIR", h
 fn dir_qoder_cn(home: &Path) -> Option<PathBuf> { env_or_home("QODERCN_CONFIG_DIR", home, ".qoder-cn") }
 fn dir_workbuddy(home: &Path) -> Option<PathBuf> { env_or_home("WORKBUDDY_CONFIG_DIR", home, ".workbuddy") }
 
+fn dir_antigravity(home: &Path) -> Option<PathBuf> {
+    let cli_dir = home.join(".gemini").join("antigravity-cli");
+    if cli_dir.join("settings.json").is_file() || cli_dir.is_dir() {
+        return Some(cli_dir);
+    }
+    let roots = crate::antigravity_usage::discover_roots(home);
+    if let Some(active) = roots.iter().find(|r| crate::antigravity_usage::root_has_data(&r.path)) {
+        return Some(active.path.clone());
+    }
+    Some(cli_dir)
+}
+
 /// 探测规格表。顺序即界面展示顺序，与 `agent_version::AGENTS` 一致。
 ///
 /// 2026-11-20 按 Stack Overflow《2026 开发者调查》（n=12,255）精简：删掉榜单里
@@ -330,11 +342,12 @@ pub(crate) fn spec_ids() -> Vec<&'static str> {
     SPECS.iter().map(|spec| spec.agent).collect()
 }
 
-const SPECS: [Spec; 17] = [
+const SPECS: [Spec; 18] = [
     Spec { agent: "claude-code", name: "Claude Code", bin: "claude", dir: dir_claude, file: "settings.json", sign_in: ".credentials.json", detect: Detect::Standard, bin_not: None },
     Spec { agent: "codex", name: "Codex", bin: "codex", dir: dir_codex, file: "config.toml", sign_in: "auth.json", detect: Detect::Standard, bin_not: None },
     Spec { agent: "zcode", name: "ZCode", bin: "zcode", dir: dir_zcode, file: "v2/provider_config.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "gemini", name: "Gemini CLI", bin: "gemini", dir: dir_gemini, file: ".env", sign_in: "", detect: Detect::CliOnly, bin_not: None },
+    Spec { agent: "antigravity", name: "Antigravity CLI", bin: "agy", dir: dir_antigravity, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "opencode", name: "OpenCode", bin: "opencode", dir: dir_opencode, file: "opencode.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "qwen", name: "Qwen Code", bin: "qwen", dir: dir_qwen, file: "settings.json", sign_in: "", detect: Detect::Standard, bin_not: None },
     Spec { agent: "kimi", name: "Kimi CLI", bin: "kimi", dir: dir_kimi, file: "config.toml", sign_in: "", detect: Detect::Standard, bin_not: None },
@@ -486,6 +499,13 @@ fn vendor_bin_dirs(name: &str, home: &Path, local_app_data: Option<&Path>) -> Ve
             dirs.push(home.join(".codex").join("packages").join("standalone").join("current").join("bin"));
             if let Some(local) = local_app_data {
                 dirs.extend(hashed_bin_dirs(&local.join("OpenAI").join("Codex").join("bin"), name));
+            }
+            dirs
+        }
+        "agy" => {
+            let mut dirs = Vec::new();
+            if let Some(local) = local_app_data {
+                dirs.push(local.join("agy").join("bin"));
             }
             dirs
         }

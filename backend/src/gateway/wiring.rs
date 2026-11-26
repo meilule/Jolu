@@ -1554,7 +1554,13 @@ pub fn status_with(agent: &str, port: u16, record: Option<&WiringRecord>) -> Wir
         };
     };
     let display = path.display().to_string();
-    let installed = path.exists() || (super::wiring_specs::spec(agent).is_some_and(|spec| spec.extra == super::wiring_specs::WiredExtra::GeminiApiKey) && gemini_settings_path().is_some_and(|p| p.exists()));
+    let installed = path.exists()
+        || (super::wiring_specs::spec(agent)
+            .is_some_and(|spec| spec.extra == super::wiring_specs::WiredExtra::GeminiApiKey)
+            && gemini_settings_path().is_some_and(|p| p.exists()))
+        || (super::wiring_specs::spec(agent)
+            .is_some_and(|spec| spec.extra == super::wiring_specs::WiredExtra::AntigravityModel)
+            && crate::creds::home().is_some_and(|home| crate::gateway::wiring_antigravity::installed(&home)));
     if !installed {
         return WiringStatus {
             agent: agent.into(),
@@ -1605,6 +1611,8 @@ pub fn status_with(agent: &str, port: u16, record: Option<&WiringRecord>) -> Wir
     // B8a：回读 Claude Code 现在的主模型；和上次接线写的不一致 = 用户在 Claude Code 里 /model 换过
     let (current_model, current_resolved) = match (agent, wired) {
         ("claude-code", true) => claude_read_model(&text).map_or((None, None), |(raw, resolved)| (Some(raw), resolved)),
+        // Antigravity 的模型选择在 settings.json 的 `model`（`jolu/<模型>`），没有别的回读入口。
+        ("antigravity", true) => crate::gateway::wiring_antigravity::current_model(&text).map_or((None, None), |model| (Some(model), None)),
         _ => (None, None),
     };
     let applied_model = record.and_then(|r| r.applied()).and_then(|a| a.model);
@@ -2684,10 +2692,10 @@ mod tests {
 
     #[test]
     fn agent_whitelist_covers_catalog_platforms() {
-        // 全部 13 家（11 + 2026-11-21 新增的 qwen / workbuddy），一家都不能漏
+        // 全部 14 家（含 antigravity / qwen / workbuddy），一家都不能漏
         for agent in [
             "claude-code", "codex", "zcode", "gemini", "opencode", "kimi", "dsh", "pi",
-            "pencil", "qoder", "qoder-cn", "qwen", "workbuddy",
+            "pencil", "qoder", "qoder-cn", "qwen", "antigravity", "workbuddy",
         ] {
             assert!(is_agent(agent), "{agent} 应可接线");
         }
@@ -3046,6 +3054,10 @@ mod tests {
                 std::fs::create_dir_all(&second).unwrap();
                 std::fs::write(second.join("cordis.patch.yml"), "# 另一个 profile\n- id: keep\n  name: user\n").unwrap();
                 return;
+            }
+            "antigravity" => {
+                // 用户自己的自定义模型 + 非 gemini 的 modelProvider；断开要原样还回来
+                r#"{"customModelsConfig":{"customModels":{"mine":{"apiProvider":"API_PROVIDER_GOOGLE_GEMINI","modelName":"gemini-3-pro"}}},"model":"mine","modelProvider":"vertex","trustedWorkspaces":["/w"]}"#
             }
             "qwen" => {
                 // 用户自己的一条 provider + 自己的 env 键 + 自己的默认模型

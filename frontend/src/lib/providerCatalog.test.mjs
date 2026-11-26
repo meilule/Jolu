@@ -40,17 +40,25 @@ test("供应商目录保留自定义与现有平台，地区版本独立展示",
     "ZCode 国内版", "ZCode 国际版",
     "Qoder CN", "Qoder", "WorkBuddy", "WorkBuddy AI",
     "DeepSeek", "Kimi（月之暗面）", "MiniMax", "StepFun（阶跃星辰）", "Qwen（通义千问）",
-    "OpenRouter", "Together", "Fireworks", "SiliconFlow（硅基流动）", "Groq", "Ollama（本机）", "LM Studio（本机）",
+    "OpenRouter", "Together", "Fireworks", "SiliconFlow（硅基流动）", "Groq", "Ollama", "LM Studio（本机）",
     "Trae CN", "Trae",
   ])
   // 预设库（P4.1）都映射到 custom 平台：只预填地址与协议，不做厂商特化
-  const presets = PROVIDERS.filter((p) => p.id.startsWith("deepseek") || ["kimi", "minimax", "stepfun", "qwen", "openrouter", "together", "fireworks", "siliconflow", "groq", "ollama", "lmstudio"].includes(p.id))
-  assert.ok(presets.length >= 12, `预设库应有 12 个以上条目，实际 ${presets.length}`)
+  const presets = PROVIDERS.filter((p) => p.id.startsWith("deepseek") || ["kimi", "minimax", "stepfun", "qwen", "openrouter", "together", "fireworks", "siliconflow", "groq", "lmstudio"].includes(p.id))
+  assert.ok(presets.length >= 11, `预设库应有 11 个以上条目，实际 ${presets.length}`)
   for (const p of presets) {
     assert.equal(p.platformId, "custom", `${p.id} 预设必须映射到 custom 平台`)
     assert.equal(p.subscription, "none", `${p.id} 预设没有订阅登录`)
     assert.ok(p.baseUrl?.value.startsWith("http"), `${p.id} 预设要预填地址`)
   }
+  const ollama = providerEntry("ollama")
+  assert.equal(ollama.platformId, "ollama", "Ollama 需要独立平台，才能保存本机订阅登录")
+  assert.equal(ollama.subscription, "ready")
+  assert.equal(ollama.apiKey, "ready")
+  assert.deepEqual(ollama.baseUrlChoices.map((choice) => [choice.label, choice.value]), [
+    ["本机 · OpenAI 兼容", "http://127.0.0.1:11434/v1"],
+    ["Cloud · OpenAI 兼容", "https://ollama.com/v1"],
+  ])
   assert.deepEqual(PROVIDERS.filter(p => p.edition).map(p => [p.id, p.platformId, p.edition]), [
     ["zcode-bigmodel", "zcode", "bigmodel"], ["zcode", "zcode", "zai"],
     ["qoder-cn", "qoder", "cn"], ["qoder", "qoder", "global"],
@@ -255,6 +263,15 @@ test("平台显示名：多版本平台只给平台名，单条目平台沿用�
   assert.equal(providerName("workbuddy-ai"), "WorkBuddy AI")
   // 都不认识就原样返回，不臆测名称
   assert.equal(providerName("unknown-platform"), "unknown-platform")
+  // 本机采集 CLI 平台（P1/P2 新增）
+  assert.equal(providerName("antigravity"), "Antigravity")
+  assert.equal(providerName("kimi"), "Kimi Code")
+  assert.equal(providerName("pi"), "Pi")
+  assert.equal(providerName("dsh"), "DeepSeek Harness")
+  const usageOpts = catalog.usagePlatformOptions()
+  for (const [id, label] of [["antigravity", "Antigravity"], ["kimi", "Kimi Code"], ["pi", "Pi"], ["dsh", "DeepSeek Harness"]]) {
+    assert.equal(usageOpts.find((o) => o.value === id)?.label, label)
+  }
 })
 
 test("每个 platformId 都登记了平台级名称，不靠条目顺序猜版本", () => {

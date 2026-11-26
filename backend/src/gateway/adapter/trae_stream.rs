@@ -22,6 +22,7 @@ pub(super) struct Reader {
     secret: String,
     _guard: tokio::sync::MutexGuard<'static, ()>,
     started: std::time::Instant,
+    first_token_ms: Option<i64>,
     id: String,
     model: String,
 }
@@ -44,6 +45,7 @@ impl Reader {
             secret,
             _guard: guard,
             started: std::time::Instant::now(),
+            first_token_ms: None,
             id: format!(
                 "chatcmpl-{}",
                 super::trae_chat::nonce()
@@ -71,11 +73,12 @@ impl Reader {
     }
     fn record(&self, usage: &Value) {
         let mapped = accounting_usage(usage);
-        crate::gateway::subscription::record_usage(
+        crate::gateway::subscription::record_usage_with_timing(
             &self.deps,
             &self.entry,
             &json!({"id":self.id,"model":self.model,"usage":mapped}),
             self.started.elapsed().as_millis() as i64,
+            self.first_token_ms,
         );
     }
     fn chunk(&self, delta: Value, finish: Option<&str>, usage: Option<Value>) -> Bytes {
@@ -93,6 +96,7 @@ pub(super) async fn response(mut reader: Reader, streaming: bool) -> Response {
         Ok(None) => return error_response(StatusCode::BAD_GATEWAY, "Trae 未返回回答"),
         Err(e) => return error_response(StatusCode::BAD_GATEWAY, &e),
     };
+    reader.first_token_ms = Some(reader.started.elapsed().as_millis() as i64);
     if !streaming {
         return complete(reader, first).await;
     }

@@ -2,6 +2,7 @@ import * as Menu from "@radix-ui/react-dropdown-menu"
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { cn } from "@/lib/utils"
+import { useGlidePill } from "@/motion"
 import { api, isTauri, type SessionItemDto } from "@/lib/api"
 import {
   WEEKDAYS, accountText, dayTime, nextFire, projectOf, quotaTip, sessionTaskName, shortId, toSchedule, toolName, validateForm, type FormErrors, type TaskForm,
@@ -82,6 +83,7 @@ function FieldSelect({ value, options, onChange, placeholder, label, disabled, i
   disabled?: boolean
   invalid?: boolean
 }) {
+  const glide = useGlidePill()
   const selected = options.find((o) => o.value === value)
   return (
     <Menu.Root modal={false}>
@@ -92,7 +94,7 @@ function FieldSelect({ value, options, onChange, placeholder, label, disabled, i
         </button>
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Content align="start" sideOffset={6} collisionPadding={12} className={MENU_CLASS} style={{ maxHeight: "min(300px, var(--radix-dropdown-menu-content-available-height))" }}>
+        <Menu.Content ref={glide} align="start" sideOffset={6} collisionPadding={12} className={MENU_CLASS} style={{ maxHeight: "min(300px, var(--radix-dropdown-menu-content-available-height))" }}>
           {options.length ? (
             <Menu.RadioGroup value={value} onValueChange={onChange}>
               {options.map((o) => (

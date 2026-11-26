@@ -42,24 +42,44 @@ struct Chat {
     done: bool,
 }
 
-/// 观察完成事件以记录用量，不修改或缓存整个响应流。
-pub(super) fn observe_completed<S, E, F>(stream: S, callback: F) -> impl Stream<Item = Result<Bytes, E>> + Send
-where S: Stream<Item = Result<Bytes, E>> + Send + 'static, E: Send + 'static, F: FnMut(&Value) + Send + 'static {
-    futures_util::stream::unfold((Box::pin(stream), Decoder::default(), callback, false), |(mut stream, mut decoder, mut callback, mut recorded)| async move {
-        let chunk = stream.next().await?;
-        if !recorded {
-            if let Ok(bytes) = &chunk {
-                if let Ok(events) = decoder.feed(bytes) {
-                    for event in events {
-                        if event.get("type").and_then(Value::as_str) == Some("response.completed") {
-                            if let Some(response) = event.get("response") { callback(response); recorded = true; break; }
-                        }
+/// 观察完成事件以记录用量与首字耗时，不修改或缓存整个响应流。
+pub(super) fn observe_completed<S, E, F>(
+    stream: S,
+    started: std::time::Instant,
+    callback: F,
+) -> impl Stream<Item = Result<Bytes, E>> + Send
+where
+    S: Stream<Item = Result<Bytes, E>> + Send + 'static,
+    E: Send + 'static,
+    F: FnMut(&Value, Option<i64>) + Send + 'static,
+{
+    futures_util::stream::unfold(
+        (Box::pin(stream), Decoder::default(), callback, false, None::<i64>),
+        move |(mut stream, mut decoder, mut callback, mut recorded, mut first_token_ms)| async move {
+            let chunk = stream.next().await?;
+            if !recorded {
+                if let Ok(bytes) = &chunk {
+                    if !bytes.is_empty() && first_token_ms.is_none() {
+                        first_token_ms = Some(started.elapsed().as_millis() as i64);
                     }
-                } else { recorded = true; }
+                    if let Ok(events) = decoder.feed(bytes) {
+                        for event in events {
+                            if event.get("type").and_then(Value::as_str) == Some("response.completed") {
+                                if let Some(response) = event.get("response") {
+                                    callback(response, first_token_ms);
+                                    recorded = true;
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        recorded = true;
+                    }
+                }
             }
-        }
-        Some((chunk, (stream, decoder, callback, recorded)))
-    })
+            Some((chunk, (stream, decoder, callback, recorded, first_token_ms)))
+        },
+    )
 }
 impl Chat {
     fn new(model: String) -> Self {

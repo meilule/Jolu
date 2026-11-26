@@ -45,6 +45,8 @@ pub(crate) enum WiredExtra {
     SelectionOurs,
     /// 由 adapter 自己判断（dsh：需要读 `.env` 与多 profile patch，逻辑在 `wiring_dsh::wired`）。
     Adapter,
+    /// 还要 Antigravity 的启动脚本仍带着本机网关地址与令牌（地址/Key 只在环境变量里）。
+    AntigravityModel,
 }
 
 /// 一家工具的接线声明。
@@ -92,6 +94,9 @@ impl AgentSpec {
         if self.extra == WiredExtra::Adapter {
             return crate::gateway::wiring_dsh::wired(home, text, port, instance_short, kept);
         }
+        if self.extra == WiredExtra::AntigravityModel {
+            return crate::gateway::wiring_antigravity::wired(home, text, port, instance_short, kept);
+        }
         let base = (self.base)(text).unwrap_or_default();
         if !crate::gateway::wiring::points_at_gateway(&base, port) {
             return false;
@@ -115,7 +120,7 @@ impl AgentSpec {
         }
         match self.extra {
             // 上面已短路
-            WiredExtra::Adapter => false,
+            WiredExtra::Adapter | WiredExtra::AntigravityModel => false,
             WiredExtra::None => true,
             WiredExtra::GeminiApiKey => {
                 let settings = crate::steady::read_optional(&home.join(".gemini").join("settings.json"))
@@ -194,6 +199,12 @@ fn path_qwen(home: &Path) -> Option<PathBuf> {
 }
 fn path_workbuddy(home: &Path) -> Option<PathBuf> {
     Some(crate::gateway::wiring_workbuddy::config_path(home))
+}
+fn path_antigravity(home: &Path) -> Option<PathBuf> {
+    Some(crate::gateway::wiring_antigravity::config_path(home))
+}
+fn antigravity_no_base(_: &str) -> Option<String> {
+    None
 }
 
 // ─────────────────────────── 注册表：加一家 = 加一行 ───────────────────────────
@@ -387,6 +398,22 @@ pub(crate) const SPECS: &[AgentSpec] = &[
         ua: &["qwencode"],
     },
     AgentSpec {
+        id: "antigravity",
+        wire: crate::gateway::wiring_antigravity::wire,
+        unwire: crate::gateway::wiring_antigravity::unwire,
+        unwire_without_main: false,
+        after_unwire: Some(crate::gateway::wiring_antigravity::cleanup_launcher),
+        path: path_antigravity,
+        // 地址与 Key 只在 agy 的环境变量里（由 jolu-agy.cmd 注入）；令牌从启动脚本回读以支持多实例检测。
+        base: antigravity_no_base,
+        token: |home, _| crate::gateway::wiring_antigravity::current_token(home),
+        token_match: TokenMatch::Exact,
+        extra: WiredExtra::AntigravityModel,
+        notice: "Antigravity CLI 只从环境变量读取网关地址与 Key：用同目录生成的 jolu-agy.cmd 启动；直接运行 agy 不经过模型路由",
+        uses_catalog: true,
+        ua: &[],
+    },
+    AgentSpec {
         id: "workbuddy",
         wire: crate::gateway::wiring::adapters::wire_workbuddy,
         unwire: crate::gateway::wiring::adapters::unwire_workbuddy,
@@ -439,7 +466,7 @@ mod tests {
         let expected: Vec<&str> = SPECS.iter().filter(|spec| spec.uses_catalog).map(|spec| spec.id).collect();
         assert_eq!(
             expected,
-            vec!["zcode", "kimi", "dsh", "pi", "pencil", "qoder", "qoder-cn", "qwen", "workbuddy"]
+            vec!["zcode", "kimi", "dsh", "pi", "pencil", "qoder", "qoder-cn", "qwen", "antigravity", "workbuddy"]
         );
     }
 
@@ -600,6 +627,16 @@ api_key = \"jolu-kimi.abcd1234\"
 ")).ok()?;
                 // 主文件 = 第一个 profile 的 patch（config_path 已指向它），与上面写的同一个
                 return Some(home);
+            }
+            "antigravity" => {
+                // 地址与 Key 只在启动脚本里；状态判定会读同目录的 jolu-agy.cmd。
+                std::fs::write(
+                    crate::gateway::wiring_antigravity::launcher_path(&path),
+                    format!("set \"GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:12731\"\r\nset \"GEMINI_API_KEY=jolu-{agent}.{instance}\"\r\n"),
+                ).ok()?;
+                format!(
+                    r#"{{"model":"jolu/zcode/glm-5.3","modelProvider":"gemini","customModelsConfig":{{"customModels":{{"jolu/zcode/glm-5.3":{{"apiProvider":"API_PROVIDER_GOOGLE_GEMINI","modelName":"zcode/glm-5.3"}}}}}}}}"#
+                )
             }
             "qwen" => {
                 // 令牌在 env.JOLU_QWEN_API_KEY，地址在 modelProviders.openai 的条目里

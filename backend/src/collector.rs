@@ -10,7 +10,7 @@ use chrono::DateTime;
 use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -51,6 +51,13 @@ fn home() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
+}
+
+fn claude_projects_dir(home: &Path) -> PathBuf {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"))
+        .join("projects")
 }
 
 fn iso_to_millis(s: &str) -> Option<i64> {
@@ -164,6 +171,17 @@ fn parse_claude_line(v: &Value) -> Option<RequestRecord> {
     let output = n(usage, "output_tokens");
     let cache_write = n(usage, "cache_creation_input_tokens");
     let cache_read = n(usage, "cache_read_input_tokens");
+    let model = msg.get("model").and_then(Value::as_str).map(String::from);
+
+    // Claude Code 在权限拒绝、本地报错或合成响应时会写出 model="<synthetic>" 且四项 token 全 0 的占位行；
+    // 跳过它避免虚增调用次数与制造虚假「<synthetic> 未计价」告警。
+    if model.as_deref() == Some("<synthetic>")
+        && [input, output, cache_write, cache_read]
+            .iter()
+            .all(|v| v.unwrap_or(0) == 0)
+    {
+        return None;
+    }
 
     // Claude 的 input_tokens 不含缓存部分（缓存单列），因此总值需要相加，
     // 这不是「把缓存再次累加」。来源未提供显式 total，故由此口径计算。
@@ -179,7 +197,7 @@ fn parse_claude_line(v: &Value) -> Option<RequestRecord> {
         dedup_key,
         session_id: v.get("sessionId").and_then(Value::as_str).map(String::from),
         ts,
-        model: msg.get("model").and_then(Value::as_str).map(String::from),
+        model,
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: cache_read,
@@ -188,6 +206,15 @@ fn parse_claude_line(v: &Value) -> Option<RequestRecord> {
         // 思考强度就在同一条 assistant 行上，与 usage 同源，无需跨行继承
         effort: v.get("effort").and_then(Value::as_str).map(String::from),
     })
+}
+
+fn parse_claude_cache_write_1h(v: &Value) -> Option<i64> {
+    if v.get("type")?.as_str()? != "assistant" {
+        return None;
+    }
+    v.pointer("/message/usage/cache_creation/ephemeral_1h_input_tokens")
+        .and_then(Value::as_i64)
+        .filter(|&tokens| tokens > 0)
 }
 
 /// Codex：`~/.codex/sessions/<y>/<m>/<d>/rollout-*.jsonl`
@@ -411,6 +438,118 @@ where
 }
 
 const RECORD_BATCH_SIZE: usize = 256;
+const MIN_ESTIMATED_DURATION_MS: i64 = 100;
+const MAX_ESTIMATED_DURATION_MS: i64 = 60 * 60 * 1000;
+const CLAUDE_CHAIN_SEED_BYTES: i64 = 256 * 1024;
+const MAX_CHAIN_HOPS: usize = 32;
+
+fn estimated_duration_ms(start_ms: i64, end_ms: i64) -> Option<i64> {
+    let diff = end_ms.checked_sub(start_ms)?;
+    (MIN_ESTIMATED_DURATION_MS..=MAX_ESTIMATED_DURATION_MS)
+        .contains(&diff)
+        .then_some(diff)
+}
+
+struct ClaudeChainNode {
+    parent: Option<String>,
+    ts_ms: Option<i64>,
+    is_attachment: bool,
+}
+
+struct ClaudeMsgTiming {
+    first_parent: Option<String>,
+    starts_at_first_block: bool,
+    end_ms: Option<i64>,
+    completed: bool,
+}
+
+fn record_claude_timing_line(
+    v: &Value,
+    chain: &mut HashMap<String, ClaudeChainNode>,
+    timings: &mut HashMap<String, ClaudeMsgTiming>,
+) {
+    let ts_ms = v.get("timestamp").and_then(Value::as_str).and_then(iso_to_millis);
+    if let Some(uuid) = v.get("uuid").and_then(Value::as_str) {
+        chain.insert(
+            uuid.to_string(),
+            ClaudeChainNode {
+                parent: v.get("parentUuid").and_then(Value::as_str).map(String::from),
+                ts_ms,
+                is_attachment: v.get("type").and_then(Value::as_str) == Some("attachment"),
+            },
+        );
+    }
+    if v.get("type").and_then(Value::as_str) != Some("assistant") {
+        return;
+    }
+    let Some(msg) = v.get("message") else { return };
+    let Some(msg_id) = msg.get("id").and_then(Value::as_str) else { return };
+    let entry = timings.entry(msg_id.to_string()).or_insert_with(|| ClaudeMsgTiming {
+        first_parent: v.get("parentUuid").and_then(Value::as_str).map(String::from),
+        starts_at_first_block: v.get("apiBlockIndex").is_none_or(|idx| idx.as_u64() == Some(0)),
+        end_ms: None,
+        completed: false,
+    });
+    if let Some(ts) = ts_ms {
+        entry.end_ms = Some(entry.end_ms.map_or(ts, |old| old.max(ts)));
+    }
+    if msg.get("stop_reason").and_then(Value::as_str).is_some() {
+        entry.completed = true;
+    }
+}
+
+fn resolve_claude_start_ms(chain: &HashMap<String, ClaudeChainNode>, first_parent: Option<&str>) -> Option<i64> {
+    let mut cursor = first_parent?;
+    for _ in 0..MAX_CHAIN_HOPS {
+        let node = chain.get(cursor)?;
+        if !node.is_attachment {
+            return node.ts_ms;
+        }
+        cursor = node.parent.as_deref()?;
+    }
+    None
+}
+
+fn seed_claude_chain(
+    file: &mut std::fs::File,
+    offset: i64,
+    chain: &mut HashMap<String, ClaudeChainNode>,
+    timings: &mut HashMap<String, ClaudeMsgTiming>,
+) {
+    let len = offset.clamp(0, CLAUDE_CHAIN_SEED_BYTES);
+    if len == 0 {
+        return;
+    }
+    let mut buf = vec![0u8; len as usize];
+    let ok = file
+        .seek(SeekFrom::Start((offset - len) as u64))
+        .and_then(|_| file.read_exact(&mut buf))
+        .is_ok();
+    let _ = file.seek(SeekFrom::Start(offset as u64));
+    if !ok {
+        return;
+    }
+    let mut lines = buf.split(|b| *b == b'\n');
+    if offset > len {
+        lines.next();
+    }
+    for line in lines {
+        if let Ok(v) = serde_json::from_slice::<Value>(line) {
+            record_claude_timing_line(&v, chain, timings);
+        }
+    }
+}
+
+fn is_codex_boundary(v: &Value) -> bool {
+    let ty = v.get("type").and_then(Value::as_str);
+    let payload_ty = v.pointer("/payload/type").and_then(Value::as_str);
+    matches!(ty, Some("turn_context"))
+        || matches!(
+            payload_ty,
+            Some("user_message" | "task_started" | "function_call_output" | "custom_tool_call_output")
+        )
+        || (ty == Some("response_item") && payload_ty == Some("message") && v.pointer("/payload/role").and_then(Value::as_str) == Some("user"))
+}
 
 /// 单个文件以固定大小批次解析并在同一事务内提交记录、解析上下文和字节偏移。
 /// 失败时整个文件回滚；重试仍从旧偏移开始，数据库去重继续兜底。
@@ -431,6 +570,11 @@ fn scan_file(conn: &mut Connection, path: &Path, kind: &str) -> Result<usize, St
     }
 
     let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut claude_chain: HashMap<String, ClaudeChainNode> = HashMap::new();
+    let mut claude_timings: HashMap<String, ClaudeMsgTiming> = HashMap::new();
+    if kind == "claude" && offset > 0 {
+        seed_claude_chain(&mut file, offset, &mut claude_chain, &mut claude_timings);
+    }
     file.seek(SeekFrom::Start(offset as u64)).map_err(|error| error.to_string())?;
     let mut reader = BufReader::new(file.take((size - offset) as u64));
     let mut parser = if matches!(kind, "codex" | "claude") && offset > 0 {
@@ -447,6 +591,8 @@ fn scan_file(conn: &mut Connection, path: &Path, kind: &str) -> Result<usize, St
     } else {
         SessionFileState::default()
     };
+    let mut codex_boundary_ms: Option<i64> = if kind == "codex" && offset > 0 { parser.updated_at_ms } else { None };
+    let mut pending_durations: Vec<(String, String, i64)> = Vec::new();
     let tx = conn.transaction().map_err(|error| error.to_string())?;
     let mut batch = Vec::with_capacity(RECORD_BATCH_SIZE);
     let mut inserted = 0usize;
@@ -482,24 +628,69 @@ fn scan_file(conn: &mut Connection, path: &Path, kind: &str) -> Result<usize, St
                 }
             }
             apply_claude_value(&mut parser, &value);
+            record_claude_timing_line(&value, &mut claude_chain, &mut claude_timings);
         } else if kind == "codex" {
             apply_codex_file_state(&mut parser, &value);
+            if is_codex_boundary(&value) {
+                if let Some(ts) = value.get("timestamp").and_then(Value::as_str).and_then(iso_to_millis) {
+                    codex_boundary_ms = Some(ts);
+                }
+            }
         }
         let record = match kind {
             "claude" => parse_claude_line(&value),
             _ => parse_codex_line(&value, &mut parser.model, &mut parser.effort),
         };
+        let claude_cw_1h = if kind == "claude" {
+            parse_claude_cache_write_1h(&value)
+        } else {
+            None
+        };
         if let Some(record) = record {
+            if kind == "codex" {
+                if let Some(dur) = codex_boundary_ms.and_then(|start| estimated_duration_ms(start, record.ts)) {
+                    pending_durations.push((record.source.clone(), record.dedup_key.clone(), dur));
+                }
+                codex_boundary_ms = Some(record.ts);
+            }
+            let key_for_1h = claude_cw_1h.map(|tokens| (record.source.clone(), record.dedup_key.clone(), tokens));
             batch.push(record);
             if batch.len() >= RECORD_BATCH_SIZE {
                 inserted += db::insert_scanned_records(&tx, &batch)
                     .map_err(|error| error.to_string())?;
                 batch.clear();
             }
+            if let Some((source, dedup_key, tokens)) = key_for_1h {
+                if !batch.is_empty() {
+                    inserted += db::insert_scanned_records(&tx, &batch)
+                        .map_err(|error| error.to_string())?;
+                    batch.clear();
+                }
+                db::set_cache_write_1h(&tx, &source, &dedup_key, tokens)
+                    .map_err(|error| error.to_string())?;
+            }
         }
     }
     if !batch.is_empty() {
         inserted += db::insert_scanned_records(&tx, &batch).map_err(|error| error.to_string())?;
+    }
+    if kind == "claude" {
+        for (msg_id, timing) in &claude_timings {
+            if timing.completed && timing.starts_at_first_block {
+                if let (Some(start), Some(end)) = (
+                    resolve_claude_start_ms(&claude_chain, timing.first_parent.as_deref()),
+                    timing.end_ms,
+                ) {
+                    if let Some(dur) = estimated_duration_ms(start, end) {
+                        pending_durations.push((SOURCE_LOCAL.into(), msg_id.clone(), dur));
+                    }
+                }
+            }
+        }
+    }
+    for (source, dedup_key, dur) in pending_durations {
+        db::set_request_duration_if_missing(&tx, &source, &dedup_key, dur)
+            .map_err(|error| error.to_string())?;
     }
     if matches!(kind, "codex" | "claude") {
         if let (Some(session_id), Some(state), Some(updated_at_ms)) = (
@@ -541,7 +732,7 @@ pub fn scan(db: &mut impl Store) -> ScanResult {
         return result;
     };
 
-    let claude_dir = home.join(".claude").join("projects");
+    let claude_dir = claude_projects_dir(&home);
     let codex_home = crate::session_titles::codex_home().unwrap_or_else(|| home.join(".codex"));
     if let Err(e) = crate::session_titles::sync_codex_if_changed(db, &codex_home) {
         result.errors.push(e);
@@ -606,7 +797,7 @@ pub fn scan_paths(db: &mut impl Store, changed: impl IntoIterator<Item = PathBuf
         result.errors.push("无法定位用户主目录".into());
         return result;
     };
-    let claude_dir = home.join(".claude").join("projects");
+    let claude_dir = claude_projects_dir(&home);
     let codex_home = crate::session_titles::codex_home().unwrap_or_else(|| home.join(".codex"));
     let codex_dir = codex_home.join("sessions");
     let index = codex_home.join("session_index.jsonl");
@@ -852,6 +1043,49 @@ mod tests {
             .unwrap();
         assert_eq!(keys, ["old-1", "old-2", "new-1"], "源端删掉的历史仍在 Jolu，且新记录照常补上");
         let _ = std::fs::remove_file(&new);
+    }
+
+    #[test]
+    fn claude_and_codex_logs_estimate_duration_without_overwriting_proxy_timing() {
+        let claude_path = temp_jsonl("duration-claude");
+        let codex_path = temp_jsonl("duration-codex");
+        let mut conn = db::open(Path::new(":memory:")).unwrap();
+
+        let claude_lines = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-11-25T10:00:00.000Z\",\"sessionId\":\"s1\",\"message\":{\"content\":\"hi\"}}\n",
+            "{\"type\":\"attachment\",\"uuid\":\"a1\",\"parentUuid\":\"u1\",\"timestamp\":\"2026-11-25T10:00:01.000Z\",\"sessionId\":\"s1\"}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"m1a\",\"parentUuid\":\"a1\",\"apiBlockIndex\":0,\"timestamp\":\"2026-11-25T10:00:02.000Z\",\"sessionId\":\"s1\",\"message\":{\"id\":\"msg_dur_1\",\"usage\":{\"input_tokens\":10,\"output_tokens\":20,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"m1b\",\"parentUuid\":\"m1a\",\"apiBlockIndex\":1,\"timestamp\":\"2026-11-25T10:00:03.500Z\",\"sessionId\":\"s1\",\"message\":{\"id\":\"msg_dur_1\",\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":10,\"output_tokens\":80,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}\n"
+        );
+        std::fs::write(&claude_path, claude_lines).unwrap();
+        assert_eq!(scan_file(&mut conn, &claude_path, "claude").unwrap(), 2);
+        let dur: Option<i64> = conn
+            .query_row("SELECT duration_ms FROM requests WHERE dedup_key = 'msg_dur_1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(dur, Some(3500), "应跳过 attachment 沿父链算 u1 -> m1b = 3500ms");
+
+        // 若已有代理实测耗时，重扫绝不覆盖
+        db::apply_proxy_timing(&conn, "msg_dur_1", 420, 3120, 200, None).unwrap();
+        conn.execute("UPDATE scan_state SET parser_initialized = 0", []).unwrap();
+        let _ = scan_file(&mut conn, &claude_path, "claude").unwrap();
+        let kept: (Option<i64>, Option<i64>) = conn
+            .query_row("SELECT first_token_ms, duration_ms FROM requests WHERE dedup_key = 'msg_dur_1'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(kept, (Some(420), Some(3120)), "绝不能覆盖已有的代理实测耗时");
+
+        let codex_lines = concat!(
+            "{\"type\":\"turn_context\",\"timestamp\":\"2026-11-25T10:01:00.000Z\",\"payload\":{\"model\":\"gpt-5\"}}\n",
+            "{\"type\":\"token_usage_record\",\"timestamp\":\"2026-11-25T10:01:02.250Z\",\"payload\":{\"response_id\":\"resp_dur_1\",\"session_id\":\"cs1\",\"usage\":{\"input_tokens\":100,\"output_tokens\":60,\"cached_input_tokens\":0,\"total_tokens\":160}}}\n"
+        );
+        std::fs::write(&codex_path, codex_lines).unwrap();
+        assert_eq!(scan_file(&mut conn, &codex_path, "codex").unwrap(), 1);
+        let codex_dur: Option<i64> = conn
+            .query_row("SELECT duration_ms FROM requests WHERE dedup_key = 'resp_dur_1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(codex_dur, Some(2250));
+
+        let _ = std::fs::remove_file(&claude_path);
+        let _ = std::fs::remove_file(&codex_path);
     }
 
     /// P1「扫描期间源端被并发改写」形态二：**同名文件被截断 / 重写**。

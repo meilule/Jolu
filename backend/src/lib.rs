@@ -9,6 +9,7 @@
 mod opencode;
 mod opencode_usage;
 mod qoder_usage;
+mod antigravity_usage;
 mod platforms;
 mod quota_registry;
 mod toast_link;
@@ -63,6 +64,7 @@ mod service_balance;
 mod trae_quota;
 mod workbuddy_quota;
 mod qoder_quota;
+mod ollama_quota;
 mod qoder_desktop;
 mod provider_browser_auth;
 mod workbuddy_browser_auth;
@@ -761,6 +763,8 @@ enum MainIntent {
     Sessions { platform: String, session_id: String },
     /// 灵动岛「查看用量」（4.2）：打开用量统计，按今天与本岛的平台 / 连接预筛。
     Usage { platform: Option<String>, connection_id: Option<String> },
+    /// 灵动岛快捷动作「建自动化」（R2-I-06）：打开自动化页并呼出新建任务弹窗（可带入当前会话）。
+    AutomationNew { platform: Option<String>, session_id: Option<String> },
 }
 
 static MAIN_INTENT: LazyLock<Mutex<Option<MainIntent>>> = LazyLock::new(|| Mutex::new(None));
@@ -2014,6 +2018,18 @@ pub fn run() {
             island_source_breakdown,
             stats_activity,
             stats_calls,
+            pricing_catalog,
+            pricing_models_dev_catalog,
+            pricing_upsert_override,
+            pricing_delete_override,
+            pricing_disable_override,
+            pricing_upsert_alias,
+            pricing_delete_alias,
+            pricing_set_rules,
+            pricing_refresh_models_dev,
+            pricing_budget_status,
+            pricing_save_budgets,
+            connection_update_billing,
             sessions_list,
             session_messages,
             session_continue_check,
@@ -2148,6 +2164,7 @@ pub fn run() {
             open_main_section,
             open_main_session,
             open_main_usage,
+            open_main_automation_new,
             set_balance_alert,
             notify::take_app_notices,
             set_retention_days,
@@ -2246,6 +2263,15 @@ pub fn run() {
             FIRST_INSTALL.store(first_install, Ordering::Release);
             app.manage(Cfg(settings::Store::load(&data_dir)));
             net::init(&app.state::<Cfg>().0.get()); // 任务 2.3：出站请求按已保存的联网方式发出
+            // 加载本地 models.dev 目录与计价模型来源；若开启自动同步且缓存过期/无价格则后台静默补拉
+            crate::gateway::models_dev::init_from_dir(&data_dir);
+            {
+                let saved = app.state::<Cfg>().0.get();
+                crate::pricing::set_pricing_model_source(&saved.pricing_model_source);
+                if saved.models_dev_auto_sync {
+                    crate::gateway::models_dev::refresh_if_stale(&handle);
+                }
+            }
             // P5 隐私脱敏：按设置初始化进程级开关（privacy_masking_set 运行时改）
             crate::gateway::mask::set_enabled(app.state::<Cfg>().0.get().privacy_masking);
             {

@@ -125,6 +125,44 @@ const WCREDITS: ProviderWindow = {
   badgeTone: "neutral",
   ringColor: RING_GREEN,
 }
+/** Ollama 订阅：新版是按月 included 余额，旧版是 session / weekly 百分比。 */
+const WOLLAMA_INCLUDED: ProviderWindow = {
+  key: "included",
+  kind: "monthly",
+  unit: "currency",
+  countsAsPlan: true,
+  ringGeometry: "arc",
+  shortLabel: "本期",
+  chipLabel: "本期",
+  placeholderName: null,
+  badgeTone: "green",
+  ringColor: RING_GREEN,
+}
+const WOLLAMA_SESSION: ProviderWindow = {
+  key: "session",
+  kind: "rolling-5h",
+  unit: "percent",
+  countsAsPlan: true,
+  ringGeometry: "arc",
+  shortLabel: "会话",
+  chipLabel: "session",
+  placeholderName: null,
+  badgeTone: "purple",
+  ringColor: RING_CYAN,
+}
+const WOLLAMA_WEEKLY: ProviderWindow = {
+  key: "weekly",
+  kind: "weekly-7d",
+  unit: "percent",
+  countsAsPlan: true,
+  ringGeometry: "arc",
+  shortLabel: "每周",
+  chipLabel: "weekly",
+  placeholderName: null,
+  badgeTone: "green",
+  ringColor: RING_GREEN,
+}
+
 /** 总配额 / 套餐额度（ZCode 本机登录兜底、自建网关总额度） */
 const WQUOTA: ProviderWindow = {
   key: "quota",
@@ -332,6 +370,35 @@ export const PROVIDERS: Readonly<Partial<Record<PlatformId, ProviderDescriptor>>
         title: "WorkBuddy 剩余积分",
         source: "WorkBuddy 个人账号",
         reason: "本机记录是已上报积分；个人剩余积分需第三方应用授权及积分读取权限。",
+      },
+    },
+    tone: DEFAULT_TONE,
+  },
+  ollama: {
+    platform: "ollama",
+    quotaSource: "connection",
+    windowKinds: ["rolling-5h", "weekly-7d", "monthly", "credit"],
+    ringGeometry: "arc",
+    windows: [WOLLAMA_INCLUDED, WOLLAMA_SESSION, WOLLAMA_WEEKLY, WCREDITS],
+    placeholderWindows: false,
+    labels: {
+      remaining: {
+        kind: "online",
+        title: "Ollama 套餐剩余",
+        source: "本机 Ollama 登录 · /api/balance",
+        api: {
+          title: "Ollama Cloud API",
+          source: "Ollama Cloud 余额",
+          reason: "API Key 连接按 Cloud /api/balance 查询套餐与已购额度。",
+        },
+        loadingReason: "正在查询 Ollama 套餐余额…",
+        windowLabels: { included: "每月剩余", session: "会话剩余", weekly: "每周剩余", credits: "已购额度" },
+        windowLabelFallback: "Ollama 额度",
+        labelFromWindowName: true,
+        unknownText: "-",
+        preferRemainingText: false,
+        okWhenValueUnknown: true,
+        emptyReason: "Ollama 未返回可展示的套餐余额。",
       },
     },
     tone: DEFAULT_TONE,

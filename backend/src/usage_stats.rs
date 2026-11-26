@@ -41,6 +41,9 @@ pub struct StatsFilter {
     /// 调用 ID / 会话 ID 片段；仅调用明细使用
     #[serde(default)]
     pub search: Option<String>,
+    /// 计费口径筛选：`all`（默认）| `api`（仅实付 API）| `subscription`（仅订阅等价）
+    #[serde(default)]
+    pub billing_scope: Option<String>,
 }
 
 impl StatsFilter {
@@ -55,6 +58,9 @@ impl StatsFilter {
         }
         if self.status.as_deref().is_some_and(|s| !matches!(s, "success" | "error" | "cancelled" | "unknown")) {
             return Err("未知状态筛选".into());
+        }
+        if self.billing_scope.as_deref().is_some_and(|s| !matches!(s, "all" | "api" | "subscription")) {
+            return Err("未知计费口径筛选".into());
         }
         Ok(())
     }
@@ -134,8 +140,16 @@ pub struct PriceSnapshot {
     pub cached_input: f64,
     pub output: f64,
     pub cache_write: Option<f64>,
-    /// 官方定价页，供界面标注来源
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_1h: Option<f64>,
+    /// 价目来源（官方定价页、`models.dev/...` 或自定义/映射说明）
     pub source: String,
+    pub source_kind: String,
+    pub pricing_model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias_from: Option<String>,
+    pub multiplier: f64,
+    pub billing_mode: String,
     /// 是否命中长上下文加价
     pub long_context: bool,
     /// 是否命中谷时折价
@@ -147,19 +161,28 @@ pub struct PriceSnapshot {
 struct Req {
     id: i64,
     call_id: String,
+    source: String,
     platform: String,
     model: Option<String>,
+    upstream_model: Option<String>,
+    served_model: Option<String>,
+    effective_model: Option<String>,
     ts: i64,
     session_id: Option<String>,
     fresh_input: Option<i64>,
     output: Option<i64>,
     cache_read: Option<i64>,
     cache_write: Option<i64>,
+    cache_write_1h: i64,
+    reasoning: Option<i64>,
+    tool: Option<i64>,
     total: Option<i64>,
-    /// 是否存在任一原始用量字段；归一化失败不等于上游未返回用量。
-    has_usage: bool,
     hit_denominator: Option<i64>,
     cost: Option<f64>,
+    credits: Option<f64>,
+    billing_mode: crate::pricing::BillingMode,
+    price_multiplier: f64,
+    unpriced_reason: Option<&'static str>,
     /// 该次请求命中的单价（每百万 token，USD），用于界面的费用拆解；无价目时为 None
     price: Option<PriceSnapshot>,
     effort: Option<String>,
@@ -171,37 +194,89 @@ struct Req {
     /// 原生来源明确标记 `cancelled`。取消不计入失败，也不计入成功。
     cancelled: bool,
     unknown: bool,
-    /// 网关 / 本地代理写入的精确归属；非代理路径为 None
-    connection_id: Option<String>,
-    /// ZCode 库的 `provider_id`（端点事实，归因层用）；其他来源为 None
-    provider_key: Option<String>,
+    attribution: crate::attribution::AttributionView,
 }
 
-fn load(conn: &Connection, f: &StatsFilter, calls: bool) -> rusqlite::Result<Vec<Req>> {
+fn load(conn: &Connection, f: &StatsFilter, calls: bool, need_pricing: bool) -> rusqlite::Result<Vec<Req>> {
     let (clause, args) = where_clause(f, calls);
     let sql = format!(
         "SELECT r.id, r.dedup_key, r.platform, r.model, r.ts, r.session_id,
                 r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_write_tokens, r.total_tokens,
                 r.input_known, r.output_known, r.cache_read_known, r.cache_write_known, r.total_known,
                 r.input_semantics, r.effort, r.duration_ms, r.first_token_ms, r.status_code, r.native_outcome,
-                m.reasoning, m.tool, r.connection_id, r.provider_key
+                m.reasoning, m.tool, r.connection_id, r.provider_key,
+                r.source, r.upstream_model, r.served_model, r.cache_write_1h_tokens, m.credits
          FROM requests r LEFT JOIN request_metrics m ON m.request_id = r.id
          WHERE {clause}
          ORDER BY r.ts DESC, r.id DESC"
     );
+    let snapshot = crate::attribution::Snapshot::load(conn).ok();
+    let mut resolver = crate::pricing::PriceResolver::load(conn);
+    let billing_scope = f.billing_scope.as_deref();
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(args), |r| {
+    let raw_rows = stmt.query_map(rusqlite::params_from_iter(args), |r| {
         let known = |i: usize| -> rusqlite::Result<bool> { Ok(r.get::<_, i64>(i)? != 0) };
         let value = |i: usize, k: usize| -> rusqlite::Result<Option<i64>> {
             Ok(if known(k)? { Some(r.get(i)?) } else { None })
         };
-        let platform: String = r.get(2)?;
-        let model: Option<String> = r.get(3)?;
-        let input = value(6, 11)?;
-        let output = value(7, 12)?;
-        let cache_read = value(8, 13)?;
-        let cache_write = value(9, 14)?;
-        let semantics: String = r.get(16)?;
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, Option<String>>(3)?,
+            r.get::<_, i64>(4)?,
+            r.get::<_, Option<String>>(5)?,
+            value(6, 11)?,
+            value(7, 12)?,
+            value(8, 13)?,
+            value(9, 14)?,
+            value(10, 15)?,
+            r.get::<_, String>(16)?,
+            r.get::<_, Option<String>>(17)?,
+            r.get::<_, Option<i64>>(18)?,
+            r.get::<_, Option<i64>>(19)?,
+            r.get::<_, Option<i64>>(20)?,
+            r.get::<_, Option<String>>(21)?,
+            r.get::<_, Option<i64>>(22)?,
+            r.get::<_, Option<i64>>(23)?,
+            r.get::<_, Option<String>>(24)?,
+            r.get::<_, Option<String>>(25)?,
+            r.get::<_, String>(26)?,
+            r.get::<_, Option<String>>(27)?,
+            r.get::<_, Option<String>>(28)?,
+            r.get::<_, Option<i64>>(29)?.unwrap_or(0),
+            r.get::<_, Option<f64>>(30)?,
+        ))
+    })?;
+
+    let mut out = Vec::new();
+    for raw in raw_rows {
+        let (
+            id, call_id, platform, model, ts, session_id,
+            input, output, cache_read, cache_write, total,
+            semantics, effort, duration_ms, first_token_ms, status_code, outcome,
+            reasoning, tool, connection_id, provider_key,
+            source, upstream_model, served_model, cache_write_1h, credits,
+        ) = raw?;
+
+        let attribution = snapshot
+            .as_ref()
+            .map_or_else(crate::attribution::AttributionView::platform, |snap| {
+                snap.resolve(&platform, connection_id.as_deref(), provider_key.as_deref(), model.as_deref())
+            });
+        // Exact 与 Mapped（唯一命中）都套用连接计费口径与倍率；Platform 档不猜测连接
+        let effective_conn_id = attribution
+            .is_connection()
+            .then(|| attribution.connection_id.as_deref())
+            .flatten();
+
+        let (billing_mode, price_multiplier) = resolver.billing_for(effective_conn_id);
+        match billing_scope {
+            Some("api") if billing_mode != crate::pricing::BillingMode::Api => continue,
+            Some("subscription") if billing_mode != crate::pricing::BillingMode::Subscription => continue,
+            _ => {}
+        }
+
         let fresh_input = match semantics.as_str() {
             "includes_cache" => input.zip(cache_read).map(|(i, c)| (i - c).max(0)),
             "excludes_cache" => input,
@@ -209,68 +284,101 @@ fn load(conn: &Connection, f: &StatsFilter, calls: bool) -> rusqlite::Result<Vec
         };
         let hit_denominator = match semantics.as_str() {
             "includes_cache" => input.zip(cache_read).map(|(i, _)| i),
-            "excludes_cache" => input.zip(cache_read).zip(cache_write).map(|((i, r), w)| i + r + w),
+            // 不强制要求 cache_write 必须已知：Antigravity / DSH 等原生来源无缓存写字段，
+            // 缺省按 0 参与分母，避免缓存命中率恒为 None。
+            "excludes_cache" => input.zip(cache_read).map(|(i, r)| i + r + cache_write.unwrap_or(0)),
             _ => None,
         };
-        let reasoning: Option<i64> = r.get(22)?;
-        let tool: Option<i64> = r.get(23)?;
-        let ts: i64 = r.get(4)?;
-        // 金额与下面的单价快照都按请求自身的时间计价（峰谷价依赖它），不随查看时刻变化
-        let at = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now);
-        let cost = input.zip(output).zip(cache_write).zip(cache_read).and_then(|(((input, output), cache_write), cache_read)| {
-            crate::pricing::estimate_usage_at(Some(&platform), model.as_deref(), crate::pricing::Usage {
-                input, output, cache_write, cache_read,
-                reasoning: reasoning.unwrap_or(0), tool: tool.unwrap_or(0),
-                long_prompt: input > crate::pricing::GEMINI_LONG_PROMPT_TOKENS,
-            }, at)
-        });
-        let status_code: Option<i64> = r.get(20)?;
-        let outcome: Option<String> = r.get(21)?;
-        // 单价快照：只在能计价时取，时间用请求自身的时间戳（峰谷价依赖它）
-        let price = cost.and_then(|_| {
-            let at = chrono::DateTime::from_timestamp_millis(ts)?;
-            crate::pricing::applied_price(Some(&platform), model.as_deref()?, input.unwrap_or(0), at).map(|p| PriceSnapshot {
+        let has_usage = [input, output, cache_read, cache_write, total, reasoning, tool]
+            .iter()
+            .any(Option::is_some);
+
+        let (cost, price, unpriced_reason, effective_model) = if need_pricing {
+            let at = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now);
+            let res = resolver.price_request(&crate::pricing::PriceRequest {
+                platform: &platform,
+                model: model.as_deref(),
+                upstream_model: upstream_model.as_deref(),
+                served_model: served_model.as_deref(),
+                connection_id: effective_conn_id,
+                input_semantics: &semantics,
+                input,
+                output,
+                cache_read,
+                cache_write,
+                cache_write_1h,
+                reasoning: reasoning.unwrap_or(0),
+                tool: tool.unwrap_or(0),
+                at,
+            });
+            let snap = res.applied.map(|p| PriceSnapshot {
                 input: p.input,
                 cached_input: p.cached_input,
                 output: p.output,
                 cache_write: p.cache_write,
-                source: p.source.to_string(),
+                cache_write_1h: p.cache_write_1h,
+                source: p.source,
+                source_kind: p.source_kind,
+                pricing_model: p.pricing_model,
+                alias_from: p.alias_from,
+                multiplier: p.multiplier,
+                billing_mode: p.billing_mode,
                 long_context: p.long_context,
                 off_peak: p.off_peak,
-            })
-        });
-        Ok(Req {
-            id: r.get(0)?,
-            call_id: r.get(1)?,
-            // 三档互斥，与 [`FAILED_SQL`] / [`CANCELLED_SQL`] 完全一致：
-            // cancelled 优先（用户主动中止，上游可能还留了个非 2xx），
-            // 其余才按状态码与原生 failed 判失败。
+            });
+            let reason = match res.unpriced_reason {
+                None => None,
+                Some(crate::pricing::UnpricedReason::NoPrice) => Some("no_price"),
+                Some(crate::pricing::UnpricedReason::NoModel) => {
+                    Some(if has_usage { "no_model" } else { "no_usage" })
+                }
+                Some(crate::pricing::UnpricedReason::NoUsage) => {
+                    Some(if has_usage { "partial_usage" } else { "no_usage" })
+                }
+            };
+            (res.cost, snap, reason, res.effective_model)
+        } else {
+            (None, None, None, model.clone())
+        };
+
+        out.push(Req {
+            id,
+            call_id,
+            source,
             cancelled: outcome.as_deref() == Some("cancelled"),
             unknown: outcome.as_deref() == Some("unknown") && status_code.is_none_or(|c| (200..300).contains(&c)),
             failed: outcome.as_deref() != Some("cancelled")
                 && (status_code.is_some_and(|c| !(200..300).contains(&c)) || outcome.as_deref() == Some("failed")),
             platform,
             model,
+            upstream_model,
+            served_model,
+            effective_model,
             ts,
-            session_id: r.get(5)?,
+            session_id,
             fresh_input,
             output,
             cache_read,
             cache_write,
-            total: value(10, 15)?,
-            has_usage: [input, output, cache_read, cache_write, value(10, 15)?, reasoning, tool].iter().any(Option::is_some),
+            cache_write_1h,
+            reasoning,
+            tool,
+            total,
             hit_denominator,
             cost,
+            credits,
+            billing_mode,
+            price_multiplier,
+            unpriced_reason,
             price,
-            effort: r.get(17)?,
-            duration_ms: r.get(18)?,
-            first_token_ms: r.get(19)?,
+            effort,
+            duration_ms,
+            first_token_ms,
             status_code,
-            connection_id: r.get(24)?,
-            provider_key: r.get(25)?,
-        })
-    })?;
-    rows.collect()
+            attribution,
+        });
+    }
+    Ok(out)
 }
 
 /// 已知值求和：任一请求缺该项则整体未知；没有请求时为 `empty`。
@@ -358,8 +466,26 @@ fn split<'a>(reqs: impl IntoIterator<Item = &'a Req> + Clone, empty: Option<i64>
 pub struct CostSummary {
     /// 已计价请求的估算合计（USD）
     pub amount: f64,
+    /// 其中按 API 实付口径的估算合计（USD）
+    pub api_amount: f64,
+    /// 其中按订阅等价口径的估算合计（USD）
+    pub subscription_amount: f64,
+    pub free_requests: i64,
     pub priced_requests: i64,
     pub requests: i64,
+    /// 独立计量的上游计划积分（Qoder / WorkBuddy 等），绝不折算为美元混入 amount
+    pub credits: f64,
+    pub credited_requests: i64,
+    /// 官方 Admin API 实账对照（仅存在已同步快照时有值）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub official_cost_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub official_synced_ms: Option<i64>,
+    /// 仅实付 API 视图下附带同周期的订阅参考（不计入实付合计）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscription_ref_amount: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscription_ref_credits: Option<f64>,
     /// 未计价原因细分：让用户知道是「模型没收录」还是「上游没给用量」
     pub unpriced_no_price: Vec<String>,
     pub unpriced_no_usage: i64,
@@ -369,28 +495,49 @@ pub struct CostSummary {
 fn cost<'a>(reqs: impl IntoIterator<Item = &'a Req>) -> CostSummary {
     let mut out = CostSummary {
         amount: 0.0,
+        api_amount: 0.0,
+        subscription_amount: 0.0,
+        free_requests: 0,
         priced_requests: 0,
         requests: 0,
+        credits: 0.0,
+        credited_requests: 0,
+        official_cost_usd: None,
+        official_synced_ms: None,
+        subscription_ref_amount: None,
+        subscription_ref_credits: None,
         unpriced_no_price: Vec::new(),
         unpriced_no_usage: 0,
         unpriced_partial: 0,
     };
     for r in reqs {
         out.requests += 1;
+        if let Some(cr) = r.credits.filter(|v| v.is_finite() && *v > 0.0) {
+            out.credits += cr;
+            out.credited_requests += 1;
+        }
         if let Some(c) = r.cost {
             out.amount += c;
             out.priced_requests += 1;
+            match r.billing_mode {
+                crate::pricing::BillingMode::Api => out.api_amount += c,
+                crate::pricing::BillingMode::Subscription => out.subscription_amount += c,
+                crate::pricing::BillingMode::Free => out.free_requests += 1,
+            }
             continue;
         }
-        // 未计价归因：模型没有价目 vs 上游没返回用量 vs 有价目但字段不全
-        match (r.model.as_deref(), r.total) {
-            (Some(model), _) if !crate::pricing::has_price(Some(&r.platform), model) => {
-                let key = format!("{}:{}", r.platform, model);
-                if !out.unpriced_no_price.contains(&key) {
-                    out.unpriced_no_price.push(key);
+        match r.unpriced_reason {
+            Some("no_price") => {
+                if let Some(model) = r.effective_model.as_deref().or(r.model.as_deref()) {
+                    let key = format!("{}:{}", r.platform, model);
+                    if !out.unpriced_no_price.contains(&key) {
+                        out.unpriced_no_price.push(key);
+                    }
+                } else {
+                    out.unpriced_partial += 1;
                 }
             }
-            _ if !r.has_usage => out.unpriced_no_usage += 1,
+            Some("no_usage") => out.unpriced_no_usage += 1,
             _ => out.unpriced_partial += 1,
         }
     }
@@ -409,13 +556,17 @@ pub struct TrendBucket {
     pub cache_write: Option<i64>,
     pub total: Option<i64>,
     pub requests: i64,
+    /// 分桶内未提供完整 Token 分项或总量的请求数；大于 0 时分项按已知小计汇总，不抹零整根柱子。
+    pub unknown_requests: i64,
+    /// 分桶内可计算请求的输入缓存命中率（0.0..=1.0）；无可计算请求时为 None。
+    pub cache_hit_rate: Option<f64>,
     /// 已计价部分的估算费用
     pub cost: f64,
 }
 
 #[derive(Debug, Serialize)]
 pub struct Trend {
-    /// "2h" | "day" | "week"，界面据此写「每 2 小时 / 每天 / 每周」
+    /// "1h" | "2h" | "day" | "week"，界面据此写「每小时 / 每 2 小时 / 每天 / 每周」
     pub bucket: &'static str,
     pub points: Vec<TrendBucket>,
 }
@@ -436,11 +587,39 @@ pub struct ModelRow {
     pub cache_hit_rate: Option<f64>,
     /// 只统计带耗时的请求（经本地代理转发）；没有则为 None
     pub avg_duration_ms: Option<f64>,
-    /// 组内全部请求可计价时才有值，否则显示「—」
+    /// 已知可计价部分的估算小计；0 条可计价时为 None
     pub cost: Option<f64>,
-    /// 价目出处（官方定价页）与核对日期；本模型未收录价目时为 None（4.4）
+    /// 该模型已计价请求条数，配合 `requests` 表达部分覆盖
+    pub priced_requests: i64,
+    /// 价目出处与核对日期；本模型未收录价目时为 None（4.4）
     pub price_source: Option<String>,
     pub price_checked: Option<String>,
+    /// 该模型命中的统一非 1.0 连接倍率（如中转 0.2×），用于分析表微标提示
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multiplier_hint: Option<f64>,
+}
+
+/// 按归因连接（账号）维度的费用与积分汇总（R1-48）。
+#[derive(Debug, Serialize)]
+pub struct ConnectionCostRow {
+    pub connection_id: Option<String>,
+    pub name: String,
+    pub platform: String,
+    pub billing_mode: String,
+    pub price_multiplier: f64,
+    pub requests: i64,
+    pub priced_requests: i64,
+    pub known_tokens: i64,
+    pub cost: f64,
+    pub credits: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub official_cost_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub official_synced_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_daily_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_monthly_usd: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -552,6 +731,7 @@ pub struct Overview {
     pub trend: Trend,
     pub models: Vec<ModelRow>,
     pub providers: Vec<ProviderRow>,
+    pub connections: Vec<ConnectionCostRow>,
     /// 能归属到某个连接的请求数
     pub attributed: i64,
     pub sessions: Vec<SessionRow>,
@@ -566,10 +746,25 @@ fn local_date(ms: i64) -> NaiveDate {
     Local.timestamp_millis_opt(ms).single().map(|d| d.date_naive()).unwrap_or_default()
 }
 
-/// 趋势分桶：两天内按 2 小时，62 天内按天，更长按周；边界跟随本地时区
+/// 趋势分桶：单日内按 1 小时，两天内按 2 小时，62 天内按天，更长按周；边界跟随本地时区
 fn buckets(start: i64, end: i64) -> (&'static str, Vec<(i64, i64, String)>) {
     let span = end - start;
     let mut out = Vec::new();
+    if span <= 86_400_000 {
+        let first = Local.timestamp_millis_opt(start).single();
+        // 对齐到整点，保证单日刻度落在 00:00 / 01:00 …
+        let mut at = first
+            .and_then(|d| d.with_minute(0)?.with_second(0)?.with_nanosecond(0))
+            .map(|d| d.timestamp_millis())
+            .unwrap_or(start);
+        while at < end {
+            let next = at + 3_600_000;
+            let label = Local.timestamp_millis_opt(at).single().map(|d| d.format("%H:%M").to_string()).unwrap_or_default();
+            out.push((at.max(start), next.min(end), label));
+            at = next;
+        }
+        return ("1h", out);
+    }
     if span <= 2 * 86_400_000 {
         let first = Local.timestamp_millis_opt(start).single();
         // 对齐到偶数整点，保证刻度落在 00:00 / 02:00 …
@@ -608,21 +803,40 @@ fn trend(reqs: &[Req], start: i64, end: i64) -> Trend {
             groups[i].push(r);
         }
     }
+    let known_or_none = |group: &[&Req], pick: &dyn Fn(&Req) -> Option<i64>| -> Option<i64> {
+        if group.is_empty() {
+            return Some(0);
+        }
+        let (known, unknown) = known_subtotal(group.iter().copied(), pick);
+        (unknown < group.len() as i64).then_some(known)
+    };
     let points = ranges
         .into_iter()
         .zip(groups)
         .map(|((start, end, label), group)| {
-            let tokens = split(group.iter().copied(), Some(0));
+            // 按已知小计汇总分桶柱图，避免单条未知语义/缺字段记录把整根柱子抹成 None/0；
+            // 同时通过 unknown_requests 告诉界面有多少条未提供完整分项。
+            let unknown_requests = group
+                .iter()
+                .filter(|r| r.total.is_none() || r.fresh_input.is_none())
+                .count() as i64;
+            let cache_known: Vec<&Req> = group
+                .iter()
+                .copied()
+                .filter(|r| r.cache_read.is_some() && r.hit_denominator.is_some())
+                .collect();
             TrendBucket {
                 start,
                 end,
                 label,
-                fresh_input: tokens.fresh_input,
-                output: tokens.output,
-                cache_read: tokens.cache_read,
-                cache_write: tokens.cache_write,
-                total: tokens.total,
+                fresh_input: known_or_none(&group, &|r| r.fresh_input),
+                output: known_or_none(&group, &|r| r.output),
+                cache_read: known_or_none(&group, &|r| r.cache_read),
+                cache_write: known_or_none(&group, &|r| r.cache_write),
+                total: known_or_none(&group, &|r| r.total),
                 requests: group.len() as i64,
+                unknown_requests,
+                cache_hit_rate: hit_rate(cache_known.iter().copied()),
                 cost: cost(group.iter().copied()).amount,
             }
         })
@@ -640,28 +854,45 @@ fn models(reqs: &[Req]) -> Vec<ModelRow> {
         .map(|((platform, model), group)| {
             let durations: Vec<i64> = group.iter().filter_map(|r| r.duration_ms).collect();
             let priced = cost(group.iter().copied());
-            let source = model.as_deref().and_then(|name| crate::pricing::price_source(Some(platform.as_str()), name));
-            // 取消与失败的请求通常没有 Token（total_known=0）。`sum_known` 遇到一条未知
-            // 就整组返回 None，那会让「4987 条里有 29 条没跑完」的模型整行变成破折号，
-            // 把真实的 23 亿 Token 藏起来。所以另给已知小计与覆盖条数。
+            let sample_price = group.iter().find_map(|r| r.price.as_ref());
+            let (price_source, price_checked) = match sample_price {
+                Some(p) => (
+                    Some(p.source.clone()),
+                    (p.source_kind == "builtin").then(|| crate::pricing::verified_on().to_string()),
+                ),
+                None => match model.as_deref().and_then(|name| crate::pricing::price_source(Some(platform.as_str()), name)) {
+                    Some((src, date)) => (Some(src), (!date.is_empty()).then(|| date.to_string())),
+                    None => (None, None),
+                },
+            };
             let (known_tokens, unknown) = known_subtotal(group.iter().copied(), |r| r.total);
+            let mut mults = group
+                .iter()
+                .filter_map(|r| r.price.as_ref().map(|p| p.multiplier))
+                .filter(|m| (*m - 1.0).abs() > 1e-6);
+            let multiplier_hint = mults.next().filter(|first| mults.all(|m| (m - *first).abs() < 1e-6));
+            let cache_known: Vec<&Req> = group
+                .iter()
+                .copied()
+                .filter(|r| r.cache_read.is_some() && r.hit_denominator.is_some())
+                .collect();
             ModelRow {
-                price_source: source.map(|(url, _)| url.to_string()),
-                price_checked: source.map(|(_, date)| date.to_string()),
+                price_source,
+                price_checked,
+                multiplier_hint,
                 platform,
                 model,
                 requests: group.len() as i64,
                 tokens: sum_known(group.iter().copied(), |r| r.total, Some(0)),
                 known_tokens,
                 known_requests: group.len() as i64 - unknown,
-                cache_hit_rate: hit_rate(group.iter().copied()),
+                cache_hit_rate: hit_rate(cache_known.iter().copied()),
                 avg_duration_ms: (!durations.is_empty()).then(|| durations.iter().sum::<i64>() as f64 / durations.len() as f64),
-                cost: (priced.priced_requests == priced.requests).then_some(priced.amount),
+                cost: (priced.priced_requests > 0).then_some(priced.amount),
+                priced_requests: priced.priced_requests,
             }
         })
         .collect();
-    // 排序也用已知小计：否则部分未知的行（tokens=None）会全被排到最后，
-    // 即使它的真实用量比排在前面的大。
     rows.sort_by(|a, b| b.known_tokens.cmp(&a.known_tokens).then(b.requests.cmp(&a.requests)));
     rows
 }
@@ -688,7 +919,7 @@ fn providers(reqs: &[Req]) -> Vec<ProviderRow> {
             }
         })
         .collect();
-    rows.sort_by(|a, b| b.tokens.unwrap_or(0).cmp(&a.tokens.unwrap_or(0)).then(a.platform.cmp(&b.platform)));
+    rows.sort_by(|a, b| b.known_tokens.cmp(&a.known_tokens).then(b.requests.cmp(&a.requests)).then(a.platform.cmp(&b.platform)));
     rows
 }
 
@@ -709,23 +940,27 @@ fn top_sessions(conn: &Connection, reqs: &[Req], limit: usize) -> rusqlite::Resu
         .collect();
     ranked.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then(a.0.cmp(&b.0)));
     ranked.truncate(limit);
-    let mut title = conn.prepare("SELECT title FROM sessions WHERE platform = ?1 AND session_id = ?2")?;
+    let mut meta = conn.prepare("SELECT title, cwd FROM sessions WHERE platform = ?1 AND session_id = ?2")?;
     // 只对排名后的几行读 cwd；read_cwd 按文件修改时间缓存，不会每次重读源文件
     let files = if ranked.is_empty() { HashMap::new() } else { crate::session_threads::source_files(conn)? };
     ranked
         .into_iter()
         .map(|((platform, session_id), (tokens, unknown_requests))| {
-            let found: Option<Option<String>> = title
-                .query_row(rusqlite::params![platform, session_id], |r| r.get(0))
+            let found: Option<(Option<String>, Option<String>)> = meta
+                .query_row(rusqlite::params![platform, session_id], |r| Ok((r.get(0)?, r.get(1)?)))
                 .map(Some)
                 .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e) })?;
+            let (title, stored_cwd) = found.unwrap_or((None, None));
+            let cwd = stored_cwd
+                .filter(|c| !c.trim().is_empty())
+                .or_else(|| files.get(&(platform.to_string(), session_id.to_string())).and_then(|p| crate::session_threads::read_cwd(p)));
             Ok(SessionRow {
                 platform: platform.to_string(),
                 session_id: session_id.to_string(),
-                title: found.flatten().filter(|t| !t.trim().is_empty()),
+                title: title.filter(|t| !t.trim().is_empty()),
                 tokens,
                 unknown_requests,
-                cwd: files.get(&(platform.to_string(), session_id.to_string())).and_then(|p| crate::session_threads::read_cwd(p)),
+                cwd,
             })
         })
         .collect()
@@ -736,17 +971,146 @@ fn empty_value(f: &StatsFilter) -> Option<i64> {
     if f.platform.as_deref().is_some_and(crate::platforms::native) { None } else { Some(0) }
 }
 
+fn connection_costs(
+    conn: &Connection,
+    reqs: &[Req],
+    official: &HashMap<String, crate::pricing::budget::OfficialCostSum>,
+) -> Vec<ConnectionCostRow> {
+    let mut meta: HashMap<String, (String, String, Option<f64>, Option<f64>)> = HashMap::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT id, name, platform, budget_daily_usd, budget_monthly_usd FROM connections",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<f64>>(3)?,
+                r.get::<_, Option<f64>>(4)?,
+            ))
+        }) {
+            for row in rows.flatten() {
+                meta.insert(row.0, (row.1, row.2, row.3, row.4));
+            }
+        }
+    }
+
+    let mut groups: HashMap<Option<String>, Vec<&Req>> = HashMap::new();
+    for r in reqs {
+        let key = r
+            .attribution
+            .is_connection()
+            .then(|| r.attribution.connection_id.clone())
+            .flatten();
+        groups.entry(key).or_default().push(r);
+    }
+
+    let mut rows: Vec<ConnectionCostRow> = groups
+        .into_iter()
+        .map(|(cid, group)| {
+            let priced = cost(group.iter().copied());
+            let (known_tokens, _) = known_subtotal(group.iter().copied(), |r| r.total);
+            let first = group[0];
+            let (name, platform, budget_daily_usd, budget_monthly_usd) = match cid.as_deref() {
+                Some(id) => match meta.get(id) {
+                    Some((n, p, d, m)) => (n.clone(), p.clone(), *d, *m),
+                    None => (
+                        first.attribution.name.clone().unwrap_or_else(|| "已删除的连接".into()),
+                        first.platform.clone(),
+                        None,
+                        None,
+                    ),
+                },
+                None => ("未归属本机日志".into(), first.platform.clone(), None, None),
+            };
+            let off = cid.as_deref().and_then(|id| official.get(id));
+            ConnectionCostRow {
+                connection_id: cid,
+                name,
+                platform,
+                billing_mode: first.billing_mode.as_str().to_string(),
+                price_multiplier: first.price_multiplier,
+                requests: group.len() as i64,
+                priced_requests: priced.priced_requests,
+                known_tokens,
+                cost: priced.amount,
+                credits: priced.credits,
+                official_cost_usd: off.map(|o| o.cost_usd),
+                official_synced_ms: off.map(|o| o.synced_ms),
+                budget_daily_usd,
+                budget_monthly_usd,
+            }
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.cost
+            .total_cmp(&a.cost)
+            .then_with(|| b.credits.total_cmp(&a.credits))
+            .then_with(|| b.requests.cmp(&a.requests))
+    });
+    rows
+}
+
 pub fn overview(conn: &Connection, f: &StatsFilter) -> rusqlite::Result<Overview> {
-    let reqs = load(conn, f, false)?;
+    let mut sub_ref_amount: Option<f64> = None;
+    let mut sub_ref_credits: Option<f64> = None;
+    let reqs = if f.billing_scope.as_deref() == Some("api") {
+        let all = load(conn, &StatsFilter { billing_scope: None, ..f.clone() }, false, true)?;
+        let (mut sa, mut sc, mut any_sub) = (0.0, 0.0, false);
+        let mut kept = Vec::with_capacity(all.len());
+        for r in all {
+            if r.billing_mode == crate::pricing::BillingMode::Api {
+                kept.push(r);
+            } else {
+                if r.billing_mode == crate::pricing::BillingMode::Subscription {
+                    if let Some(c) = r.cost {
+                        sa += c;
+                        any_sub = true;
+                    }
+                }
+                if let Some(cr) = r.credits.filter(|v| v.is_finite() && *v > 0.0) {
+                    sc += cr;
+                    any_sub = true;
+                }
+            }
+        }
+        if any_sub {
+            sub_ref_amount = Some(sa);
+            sub_ref_credits = Some(sc);
+        }
+        kept
+    } else {
+        load(conn, f, false, true)?
+    };
     let empty = empty_value(f);
     let (previous_start, previous_end) = previous_window(f.start, f.end);
-    let previous = load(conn, &f.with_range(previous_start, previous_end), false)?;
+    let previous = load(conn, &f.with_range(previous_start, previous_end), false, false)?;
     let cache_known: Vec<&Req> = reqs.iter().filter(|r| r.cache_read.is_some() && r.hit_denominator.is_some()).collect();
+    let official = crate::pricing::budget::load_official_costs_in_range(conn, f.start, f.end).unwrap_or_default();
+    let connection_rows = connection_costs(conn, &reqs, &official);
+    let mut summary = cost(reqs.iter());
+    summary.subscription_ref_amount = sub_ref_amount;
+    summary.subscription_ref_credits = sub_ref_credits;
+    // 仅汇总落在当前可见连接集内的官方实账快照，保持口径一致
+    let mut off_sum = 0.0;
+    let mut off_synced: Option<i64> = None;
+    let mut off_any = false;
+    for row in &connection_rows {
+        if let Some(v) = row.official_cost_usd {
+            off_sum += v;
+            off_any = true;
+            if let Some(s) = row.official_synced_ms {
+                off_synced = Some(off_synced.map_or(s, |prev| prev.max(s)));
+            }
+        }
+    }
+    if off_any {
+        summary.official_cost_usd = Some(off_sum);
+        summary.official_synced_ms = off_synced;
+    }
     Ok(Overview {
         provenance: provenance(conn, f)?,
         tokens: split(reqs.iter(), empty),
-        // 用共享契约算覆盖：`Coverage::of` 与 `SessionTokens` / 灵动岛用的是同一套
-        // 「未知不是零、负数当未知」规则。这里取其中两个字段填既有 DTO，不改序列化形状。
         token_coverage: {
             let coverage = crate::data_contract::Coverage::of(reqs.iter().map(|r| r.total));
             TokenCoverage {
@@ -761,11 +1125,12 @@ pub fn overview(conn: &Connection, f: &StatsFilter) -> rusqlite::Result<Overview
         cancelled: reqs.iter().filter(|r| r.cancelled).count() as i64,
         unknown: reqs.iter().filter(|r| r.unknown).count() as i64,
         cache_hit_rate: hit_rate(reqs.iter()),
-        cost: cost(reqs.iter()),
+        cost: summary,
         previous_total: if previous.is_empty() { None } else { sum_known(previous.iter(), |r| r.total, None) },
         trend: trend(&reqs, f.start, f.end),
         models: models(&reqs),
         providers: providers(&reqs),
+        connections: connection_rows,
         attributed: count_attributed(conn, f)?,
         sessions: top_sessions(conn, &reqs, 5)?,
     })
@@ -821,6 +1186,8 @@ pub struct ActivityDay {
     pub date: String,
     pub tokens: i64,
     pub requests: i64,
+    pub cost: f64,
+    pub unpriced_requests: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -836,22 +1203,86 @@ pub struct Activity {
     pub month_active_days: i64,
 }
 
-/// 全年活跃日历。只按供应商和账号筛选，日期固定为结束日往前一年。
+/// 全年活跃日历。只按供应商和账号筛选，日期固定为结束日往前一年；同时按记忆化计价引擎算出每日估算费用（R1-48）。
 pub fn activity(conn: &Connection, platform: Option<String>, connections: Vec<String>, now: i64) -> rusqlite::Result<Activity> {
     let today = local_date(now);
     let year_ago = today - Duration::days(364);
     let first = year_ago - Duration::days(i64::from(year_ago.weekday().num_days_from_monday()));
     let f = StatsFilter { start: local_ms(first), end: now.max(local_ms(first) + 1), platform, connections, ..Default::default() };
-    let reqs = load(conn, &f, false)?;
-    let mut days: BTreeMap<NaiveDate, (i64, i64)> = BTreeMap::new();
+    let (clause, args) = where_clause(&f, false);
+    let snapshot = crate::attribution::Snapshot::load(conn).ok();
+    let mut resolver = crate::pricing::PriceResolver::load(conn);
+    let mut stmt = conn.prepare(&format!(
+        "SELECT r.ts, r.total_tokens, r.total_known, r.platform, r.model, r.upstream_model, r.served_model,
+                r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_write_tokens, r.cache_write_1h_tokens,
+                r.input_known, r.output_known, r.cache_read_known, r.cache_write_known,
+                r.input_semantics, r.connection_id, r.provider_key, m.reasoning, m.tool
+         FROM requests r LEFT JOIN request_metrics m ON m.request_id = r.id
+         WHERE {clause}"
+    ))?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(args), |r| {
+        let opt = |v: usize, k: usize| -> rusqlite::Result<Option<i64>> {
+            Ok(if r.get::<_, i64>(k)? != 0 { Some(r.get(v)?) } else { None })
+        };
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, i64>(2)? != 0,
+            r.get::<_, String>(3)?,
+            r.get::<_, Option<String>>(4)?,
+            r.get::<_, Option<String>>(5)?,
+            r.get::<_, Option<String>>(6)?,
+            opt(7, 12)?,
+            opt(8, 13)?,
+            opt(9, 14)?,
+            opt(10, 15)?,
+            r.get::<_, Option<i64>>(11)?.unwrap_or(0),
+            r.get::<_, String>(16)?,
+            r.get::<_, Option<String>>(17)?,
+            r.get::<_, Option<String>>(18)?,
+            r.get::<_, Option<i64>>(19)?.unwrap_or(0),
+            r.get::<_, Option<i64>>(20)?.unwrap_or(0),
+        ))
+    })?;
+    let mut days: BTreeMap<NaiveDate, (i64, i64, f64, i64)> = BTreeMap::new();
     let mut today_ts = Vec::new();
-    for r in &reqs {
-        let date = local_date(r.ts);
+    for row in rows {
+        let (ts, total, known, plat, model, upstream, served, input, output, cr, cw, cw1h, semantics, conn_id, provider_key, reasoning, tool) = row?;
+        let date = local_date(ts);
         let entry = days.entry(date).or_default();
-        entry.0 += r.total.unwrap_or(0);
+        if known {
+            entry.0 += total;
+        }
         entry.1 += 1;
+        let attribution = snapshot
+            .as_ref()
+            .map_or_else(crate::attribution::AttributionView::platform, |snap| {
+                snap.resolve(&plat, conn_id.as_deref(), provider_key.as_deref(), model.as_deref())
+            });
+        let effective_conn = attribution.is_connection().then(|| attribution.connection_id.as_deref()).flatten();
+        let at = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now);
+        let res = resolver.price_request(&crate::pricing::PriceRequest {
+            platform: &plat,
+            model: model.as_deref(),
+            upstream_model: upstream.as_deref(),
+            served_model: served.as_deref(),
+            connection_id: effective_conn,
+            input_semantics: &semantics,
+            input,
+            output,
+            cache_read: cr,
+            cache_write: cw,
+            cache_write_1h: cw1h,
+            reasoning,
+            tool,
+            at,
+        });
+        match res.cost {
+            Some(c) => entry.2 += c,
+            None => entry.3 += 1,
+        }
         if date == today {
-            today_ts.push(r.ts);
+            today_ts.push(ts);
         }
     }
     today_ts.sort_unstable();
@@ -866,7 +1297,13 @@ pub fn activity(conn: &Connection, platform: Option<String>, connections: Vec<St
         month_active_days: active.iter().filter(|d| **d >= month_start && **d <= today).count() as i64,
         days: days
             .into_iter()
-            .map(|(date, (tokens, requests))| ActivityDay { date: date.format("%Y-%m-%d").to_string(), tokens, requests })
+            .map(|(date, (tokens, requests, cost, unpriced_requests))| ActivityDay {
+                date: date.format("%Y-%m-%d").to_string(),
+                tokens,
+                requests,
+                cost,
+                unpriced_requests,
+            })
             .collect(),
         today_active_minutes: active_ms / 60_000,
     })
@@ -878,16 +1315,29 @@ pub struct CallRow {
     pub price: Option<PriceSnapshot>,
     pub id: i64,
     pub call_id: String,
+    pub source: String,
     pub ts: i64,
     pub platform: String,
     pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub served_model: Option<String>,
     pub session_id: Option<String>,
     pub fresh_input: Option<i64>,
     pub cache_read: Option<i64>,
     pub cache_write: Option<i64>,
+    pub cache_write_1h: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<i64>,
     pub output: Option<i64>,
     pub total: Option<i64>,
     pub cost: Option<f64>,
+    pub billing_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unpriced_reason: Option<String>,
     pub effort: Option<String>,
     pub duration_ms: Option<i64>,
     pub first_token_ms: Option<i64>,
@@ -898,7 +1348,6 @@ pub struct CallRow {
     pub cancelled: bool,
     pub unknown: bool,
     /// 这条调用归到的已存连接（`exact` / `mapped`）；归不出唯一结论时是 `platform` 档。
-    /// 归因只影响展示，不参与费用计算，也不改写 `requests.connection_id`。
     pub attribution: crate::attribution::AttributionView,
 }
 
@@ -908,16 +1357,24 @@ impl From<Req> for CallRow {
             price: r.price,
             id: r.id,
             call_id: r.call_id,
+            source: r.source,
             ts: r.ts,
             platform: r.platform,
             model: r.model,
+            upstream_model: r.upstream_model,
+            served_model: r.served_model,
             session_id: r.session_id,
             fresh_input: r.fresh_input,
             cache_read: r.cache_read,
             cache_write: r.cache_write,
+            cache_write_1h: r.cache_write_1h,
+            reasoning: r.reasoning,
+            tool: r.tool,
             output: r.output,
             total: r.total,
             cost: r.cost,
+            billing_mode: r.billing_mode.as_str().to_string(),
+            unpriced_reason: r.unpriced_reason.map(str::to_string),
             effort: r.effort,
             duration_ms: r.duration_ms,
             first_token_ms: r.first_token_ms,
@@ -925,8 +1382,7 @@ impl From<Req> for CallRow {
             failed: r.failed,
             cancelled: r.cancelled,
             unknown: r.unknown,
-            // 归因需要连接清单与 provider 规则，由 calls() 统一解析后覆盖（见 calls）。
-            attribution: crate::attribution::AttributionView::platform(),
+            attribution: r.attribution,
         }
     }
 }
@@ -943,40 +1399,42 @@ pub struct CallPage {
     pub models: Vec<String>,
 }
 
-pub const CALL_PAGE_SIZE: u32 = 10;
+pub const CALL_PAGE_SIZE: u32 = 20;
 
 pub fn calls(conn: &Connection, f: &StatsFilter, page: u32) -> rusqlite::Result<CallPage> {
-    let reqs = load(conn, f, true)?;
+    let reqs = load(conn, f, true, true)?;
     let total_count = reqs.len() as i64;
     let page_count = (reqs.len() as u32).div_ceil(CALL_PAGE_SIZE).max(1);
     let page = page.clamp(1, page_count);
     let unpriced_count = reqs.iter().filter(|r| r.cost.is_none()).count() as i64;
-    // 归因只为当页这十来行解析一次连接快照；读不到连接表时整页按平台档展示。
-    let snapshot = crate::attribution::Snapshot::load(conn).ok();
     let rows = reqs
         .into_iter()
         .skip(((page - 1) * CALL_PAGE_SIZE) as usize)
         .take(CALL_PAGE_SIZE as usize)
-        .map(|req| {
-            let attribution = snapshot
-                .as_ref()
-                .map_or_else(crate::attribution::AttributionView::platform, |snapshot| {
-                    snapshot.resolve(
-                        &req.platform,
-                        req.connection_id.as_deref(),
-                        req.provider_key.as_deref(),
-                        req.model.as_deref(),
-                    )
-                });
-            let mut row = CallRow::from(req);
-            row.attribution = attribution;
-            row
-        })
+        .map(CallRow::from)
         .collect();
     let (clause, args) = where_clause(&StatsFilter { model: None, status: None, search: None, ..f.clone() }, true);
     let mut stmt = conn.prepare(&format!("SELECT DISTINCT r.model FROM requests r WHERE {clause} AND r.model IS NOT NULL ORDER BY r.model"))?;
     let models = stmt.query_map(rusqlite::params_from_iter(args), |r| r.get(0))?.collect::<Result<_, _>>()?;
     Ok(CallPage { rows, total_count, unpriced_count, page, page_size: CALL_PAGE_SIZE, page_count, models })
+}
+
+fn source_label(source: &str) -> &'static str {
+    if source.starts_with("gateway") {
+        "模型路由"
+    } else if source.starts_with("native:") {
+        "原生采集"
+    } else {
+        "本机日志"
+    }
+}
+
+fn billing_mode_label(mode: crate::pricing::BillingMode) -> &'static str {
+    match mode {
+        crate::pricing::BillingMode::Api => "API 实付",
+        crate::pricing::BillingMode::Subscription => "订阅等价",
+        crate::pricing::BillingMode::Free => "免费 / $0",
+    }
 }
 
 fn csv_cell(value: &str) -> String {
@@ -989,12 +1447,11 @@ fn csv_cell(value: &str) -> String {
 
 /// 按当前筛选导出全部调用。不含 API Key 和对话正文；未知值留空，费用列标明估算与币种。
 pub fn calls_csv(conn: &Connection, f: &StatsFilter) -> rusqlite::Result<(String, i64)> {
-    let reqs = load(conn, f, true)?;
-    let mut out = String::from("\u{feff}时间,供应商,模型,普通输入,缓存读取,缓存写入,输出,总 Token,估算费用（USD）,首字（毫秒）,总耗时（毫秒）,思考强度,状态,会话 ID,调用 ID,数据来源\r\n");
+    let reqs = load(conn, f, true, true)?;
+    let mut out = String::from("\u{feff}时间,供应商,模型,普通输入,缓存读取,缓存写入,输出,总 Token,估算费用（USD）,计费口径,计价模型,首字（毫秒）,总耗时（毫秒）,思考强度,状态,会话 ID,调用 ID,数据来源\r\n");
     let opt = |v: Option<i64>| v.map(|v| v.to_string()).unwrap_or_default();
     for r in &reqs {
         let time = Local.timestamp_millis_opt(r.ts).single().map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string()).unwrap_or_default();
-        // 状态列与界面胶囊同一口径：取消是独立一档，不能写成「失败」。
         let status = match (r.cancelled, r.failed, r.unknown, r.status_code) {
             (true, _, _, _) => "已取消".to_string(),
             (false, true, _, Some(code)) => format!("失败 {code}"),
@@ -1002,6 +1459,7 @@ pub fn calls_csv(conn: &Connection, f: &StatsFilter) -> rusqlite::Result<(String
             (false, false, true, _) => "状态未知".to_string(),
             (false, false, false, _) => "成功".to_string(),
         };
+        let pricing_model = r.price.as_ref().map(|p| p.pricing_model.clone()).unwrap_or_default();
         let cells = [
             time,
             crate::platforms::get(&r.platform).map_or(r.platform.clone(), |p| p.name.clone()),
@@ -1012,13 +1470,15 @@ pub fn calls_csv(conn: &Connection, f: &StatsFilter) -> rusqlite::Result<(String
             opt(r.output),
             opt(r.total),
             r.cost.map(|c| format!("{c:.6}")).unwrap_or_default(),
+            billing_mode_label(r.billing_mode).to_string(),
+            pricing_model,
             opt(r.first_token_ms),
             opt(r.duration_ms),
             r.effort.clone().unwrap_or_default(),
             status,
             r.session_id.clone().unwrap_or_default(),
             r.call_id.clone(),
-            "本机日志".to_string(),
+            source_label(&r.source).to_string(),
         ];
         out.push_str(&cells.iter().map(|c| csv_cell(c)).collect::<Vec<_>>().join(","));
         out.push_str("\r\n");
@@ -1250,8 +1710,8 @@ mod tests {
         assert_eq!(o.cost.requests, 2);
         assert_eq!(o.providers.len(), 2);
         assert_eq!(o.sessions[0].session_id, "s1");
-        assert_eq!(o.trend.bucket, "2h");
-        assert_eq!(o.trend.points.len(), 12);
+        assert_eq!(o.trend.bucket, "1h");
+        assert_eq!(o.trend.points.len(), 24);
         // 来源元数据与统计同一批行：数据时间是范围内最后一条，最早可用记录不受范围限制
         assert_eq!(o.provenance.data_at, Some(base + 2_000));
         assert_eq!(o.provenance.earliest_available, Some(base - 86_400_000 + 1_000));
@@ -1320,7 +1780,7 @@ mod tests {
         let all = overview(&conn, &filter(base, base + 3_600_000)).unwrap();
         assert_eq!(all.tokens.cache_read, None);
         assert_eq!(all.cache_hit_rate, None);
-        assert_eq!(all.trend.bucket, "2h");
+        assert_eq!(all.trend.bucket, "1h");
         let codex = overview(&conn, &StatsFilter { platform: Some("codex".into()), ..filter(base, base + 3_600_000) }).unwrap();
         assert_eq!(codex.tokens.cache_read, Some(0));
         assert_eq!(codex.requests, 1);
@@ -1331,22 +1791,23 @@ mod tests {
     #[test]
     fn calls_paginate_newest_first_and_search_by_session() {
         let base = local_ms(NaiveDate::from_ymd_opt(2026, 10, 21).unwrap());
-        let records: Vec<_> = (0..12)
+        let records: Vec<_> = (0..22)
             .map(|i| rec("claude", &format!("k{i}"), base + i * 1_000, "claude-sonnet-4-5", [Some(1), Some(1), Some(0), Some(0), Some(2)], Some(if i == 3 { "needle" } else { "other" })))
             .collect();
         let (conn, path) = seeded(&records);
         let page = calls(&conn, &filter(base, base + 60_000), 1).unwrap();
-        assert_eq!(page.total_count, 12);
+        assert_eq!(page.total_count, 22);
         assert_eq!(page.page_count, 2);
-        assert_eq!(page.rows[0].call_id, "k11");
+        assert_eq!(page.rows.len(), 20);
+        assert_eq!(page.rows[0].call_id, "k21");
         assert_eq!(page.models, vec!["claude-sonnet-4-5".to_string()]);
         let found = calls(&conn, &StatsFilter { search: Some("needle".into()), ..filter(base, base + 60_000) }, 1).unwrap();
         assert_eq!(found.total_count, 1);
         assert_eq!(found.rows[0].call_id, "k3");
         let (csv, count) = calls_csv(&conn, &filter(base, base + 60_000)).unwrap();
-        assert_eq!(count, 12);
+        assert_eq!(count, 22);
         assert!(csv.starts_with('\u{feff}'));
-        assert_eq!(csv.lines().count(), 13);
+        assert_eq!(csv.lines().count(), 23);
         drop(conn);
         let _ = std::fs::remove_file(path);
     }
@@ -1360,9 +1821,12 @@ mod tests {
         assert_eq!(ranges.len(), 7);
         assert_eq!(ranges[0].2, "10/15");
         let (kind, ranges) = buckets(start, start + 12 * 3_600_000 + 1);
+        assert_eq!(kind, "1h");
+        assert_eq!(ranges.len(), 13);
+        assert_eq!(ranges[12].2, "12:00");
+        let (kind, ranges) = buckets(start, start + 2 * 86_400_000);
         assert_eq!(kind, "2h");
-        assert_eq!(ranges.len(), 7);
-        assert_eq!(ranges[6].2, "12:00");
+        assert_eq!(ranges.len(), 24);
     }
 
     #[test]
@@ -1485,6 +1949,152 @@ mod tests {
         let mut good = filter(base, base + 1);
         good.status = Some("cancelled".into());
         assert!(good.validate().is_ok());
+        drop(conn);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn billing_scope_splits_api_and_subscription_and_gemini_prices_without_cache_write() {
+        let base = local_ms(NaiveDate::from_ymd_opt(2026, 11, 20).unwrap());
+        let (conn, path) = seeded(&[
+            // Gemini 缺 cache_write_tokens（cache_write_known = 0），仍应计价
+            rec("gemini", "g1", base + 1_000, "gemini-2.5-pro", [Some(100_000), Some(20_000), Some(0), None, Some(120_000)], None),
+            // API 连接（倍率 0.5）
+            rec("claude", "c-api", base + 2_000, "claude-sonnet-4-5", [Some(1_000_000), Some(0), Some(0), Some(0), Some(1_000_000)], None),
+            // 订阅连接
+            rec("claude", "c-sub", base + 3_000, "claude-sonnet-4-5", [Some(1_000_000), Some(0), Some(0), Some(0), Some(1_000_000)], None),
+            // 同模型一条取消无用量，模型行仍应保留已知费用小计
+            rec("claude", "c-cancel", base + 4_000, "claude-sonnet-4-5", [None; 5], None),
+        ]);
+        conn.execute(
+            "INSERT INTO connections(id,platform,kind,name,status,created_ms,billing_mode,price_multiplier)
+             VALUES('conn-api','claude','api','半价中转','connected',1,'api',0.5),
+                   ('conn-sub','claude','auth','官方订阅','connected',1,'auto',1.0)",
+            [],
+        ).unwrap();
+        conn.execute("UPDATE requests SET connection_id='conn-api' WHERE dedup_key='c-api'", []).unwrap();
+        conn.execute("UPDATE requests SET connection_id='conn-sub' WHERE dedup_key='c-sub'", []).unwrap();
+
+        let all = overview(&conn, &filter(base, base + 86_400_000)).unwrap();
+        assert_eq!(all.cost.priced_requests, 3, "Gemini 缺 cache_write 也应成功计价");
+        assert!((all.cost.subscription_amount - 3.0).abs() < 1e-6);
+        assert!(all.cost.api_amount > 1.5, "包含半价 API ($1.5) + 未归属 Gemini API");
+
+        let claude_row = all.models.iter().find(|m| m.model.as_deref() == Some("claude-sonnet-4-5")).unwrap();
+        assert_eq!(claude_row.priced_requests, 2);
+        assert!((claude_row.cost.unwrap() - 4.5).abs() < 1e-6, "部分取消不应抹掉模型行已知费用（$1.5 + $3.0 = $4.5）");
+
+        let mut only_api = filter(base, base + 86_400_000);
+        only_api.billing_scope = Some("api".into());
+        let api_view = overview(&conn, &only_api).unwrap();
+        assert_eq!(api_view.cost.subscription_amount, 0.0);
+        assert_eq!(api_view.cost.priced_requests, 2);
+
+        let mut only_sub = filter(base, base + 86_400_000);
+        only_sub.billing_scope = Some("subscription".into());
+        let sub_view = overview(&conn, &only_sub).unwrap();
+        assert_eq!(sub_view.requests, 1);
+        assert!((sub_view.cost.amount - 3.0).abs() < 1e-6);
+
+        drop(conn);
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// P0 回归：
+    /// 1) excludes_cache 缺 cache_write 时仍可算命中率（如 Antigravity / DSH）；
+    /// 2) 趋势分桶混入单条 unknown 语义记录时，不把整根柱子抹零，并回报 unknown_requests 与 cache_hit_rate；
+    /// 3) ModelRow.cache_hit_rate 不因单条取消/未知行归零；
+    /// 4) 存量 Claude `<synthetic>` 零 Token 伪行自动从统计中排除。
+    #[test]
+    fn p0_excludes_cache_hit_rate_trend_partial_bucket_and_synthetic_exclusion() {
+        let base = local_ms(NaiveDate::from_ymd_opt(2026, 11, 21).unwrap());
+        let (conn, path) = seeded(&[
+            // 正常 Claude 行：有缓存读 800、新增输入 200 → 命中率 80%
+            rec("claude", "c-ok", base + 1_000, "claude-sonnet-4-5", [Some(200), Some(50), Some(800), Some(0), Some(1_050)], None),
+            // 同模型一条取消行（无 Token）
+            rec("claude", "c-cancel", base + 2_000, "claude-sonnet-4-5", [None; 5], None),
+            // Claude `<synthetic>` 零 Token 伪行（应被排除）
+            rec("claude", "c-syn", base + 3_000, "<synthetic>", [Some(0), Some(0), Some(0), Some(0), Some(0)], None),
+        ]);
+        // 一条 excludes_cache 但 cache_write_known=0 的原生记录（如 Antigravity）
+        crate::source_store::write(&conn, &[crate::source_store::Record {
+            request: RequestRecord {
+                platform: "antigravity".into(),
+                source: "native:antigravity:default".into(),
+                dedup_key: "ag-1".into(),
+                session_id: Some("native:antigravity:default:s1".into()),
+                ts: base + 4_000,
+                model: Some("gemini-4-neon-xhigh".into()),
+                input_tokens: Some(3_000),
+                output_tokens: Some(800),
+                cache_read_tokens: Some(177_000),
+                cache_write_tokens: None,
+                total_tokens: Some(180_800),
+                effort: None,
+            },
+            input_semantics: "excludes_cache",
+            credits: None,
+            original_credits: None,
+            billable: None,
+            context_ratio: None,
+            reasoning: None,
+            tool: None,
+            duration_ms: Some(15_000),
+            first_token_ms: Some(10_000),
+        }]).unwrap();
+        // 一条 input_semantics='unknown' 的 workbuddy 记录（曾导致整日趋势桶归零）
+        crate::source_store::write(&conn, &[crate::source_store::Record {
+            request: RequestRecord {
+                platform: "workbuddy".into(),
+                source: "native:workbuddy:main".into(),
+                dedup_key: "wb-1".into(),
+                session_id: None,
+                ts: base + 5_000,
+                model: Some("glm-5".into()),
+                input_tokens: Some(100),
+                output_tokens: Some(20),
+                cache_read_tokens: None,
+                cache_write_tokens: None,
+                total_tokens: Some(120),
+                effort: None,
+            },
+            input_semantics: "unknown",
+            credits: None,
+            original_credits: None,
+            billable: None,
+            context_ratio: None,
+            reasoning: None,
+            tool: None,
+            duration_ms: None,
+            first_token_ms: None,
+        }]).unwrap();
+
+        let o = overview(&conn, &filter(base, base + 86_400_000)).unwrap();
+        // `<synthetic>` 应被排除：共 4 条有效请求（c-ok, c-cancel, ag-1, wb-1）
+        assert_eq!(o.requests, 4);
+        assert!(!o.cost.unpriced_no_price.iter().any(|m| m.contains("<synthetic>")));
+
+        // 趋势图第 0 个 1h 桶不能被 wb-1 / c-cancel 吞零
+        let b0 = &o.trend.points[0];
+        assert_eq!(b0.fresh_input, Some(3_200), "已知新鲜输入 = 200 + 3000");
+        assert_eq!(b0.cache_read, Some(177_800));
+        assert_eq!(b0.unknown_requests, 2, "c-cancel 和 wb-1 缺分项或语义未知");
+        assert!(b0.cache_hit_rate.unwrap() > 0.98);
+
+        // Antigravity excludes_cache 缺 cache_write 仍可计算准确命中率：177_000 / 180_000 = 98.333%
+        let ag = overview(&conn, &StatsFilter { platform: Some("antigravity".into()), ..filter(base, base + 86_400_000) }).unwrap();
+        let rate = ag.cache_hit_rate.expect("excludes_cache 缺 cache_write 不应导致命中率为空");
+        assert!((rate - (177_000.0 / 180_000.0)).abs() < 1e-6);
+
+        // Claude 模型行虽含 1 条取消行，命中率仍保留 80%
+        let claude_m = o.models.iter().find(|m| m.model.as_deref() == Some("claude-sonnet-4-5")).unwrap();
+        assert!((claude_m.cache_hit_rate.unwrap() - 0.8).abs() < 1e-6);
+
+        // Antigravity 写入的 first_token_ms 应完整落库并透传到调用明细
+        let ag_calls = calls(&conn, &StatsFilter { platform: Some("antigravity".into()), ..filter(base, base + 86_400_000) }, 1).unwrap();
+        assert_eq!(ag_calls.rows[0].first_token_ms, Some(10_000));
+        assert_eq!(ag_calls.rows[0].duration_ms, Some(15_000));
+
         drop(conn);
         let _ = std::fs::remove_file(path);
     }

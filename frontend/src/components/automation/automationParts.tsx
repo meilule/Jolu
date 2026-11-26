@@ -3,6 +3,7 @@ import * as Tooltip from "@radix-ui/react-tooltip"
 import type { ReactNode } from "react"
 import { Ellipsis, Info, ListOrdered, Pause, Pencil, Play, RotateCcw, Square, Trash2, X, type LucideIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { SlideIndicator, useGlidePill } from "@/motion"
 import { canDeleteTask, DELETE_BLOCKED_TIP, taskStatus, type Tone } from "@/lib/automation"
 import type { TaskAction, TaskItemDto } from "@/lib/automationApi"
 
@@ -63,24 +64,32 @@ export function Notice({ icon: Icon = Info, title, children, tone = "side", clas
 
 /** 页签：任务 / 运行记录（画板 58 / 64） */
 export function AutomationTabs({ value, onChange }: { value: "tasks" | "runs"; onChange: (v: "tasks" | "runs") => void }) {
+  const hoverGlide = useGlidePill({
+    selector: "button",
+    background: "color-mix(in oklab, var(--jn-surface) 65%, transparent)",
+    skipActive: true,
+  })
   return (
-    <div role="tablist" aria-label="自动化页签" className="inline-flex h-[38px] items-center gap-0.5 rounded-full bg-jn-well p-[3px]">
-      {([["tasks", "任务"], ["runs", "运行记录"]] as const).map(([key, label]) => (
-        <button
-          key={key}
-          type="button"
-          role="tab"
-          aria-selected={value === key}
-          onClick={() => onChange(key)}
-          className={cn(
-            "jn-interactive inline-flex h-[30px] items-center justify-center rounded-full px-3.5 text-[13px] font-semibold",
-            // 分段栏里的选中项是白底滑块（画板 segment 样式）
-            value === key ? "bg-jn-surface text-jn-text" : "text-jn-text-2 hover:text-jn-text",
-          )}
-        >
-          {label}
-        </button>
-      ))}
+    <div ref={hoverGlide} role="tablist" aria-label="自动化页签" className="relative inline-flex h-[38px] items-center gap-0.5 rounded-full bg-jn-well p-[3px]">
+      {([["tasks", "任务"], ["runs", "运行记录"]] as const).map(([key, label]) => {
+        const active = value === key
+        return (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(key)}
+            className={cn(
+              "jn-interactive jn-no-press relative isolate inline-flex h-[30px] items-center justify-center rounded-full px-3.5 text-[13px] font-semibold",
+              active ? "text-jn-text" : "text-jn-text-2 hover:text-jn-text",
+            )}
+          >
+            {active && <SlideIndicator layoutId="jn-automation-tabs" radius={9999} className="-z-10 bg-jn-surface shadow-jn-surface" />}
+            {label}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -121,6 +130,7 @@ export function TaskMenu({ item, now, onAction, onEdit, onQueue, onCancel, onDel
   onDelete: () => void
   trigger?: ReactNode
 }) {
+  const glide = useGlidePill()
   const running = item.active?.status === "running"
   const cancelled = item.state === "cancelled"
   const status = taskStatus(item, now)
@@ -137,7 +147,7 @@ export function TaskMenu({ item, now, onAction, onEdit, onQueue, onCancel, onDel
         )}
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Content align="end" sideOffset={6} collisionPadding={12} className={MENU_CLASS}>
+        <Menu.Content ref={glide} align="end" sideOffset={6} collisionPadding={12} className={MENU_CLASS}>
           <Menu.Item className={ITEM_CLASS} disabled={cancelled} onSelect={onEdit}><Pencil aria-hidden />编辑任务</Menu.Item>
           {running ? (
             <Menu.Item className={ITEM_CLASS} onSelect={() => onAction("stop")}><Square aria-hidden />停止运行</Menu.Item>

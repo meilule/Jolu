@@ -3,7 +3,8 @@ import type { ToastInput } from "./toastQueue"
 export type BalanceNotice = { id: number; kind: "balance"; connection_id: string; connection_name: string; platform: string; remaining: number; currency: string; threshold: number }
 export type TaskNotice = { id: number; kind: "task"; task_id: number; state: "resumed" | "completed" | "failed"; platform: string; task_name: string; reason?: string | null }
 export type QuotaNotice = { id: number; kind: "quota"; connection_id: string; connection_name: string; platform: string; alert: "low" | "expired" | "failed"; detail: string }
-export type AppNotice = BalanceNotice | TaskNotice | QuotaNotice
+export type BudgetNotice = { id: number; kind: "budget"; scope_key: string; title: string; detail: string }
+export type AppNotice = BalanceNotice | TaskNotice | QuotaNotice | BudgetNotice
 export type NoticeTarget = { kind: "account"; id: string; nonce: number } | { kind: "task"; id: number; nonce: number }
 
 export function parseAppNotice(value: unknown): AppNotice | null {
@@ -20,6 +21,7 @@ export function parseAppNotice(value: unknown): AppNotice | null {
     && (v.reason == null || typeof v.reason === "string" && v.reason.length <= 2048)) return value as TaskNotice
   if (v.kind === "quota" && text("connection_id", 128) && text("connection_name") && text("platform", 64) && text("detail", 512)
     && ["low", "expired", "failed"].includes(v.alert as string)) return value as QuotaNotice
+  if (v.kind === "budget" && text("scope_key", 128) && text("title", 256) && text("detail", 512)) return value as BudgetNotice
   return null
 }
 
@@ -40,6 +42,12 @@ export function noticeToast(notice: AppNotice, open: { account: (id: string) => 
     title: notice.alert === "low" ? "额度快用完了" : notice.alert === "expired" ? "账号需要重新登录" : "额度查询连续失败",
     detail: `${notice.connection_name}：${notice.detail}`,
     action: { label: "查看账号", onClick: () => open.account(notice.connection_id) },
+  }
+  if (notice.kind === "budget") return {
+    scope: `budget:${notice.scope_key}`,
+    tone: notice.scope_key.endsWith(":exceeded") ? "danger" : "warn",
+    title: notice.title,
+    detail: notice.detail,
   }
   const titles = { resumed: "任务已继续", completed: "任务已完成", failed: "任务失败" }
   return {

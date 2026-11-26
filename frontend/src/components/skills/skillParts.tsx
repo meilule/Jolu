@@ -7,6 +7,7 @@ import { PlatformLogo } from "@/components/brand/PlatformLogo"
 import { providerName } from "@/lib/providerCatalog"
 import type { PlatformId } from "@/types"
 import { Icon, type IconName } from "@/icons"
+import { useGlidePill } from "@/motion"
 import { Dialog as JnDialog, Switch as JnSwitch, type DialogWidth } from "@/ui"
 
 /* ───────────── 小部件 ───────────── */
@@ -55,6 +56,7 @@ export function ProviderMark({ platform, size = 18 }: { platform: string; size?:
 /* ───────────── 供应商下拉 ───────────── */
 
 export function ProviderMenu({ value, platforms, onChange }: { value: string; platforms: SkillPlatformDto[]; onChange: (platform: string) => void }) {
+  const glide = useGlidePill()
   const [query, setQuery] = useState("")
   const total = platforms.reduce((sum, p) => sum + p.count, 0)
   const q = query.trim().toLowerCase()
@@ -98,7 +100,7 @@ export function ProviderMenu({ value, platforms, onChange }: { value: string; pl
               className="min-w-0 flex-1 bg-transparent text-xs text-jn-text outline-none placeholder:text-jn-text-3"
             />
           </label>
-          <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
+          <div ref={glide} className="relative flex min-h-0 flex-col gap-0.5 overflow-y-auto">
             {show("全部供应商") && row("all", "全部供应商", `${total} 个安装项`, true, <Icon name="blocks" size="sm" className="text-jn-text-3" />)}
             {SKILL_PLATFORMS.filter((id) => show(providerName(id))).map((id) => {
               const p = platforms.find((x) => x.id === id)
@@ -136,6 +138,7 @@ export function FieldSelect({ value, options, onChange, label, disabled, placeho
   disabled?: boolean
   placeholder?: string
 }) {
+  const glide = useGlidePill()
   const selected = options.find((o) => o.value === value)
   return (
     <Menu.Root modal={false}>
@@ -148,7 +151,7 @@ export function FieldSelect({ value, options, onChange, label, disabled, placeho
         <Icon name="expand" size="xs" className="jn-chevron shrink-0 text-jn-text-3" />
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Content align="start" sideOffset={6} collisionPadding={12} className="jn-popover z-[160] min-w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto rounded-[16px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface" style={{ maxHeight: "min(300px, var(--radix-dropdown-menu-content-available-height))" }}>
+        <Menu.Content ref={glide} align="start" sideOffset={6} collisionPadding={12} className="jn-popover z-[160] min-w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto rounded-[16px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface" style={{ maxHeight: "min(300px, var(--radix-dropdown-menu-content-available-height))" }}>
           <Menu.RadioGroup value={value} onValueChange={onChange}>
             {options.map((o) => (
               <Menu.RadioItem key={o.value} value={o.value} disabled={o.disabled} className="relative flex h-8 cursor-pointer select-none items-center gap-2 rounded-[10px] pl-2.5 pr-7 text-xs text-jn-text outline-none data-[highlighted]:bg-jn-well data-[state=checked]:text-jn-primary-ink data-[disabled]:opacity-40">

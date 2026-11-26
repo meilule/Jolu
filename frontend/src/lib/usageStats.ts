@@ -243,6 +243,50 @@ export function currencyLabel(currency: "USD" | "CNY"): string {
   return currency
 }
 
+/** 每百万 token 单价格式化（遵循 USD/CNY 显示币种）。 */
+export function formatUnitPrice(usdPerMillion: number | null | undefined, fx: { rate: number; currency: "USD" | "CNY" }): string {
+  if (usdPerMillion === null || usdPerMillion === undefined || !Number.isFinite(usdPerMillion)) return DASH
+  const converted = usdPerMillion * fx.rate
+  const symbol = fx.currency === "CNY" ? "¥" : "$"
+  const fixed = converted.toFixed(4).replace(/0+$/, "")
+  const [whole, frac = ""] = fixed.split(".")
+  return `${symbol}${whole}.${frac.padEnd(2, "0")}/M`
+}
+
+export function billingModeLabel(mode?: string | null): string {
+  if (mode === "subscription") return "订阅等价"
+  if (mode === "free") return "免费 / $0"
+  if (mode === "api") return "API 实付"
+  return "自动"
+}
+
+export function callSourceLabel(source?: string | null): string {
+  if (!source) return "本机日志"
+  if (source.startsWith("gateway")) return "模型路由"
+  if (source.startsWith("native:")) return "原生采集"
+  return "本机日志"
+}
+
+export function unpricedReasonText(row: {
+  model: string | null
+  upstream_model?: string | null
+  unpriced_reason?: string | null
+}): string {
+  const name = row.upstream_model || row.model
+  switch (row.unpriced_reason) {
+    case "no_usage":
+      return "该调用上游未返回可用 Token，无法估算费用"
+    case "partial_usage":
+      return "该调用仅记录了部分 Token 分项，缺少输入或输出计数，无法估算费用"
+    case "no_model":
+      return "该记录没有模型信息，无法估算费用"
+    case "no_price":
+      return name ? `「${name}」未收录价目，可在价目管理中补价或设置同价映射` : "未收录价目，无法估算费用"
+    default:
+      return name ? `「${name}」未收录价目或用量不完整，无法估算费用` : "该记录没有模型信息，无法估算费用"
+  }
+}
+
 export function formatPercent(rate: number | null | undefined, digits = 1): string {
   if (rate === null || rate === undefined || !Number.isFinite(rate)) return DASH
   return `${(rate * 100).toFixed(digits)}%`
@@ -267,8 +311,10 @@ export function formatMinutes(minutes: number): string {
   return h ? `${h} 小时 ${m} 分` : `${m} 分`
 }
 
-export function bucketLabel(bucket: "2h" | "day" | "week"): string {
-  return bucket === "2h" ? "每 2 小时" : bucket === "day" ? "每天" : "每周"
+export function bucketLabel(bucket: "1h" | "2h" | "day" | "week"): string {
+  if (bucket === "1h") return "每小时"
+  if (bucket === "2h") return "每 2 小时"
+  return bucket === "day" ? "每天" : "每周"
 }
 
 /** 输出 TPS：输出 Token ÷（总耗时 − 首字）。任一缺失或差值不为正时未知 */
@@ -277,6 +323,39 @@ export function outputTps(row: { output: number | null; duration_ms: number | nu
   const seconds = (row.duration_ms - row.first_token_ms) / 1000
   if (seconds <= 0 || row.output <= 0) return null
   return row.output / seconds
+}
+
+/**
+ * 输出速率（区分精确生成速度与无首字时的总耗时估算下限）。
+ *
+ * - 精确口径：具备有效首字耗时（>0）且生成窗口 >= 100ms 时，扣除首字等待计算真实生成速度；
+ * - 估算口径：本机/原生日志不含首字，但总耗时 >= 500ms 且输出 >= 20 token 时，用总耗时算出下限速度并标 `estimated: true`（界面加 ≈）。
+ */
+export function outputSpeed(row: {
+  output: number | null
+  duration_ms: number | null
+  first_token_ms: number | null
+}): { tps: number; estimated: boolean } | null {
+  if (row.output === null || row.output <= 0 || row.duration_ms === null || row.duration_ms <= 0) return null
+  if (row.first_token_ms !== null && row.first_token_ms > 0) {
+    const genMs = row.duration_ms - row.first_token_ms
+    if (genMs >= 100) return { tps: row.output / (genMs / 1000), estimated: false }
+  }
+  if (row.duration_ms >= 500 && row.output >= 20) {
+    return { tps: row.output / (row.duration_ms / 1000), estimated: true }
+  }
+  return null
+}
+
+export function formatSpeed(speed: { tps: number; estimated: boolean } | null): string {
+  if (!speed) return DASH
+  return `${speed.estimated ? "≈ " : ""}${speed.tps.toFixed(1)} tok/s`
+}
+
+/** 含首字等待的端到端均速（output ÷ 总耗时，与 CCS 速度口径对齐，作副指标展示） */
+export function overallSpeed(row: { output: number | null; duration_ms: number | null }): number | null {
+  if (row.output === null || row.output <= 0 || row.duration_ms === null || row.duration_ms < 500) return null
+  return row.output / (row.duration_ms / 1000)
 }
 
 const EFFORT_LABELS: Record<string, string> = { minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最高" }

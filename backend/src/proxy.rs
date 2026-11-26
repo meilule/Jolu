@@ -50,6 +50,8 @@ pub(crate) struct PendingTiming {
     pub created_ms: i64,
     /// 按请求凭证指纹匹配到的 API Key 连接；匹配不到为 None，记录保持无归属。
     pub connection_id: Option<String>,
+    pub upstream_model: Option<String>,
+    pub served_model: Option<String>,
 }
 
 /// 凭证指纹索引：API Key 连接的 SHA-256 → 连接 id。只在内存里保存哈希，定期重建以跟随连接变更。
@@ -134,6 +136,18 @@ pub(crate) fn queue_pending_timing(
     status_code: i64,
     connection_id: Option<&str>,
 ) {
+    queue_pending_timing_with_models(dedup_key, first_token_ms, duration_ms, status_code, connection_id, None, None);
+}
+
+pub(crate) fn queue_pending_timing_with_models(
+    dedup_key: &str,
+    first_token_ms: i64,
+    duration_ms: i64,
+    status_code: i64,
+    connection_id: Option<&str>,
+    upstream_model: Option<&str>,
+    served_model: Option<&str>,
+) {
     if let Ok(mut queue) = PENDING.lock() {
         queue.push(PendingTiming {
             dedup_key: dedup_key.to_string(),
@@ -142,6 +156,8 @@ pub(crate) fn queue_pending_timing(
             status_code,
             created_ms: now_ms(),
             connection_id: connection_id.map(str::to_string),
+            upstream_model: upstream_model.filter(|s| !s.is_empty()).map(str::to_string),
+            served_model: served_model.filter(|s| !s.is_empty()).map(str::to_string),
         });
     }
 }
@@ -363,17 +379,53 @@ pub(crate) fn extract_dedup_key(platform: ProxyPlatform, head: &[u8]) -> Option<
     None
 }
 
+/// 从上游响应头快照提取实际回显模型名（非流式顶层 `model`，或 SSE `message.model` / `response.model` / `model`）。
+pub(crate) fn extract_served_model(head: &[u8]) -> Option<String> {
+    let pick = |value: &serde_json::Value| {
+        value
+            .pointer("/message/model")
+            .or_else(|| value.pointer("/response/model"))
+            .or_else(|| value.get("model"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(head) {
+        if let Some(model) = pick(&value) {
+            return Some(model);
+        }
+    }
+    for line in head.split(|byte| *byte == b'\n') {
+        let line = trim_ws(line);
+        let Some(payload) = line.strip_prefix(b"data:").map(trim_ws) else {
+            continue;
+        };
+        if payload.is_empty() || payload == b"[DONE]" {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(payload) {
+            if let Some(model) = pick(&value) {
+                return Some(model);
+            }
+        }
+    }
+    None
+}
+
 fn json_id(platform: ProxyPlatform, value: &serde_json::Value) -> Option<String> {
     let candidate = match platform {
         ProxyPlatform::Claude => value
             .get("id")
             .and_then(|v| v.as_str())
-            .or_else(|| value.get("message").and_then(|m| m.get("id")).and_then(|v| v.as_str())),
+            .or_else(|| value.get("message").and_then(|m| m.get("id")).and_then(|v| v.as_str()))
+            .or_else(|| value.get("response").and_then(|r| r.get("id")).and_then(|v| v.as_str())),
         // 事件顶层没有 id；`response.id` 才是去重键，不会误取 item.id（在 "item" 键下）
         ProxyPlatform::Codex => value
             .get("id")
             .and_then(|v| v.as_str())
-            .or_else(|| value.get("response").and_then(|r| r.get("id")).and_then(|v| v.as_str())),
+            .or_else(|| value.get("response").and_then(|r| r.get("id")).and_then(|v| v.as_str()))
+            .or_else(|| value.get("message").and_then(|m| m.get("id")).and_then(|v| v.as_str())),
     };
     candidate
         .map(str::trim)
@@ -485,10 +537,13 @@ impl ProxyDeps {
         let Some(dedup_key) = extract_dedup_key(platform, head) else {
             return;
         };
+        let served_model = extract_served_model(head);
         // 这里跑在转发流的异步任务里：写锁被采集占用时不阻塞运行时线程，
         // 直接转入待关联队列，由采集下一轮扫描后补写（flush_pending）。
         let applied = match self.db.try_lock() {
-            Ok(conn) => crate::db::apply_proxy_timing(&conn, &dedup_key, first, duration, status, connection_id).unwrap_or(0),
+            Ok(conn) => crate::db::apply_proxy_timing_with_models(
+                &conn, &dedup_key, Some(first), duration, status, connection_id, None, served_model.as_deref(),
+            ).unwrap_or(0),
             Err(_) => 0,
         };
         if applied == 0 {
@@ -500,6 +555,8 @@ impl ProxyDeps {
                     status_code: status,
                     created_ms: now_ms(),
                     connection_id: connection_id.map(str::to_string),
+                    upstream_model: None,
+                    served_model,
                 });
             }
         }
@@ -1238,13 +1295,15 @@ pub(crate) fn flush_entries(conn: &rusqlite::Connection, queue: &mut Vec<Pending
     let mut remaining = Vec::new();
     std::mem::swap(queue, &mut remaining);
     for entry in remaining {
-        let applied = crate::db::apply_proxy_timing(
+        let applied = crate::db::apply_proxy_timing_with_models(
             conn,
             &entry.dedup_key,
-            entry.first_token_ms,
+            (entry.first_token_ms >= 0).then_some(entry.first_token_ms),
             entry.duration_ms,
             entry.status_code,
             entry.connection_id.as_deref(),
+            entry.upstream_model.as_deref(),
+            entry.served_model.as_deref(),
         )
         .unwrap_or(0);
         if applied == 0 && entry.created_ms >= cutoff {
@@ -1606,6 +1665,8 @@ mod tests {
         let mut queue = vec![
             PendingTiming {
                 connection_id: None,
+                upstream_model: None,
+                served_model: None,
                 dedup_key: "msg_late".into(),
                 first_token_ms: 120,
                 duration_ms: 900,
@@ -1614,6 +1675,8 @@ mod tests {
             },
             PendingTiming {
                 connection_id: None,
+                upstream_model: None,
+                served_model: None,
                 dedup_key: "msg_expired".into(),
                 first_token_ms: 1,
                 duration_ms: 2,
@@ -1650,7 +1713,7 @@ mod tests {
         bearer.insert("authorization", "Bearer sk-test-key".parse().unwrap());
         assert_eq!(deps.connection_for(ProxyPlatform::Codex, &bearer), None, "平台不同的同名 Key 不归账");
         assert_eq!(deps.connection_for(ProxyPlatform::Claude, &bearer).as_deref(), Some("claude-abc"));
-        let mut queue = vec![PendingTiming { dedup_key: "msg_attr".into(), first_token_ms: 1, duration_ms: 2, status_code: 200, created_ms: now_ms(), connection_id: Some("claude-abc".into()) }];
+        let mut queue = vec![PendingTiming { dedup_key: "msg_attr".into(), first_token_ms: 1, duration_ms: 2, status_code: 200, created_ms: now_ms(), connection_id: Some("claude-abc".into()), upstream_model: None, served_model: None }];
         flush_entries(&db.lock().unwrap(), &mut queue).unwrap();
         let attributed: Option<String> = db.lock().unwrap().query_row("SELECT connection_id FROM requests WHERE dedup_key='msg_attr'", [], |r| r.get(0)).unwrap();
         assert_eq!(attributed.as_deref(), Some("claude-abc"));
@@ -1663,6 +1726,8 @@ mod tests {
         let conn = memory_db();
         let mut queue = vec![PendingTiming {
                 connection_id: None,
+                upstream_model: None,
+                served_model: None,
             dedup_key: "msg_wait".into(),
             first_token_ms: 50,
             duration_ms: 400,

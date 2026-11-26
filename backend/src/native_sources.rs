@@ -36,7 +36,7 @@ fn app_data() -> PathBuf {
 }
 
 pub fn sources_at(home: &Path, app: &Path) -> Vec<Source> {
-    [
+    let mut list: Vec<Source> = [
         ("opencode", "db", "OpenCode", crate::opencode::data_dir(home).join("opencode.db")),
         ("opencode", "json", "OpenCode JSON", crate::opencode::data_dir(home).join("storage/message")),
         ("gemini", "cli", "Gemini CLI", home.join(".gemini/tmp")),
@@ -75,6 +75,24 @@ pub fn sources_at(home: &Path, app: &Path) -> Vec<Source> {
             "WorkBuddy AI",
             home.join(".workbuddy-ai/projects"),
         ),
+        (
+            "kimi",
+            "code",
+            "Kimi Code",
+            crate::kimi_sessions::kimi_home(home).join("sessions"),
+        ),
+        (
+            "pi",
+            "agent",
+            "Pi",
+            crate::pi_sessions::pi_agent_dir(home).join("sessions"),
+        ),
+        (
+            "dsh",
+            "main",
+            "DeepSeek Harness",
+            crate::dsh_sessions::dsh_home(home).join("sessions"),
+        ),
     ]
     .into_iter()
     .map(|(platform, instance, name, path)| {
@@ -111,7 +129,31 @@ pub fn sources_at(home: &Path, app: &Path) -> Vec<Source> {
             path,
         }
     })
-    .collect()
+    .collect();
+
+    // Antigravity CLI：自动发现官方目录与 CCS 托管多账号目录
+    let ag_impl = crate::platforms::supports("antigravity", "local_sessions");
+    let ag_caps = crate::platforms::get("antigravity")
+        .map(|p| p.capabilities.clone())
+        .unwrap_or_default();
+    for root in crate::antigravity_usage::discover_roots(home) {
+        let available = ag_impl && crate::antigravity_usage::root_has_data(&root.path);
+        list.push(Source {
+            id: root.source_id,
+            platform: "antigravity".into(),
+            name: root.name.clone(),
+            available,
+            capabilities: ag_caps.clone(),
+            reason: if !available {
+                Some(format!("未发现 {} 的本机数据，请先完成一次会话", root.name))
+            } else {
+                Some(crate::platforms::limitation("antigravity"))
+            },
+            path: root.path,
+        });
+    }
+
+    list
 }
 
 pub fn sources(platform: &str) -> Vec<Source> {
@@ -151,6 +193,17 @@ pub(crate) fn register_accounts(conn:&Connection,platform:&str,_name:Option<&str
 }
 
 pub fn register(conn:&Connection,platform:&str,_name:Option<&str>) -> Result<(usize,usize,Vec<String>),String> {
+    if platform=="ollama" {
+        let user=crate::ollama_quota::local_user().map_err(|error|error.reason())?;
+        let official=user.account();
+        let display=_name.map(str::trim).filter(|value|!value.is_empty()).map(str::to_string).or(official.clone()).unwrap_or_else(||"Ollama 账号".into());
+        let display=crate::connections::validate_name(&display.chars().take(80).collect::<String>())?;
+        let id="monitor:native:ollama:account";
+        let slug=crate::gateway::identity::allocate_slug(conn,id,platform,&display,None).map_err(|e|e.to_string())?;
+        let label=user.plan().map(|plan|format!("Ollama · {plan}")).unwrap_or_else(||"本机登录".into());
+        let n=conn.execute("INSERT OR IGNORE INTO connections(id,platform,kind,name,label,masked,status,created_ms,account_email,slug) VALUES(?1,'ollama','auth',?2,?3,'','connected',?4,?5,?6)",params![id,display,label,chrono::Utc::now().timestamp_millis(),official,slug]).map_err(|e|e.to_string())?;
+        return Ok((n,usize::from(n==0),vec!["只读关联 Ollama 本机登录；不复制或刷新认证信息".into()]));
+    }
     if matches!(platform,"qoder"|"workbuddy"|"trae") { return Err("请先在数据库锁外读取对应区域的本地登录".into()); }
     if platform=="opencode" {
         if !crate::opencode::openai_logged_in(){return Err("请先在 OpenCode 中登录 OpenAI".into())}
@@ -207,6 +260,11 @@ fn register_sources(
 }
 
 pub fn check(id: &str, platform: &str) -> Result<Source, String> {
+    if platform=="ollama" && id=="monitor:native:ollama:account" {
+        let user=crate::ollama_quota::local_user().map_err(|error|error.reason())?;
+        let path=home().ok_or("无法定位用户目录")?.join(".ollama");
+        return Ok(Source{id:"native:ollama:account".into(),platform:"ollama".into(),name:user.account().unwrap_or_else(||"Ollama 账号".into()),available:true,capabilities:crate::platforms::get("ollama").map(|p|p.capabilities.clone()).unwrap_or_default(),reason:None,path});
+    }
     if id=="monitor:native:opencode:openai" && platform=="opencode" {
         if !crate::opencode::openai_logged_in(){return Err("OpenCode 中未检测到 OpenAI 登录".into())}
         return Ok(Source{id:"native:opencode:openai".into(),platform:"opencode".into(),name:"OpenAI".into(),available:true,capabilities:vec![],reason:None,path:crate::opencode::data_dir(&home().ok_or("无法定位用户目录")?).join("auth.json")});
@@ -242,6 +300,18 @@ fn validate_source(source: &Source) -> Result<(), String> {
     }
     if source.platform == "grok" {
         return crate::creds::local_grok_auth().map(|_| ());
+    }
+    if source.platform == "antigravity" {
+        if crate::antigravity_usage::root_has_data(&source.path) {
+            return Ok(());
+        }
+        return Err("目录已发现，但尚无 Antigravity 会话记录".into());
+    }
+    if matches!(source.platform.as_str(), "kimi" | "pi" | "dsh") {
+        if source.path.is_dir() {
+            return Ok(());
+        }
+        return Err("目录不存在，尚无会话记录".into());
     }
     if source.platform == "zcode" {
         readonly(&source.path)?.prepare("SELECT id,session_id,input_tokens,cache_read_input_tokens,cache_creation_input_tokens,raw_usage_json FROM model_usage LIMIT 0")
@@ -713,12 +783,14 @@ fn qoder_ledger(db: &mut impl Store, home: &Path, source_id: &str) -> Result<(us
 fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
     let key = source.path.to_string_lossy().to_string();
     let timestamp_migration = format!("{key}#zcode-started-at-v1");
-    // 升级后重扫一次旧库，补上会话级状态时间。
+    // 升级后重扫一次旧库，补上会话级状态时间与每条请求的源端耗时（completed_at - started_at）。
     let activity_migration = format!("{key}#zcode-activity-time-v2");
+    let duration_migration = format!("{key}#zcode-duration-v1");
     let stamps = db_stamps(&source.path)?;
     if db.write(|conn| db_unchanged(conn, &key, stamps)
         && crate::db::get_scan_state(conn, &timestamp_migration) == Some((1, 1))
-        && crate::db::get_scan_state(conn, &activity_migration) == Some((1, 1))) {
+        && crate::db::get_scan_state(conn, &activity_migration) == Some((1, 1))
+        && crate::db::get_scan_state(conn, &duration_migration) == Some((1, 1))) {
         return Ok(0);
     }
     // 读取第三方库不占本应用写锁。
@@ -814,6 +886,10 @@ fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
             } else {
                 "unknown"
             };
+            let duration_ms = completed_at
+                .zip(started_at)
+                .and_then(|(end, start)| end.checked_sub(start))
+                .filter(|d| (10..=3_600_000).contains(d));
             Ok((
                 Record {
                     request: crate::db::RequestRecord {
@@ -837,6 +913,8 @@ fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
                     context_ratio: None,
                     reasoning: number(12)?,
                     tool: None,
+                    duration_ms,
+                    first_token_ms: None,
                 },
                 status,
                 row.get::<_, Option<String>>(14)?,
@@ -929,6 +1007,7 @@ fn zcode(db: &mut impl Store, source: &Source) -> Result<usize, String> {
         save_db_stamps(&tx, &key, stamps).map_err(|e| e.to_string())?;
         save_stamp(&tx, &timestamp_migration, 1, 1).map_err(|e| e.to_string())?;
         save_stamp(&tx, &activity_migration, 1, 1).map_err(|e| e.to_string())?;
+        save_stamp(&tx, &duration_migration, 1, 1).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(changed)
     })
@@ -1039,11 +1118,17 @@ fn collects_sessions(source: &Source) -> bool {
 
 pub fn watch_roots() -> Vec<PathBuf> {
     let Some(home) = home() else { return Vec::new() };
-    sources_at(&home, &app_data())
+    let mut roots: Vec<PathBuf> = sources_at(&home, &app_data())
         .into_iter()
         .filter(|source| collects_sessions(source))
         .map(|source| watch_root(&source))
-        .collect()
+        .collect();
+    for dir in crate::antigravity_usage::watch_dirs(&home) {
+        if !roots.contains(&dir) {
+            roots.push(dir);
+        }
+    }
+    roots
 }
 
 /// 回填历史会话的项目目录：旧版本采集没有写 `sessions.cwd`，增量扫描也不会重扫
@@ -1230,7 +1315,20 @@ fn scan_sources(db: &mut impl Store, home: &Path, app: &Path, only: Option<&[Pat
         if paused {
             continue;
         }
-        let read = if source.platform == "opencode" {
+        let read = if source.platform == "antigravity" {
+            let root = crate::antigravity_usage::Root {
+                source_id: source.id.clone(),
+                name: source.name.clone(),
+                path: source.path.clone(),
+            };
+            crate::antigravity_usage::scan_root(db, &root)
+        } else if source.platform == "kimi" {
+            crate::kimi_sessions::scan_usage(db, home)
+        } else if source.platform == "pi" {
+            crate::pi_sessions::scan_usage(db, home)
+        } else if source.platform == "dsh" {
+            crate::dsh_sessions::scan_usage(db, home)
+        } else if source.platform == "opencode" {
             // 新旧格式共存时只读 SQLite，避免迁移副本重复统计。只读连接保留 WAL 可见性。
             if source.path.is_dir() && crate::opencode::data_dir(home).join("opencode.db").exists(){continue}
             (||->Result<(usize,Vec<String>),String>{let records=if source.path.is_dir(){crate::opencode_usage::read_json_files(&source.path)?}else{let input=readonly(&source.path)?;crate::opencode_usage::read_usage(&input,crate::opencode_usage::detect_layout(&input)?,0)?};db.write(|conn|source_store::write(conn,&records)).map(|n|(n,vec![])).map_err(|e|e.to_string())})()
@@ -2491,7 +2589,7 @@ mod tests {
     fn missing_sources_are_not_created_or_reported_connected() {
         let path = std::env::temp_dir().join(format!("missing-native-{}", std::process::id()));
         let list = sources_at(&path, &path);
-        assert_eq!(list.len(), 12);
+        assert_eq!(list.len(), 16);
         assert!(list.iter().all(|s| !s.available));
         assert!(!path.exists());
         assert!(readonly(&path.join("missing.db")).is_err());

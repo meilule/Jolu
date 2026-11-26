@@ -16,3 +16,4 @@ export {
   useReducedMotion,
   useSpring,
 } from "./components"
+export { useGlidePill } from "./useGlidePill"

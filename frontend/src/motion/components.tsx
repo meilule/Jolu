@@ -2,11 +2,11 @@
  * 动效封装层 —— 所有新界面与 `ui/` 组件的唯一动效实现。
  *
  * 页面与基础组件不直接 import `framer-motion`；这里统一使用
- * `LazyMotion`（domAnimation）+ `m.*` + `tokens.ts` 的参数，
+ * `LazyMotion`（domMax，含 layout/layoutId 投影）+ `m.*` + `tokens.ts` 的参数，
  * 并通过根部 `<MotionProvider>` 接管系统偏好与 Jolu 的「减少动效」设置。
  */
 import { useEffect, useRef, useState, type ComponentPropsWithoutRef, type ReactNode, type Ref } from "react"
-import { AnimatePresence, LazyMotion, MotionConfig, domAnimation, m, useMotionValue, useReducedMotion, useSpring } from "framer-motion"
+import { AnimatePresence, LazyMotion, MotionConfig, domMax, m, useMotionValue, useReducedMotion, useSpring } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { DURATION, EASE, SPRING, STAGGER, STAGGER_LIMIT } from "./tokens"
 
@@ -21,7 +21,7 @@ export function MotionProvider({
   children: ReactNode
 }) {
   return (
-    <LazyMotion features={domAnimation}>
+    <LazyMotion features={domMax}>
       <MotionConfig
         reducedMotion={reduced ? "always" : "user"}
         transition={{ duration: DURATION.pop, ease: EASE.standard }}
@@ -35,12 +35,15 @@ export function MotionProvider({
 /**
  * 共享布局滑块：页签、分段栏、侧栏导航的选中底板共用。
  * 选中项切换时以 `SPRING.snappy` 弹簧滑到目标项位置与宽度。
+ * 传入 `radius` 以内联写入 `borderRadius`，确保宽窄不等切换时 Framer Motion 反向校正圆角不拉伸。
  */
 export function SlideIndicator({
   layoutId,
+  radius,
   className,
 }: {
   layoutId: string
+  radius?: number
   className?: string
 }) {
   return (
@@ -48,16 +51,25 @@ export function SlideIndicator({
       layoutId={layoutId}
       aria-hidden
       transition={SPRING.snappy}
-      className={cn("pointer-events-none absolute inset-0 rounded-[inherit]", className)}
+      style={radius !== undefined ? { borderRadius: radius } : undefined}
+      className={cn("pointer-events-none absolute inset-0", radius === undefined && "rounded-[inherit]", className)}
     />
   )
 }
 
 /**
- * 开关弹簧滑块：使用 layout 过渡，保证打断重按时保留速度。
+ * 开关弹簧滑块：纯水平位移弹簧（不依赖 layout 测量），避免页面滚动或邻近折叠重排引起竖向跳动。
  */
-export function SpringThumb({ className }: { className?: string }) {
-  return <m.span layout aria-hidden transition={SPRING.snappy} className={className} />
+export function SpringThumb({ checked = false, travel = 18, className }: { checked?: boolean; travel?: number; className?: string }) {
+  return (
+    <m.span
+      aria-hidden
+      initial={false}
+      animate={{ x: checked ? travel : 0 }}
+      transition={SPRING.snappy}
+      className={className}
+    />
+  )
 }
 
 /**

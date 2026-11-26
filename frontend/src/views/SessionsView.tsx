@@ -16,6 +16,7 @@ import {
 import { formatPercent, formatTokens } from "@/lib/usageStats"
 import { UNATTRIBUTED_ACCOUNT, accountLabel, accountsFor } from "@/lib/usageFilters"
 import { useConnections } from "@/hooks/useConnections"
+import { useMainContextReport } from "@/hooks/useMainContextReport"
 import { useStatsQuery } from "@/hooks/useStatsQuery"
 import { demoSessions } from "@/mock/sessionThreads"
 import { useToast } from "@/components/ui/Toast"
@@ -89,6 +90,8 @@ export function SessionsView({ active, target, onDrillUsage, onCreateAutomation 
   /** 列表尚未读到时统计未知，显示「—」而不是 0 */
   const known = query.data !== null
   const current = sessions.find((s) => sessionKey(s) === selected) ?? null
+  // R2-I-06 看向你在看的地方：主窗口选定某条归属账号的会话时，同步给本体岛
+  useMainContextReport("sessions", current?.connection_id ?? null)
   const searching = !!search.trim()
   const filtered = !!(platform || account || project !== null || time !== "all" || searching)
 

@@ -13,6 +13,7 @@ pub(crate) mod capabilities;
 pub(crate) mod agents;
 pub(crate) mod routing;
 pub(crate) mod providers;
+pub(crate) mod pricing;
 
 pub(crate) use panel::*;
 pub(crate) use island_window::*;
@@ -23,3 +24,4 @@ pub(crate) use capabilities::*;
 pub(crate) use agents::*;
 pub(crate) use routing::*;
 pub(crate) use providers::*;
+pub(crate) use pricing::*;

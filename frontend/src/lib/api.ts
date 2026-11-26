@@ -136,6 +136,11 @@ export interface ConnectionDto {
   slug?: string | null
   /** ZCode 订阅通道手动锁定（待确认，无画板）：start-plan / coding-plan；null = 自动双通道 */
   start_channel?: "start-plan" | "coding-plan" | null
+  billing_mode?: "auto" | "api" | "subscription" | "free"
+  price_multiplier?: number
+  budget_daily_usd?: number | null
+  budget_monthly_usd?: number | null
+  budget_action?: "alert" | "block"
 }
 
 export interface FetchResult {
@@ -226,6 +231,7 @@ export type MainIntentDto =
   | { kind: "settings"; section: string }
   | { kind: "about"; version: string }
   | { kind: "automation"; task_id: number }
+  | { kind: "automation_new"; platform: string | null; session_id: string | null }
   | { kind: "sessions"; platform: string; session_id: string }
   | { kind: "usage"; platform: string | null; connection_id: string | null }
 
@@ -380,21 +386,64 @@ export interface MenuSourceEvent {
 export type IslandStyle = "classic" | "capsule"
 
 /** 持久化设置（§2.6 / §7.3）。托盘与设置界面共享同一份值 */
-/** 灵动岛联动的几项开关（后端 `settings::IslandLinkage`） */
+/** 灵动岛联动与趣味开关（后端 `settings::IslandLinkage`，R2-I-04） */
 export interface IslandLinkageDto {
   /** 严格模式：「正在写」只认确证，推测显示「不知道」 */
   strict_writing: boolean
   /** 阈值 / 事件短时动效；免打扰或减少动效时只改颜色 */
   signals: boolean
-  /** 跟随主窗口：主窗口在看某个连接时本体岛临时显示它 */
+  /** 跟随主窗口：主窗口在看某个连接时本体岛临时显示它并转头看向主窗口 */
   follow_main: boolean
   /** 旧版筛选值，仅为兼容既有设置保留。 */
   zcode_provider: string | null
   /** 按最近活跃自动选主：分身所在平台明显更活跃时自动与本体互换 */
   auto_focus: boolean
+  /** 实时路由：胶囊里画出工具 → 分组 → 来源；关闭后只显示 Token 增量 */
+  show_route_flow?: boolean
+  /** 实时路由：上游拒绝、改道成功、全部失败时变形 1.5 秒 */
+  route_feedback?: boolean
+  /** 实时路由：多工具同时在写时叠放最多 3 个工具图标 */
+  multi_tool_stack?: boolean
+  /** 额度预警阈值（60–95%，默认 80） */
+  quota_warn_percent?: number
+  /** 额度预警时给出同分组有余量的接替来源 */
+  quota_suggest_fallback?: boolean
+  /** 联动：同分组的岛显示流量去向 */
+  peer_flow?: boolean
+  /** 联动：有自动化任务在等额度时显示分离气泡 */
+  automation_bubble?: boolean
+  /** 趣味：签到、额度重置、上下文吃撑、长任务、深夜咖啡等 bot 道具与小剧场 */
+  props_theater?: boolean
+  /** 趣味：今日 Token 越过 1M、10M 时各撒一次彩带 */
+  milestone_confetti?: boolean
+  /** 趣味：单击 bot 眨眼 / 连戳 3 次挤眼；告警表情期间不响应 */
+  poke_reaction?: boolean
+  /** 趣味：傍晚第一次空闲时弹出今日回顾卡与成就 */
+  daily_recap?: boolean
 }
 
-export const DEFAULT_ISLAND_LINKAGE: IslandLinkageDto = { strict_writing: false, signals: true, follow_main: false, zcode_provider: null, auto_focus: false }
+export const DEFAULT_ISLAND_LINKAGE: Required<IslandLinkageDto> = {
+  strict_writing: false,
+  signals: true,
+  follow_main: false,
+  zcode_provider: null,
+  auto_focus: false,
+  show_route_flow: true,
+  route_feedback: true,
+  multi_tool_stack: true,
+  quota_warn_percent: 80,
+  quota_suggest_fallback: true,
+  peer_flow: true,
+  automation_bubble: true,
+  props_theater: true,
+  milestone_confetti: true,
+  poke_reaction: true,
+  daily_recap: true,
+}
+
+export function resolveIslandLinkage(raw?: IslandLinkageDto | null): Required<IslandLinkageDto> {
+  return { ...DEFAULT_ISLAND_LINKAGE, ...(raw ?? {}) }
+}
 
 export interface AppSettings {
   /** 后端每次保存成功加一；`get_settings` 与 `settings-changed` 都带。乱序到达时丢弃更小的 */
@@ -469,6 +518,18 @@ export interface AppSettings {
   privacy_allow?: string[]
   /** ZCode 通道顺序：true = 先试免费 Start Plan，再落 Coding Plan；旧版设置缺省为关 */
   zcode_free_first?: boolean
+  /** 网关路由计价模型基准：upstream（优先实际路由/上游返回模型）或 request（优先客户端请求模型） */
+  pricing_model_source?: "upstream" | "request" | string
+  /** 是否自动在后台同步 models.dev 目录与价格 */
+  models_dev_auto_sync?: boolean
+  /** 汇率来源：auto（每日同步）或 fixed（自定义固定汇率） */
+  fx_mode?: "auto" | "fixed" | string
+  fx_fixed_usd_cny?: number | null
+  /** 全局实付 API 预算设置 */
+  global_budget_enabled?: boolean
+  global_budget_daily_usd?: number | null
+  global_budget_monthly_usd?: number | null
+  global_budget_warn_percent?: number
   /** 局域网共享允许连入的来源地址（IP / CIDR）；空 = 不限 */
   gateway_allow_ips?: string[]
   /** 联网搜索后端；Key 一律是掩码（后端序列化默认掩码） */
@@ -597,7 +658,10 @@ export const api = {
   setMainContext: (page: string, connectionId: string | null) => invoke<void>("set_main_context", { page, connectionId }),
   mainContext: () => invoke<{ page: string; connection_id: string | null } | null>("main_context"),
   /** 从灵动岛打开主窗口的指定页面（模型入口 / 灵动岛 / 供应商） */
-  openMainSection: (section: "gateway" | "island" | "connections") => invoke<void>("open_main_section", { section }),
+  openMainSection: (section: "gateway" | "island" | "connections" | "checkin" | "sessions" | "automation") =>
+    invoke<void>("open_main_section", { section }),
+  openMainAutomationNew: (platform: string | null = null, sessionId: string | null = null) =>
+    invoke<void>("open_main_automation_new", { platform, sessionId }),
   /** 灵动岛点会话：主窗口打开会话线程并定位 */
   openMainSession: (platform: string, sessionId: string) => invoke<void>("open_main_session", { platform, sessionId }),
   /** 灵动岛「查看用量」：主窗口打开用量统计，按今天与平台 / 连接预筛 */
@@ -624,9 +688,17 @@ export const api = {
   setAutoCheckUpdates: (on: boolean) => invoke<AppSettings>("set_auto_check_updates", { on }),
   setUpdateInterval: (minutes: number) => invoke<AppSettings>("set_update_interval", { minutes }),
   setCostCurrency: (currency: "USD" | "CNY") => invoke<AppSettings>("set_cost_currency", { currency }),
-  /** 费用汇率：USD 为基准币种（rate=1）；CNY 返回当日汇率，失败时 fallback=true 用参考价 */
+  /** 费用汇率：USD 为基准币种（rate=1）；CNY 支持当日在线汇率或自定义固定汇率 */
   fxRate: (currency: "USD" | "CNY") =>
-    invoke<{ currency: string; rate: number; as_of: string; fallback: boolean }>("fx_rate", { currency }),
+    invoke<{
+      currency: string
+      rate: number
+      as_of: string
+      fallback: boolean
+      fixed?: boolean
+      live_rate?: number | null
+      live_as_of?: string | null
+    }>("fx_rate", { currency }),
   checkAppUpdate: () => invoke<UpdateCheckDto>("check_app_update_available"),
   /** 下载并验证签名，返回本次下载的版本 */
   downloadAppUpdate: () => invoke<UpdateCheckDto>("download_app_update"),
@@ -733,6 +805,31 @@ export const api = {
   statsActivity: (platform: string | null, connections: string[], nowMs: number) =>
     invoke<StatsActivityDto>("stats_activity", { platform, connections, nowMs }),
   statsCalls: (filter: StatsFilterDto, page: number) => invoke<StatsCallPageDto>("stats_calls", { filter, page }),
+  pricingCatalog: () => invoke<PricingCatalogViewDto>("pricing_catalog"),
+  pricingModelsDevCatalog: () => invoke<ModelsDevPriceDto[]>("pricing_models_dev_catalog"),
+  pricingUpsertOverride: (item: PricingOverrideDto) => invoke<PricingOverrideDto>("pricing_upsert_override", { item }),
+  pricingDeleteOverride: (scope: string, modelId: string) => invoke<void>("pricing_delete_override", { scope, modelId }),
+  pricingDisableOverride: (scope: string, modelId: string) => invoke<void>("pricing_disable_override", { scope, modelId }),
+  pricingUpsertAlias: (scope: string, aliasModel: string, targetModel: string) =>
+    invoke<PricingAliasDto>("pricing_upsert_alias", { scope, aliasModel, targetModel }),
+  pricingDeleteAlias: (scope: string, aliasModel: string) => invoke<void>("pricing_delete_alias", { scope, aliasModel }),
+  pricingSetRules: (
+    pricingModelSource: "upstream" | "request" | null,
+    modelsDevAutoSync: boolean | null,
+    fxMode?: "auto" | "fixed" | null,
+    fxFixedUsdCny?: number | null | undefined,
+  ) =>
+    invoke<AppSettings>("pricing_set_rules", {
+      pricingModelSource,
+      modelsDevAutoSync,
+      ...(fxMode !== undefined ? { fxMode } : {}),
+      ...(fxFixedUsdCny !== undefined ? { fxFixedUsdCny } : {}),
+    }),
+  pricingRefreshModelsDev: () => invoke<[number, number]>("pricing_refresh_models_dev"),
+  pricingBudgetStatus: () => invoke<BudgetStatusDto>("pricing_budget_status"),
+  pricingSaveBudgets: (input: SaveBudgetsInputDto) => invoke<BudgetStatusDto>("pricing_save_budgets", { input }),
+  connectionUpdateBilling: (id: string, billingMode: "auto" | "api" | "subscription" | "free", priceMultiplier: number) =>
+    invoke<void>("connection_update_billing", { id, billingMode, priceMultiplier }),
   /** 按当前筛选导出 CSV；取消保存返回 null */
   exportCallsCsv: (filter: StatsFilterDto) => invoke<{ path: string; count: number } | null>("export_calls_csv", { filter }),
   /** 会话线程（模块 D） */
@@ -826,6 +923,8 @@ export interface StatsFilterDto {
   /** 三档互斥：success 不含失败与取消，error 只认失败，cancelled 只认取消 */
   status?: "success" | "error" | "cancelled" | "unknown" | null
   search?: string | null
+  /** 计费口径：all / api / subscription */
+  billing_scope?: "all" | "api" | "subscription" | null
 }
 
 /** Token 分项；null 表示区间内有请求缺该字段，界面显示「—」 */
@@ -848,7 +947,16 @@ export interface TokenSplitDto {
 
 export interface CostSummaryDto {
   amount: number
+  api_amount?: number
+  subscription_amount?: number
+  free_requests?: number
   priced_requests: number
+  credits?: number
+  credited_requests?: number
+  official_cost_usd?: number | null
+  official_synced_ms?: number | null
+  subscription_ref_amount?: number | null
+  subscription_ref_credits?: number | null
   /** 未计价的模型（platform:model 形式），说明这些模型没有收录价目 */
   unpriced_no_price?: string[]
   /** 未计价且没有可用 token 用量的请求数 */
@@ -863,6 +971,8 @@ export interface StatsTrendBucketDto extends TokenSplitDto {
   end: number
   label: string
   requests: number
+  unknown_requests?: number
+  cache_hit_rate?: number | null
   cost: number
 }
 
@@ -880,11 +990,32 @@ export interface StatsModelRowDto {
   known_requests?: number
   cache_hit_rate: number | null
   avg_duration_ms: number | null
-  /** 组内全部请求可计价时才有值 */
+  /** 已知可计价部分的估算小计 */
   cost: number | null
-  /** 价目出处（官方定价页）与核对日期；未收录价目时为 null（4.4；旧后端不返回） */
+  /** 该模型已计价请求条数 */
+  priced_requests?: number
+  /** 价目出处与核对日期；未收录价目时为 null */
   price_source?: string | null
   price_checked?: string | null
+  /** 统一命中的非 1.0 连接倍率（如中转 0.2×） */
+  multiplier_hint?: number | null
+}
+
+export interface StatsConnectionCostRowDto {
+  connection_id: string | null
+  name: string
+  platform: string
+  billing_mode: "api" | "subscription" | "free" | string
+  price_multiplier: number
+  requests: number
+  priced_requests: number
+  known_tokens: number
+  cost: number
+  credits: number
+  official_cost_usd?: number | null
+  official_synced_ms?: number | null
+  budget_daily_usd?: number | null
+  budget_monthly_usd?: number | null
 }
 
 export interface StatsProviderRowDto {
@@ -925,9 +1056,10 @@ export interface StatsOverviewDto {
   cache_hit_rate: number | null
   cost: CostSummaryDto
   previous_total: number | null
-  trend: { bucket: "2h" | "day" | "week"; points: StatsTrendBucketDto[] }
+  trend: { bucket: "1h" | "2h" | "day" | "week"; points: StatsTrendBucketDto[] }
   models: StatsModelRowDto[]
   providers: StatsProviderRowDto[]
+  connections?: StatsConnectionCostRowDto[]
   attributed: number
   sessions: StatsSessionRowDto[]
 }
@@ -935,7 +1067,7 @@ export interface StatsOverviewDto {
 export interface StatsActivityDto {
   first_date: string
   last_date: string
-  days: { date: string; tokens: number; requests: number }[]
+  days: { date: string; tokens: number; requests: number; cost?: number; unpriced_requests?: number }[]
   today_active_minutes: number
   week_active_days: number
   month_active_days: number
@@ -947,7 +1079,13 @@ export interface PriceSnapshotDto {
   cached_input: number
   output: number
   cache_write: number | null
+  cache_write_1h?: number | null
   source: string
+  source_kind?: string
+  pricing_model?: string
+  alias_from?: string | null
+  multiplier?: number
+  billing_mode?: string
   /** 是否命中长上下文加价 */
   long_context: boolean
   /** 是否命中谷时折价 */
@@ -959,16 +1097,24 @@ export interface StatsCallRowDto {
   price: PriceSnapshotDto | null
   id: number
   call_id: string
+  source?: string
   ts: number
   platform: string
   model: string | null
+  upstream_model?: string | null
+  served_model?: string | null
   session_id: string | null
   fresh_input: number | null
   cache_read: number | null
   cache_write: number | null
+  cache_write_1h?: number
+  reasoning?: number | null
+  tool?: number | null
   output: number | null
   total: number | null
   cost: number | null
+  billing_mode?: string
+  unpriced_reason?: "no_price" | "no_usage" | "partial_usage" | "no_model" | string | null
   effort: string | null
   duration_ms: number | null
   first_token_ms: number | null
@@ -980,6 +1126,125 @@ export interface StatsCallRowDto {
   unknown?: boolean
   /** 这条调用归到的已存连接（可选字段：旧后端不返回） */
   attribution?: AttributionDto
+}
+
+export interface PricingOverrideDto {
+  scope: string
+  model_id: string
+  display_name: string
+  input: number
+  output: number
+  cache_read: number
+  cache_write: number | null
+  cache_write_1h: number | null
+  long_ctx_threshold: number | null
+  long_ctx_input: number | null
+  long_ctx_output: number | null
+  long_ctx_cache_read: number | null
+  long_ctx_cache_write: number | null
+  disabled?: boolean
+  updated_ms?: number
+}
+
+export interface PricingAliasDto {
+  scope: string
+  alias_model: string
+  target_model: string
+  updated_ms?: number
+}
+
+export interface PricingEntryDto {
+  model_id: string
+  display_name: string
+  vendor: string
+  source_kind: "user_custom" | "builtin" | "models_dev" | "unpriced" | string
+  source: string
+  input: number | null
+  output: number | null
+  cache_read: number | null
+  cache_write: number | null
+  cache_write_1h: number | null
+  long_ctx_threshold: number | null
+  long_ctx_input: number | null
+  long_ctx_output: number | null
+  long_ctx_cache_read: number | null
+  long_ctx_cache_write: number | null
+  has_override: boolean
+  disabled: boolean
+  recent_requests: number
+}
+
+export interface ModelsDevPriceDto {
+  model_id: string
+  display_name: string
+  vendor: string
+  input: number
+  output: number
+  cache_read: number
+  cache_write: number | null
+  cache_write_1h: number | null
+  long_ctx_threshold: number | null
+  long_ctx_input: number | null
+  long_ctx_output: number | null
+  long_ctx_cache_read: number | null
+  long_ctx_cache_write: number | null
+}
+
+export interface PricingCatalogViewDto {
+  entries: PricingEntryDto[]
+  connection_overrides: PricingOverrideDto[]
+  aliases: PricingAliasDto[]
+  models_dev_fetched_ms: number
+  models_dev_count: number
+  models_dev_auto_sync: boolean
+  pricing_model_source: "upstream" | "request" | string
+  fx_mode?: "auto" | "fixed" | string
+  fx_fixed_usd_cny?: number | null
+}
+
+export interface ConnectionBudgetRowDto {
+  connection_id: string
+  name: string
+  platform: string
+  kind: "auth" | "api" | string
+  billing_mode: "api" | "subscription" | "free" | string
+  price_multiplier: number
+  serve_enabled: boolean
+  daily_limit: number | null
+  monthly_limit: number | null
+  action: "alert" | "block" | string
+  today_spend: number
+  month_spend: number
+  warned: boolean
+  exceeded: boolean
+}
+
+export interface BudgetStatusDto {
+  global_enabled: boolean
+  global_daily_limit: number | null
+  global_monthly_limit: number | null
+  warn_percent: number
+  global_today_spend: number
+  global_month_spend: number
+  projected_month_spend: number | null
+  global_warned: boolean
+  global_exceeded: boolean
+  exceeded_connections: number
+  has_any_budget: boolean
+  connections: ConnectionBudgetRowDto[]
+}
+
+export interface SaveBudgetsInputDto {
+  global_enabled: boolean
+  global_daily_limit: number | null
+  global_monthly_limit: number | null
+  warn_percent: number
+  connections: {
+    connection_id: string
+    daily_limit: number | null
+    monthly_limit: number | null
+    action: "alert" | "block"
+  }[]
 }
 
 export interface StatsCallPageDto {

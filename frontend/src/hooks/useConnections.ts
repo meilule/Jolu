@@ -45,6 +45,11 @@ function toConnection(d: ConnectionDto): Connection {
     serve_enabled: d.serve_enabled ?? false,
     slug: d.slug ?? null,
     startChannel: d.start_channel ?? null,
+    billingMode: d.billing_mode ?? "auto",
+    priceMultiplier: d.price_multiplier ?? 1,
+    budgetDailyUsd: d.budget_daily_usd ?? null,
+    budgetMonthlyUsd: d.budget_monthly_usd ?? null,
+    budgetAction: d.budget_action ?? "alert",
   }
 }
 

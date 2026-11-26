@@ -11,6 +11,8 @@ import { convertFromUsd, type FxState } from "@/lib/costCurrency"
 import { projectName } from "@/lib/sessionThreads"
 import type { StatsModelRowDto, StatsOverviewDto, StatsTrendBucketDto } from "@/lib/api"
 import { providerName } from "@/lib/providerCatalog"
+import { PlatformLogo } from "@/components/brand/PlatformLogo"
+import type { PlatformId } from "@/types"
 import { Card, CardTitle } from "./usageControls"
 import { TrendChart, TrendLegend, type TrendMode } from "./TrendChart"
 import { MetricGrid } from "../ui/MetricGrid"
@@ -21,7 +23,15 @@ const MODES: { value: TrendMode; label: string }[] = [
   { value: "tokens", label: "Token" },
   { value: "requests", label: "请求" },
   { value: "cost", label: "费用" },
+  { value: "cache_hit_rate", label: "命中率" },
 ]
+
+function trendTitle(mode: TrendMode, isToday: boolean): string {
+  if (mode === "cache_hit_rate") return isToday ? "今日缓存命中率" : "缓存命中率"
+  if (mode === "cost") return isToday ? "今日费用" : "费用趋势"
+  if (mode === "requests") return isToday ? "今日调用" : "调用趋势"
+  return isToday ? "今日用量" : "用量趋势"
+}
 
 function costNoteTitle(cost: StatsOverviewDto["cost"]): string | undefined {
   const missing = unpricedModels(cost)
@@ -29,13 +39,14 @@ function costNoteTitle(cost: StatsOverviewDto["cost"]): string | undefined {
   return `未收录价目的模型（${missing.length}）：\n${missing.join("\n")}`
 }
 
-export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, onOpenSession }: {
+export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, onOpenSession, onOpenPricing }: {
   fx: FxState
   data: StatsOverviewDto
   isToday: boolean
   onDrillBucket: (point: StatsTrendBucketDto) => void
   onDrillModel: (model: StatsModelRowDto) => void
   onOpenSession: (target?: { platform: string; sessionId: string }) => void
+  onOpenPricing?: () => void
 }) {
   const [mode, setMode] = useState<TrendMode>("tokens")
   const total = data.tokens.total ?? data.token_coverage.known_total
@@ -50,18 +61,29 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
   const unattributed = data.requests - data.attributed
   const costAmount = data.cost.priced_requests ? convertFromUsd(data.cost.amount, fx) : null
   const scopeLabel = isToday ? "今天" : "所选范围"
+  const cardScope = (target: TrendMode) =>
+    mode === target ? (
+      <span className="inline-flex items-center gap-1 font-medium text-jn-primary-ink">
+        <span aria-hidden className="size-1.5 rounded-full bg-jn-primary" />
+        当前图表
+      </span>
+    ) : (
+      scopeLabel
+    )
 
   return (
     <>
       <MetricGrid>
         <MetricCard
+          active={mode === "tokens"}
+          onClick={() => setMode("tokens")}
           title={
             <span className="inline-flex items-center gap-1.5">
               <Icon name="layers" size="sm" className="text-jn-text-3" />
               {partial ? "已知 Token" : "总 Token"}
             </span>
           }
-          scope={scopeLabel}
+          scope={cardScope("tokens")}
           value={
             total === null ? (
               <DataValue state="unknown" note="未提供" />
@@ -85,13 +107,15 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
         />
 
         <MetricCard
+          active={mode === "requests"}
+          onClick={() => setMode("requests")}
           title={
             <span className="inline-flex items-center gap-1.5">
               <Icon name="activity" size="sm" className="text-jn-text-3" />
               调用次数
             </span>
           }
-          scope={scopeLabel}
+          scope={cardScope("requests")}
           value={
             <DataValue
               state={data.requests === 0 ? "zero" : "value"}
@@ -105,13 +129,15 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
         />
 
         <MetricCard
+          active={mode === "cost"}
+          onClick={() => setMode("cost")}
           title={
             <span className="inline-flex items-center gap-1.5" title={costNoteTitle(data.cost)}>
               <Icon name="coins" size="sm" className="text-jn-text-3" />
               估算费用 · {fx.currency}
             </span>
           }
-          scope={scopeLabel}
+          scope={cardScope("cost")}
           value={
             costAmount === null ? (
               <DataValue state="unknown" note="未计价" />
@@ -125,18 +151,45 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
               />
             )
           }
-          compare={<span title={costNoteTitle(data.cost)}>{unpricedNote(data.cost)}</span>}
-          source={<SourceNote source="native" coverage="按公开价目推算 · 不含月费" />}
+          compare={
+            <span className="inline-flex flex-wrap items-center gap-1.5" title={costNoteTitle(data.cost)}>
+              <span>{unpricedNote(data.cost)}</span>
+              {onOpenPricing && unpricedModels(data.cost).length > 0 && (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onOpenPricing()
+                  }}
+                  className="font-medium text-jn-primary-ink hover:underline"
+                >
+                  去补价
+                </button>
+              )}
+            </span>
+          }
+          source={
+            <SourceNote
+              source="native"
+              coverage={
+                (data.cost.api_amount ?? 0) > 0 && (data.cost.subscription_amount ?? 0) > 0
+                  ? `API ${formatMoney(convertFromUsd(data.cost.api_amount ?? 0, fx), fx.currency)} · 订阅等价 ${formatMoney(convertFromUsd(data.cost.subscription_amount ?? 0, fx), fx.currency)}`
+                  : "按生效价目推算 · 不含月费"
+              }
+            />
+          }
         />
 
         <MetricCard
+          active={mode === "cache_hit_rate"}
+          onClick={() => setMode("cache_hit_rate")}
           title={
             <span className="inline-flex items-center gap-1.5">
               <Icon name="spark" size="sm" className="text-jn-text-3" />
               输入缓存命中率
             </span>
           }
-          scope={scopeLabel}
+          scope={cardScope("cache_hit_rate")}
           value={
             cacheRate === null ? (
               <DataValue state="unknown" note="无输入数据" />
@@ -162,7 +215,7 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
         <Card className="flex flex-col gap-3 p-5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-baseline gap-2">
-              <h3 className="text-sm font-semibold text-jn-text">{isToday ? "今日用量" : "用量趋势"}</h3>
+              <h3 className="text-sm font-semibold text-jn-text">{trendTitle(mode, isToday)}</h3>
               <span className="text-[11px] text-jn-text-3">{bucketLabel(data.trend.bucket)}</span>
             </div>
             <Tabs
@@ -173,7 +226,7 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
             />
           </div>
           <TrendLegend mode={mode} />
-          <TrendChart points={data.trend.points} bucket={data.trend.bucket} mode={mode} onDrill={onDrillBucket} />
+          <TrendChart points={data.trend.points} bucket={data.trend.bucket} mode={mode} fx={fx} onDrill={onDrillBucket} />
         </Card>
 
         <Card className="flex flex-col gap-3 p-5">
@@ -214,6 +267,7 @@ export function OverviewPanel({ data, isToday, fx, onDrillBucket, onDrillModel, 
               const cell = providerTokenCell(p)
               return (
                 <div key={p.platform} className="flex min-h-9 items-center gap-2.5 rounded-[12px] px-2 text-xs hover:bg-jn-well">
+                  <span className="grid size-5 shrink-0 place-items-center"><PlatformLogo platform={p.platform as PlatformId} size={15} /></span>
                   <span className="min-w-0 flex-1 truncate font-medium text-jn-text">{providerName(p.platform)}</span>
                   {cell.note ? (
                     <span className="flex shrink-0 flex-col items-end">

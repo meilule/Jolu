@@ -363,6 +363,9 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
     // 会话项目目录：Claude / Codex 从源文件读，ZCode 等库型来源只能落库保存。
     // 旧库升级后为 NULL，仍按「未识别项目」展示，不伪造路径。
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN cwd TEXT", []);
+    // 子代理会话标记（如 DeepSeek Harness 的 origin="subagent"）：用量照常计入 requests，
+    // 会话线程列表按 is_subagent = 0 隐藏子代理避免刷屏。
+    let _ = conn.execute("ALTER TABLE sessions ADD COLUMN is_subagent INTEGER NOT NULL DEFAULT 0", []);
     // 账号汇聚网关：该连接是否进入模型池、接受其他工具的请求。
     // 默认 0，旧库升级后全部不对外服务，观测模式行为完全不变。
     let _ = conn.execute("ALTER TABLE connections ADD COLUMN serve_enabled INTEGER NOT NULL DEFAULT 0", []);
@@ -422,6 +425,10 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
     if conn.execute("ALTER TABLE sessions ADD COLUMN turn_started_ms INTEGER", []).is_ok() {
         conn.execute("UPDATE scan_state SET parser_initialized = 0", [])?;
     }
+    // 升级后只重扫一次本机 Claude / Codex 日志，按消息链补回历史请求的估算耗时（不重复记用量、不覆盖代理实测耗时）。
+    if conn.execute("ALTER TABLE scan_state ADD COLUMN parser_duration_v1 INTEGER NOT NULL DEFAULT 0", []).is_ok() {
+        conn.execute("UPDATE scan_state SET parser_initialized = 0", [])?;
+    }
     // 本地代理按凭证指纹把请求归到具体连接；未经代理的记录保持 NULL，统计默认仍按平台合并。
     let _ = conn.execute("ALTER TABLE requests ADD COLUMN connection_id TEXT", []);
     conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_requests_connection ON requests(connection_id, ts);")?;
@@ -444,6 +451,53 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
     // 402 标为额度用尽的本地日期（YYYY-MM-DD）：次日起自动恢复（route::recover_exhausted）；
     // 旧行为 NULL，不自动恢复（以前可能是手动设的）
     let _ = conn.execute("ALTER TABLE connections ADD COLUMN exhausted_day TEXT", []);
+    // 连接级计费口径、价格倍率与预算上限（可恢复纯增量列；旧连接默认 auto + 1.0 + alert）
+    let _ = conn.execute("ALTER TABLE connections ADD COLUMN billing_mode TEXT NOT NULL DEFAULT 'auto'", []);
+    let _ = conn.execute("ALTER TABLE connections ADD COLUMN price_multiplier REAL NOT NULL DEFAULT 1.0", []);
+    let _ = conn.execute("ALTER TABLE connections ADD COLUMN budget_daily_usd REAL", []);
+    let _ = conn.execute("ALTER TABLE connections ADD COLUMN budget_monthly_usd REAL", []);
+    let _ = conn.execute("ALTER TABLE connections ADD COLUMN budget_action TEXT NOT NULL DEFAULT 'alert'", []);
+    // 网关路由实际模型、上游回显模型与 1h 缓存写量（可恢复纯增量列）
+    let _ = conn.execute("ALTER TABLE requests ADD COLUMN upstream_model TEXT", []);
+    let _ = conn.execute("ALTER TABLE requests ADD COLUMN served_model TEXT", []);
+    let _ = conn.execute("ALTER TABLE requests ADD COLUMN cache_write_1h_tokens INTEGER NOT NULL DEFAULT 0", []);
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS pricing_overrides (
+            scope TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            display_name TEXT NOT NULL DEFAULT '',
+            input REAL NOT NULL DEFAULT 0,
+            output REAL NOT NULL DEFAULT 0,
+            cache_read REAL NOT NULL DEFAULT 0,
+            cache_write REAL,
+            cache_write_1h REAL,
+            long_ctx_threshold INTEGER,
+            long_ctx_input REAL,
+            long_ctx_output REAL,
+            long_ctx_cache_read REAL,
+            long_ctx_cache_write REAL,
+            disabled INTEGER NOT NULL DEFAULT 0,
+            updated_ms INTEGER NOT NULL,
+            PRIMARY KEY (scope, model_id)
+        );
+        CREATE TABLE IF NOT EXISTS pricing_aliases (
+            scope TEXT NOT NULL,
+            alias_model TEXT NOT NULL,
+            target_model TEXT NOT NULL,
+            updated_ms INTEGER NOT NULL,
+            PRIMARY KEY (scope, alias_model)
+        );
+        CREATE TABLE IF NOT EXISTS official_cost_snapshots (
+            connection_id TEXT NOT NULL,
+            day TEXT NOT NULL,
+            cost_usd REAL NOT NULL,
+            source TEXT NOT NULL DEFAULT '',
+            synced_ms INTEGER NOT NULL,
+            PRIMARY KEY (connection_id, day)
+        );
+        "#,
+    )?;
     // 身份迁移：开发期直接暴露问题；发布期只记诊断，不阻止应用启动。
     let migration = crate::gateway::identity::migrate(conn);
     #[cfg(debug_assertions)]
@@ -798,12 +852,75 @@ pub fn apply_proxy_timing(
     status_code: i64,
     connection_id: Option<&str>,
 ) -> rusqlite::Result<usize> {
+    apply_proxy_timing_with_models(conn, dedup_key, Some(first_token_ms), duration_ms, status_code, connection_id, None, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn apply_proxy_timing_with_models(
+    conn: &Connection,
+    dedup_key: &str,
+    first_token_ms: Option<i64>,
+    duration_ms: i64,
+    status_code: i64,
+    connection_id: Option<&str>,
+    upstream_model: Option<&str>,
+    served_model: Option<&str>,
+) -> rusqlite::Result<usize> {
     conn.execute(
-        "UPDATE requests SET duration_ms = ?3, first_token_ms = ?4, status_code = ?5,
-                connection_id = COALESCE(?6, connection_id)
-         WHERE source = ?1 AND dedup_key = ?2",
-        params![crate::collector::SOURCE_LOCAL, dedup_key, duration_ms, first_token_ms, status_code, connection_id],
+        "UPDATE requests SET duration_ms = ?3,
+                first_token_ms = COALESCE(?4, first_token_ms),
+                status_code = ?5,
+                connection_id = COALESCE(?6, connection_id),
+                upstream_model = COALESCE(?7, upstream_model),
+                served_model = COALESCE(?8, served_model)
+         WHERE dedup_key = ?2 AND (source = ?1 OR source LIKE 'native:%')",
+        params![
+            crate::collector::SOURCE_LOCAL,
+            dedup_key,
+            duration_ms,
+            first_token_ms,
+            status_code,
+            connection_id,
+            upstream_model,
+            served_model,
+        ],
     )
+}
+
+/// 回填本机/原生来源估算或源端自带的请求耗时；绝不覆盖已有（如代理/网关实测）的耗时。
+pub(crate) fn set_request_duration_if_missing(
+    conn: &Connection,
+    source: &str,
+    dedup_key: &str,
+    duration_ms: i64,
+) -> rusqlite::Result<()> {
+    if duration_ms <= 0 {
+        return Ok(());
+    }
+    conn.prepare_cached(
+        "UPDATE requests SET duration_ms = COALESCE(duration_ms, ?3)
+         WHERE source = ?1 AND dedup_key = ?2",
+    )?
+    .execute(params![source, dedup_key, duration_ms])?;
+    Ok(())
+}
+
+/// 记录 Claude 1h TTL 缓存写入量；多次扫描同一请求时取较大值，与 token 合并口径一致。
+pub(crate) fn set_cache_write_1h(
+    conn: &Connection,
+    source: &str,
+    dedup_key: &str,
+    tokens: i64,
+) -> rusqlite::Result<()> {
+    if tokens <= 0 {
+        return Ok(());
+    }
+    conn.prepare_cached(
+        "UPDATE requests SET cache_write_1h_tokens = MAX(cache_write_1h_tokens, ?3)
+         WHERE source = ?1 AND dedup_key = ?2",
+    )?
+    .execute(params![source, dedup_key, tokens])?;
+    Ok(())
 }
 
 /// 经本地代理归账到某条连接的请求数；为 0 时界面不提供「仅此连接」统计范围。
@@ -1159,7 +1276,7 @@ pub fn import_parsed(conn: &mut Connection, parsed: &ParsedBackup) -> Result<Imp
             crate::source_store::write(&tx, &[crate::source_store::Record { request: r.clone(), input_semantics,
                 credits: metric.and_then(|m| m.credits), original_credits: metric.and_then(|m| m.original_credits),
                 billable: metric.and_then(|m| m.billable), context_ratio: metric.and_then(|m| m.context_ratio),
-                reasoning: metric.and_then(|m| m.reasoning), tool: metric.and_then(|m| m.tool) }]).map_err(|e| e.to_string())?
+                reasoning: metric.and_then(|m| m.reasoning), tool: metric.and_then(|m| m.tool), duration_ms: None, first_token_ms: None }]).map_err(|e| e.to_string())?
         } else {
             insert_records_into(&tx, std::slice::from_ref(r)).map_err(|e| e.to_string())?
         };
@@ -1209,11 +1326,19 @@ pub fn insert_records(conn: &mut Connection, recs: &[RequestRecord]) -> rusqlite
 }
 
 /// 网关订阅没有原工具日志可扫描，直接保存无正文的请求统计并绑定所选账号。
-pub(crate) fn insert_gateway_record(conn: &mut Connection, record: &RequestRecord, connection_id: &str, duration_ms: i64) -> rusqlite::Result<()> {
+pub(crate) fn insert_gateway_record_with_timing(
+    conn: &mut Connection,
+    record: &RequestRecord,
+    connection_id: &str,
+    duration_ms: i64,
+    first_token_ms: Option<i64>,
+) -> rusqlite::Result<()> {
     let tx = conn.transaction()?;
     insert_records_into(&tx, std::slice::from_ref(record))?;
-    tx.execute("UPDATE requests SET connection_id=?3,duration_ms=?4,status_code=200 WHERE source=?1 AND dedup_key=?2",
-        params![record.source,record.dedup_key,connection_id,duration_ms])?;
+    tx.execute(
+        "UPDATE requests SET connection_id=?3, duration_ms=?4, first_token_ms=COALESCE(?5, first_token_ms), status_code=200 WHERE source=?1 AND dedup_key=?2",
+        params![record.source, record.dedup_key, connection_id, duration_ms, first_token_ms],
+    )?;
     tx.commit()
 }
 
@@ -1268,6 +1393,24 @@ pub fn set_session_cwd(conn: &Connection, platform: &str, session_id: &str, cwd:
          ON CONFLICT(platform, session_id) DO UPDATE SET cwd = COALESCE(sessions.cwd, excluded.cwd)",
     )?;
     stmt.execute(rusqlite::params![platform, session_id, trimmed])?;
+    Ok(())
+}
+
+/// 标记会话是否属于子代理（如 DeepSeek Harness 的 `origin = "subagent"`）。
+/// 用量仍完整计入 `requests`；会话线程页据此隐藏子代理，避免单个任务刷出大量会话。
+pub fn set_session_subagent(
+    conn: &Connection,
+    platform: &str,
+    session_id: &str,
+    is_subagent: bool,
+) -> rusqlite::Result<()> {
+    let flag = i32::from(is_subagent);
+    conn.prepare_cached(
+        "INSERT INTO sessions(platform, session_id, is_subagent) VALUES(?1, ?2, ?3)
+         ON CONFLICT(platform, session_id) DO UPDATE SET is_subagent = excluded.is_subagent
+         WHERE sessions.is_subagent IS NOT excluded.is_subagent",
+    )?
+    .execute(params![platform, session_id, flag])?;
     Ok(())
 }
 
@@ -1989,15 +2132,16 @@ const FRESH_INPUT_SQL: &str =
     "CASE input_semantics WHEN 'includes_cache' THEN max(input_tokens - cache_read_tokens, 0) WHEN 'excludes_cache' THEN input_tokens ELSE NULL END";
 
 /// 同理，新增输入的「是否已知」在 Codex 上依赖两个字段：缺任何一个都算未知。
+#[cfg(test)]
 const FRESH_INPUT_KNOWN_SQL: &str =
     "CASE input_semantics WHEN 'includes_cache' THEN input_known * cache_read_known WHEN 'excludes_cache' THEN input_known ELSE 0 END";
 
 /// 命中率分母是「本可以命中的输入」：新增输入 + 缓存写入 + 缓存命中。
 /// 任一分量未知则整个比率未知——用已知的部分凑一个分母会低估分母、高估命中率。
 #[cfg(test)]
-const HIT_DENOMINATOR_KNOWN_SQL: &str = "CASE input_semantics      WHEN 'includes_cache' THEN input_known * cache_read_known      WHEN 'excludes_cache' THEN input_known * cache_read_known * cache_write_known ELSE 0 END";
+const HIT_DENOMINATOR_KNOWN_SQL: &str = "CASE input_semantics      WHEN 'includes_cache' THEN input_known * cache_read_known      WHEN 'excludes_cache' THEN input_known * cache_read_known ELSE 0 END";
 #[cfg(test)]
-const HIT_DENOMINATOR_SQL: &str = "CASE input_semantics WHEN 'includes_cache' THEN input_tokens      WHEN 'excludes_cache' THEN input_tokens + cache_read_tokens + cache_write_tokens END";
+const HIT_DENOMINATOR_SQL: &str = "CASE input_semantics WHEN 'includes_cache' THEN input_tokens      WHEN 'excludes_cache' THEN input_tokens + cache_read_tokens + CASE WHEN cache_write_known = 1 THEN cache_write_tokens ELSE 0 END END";
 
 /// 退化行排除（2026-09-19 鼠鼠定版）：已知 Token 字段全为 0 却缺任一缓存字段的
 /// 记录——实测来自第三方网关的空响应（usage 只有 input/output 两个 0）——本身
@@ -2022,7 +2166,7 @@ END";
 
 pub(crate) const EXCLUDE_DEGENERATE_SQL: &str = " AND NOT (platform = 'claude' AND input_known = 1 AND input_tokens = 0 \
      AND output_known = 1 AND output_tokens = 0 \
-     AND (cache_read_known = 0 OR cache_write_known = 0))";
+     AND (cache_read_known = 0 OR cache_write_known = 0 OR (COALESCE(model, '') = '<synthetic>' AND COALESCE(total_tokens, 0) = 0)))";
 
 /// 测试沿用的旧签名：不按连接筛选。
 #[cfg(test)]
@@ -2373,47 +2517,79 @@ pub fn cost_estimate_at_scoped(
 ) -> rusqlite::Result<CostEstimate> {
     let (start, end) = resolve_range_at(conn, platform, period, custom, query_end_ms);
     let filter = Filter::new(platform, model, connection, 3);
-    // Gemini 的思考 / 工具 Token 在 request_metrics；Pro 系列按单次输入是否超过长提示阈值分档，
-    // 所以分组键多一个 long_prompt，其他平台该列恒为 0，不影响原有口径。
+    let snapshot = crate::attribution::Snapshot::load(conn).ok();
+    let mut resolver = crate::pricing::PriceResolver::load(conn);
+    // 逐条按单次请求计价，避免分组求和把普通短请求误判成超长上下文阶梯。
     let sql = format!(
-        "SELECT platform, model, SUM(input_tokens), SUM(output_tokens), SUM(cache_write_tokens),
-                SUM(cache_read_tokens), SUM(total_tokens), MIN(input_known), MIN(output_known),
-                MIN(cache_write_known), MIN(cache_read_known), MIN(total_known), MIN({FRESH_INPUT_KNOWN_SQL}),
-                SUM(COALESCE(m.reasoning, 0)), SUM(COALESCE(m.tool, 0)),
-                CASE WHEN platform = 'gemini' AND input_tokens > {long} THEN 1 ELSE 0 END AS long_prompt,
-                MIN(ts), (ts / 3600000) % 168 AS hour_of_week
+        "SELECT requests.platform, requests.model, requests.upstream_model, requests.served_model,
+                requests.input_tokens, requests.output_tokens, requests.cache_write_tokens, requests.cache_read_tokens,
+                requests.cache_write_1h_tokens, requests.total_tokens,
+                requests.input_known, requests.output_known, requests.cache_write_known, requests.cache_read_known,
+                requests.total_known, requests.input_semantics, requests.connection_id, requests.provider_key,
+                COALESCE(m.reasoning, 0), COALESCE(m.tool, 0), requests.ts
          FROM requests LEFT JOIN request_metrics m ON m.request_id = requests.id
-         WHERE ts >= ?1 AND ts < ?2{EXCLUDE_DEGENERATE_SQL}{}
-         GROUP BY platform, model, long_prompt, hour_of_week",
-        filter.clause, long = crate::pricing::GEMINI_LONG_PROMPT_TOKENS
+         WHERE requests.ts >= ?1 AND requests.ts < ?2{EXCLUDE_DEGENERATE_SQL}{}",
+        filter.clause
     );
     let mut stmt = conn.prepare(&sql)?;
-    // 峰谷价只取决于 UTC 小时与星期：按「一周中的第几个小时」分桶（纪元起每 168 小时一周，
-    // 同桶的 UTC 小时与星期相同），每桶用桶内任一请求的时刻计价，金额不随查看时刻变化。
-    let map = |r: &rusqlite::Row| -> rusqlite::Result<(String, Option<String>, i64, i64, i64, i64, i64, bool, i64, i64, bool, i64)> {
-        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?,
-            (7..=11).all(|index| r.get::<_, i32>(index).unwrap_or(0) != 0),
-            r.get(13)?, r.get(14)?, r.get::<_, i32>(15)? != 0, r.get(16)?))
-    };
-    let rows: Vec<_> = stmt
-        .query_map(rusqlite::params_from_iter(filter.params(&[start, end])), map)?
-        .collect::<Result<_, _>>()?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(filter.params(&[start, end])), |r| {
+        let opt = |v: usize, k: usize| -> rusqlite::Result<Option<i64>> {
+            Ok(if r.get::<_, i64>(k)? != 0 { Some(r.get(v)?) } else { None })
+        };
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, Option<String>>(3)?,
+            opt(4, 10)?,
+            opt(5, 11)?,
+            opt(6, 12)?,
+            opt(7, 13)?,
+            r.get::<_, Option<i64>>(8)?.unwrap_or(0),
+            opt(9, 14)?,
+            r.get::<_, String>(15)?,
+            r.get::<_, Option<String>>(16)?,
+            r.get::<_, Option<String>>(17)?,
+            r.get::<_, i64>(18)?,
+            r.get::<_, i64>(19)?,
+            r.get::<_, i64>(20)?,
+        ))
+    })?;
 
     let mut amount = 0.0;
     let mut uncovered = 0i64;
     let mut complete = true;
-    for (row_platform, model, i, o, cw, cr, total, fields_known, reasoning, tool, long_prompt, sample_ts) in rows {
-        if !fields_known {
-            complete = false;
-            continue;
-        }
-        let at = chrono::DateTime::from_timestamp_millis(sample_ts).unwrap_or_else(chrono::Utc::now);
-        match crate::pricing::estimate_usage_at(Some(&row_platform), model.as_deref(), crate::pricing::Usage {
-            input: i, output: o, cache_write: cw, cache_read: cr, reasoning, tool, long_prompt,
-        }, at) {
+    for row in rows {
+        let (row_platform, model, upstream, served, input, output, cw, cr, cw1h, total, semantics, conn_id, provider_key, reasoning, tool, ts) = row?;
+        let attribution = snapshot
+            .as_ref()
+            .map_or_else(crate::attribution::AttributionView::platform, |snap| {
+                snap.resolve(&row_platform, conn_id.as_deref(), provider_key.as_deref(), model.as_deref())
+            });
+        let effective_conn = attribution.is_connection().then(|| attribution.connection_id.as_deref()).flatten();
+        let at = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now);
+        let res = resolver.price_request(&crate::pricing::PriceRequest {
+            platform: &row_platform,
+            model: model.as_deref(),
+            upstream_model: upstream.as_deref(),
+            served_model: served.as_deref(),
+            connection_id: effective_conn,
+            input_semantics: &semantics,
+            input,
+            output,
+            cache_read: cr,
+            cache_write: cw,
+            cache_write_1h: cw1h,
+            reasoning,
+            tool,
+            at,
+        });
+        match res.cost {
             Some(v) => amount += v,
-            // 价目表没有该模型：计入未覆盖，不当成 0 元悄悄吞掉
-            None => uncovered += total,
+            None => match res.unpriced_reason {
+                Some(crate::pricing::UnpricedReason::NoUsage) => complete = false,
+                _ => uncovered += total.unwrap_or(0),
+            },
         }
     }
     Ok(CostEstimate {
@@ -2503,6 +2679,7 @@ pub fn request_log_at_scoped(
                         input, output, cache_write, cache_read,
                         reasoning: reasoning.unwrap_or(0), tool: tool.unwrap_or(0),
                         long_prompt: input > crate::pricing::GEMINI_LONG_PROMPT_TOKENS,
+                        ..Default::default()
                     },
                     // 按请求自身时间计价（峰谷价），不随查看时刻变化
                     chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now),
@@ -2836,6 +3013,8 @@ mod tests {
             context_ratio: None,
             reasoning: None,
             tool: None,
+            duration_ms: None,
+            first_token_ms: None,
         };
         for _ in 0..2 {
             crate::source_store::write(&conn, std::slice::from_ref(&stored)).unwrap();
@@ -2848,7 +3027,7 @@ mod tests {
              VALUES('c-gw','codex','auth','网关','x','****',1,'c-gw')",
             [],
         ).unwrap();
-        insert_gateway_record(&mut conn, &record(), "c-gw", 1234).unwrap();
+        insert_gateway_record_with_timing(&mut conn, &record(), "c-gw", 1234, None).unwrap();
         assert_eq!(snapshot(&conn), (1, 120), "网关记账不新增行");
 
         // 入口 4：代理计时回填（UPDATE 语义，重复调用不产生行）

@@ -88,6 +88,8 @@ pub(crate) fn record_upstream_signal(deps: &Arc<ProxyDeps>, entry: &PoolEntry, u
 /// 网关请求计时回填（执行文档 §9）：从响应头快照提取上游去重键，按连接归账写 `requests`。
 /// 与观测模式共用 `apply_proxy_timing`，区别是连接 id 已知（不必靠凭证指纹匹配）。
 /// 记录尚未入库时（CLI 还没写日志）转进待关联队列，由采集扫描后的 `flush_pending` 补写。
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn settle_gateway_timing(
     deps: &Arc<ProxyDeps>,
     connection_id: &str,
@@ -97,18 +99,49 @@ pub(crate) fn settle_gateway_timing(
     duration_ms: i64,
     status_code: i64,
 ) {
+    settle_gateway_timing_with_model(deps, connection_id, platform, None, head, Some(first_token_ms), duration_ms, status_code);
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn settle_gateway_timing_with_model(
+    deps: &Arc<ProxyDeps>,
+    connection_id: &str,
+    platform: &str,
+    upstream_model: Option<&str>,
+    head: &[u8],
+    first_token_ms: Option<i64>,
+    duration_ms: i64,
+    status_code: i64,
+) {
     let Some(dedup_key) = crate::proxy::extract_dedup_key(crate::proxy_config::ProxyPlatform::from_platform(platform), head) else {
         return;
     };
+    let served_model = crate::proxy::extract_served_model(head);
+    let upstream = upstream_model.map(str::trim).filter(|s| !s.is_empty());
     let applied = match deps.db.try_lock() {
-        Ok(conn) => {
-            crate::db::apply_proxy_timing(&conn, &dedup_key, first_token_ms, duration_ms, status_code, Some(connection_id))
-                .unwrap_or(0)
-        }
+        Ok(conn) => crate::db::apply_proxy_timing_with_models(
+            &conn,
+            &dedup_key,
+            first_token_ms,
+            duration_ms,
+            status_code,
+            Some(connection_id),
+            upstream,
+            served_model.as_deref(),
+        )
+        .unwrap_or(0),
         Err(_) => 0,
     };
     if applied == 0 {
-        crate::proxy::queue_pending_timing(&dedup_key, first_token_ms, duration_ms, status_code, Some(connection_id));
+        crate::proxy::queue_pending_timing_with_models(
+            &dedup_key,
+            first_token_ms.unwrap_or(-1),
+            duration_ms,
+            status_code,
+            Some(connection_id),
+            upstream,
+            served_model.as_deref(),
+        );
     }
 }
 

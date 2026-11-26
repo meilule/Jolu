@@ -43,6 +43,8 @@ fn base(platform: &str, source: &str, session: &str, id: &str, ts: i64) -> Recor
         context_ratio: None,
         reasoning: None,
         tool: None,
+        duration_ms: None,
+        first_token_ms: None,
     }
 }
 
@@ -228,10 +230,25 @@ pub fn gemini_records(lines: &[Value], source: &str) -> Vec<Record> {
     if session.is_empty() {
         return vec![];
     }
-    messages
-        .iter()
-        .filter_map(|m| gemini_message(m, source, &session))
-        .collect()
+    let mut out = Vec::new();
+    let mut prev_user_ts: Option<i64> = None;
+    for m in &messages {
+        let ty = text(m, "type");
+        if ty == Some("user") {
+            prev_user_ts = m.get("timestamp").and_then(timestamp);
+            continue;
+        }
+        if let Some(mut rec) = gemini_message(m, source, &session) {
+            if let Some(start) = prev_user_ts.take() {
+                let dur = rec.request.ts.saturating_sub(start);
+                if (100..=3_600_000).contains(&dur) {
+                    rec.duration_ms = Some(dur);
+                }
+            }
+            out.push(rec);
+        }
+    }
+    out
 }
 
 #[cfg(test)]

@@ -70,6 +70,7 @@ fn agent_of_platform(platform: &str) -> Option<&'static str> {
         "claude" => "claude-code",
         "codex" => "codex",
         "gemini" => "gemini",
+        "antigravity" => "antigravity",
         "opencode" => "opencode",
         "zcode" => "zcode",
         "kimi" => "kimi",
@@ -266,6 +267,16 @@ mod tests {
             "Agent 列不能空着：平台名要反查成接线注册表的 agent id"
         );
         assert!(row.links.is_empty(), "它确实没有网关来源关联");
+
+        // Antigravity 本地会话同样映射回接线注册表的 agent id
+        conn.execute(
+            "INSERT INTO requests(platform, source, dedup_key, session_id, ts, model)
+             VALUES('antigravity', 'native:antigravity:default', 'ag-1', 'native:antigravity:default:conv-1', ?1, 'gemini-4-neon-xhigh')",
+            [now],
+        ).unwrap();
+        let view2 = overview(&conn).unwrap();
+        let agy = view2.sessions.iter().find(|s| s.session_id == "native:antigravity:default:conv-1").expect("Antigravity 本机会话应进入活跃会话");
+        assert_eq!(agy.agent.as_deref(), Some("antigravity"));
     }
 
     #[test]

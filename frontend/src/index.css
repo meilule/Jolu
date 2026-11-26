@@ -946,17 +946,6 @@ html:not(.island-window), html:not(.island-window) * {
 }
 
 
-[data-glide-menu] [role="menuitemradio"][data-highlighted]:not([data-state="checked"]) {
-  background: transparent;
-}
-/* 普通 Item（ProviderMenu）没有 data-state，由 hook 在悬停时给它打
-   data-glide-hi 标记 —— 只有「非选中行」才会被打上，选中行保持原底色。 */
-[data-glide-menu] [data-glide-hi][data-highlighted] {
-  /* Tailwind 的 data-[highlighted]:bg-jolu-side 是伪类变体，权重与这里相同，
-     靠源码顺序未必赢 —— 用 important 保证滑块底下没有第二层底色。 */
-  background: transparent !important;
-}
-
 html.dark:not(.island-window) [role="menu"] { box-shadow: 0 10px 24px var(--jolu-cc-popup-shadow); }
 @media (prefers-reduced-motion: reduce) {
 }

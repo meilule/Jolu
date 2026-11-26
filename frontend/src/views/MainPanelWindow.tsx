@@ -165,6 +165,19 @@ export function MainPanelWindow({
       } else setPage(pageForIntent(intent))
       if (intent.kind === "settings") setSettingsSection(intent.section)
       if (intent.kind === "automation") setAutomationTarget({ taskId: intent.task_id, nonce: Date.now() })
+      if (intent.kind === "automation_new") {
+        const nonce = Date.now()
+        if (intent.platform && intent.session_id) {
+          void api.sessionsList({ platform: intent.platform, connection: null, project: null, since: null, search: intent.session_id })
+            .then((res) => {
+              const matched = res.sessions.find((s) => s.platform === intent.platform && s.session_id === intent.session_id)
+              if (!stopped) setAutomationPrefill(matched ? { session: matched, nonce } : { nonce })
+            })
+            .catch(() => { if (!stopped) setAutomationPrefill({ nonce }) })
+        } else {
+          setAutomationPrefill({ nonce })
+        }
+      }
       if (intent.kind === "providers") setAccountTarget({ connectionId: intent.connection_id, nonce: Date.now() })
       if (intent.kind === "sessions") setSessionTarget({ platform: intent.platform, sessionId: intent.session_id, nonce: Date.now() })
       if (intent.kind === "usage") {

@@ -6,6 +6,7 @@ import * as Menu from "@radix-ui/react-dropdown-menu"
 import { Check, ChevronDown, CircleAlert, CircleCheck, Eye, EyeOff, LoaderCircle, Search } from "lucide-react"
 import { api, isTauri, type LoginDetectionDto } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { useGlidePill } from "@/motion"
 import {
   API_PROTOCOLS,
   canEnterManualModel,
@@ -594,13 +595,14 @@ function Info({ label, value }: { label: string; value: string }) {
 
 /** 「更换平台」：列出全部供应商，待接入的不可选 */
 function PlatformSwitcher({ current, onPick }: { current: ProviderId; onPick: (platform: ProviderId) => void }) {
+  const glide = useGlidePill()
   return (
     <Menu.Root modal={false}>
       <Menu.Trigger asChild>
         <Button kind="ghost" size="sm">更换平台</Button>
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Content align="end" sideOffset={6} collisionPadding={12} style={{ maxHeight: "var(--radix-dropdown-menu-content-available-height)" }} className="jn-popover z-[160] w-[220px] overflow-y-auto rounded-[16px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface">
+        <Menu.Content ref={glide} align="end" sideOffset={6} collisionPadding={12} style={{ maxHeight: "var(--radix-dropdown-menu-content-available-height)" }} className="jn-popover z-[160] w-[220px] overflow-y-auto rounded-[16px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface">
           {PROVIDERS.map((item) => {
             const pending = item.subscription !== "ready" && item.apiKey !== "ready"
             return (

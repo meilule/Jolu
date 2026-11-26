@@ -10,11 +10,14 @@
 import { useState } from "react"
 import { cn } from "@/lib/utils"
 import { axisTicks, labelEvery } from "@/lib/chartGeometry"
-import { formatTokens, formatUsd } from "@/lib/usageStats"
+import { convertFromUsd, type FxState } from "@/lib/costCurrency"
+import { formatMoney, formatPercent, formatTokens } from "@/lib/usageStats"
 import type { StatsTrendBucketDto } from "@/lib/api"
 import { ChartTooltip, Legend, VIZ_BG, type ChartTooltipRow, type VizSeries } from "@/ui"
 
-export type TrendMode = "tokens" | "requests" | "cost"
+export type TrendMode = "tokens" | "requests" | "cost" | "cache_hit_rate"
+
+const DEFAULT_FX: FxState = { currency: "USD", rate: 1, asOf: "", fallback: false, fixed: false, loading: false }
 
 const TOKEN_SERIES: readonly { key: "fresh_input" | "output" | "cache_read" | "cache_write"; label: string; series: VizSeries }[] = [
   { key: "fresh_input", label: "输入", series: 1 },
@@ -23,25 +26,33 @@ const TOKEN_SERIES: readonly { key: "fresh_input" | "output" | "cache_read" | "c
   { key: "cache_write", label: "缓存写入", series: 4 },
 ]
 
-/** 轴刻度去掉多余小数：1 M、500 K、2.5 M */
-function axisLabel(value: number, mode: TrendMode): string {
-  if (mode === "cost") return value === 0 ? "0" : `$${Number(value.toFixed(2))}`
+/** 轴刻度去掉多余小数：1 M、500 K、2.5 M、100% */
+function axisLabel(value: number, mode: TrendMode, fx: FxState): string {
+  if (mode === "cache_hit_rate") return `${Math.round(value)}%`
+  if (mode === "cost") {
+    if (value === 0) return "0"
+    const symbol = fx.currency === "CNY" ? "¥" : "$"
+    return `${symbol}${Number(value.toFixed(2))}`
+  }
   if (mode === "requests") return String(Math.round(value))
   if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(1))} M`
   if (value >= 1_000) return `${Number((value / 1_000).toFixed(1))} K`
   return String(Math.round(value))
 }
 
-function tooltipTitle(point: StatsTrendBucketDto, bucket: "2h" | "day" | "week"): string {
+function tooltipTitle(point: StatsTrendBucketDto, bucket: "1h" | "2h" | "day" | "week"): string {
   const d = new Date(point.start)
   const day = `${d.getMonth() + 1} 月 ${d.getDate()} 日`
-  if (bucket === "2h") return `${day} · ${point.label}`
+  if (bucket === "1h" || bucket === "2h") return `${day} · ${point.label}`
   return bucket === "week" ? `${day}起一周` : day
 }
 
-function pointTotal(point: StatsTrendBucketDto, mode: TrendMode): number {
+function pointTotal(point: StatsTrendBucketDto, mode: TrendMode, fx: FxState): number {
   if (mode === "requests") return point.requests
-  if (mode === "cost") return point.cost ?? 0
+  if (mode === "cost") return convertFromUsd(point.cost ?? 0, fx) ?? 0
+  if (mode === "cache_hit_rate") {
+    return point.cache_hit_rate !== null && point.cache_hit_rate !== undefined ? point.cache_hit_rate * 100 : 0
+  }
   return (point.fresh_input ?? 0) + (point.output ?? 0) + (point.cache_read ?? 0) + (point.cache_write ?? 0)
 }
 
@@ -49,20 +60,27 @@ export function TrendLegend({ mode }: { mode: TrendMode }) {
   const items =
     mode === "tokens"
       ? TOKEN_SERIES.map((s) => ({ key: s.key, label: s.label, series: s.series }))
-      : [{ key: mode, label: mode === "requests" ? "请求次数" : "估算费用", series: 1 as VizSeries }]
+      : [
+          {
+            key: mode,
+            label: mode === "requests" ? "请求次数" : mode === "cost" ? "估算费用" : "输入缓存命中率",
+            series: 1 as VizSeries,
+          },
+        ]
   return <Legend items={items} />
 }
 
-export function TrendChart({ points, bucket, mode, onDrill }: {
+export function TrendChart({ points, bucket, mode, fx = DEFAULT_FX, onDrill }: {
   points: StatsTrendBucketDto[]
-  bucket: "2h" | "day" | "week"
+  bucket: "1h" | "2h" | "day" | "week"
   mode: TrendMode
+  fx?: FxState
   onDrill: (point: StatsTrendBucketDto) => void
 }) {
   const [hover, setHover] = useState(-1)
-  const totals = points.map((p) => pointTotal(p, mode))
+  const totals = points.map((p) => pointTotal(p, mode, fx))
   const maxVal = Math.max(0, ...totals)
-  const ticks = axisTicks(maxVal, 3)
+  const ticks = mode === "cache_hit_rate" ? [100, 50, 0] : axisTicks(maxVal, 3)
   const top = ticks[0] || 1
   const every = labelEvery(points.length, 7)
   const hovered = hover >= 0 ? points[hover] ?? null : null
@@ -75,19 +93,31 @@ export function TrendChart({ points, bucket, mode, onDrill }: {
           { label: "缓存读取", value: formatTokens(hovered.cache_read), series: 3 },
           { label: "缓存写入", value: formatTokens(hovered.cache_write), series: 4 },
         ]
-      : [
-          {
-            label: mode === "requests" ? "请求次数" : "估算费用",
-            value: mode === "requests" ? `${hovered.requests} 次` : formatUsd(hovered.cost),
-            series: 1,
-          },
-        ]
+      : mode === "cache_hit_rate"
+        ? [
+            { label: "缓存命中率", value: formatPercent(hovered.cache_hit_rate), series: 1 },
+            { label: "缓存读取", value: formatTokens(hovered.cache_read), series: 3 },
+            { label: "普通输入", value: formatTokens(hovered.fresh_input), series: 1 },
+            { label: "调用次数", value: `${hovered.requests} 次`, series: 2 },
+          ]
+        : [
+            {
+              label: mode === "requests" ? "请求次数" : `估算费用 (${fx.currency})`,
+              value: mode === "requests" ? `${hovered.requests} 次` : formatMoney(convertFromUsd(hovered.cost, fx), fx.currency),
+              series: 1,
+            },
+          ]
     : []
 
+  const unknownCount = hovered?.unknown_requests ?? 0
   const tooltipFooter = hovered
     ? mode === "tokens"
-      ? `总 Token · ${formatTokens(hovered.total)}`
-      : "点击柱子查看此时段调用明细"
+      ? unknownCount > 0
+        ? `已知 Token · ${formatTokens(hovered.total)} · 含 ${unknownCount} 条未提供分项`
+        : `总 Token · ${formatTokens(hovered.total)}`
+      : unknownCount > 0
+        ? `点击柱子查看明细 · 含 ${unknownCount} 条未提供分项`
+        : "点击柱子查看此时段调用明细"
     : undefined
 
   return (
@@ -102,7 +132,7 @@ export function TrendChart({ points, bucket, mode, onDrill }: {
           {ticks.map((tick) => (
             <div key={tick} className="flex items-center gap-2">
               <span className="tnum w-10 shrink-0 text-right font-mono text-[10px] text-jn-text-3">
-                {axisLabel(tick, mode)}
+                {axisLabel(tick, mode, fx)}
               </span>
               <span className="h-px flex-1 bg-jn-viz-grid" />
             </div>
@@ -136,7 +166,15 @@ export function TrendChart({ points, bucket, mode, onDrill }: {
               <button
                 key={point.start}
                 type="button"
-                aria-label={`${tooltipTitle(point, bucket)}：${mode === "requests" ? `${point.requests} 次` : mode === "cost" ? formatUsd(point.cost) : formatTokens(point.total)}`}
+                aria-label={`${tooltipTitle(point, bucket)}：${
+                  mode === "requests"
+                    ? `${point.requests} 次`
+                    : mode === "cost"
+                      ? formatMoney(convertFromUsd(point.cost, fx), fx.currency)
+                      : mode === "cache_hit_rate"
+                        ? formatPercent(point.cache_hit_rate)
+                        : formatTokens(point.total)
+                }`}
                 onMouseEnter={() => setHover(index)}
                 onFocus={() => setHover(index)}
                 onClick={() => onDrill(point)}

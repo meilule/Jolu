@@ -291,8 +291,12 @@ pub(crate) struct UsageMeter {
     whole: Vec<u8>,
     input: Option<i64>,
     output: Option<i64>,
-    /// 输入里命中缓存的部分（上下文观察用，预算不看它）
+    /// 输入里命中缓存的部分
     cache_read: Option<i64>,
+    /// 缓存写入总量（5m + 1h）
+    cache_write: Option<i64>,
+    /// 1h TTL 缓存写入量
+    cache_write_1h: Option<i64>,
 }
 
 const WHOLE_LIMIT: usize = 4 * 1024 * 1024;
@@ -326,6 +330,12 @@ impl UsageMeter {
     fn observe(&mut self, value: &Value) {
         if let Some(cached) = cache_read_of(value) {
             self.cache_read = Some(self.cache_read.map_or(cached, |seen| seen.max(cached)));
+        }
+        if let Some(cw) = cache_write_of(value) {
+            self.cache_write = Some(self.cache_write.map_or(cw, |seen| seen.max(cw)));
+        }
+        if let Some(cw1h) = cache_write_1h_of(value) {
+            self.cache_write_1h = Some(self.cache_write_1h.map_or(cw1h, |seen| seen.max(cw1h)));
         }
         let (input, output) = usage_of(value);
         if let Some(input) = input {
@@ -362,6 +372,36 @@ impl UsageMeter {
     pub(crate) fn cache_read(&self) -> Option<i64> {
         self.cache_read
     }
+
+    pub(crate) fn cache_write(&self) -> Option<i64> {
+        self.cache_write
+    }
+
+    pub(crate) fn cache_write_1h(&self) -> Option<i64> {
+        self.cache_write_1h
+    }
+}
+
+fn cache_write_of(value: &Value) -> Option<i64> {
+    for base in ["/message/usage", "/usage", "/response/usage"] {
+        let Some(usage) = value.pointer(base) else { continue };
+        let cw = int(usage, "/cache_creation_input_tokens")
+            .or_else(|| int(usage, "/cache_write_input_tokens"));
+        if cw.is_some() {
+            return cw;
+        }
+    }
+    None
+}
+
+fn cache_write_1h_of(value: &Value) -> Option<i64> {
+    for base in ["/message/usage", "/usage", "/response/usage"] {
+        let Some(usage) = value.pointer(base) else { continue };
+        if let Some(v) = int(usage, "/cache_creation/ephemeral_1h_input_tokens") {
+            return Some(v);
+        }
+    }
+    None
 }
 
 /// 各协议「输入里命中缓存」的位置：Anthropic `cache_read_input_tokens`，Chat `prompt_tokens_details.cached_tokens`，
@@ -420,19 +460,34 @@ impl MeteredStream {
     fn settle_once(&mut self) {
         let Some((reservation, db)) = self.pending.take() else { return };
         let actual = self.meter.finish().or(if self.success { None } else { Some(0) });
-        // 费用：读到了用量、且知道实际路由到的平台与模型、价目表里有它，才计
         let (input, output) = self.meter.parts();
         let routed = reservation.routed.lock().ok().and_then(|cell| cell.clone());
-        let cost = match (routed, input.or(output)) {
-            (Some((platform, model)), Some(_)) => crate::pricing::estimate_usage(
-                Some(&platform),
-                Some(&model),
-                crate::pricing::Usage { input: input.unwrap_or(0), output: output.unwrap_or(0), ..Default::default() },
-            ),
-            _ => None,
-        };
         let guard = db.lock();
         if let Ok(conn) = guard {
+            let cost = match (routed, input.or(output)) {
+                (Some((platform, model)), Some(_)) => {
+                    let mut resolver = crate::pricing::PriceResolver::load(&conn);
+                    resolver
+                        .price_request(&crate::pricing::PriceRequest {
+                            platform: &platform,
+                            model: Some(&model),
+                            upstream_model: None,
+                            served_model: None,
+                            connection_id: None,
+                            input_semantics: "includes_cache",
+                            input: Some(input.unwrap_or(0)),
+                            output: Some(output.unwrap_or(0)),
+                            cache_read: self.meter.cache_read(),
+                            cache_write: self.meter.cache_write(),
+                            cache_write_1h: self.meter.cache_write_1h().unwrap_or(0),
+                            reasoning: 0,
+                            tool: 0,
+                            at: chrono::Utc::now(),
+                        })
+                        .cost
+                }
+                _ => None,
+            };
             settle_with_cost(&conn, &reservation, actual, cost);
         }
     }

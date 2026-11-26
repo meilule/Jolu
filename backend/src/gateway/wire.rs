@@ -503,6 +503,94 @@ pub(crate) fn linked(meta: &RouteMeta, entry: &route::PoolEntry) -> RouteMeta {
     RouteMeta { connection_id: Some(entry.connection_id.clone()), ..meta.clone() }
 }
 
+/// 协议转换后的响应流计时观察：提取面向调用方的去重键（如 msg_ / resp_）并回填首字与总耗时。
+fn observe_caller_timing(
+    deps: Arc<ProxyDeps>,
+    entry: &route::PoolEntry,
+    upstream_model: &str,
+    protocol: CallerProtocol,
+    started: std::time::Instant,
+    response: Response,
+) -> Response {
+    let status = response.status().as_u16() as i64;
+    let (parts, body) = response.into_parts();
+    let platform = match protocol {
+        CallerProtocol::Anthropic => "claude",
+        CallerProtocol::Responses | CallerProtocol::Chat => "codex",
+    };
+    struct CallerTimed {
+        inner: axum::body::BodyDataStream,
+        deps: Arc<ProxyDeps>,
+        connection_id: String,
+        platform: &'static str,
+        upstream_model: String,
+        started: std::time::Instant,
+        status: i64,
+        first_byte_ms: Option<i64>,
+        head: Vec<u8>,
+        settled: bool,
+    }
+    impl CallerTimed {
+        fn settle(&mut self) {
+            if self.settled {
+                return;
+            }
+            self.settled = true;
+            crate::gateway::adapter::settle_gateway_timing_with_model(
+                &self.deps,
+                &self.connection_id,
+                self.platform,
+                Some(&self.upstream_model),
+                &self.head,
+                self.first_byte_ms,
+                self.started.elapsed().as_millis() as i64,
+                self.status,
+            );
+        }
+    }
+    impl futures_util::Stream for CallerTimed {
+        type Item = Result<axum::body::Bytes, axum::Error>;
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            let polled = std::pin::Pin::new(&mut self.inner).poll_next(cx);
+            match &polled {
+                std::task::Poll::Ready(Some(Ok(bytes))) => {
+                    if !bytes.is_empty() && self.first_byte_ms.is_none() {
+                        self.first_byte_ms = Some(self.started.elapsed().as_millis() as i64);
+                    }
+                    if self.head.len() < crate::proxy::HEAD_CAP {
+                        let room = crate::proxy::HEAD_CAP - self.head.len();
+                        self.head.extend_from_slice(&bytes[..bytes.len().min(room)]);
+                    }
+                }
+                std::task::Poll::Ready(None) | std::task::Poll::Ready(Some(Err(_))) => self.settle(),
+                std::task::Poll::Pending => {}
+            }
+            polled
+        }
+    }
+    impl Drop for CallerTimed {
+        fn drop(&mut self) {
+            self.settle();
+        }
+    }
+    let stream = CallerTimed {
+        inner: body.into_data_stream(),
+        deps,
+        connection_id: entry.connection_id.clone(),
+        platform,
+        upstream_model: upstream_model.to_string(),
+        started,
+        status,
+        first_byte_ms: None,
+        head: Vec::new(),
+        settled: false,
+    };
+    Response::from_parts(parts, axum::body::Body::from_stream(stream))
+}
+
 /// 网关运行态（亲和 + 冷却）的借用引用，避免在 async 里长期持锁。
 struct GatewayState<'a> {
     affinity: &'a Mutex<crate::gateway::route::Affinity>,
@@ -923,6 +1011,8 @@ pub(crate) async fn handle(
     let total = candidates.len();
     for (index, (entry, upstream_model)) in candidates.into_iter().enumerate() {
         let last = index + 1 == total;
+        // 分组成员可带固定 effort（`来源/模型:high`，2.7）：发上游和计价前先剥掉 effort 尾标
+        let (upstream_model, member_effort) = crate::gateway::member_effort::split(&upstream_model);
         if let Ok(mut cell) = routed.lock() {
             let priced_model = if upstream_model.is_empty() { route::split_model_id(&model).map(|(_, m)| m.to_string()).unwrap_or_else(|| model.clone()) } else { upstream_model.clone() };
             if let Some(capture) = capture.as_ref() {
@@ -938,9 +1028,22 @@ pub(crate) async fn handle(
             eprintln!("[路由] 成员「{}」配置已变化，跳过换下一个候选", entry.slug);
             continue;
         }
+        let budget_block = deps.db.try_lock().ok().and_then(|conn| {
+            crate::pricing::budget::check_gateway_connection_budget(
+                &conn,
+                &entry.connection_id,
+                chrono::Utc::now().timestamp_millis(),
+            )
+        });
+        if let Some(reason) = budget_block {
+            if last {
+                record_route(&deps, request_id, &meta, Some(&entry.slug), None, Some(429), "rejected", started);
+                return error_response(StatusCode::TOO_MANY_REQUESTS, &reason);
+            }
+            eprintln!("[路由] 成员「{}」{reason}，尝试下一个候选", entry.slug);
+            continue;
+        }
         let meta = linked(&meta, &entry);
-        // 分组成员可带固定 effort（`来源/模型:high`，2.7）：发上游用裸模型，effort 写进请求体
-        let (upstream_model, member_effort) = crate::gateway::member_effort::split(&upstream_model);
         // 订阅适配器从请求体读模型：分组成员的模型与请求不同时要重写 body 的 model 字段
         let try_body = if upstream_model.is_empty() || upstream_model == model {
             body.clone()
@@ -1182,6 +1285,13 @@ async fn forward_one(
                     let chat_form = crate::gateway::translate::chat_response(response, requested_model).await;
                     crate::gateway::responses_chat::response_body(chat_form, original_custom_tools(&original_body)).await
                 }
+            };
+            // 协议转换后会重新生成面向调用方的 msg_ / resp_ id；单独观察转换后的响应流，
+            // 让调用方本机日志写出的去重键也能拿到精确首字与总耗时。
+            let response = if conversion != Conversion::None {
+                observe_caller_timing(deps.clone(), entry, &upstream_for_log, protocol, started, response)
+            } else {
+                response
             };
             guard.finish();
             let row_id = record_route(

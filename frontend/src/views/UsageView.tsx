@@ -10,12 +10,13 @@ import { useSettings } from "@/hooks/useSettings"
 import { useStatsQuery } from "@/hooks/useStatsQuery"
 import { useCollectionStatus } from "@/hooks/useCollectionStatus"
 import { useMainContextReport } from "@/hooks/useMainContextReport"
-import { demoActivity, demoCalls, demoOverview } from "@/mock/usageStats"
+import { demoActivity, demoBudgetStatus, demoCalls, demoOverview } from "@/mock/usageStats"
 import { useToast } from "@/components/ui/Toast"
 import { AnalysisPanel } from "@/components/usage/AnalysisPanel"
 import { CallsPanel } from "@/components/usage/CallsPanel"
 import { DateRangeDialog } from "@/components/usage/DateRangeDialog"
 import { OverviewPanel } from "@/components/usage/OverviewPanel"
+import { PricingDialog, type PricingDialogTab } from "@/components/usage/PricingDialog"
 import {
   ALL, AccountFilter, EmptyCard, ErrorNotice, FilterTrigger, LoadingCard, MenuFilter, RefreshButton, ResetButton, providerOptions,
 } from "@/components/usage/usageControls"
@@ -68,12 +69,24 @@ export function UsageView({ active, request, onOpenSession }: {
   useMainContextReport("usage", accounts.length === 1 && accounts[0] !== UNATTRIBUTED_ACCOUNT ? accounts[0] : null)
   const [model, setModel] = useState<string | null>(null)
   const [status, setStatus] = useState<CallStatus>(null)
+  const [billingScope, setBillingScope] = useState<"all" | "api" | "subscription">("all")
+  const [pricingOpen, setPricingOpen] = useState(false)
+  const [pricingTarget, setPricingTarget] = useState<{ tab?: PricingDialogTab; model?: string | null; filter?: "all" | "unpriced" }>({})
   const [searchDraft, setSearchDraft] = useState("")
   const [search, setSearch] = useState("")
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<number | null>(null)
   const [picking, setPicking] = useState(false)
   const [exporting, setExporting] = useState(false)
+
+  const openPricing = (
+    modelName?: string | null,
+    filter: "all" | "unpriced" = "all",
+    initialTab: PricingDialogTab = "catalog",
+  ) => {
+    setPricingTarget({ tab: initialTab, model: modelName ?? null, filter })
+    setPricingOpen(true)
+  }
 
   useEffect(() => {
     if (!request) return
@@ -88,19 +101,26 @@ export function UsageView({ active, request, onOpenSession }: {
     setPage(1)
   }, [request])
 
-  const statsFilter = (): StatsFilterDto => ({ ...rangeToMillis(range), platform, connections: accounts })
-  const callsFilter = (): StatsFilterDto => ({ ...rangeToMillis(range), platform, connections: [], model, status, search: search.trim() || null })
+  const statsFilter = (): StatsFilterDto => ({ ...rangeToMillis(range), platform, connections: accounts, billing_scope: billingScope })
+  const callsFilter = (): StatsFilterDto => ({ ...rangeToMillis(range), platform, connections: accounts, model, status, search: search.trim() || null, billing_scope: billingScope })
 
   const cfg = useSettings()
   const costCurrency = (cfg.settings.cost_currency === "CNY" ? "CNY" : "USD") as "USD" | "CNY"
-  const fx = useCostFx(costCurrency)
+  const fx = useCostFx(costCurrency, `${cfg.settings.fx_mode ?? "auto"}:${cfg.settings.fx_fixed_usd_cny ?? ""}`)
 
   const overview = useStatsQuery(
-    "stats-overview:" + JSON.stringify([range, platform, accounts]),
+    "stats-overview:" + JSON.stringify([range, platform, accounts, billingScope]),
     () => api.statsOverview(statsFilter()),
     () => demoOverview(rangeToMillis(range).start),
     platform,
     active && tab !== "calls",
+  )
+  const budgetStatus = useStatsQuery(
+    "pricing-budget-status:" + JSON.stringify([cfg.settings.global_budget_enabled, cfg.settings.global_budget_daily_usd, cfg.settings.global_budget_monthly_usd, cfg.settings.global_budget_warn_percent]),
+    () => api.pricingBudgetStatus(),
+    () => demoBudgetStatus(),
+    null,
+    active && tab === "analysis",
   )
   const activity = useStatsQuery(
     "stats-activity:" + JSON.stringify([platform, accounts]),
@@ -110,7 +130,7 @@ export function UsageView({ active, request, onOpenSession }: {
     active && tab === "analysis",
   )
   const calls = useStatsQuery<StatsCallPageDto>(
-    "stats-calls:" + JSON.stringify([range, platform, model, status, search, page]),
+    "stats-calls:" + JSON.stringify([range, platform, accounts, model, status, search, billingScope, page]),
     () => api.statsCalls(callsFilter(), page),
     () => demoCalls(Date.now(), page),
     platform,
@@ -130,6 +150,8 @@ export function UsageView({ active, request, onOpenSession }: {
   const resetCalls = () => {
     setRange(todayRange())
     setPlatform(null)
+    setAccounts([])
+    setBillingScope("all")
     setModel(null)
     setStatus(null)
     setSearch("")
@@ -139,6 +161,7 @@ export function UsageView({ active, request, onOpenSession }: {
   const clearFilters = () => {
     setPlatform(null)
     setAccounts([])
+    setBillingScope("all")
   }
 
   /** 下钻到调用明细：图表数据点按所在日期，模型 / 供应商按名称（画板 38「交互」） */
@@ -176,6 +199,26 @@ export function UsageView({ active, request, onOpenSession }: {
   const callRows = calls.data?.rows ?? []
   const selectedId = callRows.some((row) => row.id === selected) ? selected : callRows[0]?.id ?? null
 
+  // 方案 A 供应商下拉：保留同日期/账号口径下全平台计数，切到单平台后下拉仍可直切其余活跃平台
+  const scopeKey = JSON.stringify([range, accounts, billingScope])
+  const [scopeCounts, setScopeCounts] = useState<{ key: string; map: Map<string, number>; total: number } | null>(null)
+  useEffect(() => {
+    if (platform !== null || !overview.data) return
+    setScopeCounts({
+      key: scopeKey,
+      map: new Map(overview.data.providers.map((p) => [p.platform, p.requests])),
+      total: overview.data.requests,
+    })
+  }, [platform, overview.data, scopeKey])
+  const supplierCounts =
+    scopeCounts?.key === scopeKey
+      ? scopeCounts.map
+      : overview.data
+        ? new Map(overview.data.providers.map((p) => [p.platform, p.requests]))
+        : undefined
+  const supplierTotal = scopeCounts?.key === scopeKey ? scopeCounts.total : undefined
+  const supplierOptions = providerOptions(supplierCounts, supplierTotal)
+
   const dateButton = (calendar: boolean) => (
     <FilterTrigger
       aria-label="日期范围"
@@ -189,7 +232,7 @@ export function UsageView({ active, request, onOpenSession }: {
 
   return (
     <div className="flex w-full flex-col gap-3.5">
-      <PageTabs>
+      <PageTabs wide>
         <Tabs
           value={tab}
           onChange={setTab}
@@ -197,8 +240,11 @@ export function UsageView({ active, request, onOpenSession }: {
         />
       </PageTabs>
 
-      {tab === "calls" && (
-        <PageActions>
+      <PageActions>
+        <Button kind="ghost" size="sm" icon="sliders" onClick={() => openPricing(null, "all", "catalog")}>
+          预算与价目
+        </Button>
+        {tab === "calls" && (
           <Button
             kind="ghost"
             size="sm"
@@ -209,23 +255,62 @@ export function UsageView({ active, request, onOpenSession }: {
           >
             {exporting ? `导出 ${calls.data?.total_count ?? 0} 条…` : "导出 CSV"}
           </Button>
-        </PageActions>
-      )}
+        )}
+      </PageActions>
 
       {tab !== "calls" ? (
         <div className="flex flex-wrap items-center gap-2">
           {dateButton(true)}
-          <MenuFilter label="供应商筛选" trailingChevron value={platform ?? ALL} options={providerOptions()} onChange={(v) => changePlatform(v === ALL ? null : (v as PlatformId))} />
+          <MenuFilter
+            label="供应商筛选"
+            trailingChevron
+            active={platform !== null}
+            menuClassName="min-w-[240px]"
+            value={platform ?? ALL}
+            options={supplierOptions}
+            onChange={(v) => changePlatform(v === ALL ? null : (v as PlatformId))}
+          />
           <AccountFilter accounts={accountsFor(conn.connections, platform)} value={accounts} onChange={setAccounts} />
+          <MenuFilter
+            label="计费口径筛选"
+            trailingChevron
+            value={billingScope}
+            options={[
+              { value: "all", label: "全部口径" },
+              { value: "api", label: "仅 API 实付" },
+              { value: "subscription", label: "仅订阅等价" },
+            ]}
+            onChange={(v) => setBillingScope(v as "all" | "api" | "subscription")}
+          />
           <span className="min-w-0 flex-1" />
           <span className="text-xs text-jn-text-3">{range.end.slice(5).replace("-", "/")} · {zone}时区</span>
           <CurrencyPicker value={costCurrency} loading={fx.loading} onChange={(next) => void cfg.setCostCurrency(next)} hint={fx} />
-          <RefreshButton loading={overview.refreshing} onClick={() => { overview.refresh(); if (tab === "analysis") activity.refresh() }} />
+          <RefreshButton loading={overview.refreshing} onClick={() => { overview.refresh(); if (tab === "analysis") { activity.refresh(); budgetStatus.refresh() } }} />
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
           {dateButton(true)}
-          <MenuFilter label="供应商筛选" trailingChevron value={platform ?? ALL} options={providerOptions()} onChange={(v) => changePlatform(v === ALL ? null : (v as PlatformId))} />
+          <MenuFilter
+            label="供应商筛选"
+            trailingChevron
+            active={platform !== null}
+            menuClassName="min-w-[240px]"
+            value={platform ?? ALL}
+            options={supplierOptions}
+            onChange={(v) => changePlatform(v === ALL ? null : (v as PlatformId))}
+          />
+          <AccountFilter accounts={accountsFor(conn.connections, platform)} value={accounts} onChange={(next) => { setAccounts(next); setPage(1) }} />
+          <MenuFilter
+            label="计费口径筛选"
+            trailingChevron
+            value={billingScope}
+            options={[
+              { value: "all", label: "全部口径" },
+              { value: "api", label: "仅 API 实付" },
+              { value: "subscription", label: "仅订阅等价" },
+            ]}
+            onChange={(v) => { setBillingScope(v as "all" | "api" | "subscription"); setPage(1) }}
+          />
           <MenuFilter
             label="模型筛选"
             trailingChevron
@@ -252,9 +337,10 @@ export function UsageView({ active, request, onOpenSession }: {
             }}
             placeholder="搜索调用 ID / 会话 ID，按 Enter 查询"
             aria-label="搜索调用 ID 或会话 ID"
-            className="w-[260px] shrink-0 bg-jn-surface shadow-jn-surface"
+            className="w-[240px] shrink-0 bg-jn-surface shadow-jn-surface"
           />
           <span className="min-w-0 flex-1" />
+          <CurrencyPicker value={costCurrency} loading={fx.loading} onChange={(next) => void cfg.setCostCurrency(next)} hint={fx} />
           <span className="hidden text-xs text-jn-text-3 xl:inline">时区 · {zone} {utcOffsetLabel()}</span>
           <ResetButton onClick={resetCalls} />
           <RefreshButton loading={calls.refreshing} onClick={calls.refresh} />
@@ -268,15 +354,47 @@ export function UsageView({ active, request, onOpenSession }: {
       <ContentTransition identity={`${tab}-${!!current.data}`} className="flex flex-col gap-3.5">
       {tab === "calls" ? (
         calls.data ? (
-          <CallsPanel data={calls.data} selectedId={selectedId} fx={fx} onSelect={setSelected} onPage={setPage} onOpenSession={onOpenSession} />
+          <CallsPanel
+            data={calls.data}
+            selectedId={selectedId}
+            fx={fx}
+            onSelect={setSelected}
+            onPage={setPage}
+            onOpenSession={onOpenSession}
+            onOpenPricing={(modelName) => openPricing(modelName, modelName ? "all" : "unpriced")}
+          />
         ) : !calls.error && <LoadingCard />
       ) : overview.data ? (
         overview.data.requests === 0 ? (
-          <EmptyCard onClear={platform || accounts.length ? clearFilters : undefined} />
+          <EmptyCard onClear={platform || accounts.length || billingScope !== "all" ? clearFilters : undefined} />
         ) : tab === "overview" ? (
-          <OverviewPanel data={overview.data} isToday={isToday} fx={fx} onDrillBucket={drillBucket} onDrillModel={drillModel} onOpenSession={onOpenSession} />
+          <OverviewPanel
+            data={overview.data}
+            isToday={isToday}
+            fx={fx}
+            onDrillBucket={drillBucket}
+            onDrillModel={drillModel}
+            onOpenSession={onOpenSession}
+            onOpenPricing={() => openPricing(null, "unpriced")}
+          />
         ) : (
-          <AnalysisPanel data={overview.data} activity={activity.data} fx={fx} activityError={activity.error} onDrillModel={drillModel} onDrillProvider={drillProvider} />
+          <AnalysisPanel
+            data={overview.data}
+            activity={activity.data}
+            fx={fx}
+            budgetStatus={budgetStatus.data}
+            billingScope={billingScope}
+            activityError={activity.error}
+            onDrillModel={drillModel}
+            onDrillProvider={drillProvider}
+            onDrillConnection={(connectionId) => {
+              setAccounts([connectionId ?? UNATTRIBUTED_ACCOUNT])
+              setPage(1)
+              setTab("calls")
+            }}
+            onOpenBudgets={() => openPricing(null, "all", "budgets")}
+            onOpenPricingForModel={(modelName) => openPricing(modelName, "unpriced", "catalog")}
+          />
         )
       ) : !overview.error && <LoadingCard layout="stats" />}
       </ContentTransition>
@@ -291,6 +409,15 @@ export function UsageView({ active, request, onOpenSession }: {
           }}
         />
       )}
+      <PricingDialog
+        open={pricingOpen}
+        onOpenChange={setPricingOpen}
+        connections={conn.connections}
+        fx={fx}
+        initialTab={pricingTarget.tab}
+        initialModel={pricingTarget.model}
+        initialFilter={pricingTarget.filter}
+      />
     </div>
   )
 }
@@ -301,11 +428,11 @@ export function UsageView({ active, request, onOpenSession }: {
 function CurrencyPicker({ value, loading, hint, onChange }: {
   value: "USD" | "CNY"
   loading: boolean
-  hint: { rate: number; asOf: string; fallback: boolean }
+  hint: { rate: number; asOf: string; fallback: boolean; fixed?: boolean }
   onChange: (next: "USD" | "CNY") => void
 }) {
   const title = value === "CNY"
-    ? `1 USD ≈ ${hint.rate.toFixed(3)} CNY · ${hint.asOf}${hint.fallback ? "（离线参考价）" : ""}`
+    ? `1 USD = ${hint.rate.toFixed(3)} CNY · ${hint.asOf}${hint.fallback ? "（离线参考价）" : ""}`
     : "费用按美元显示（基准币种）"
   return (
     <span className="inline-flex items-center gap-1.5" title={title}>
@@ -320,8 +447,8 @@ function CurrencyPicker({ value, loading, hint, onChange }: {
         ]}
       />
       {value === "CNY" && (
-        <span className={hint.fallback ? "text-[11px] text-jn-danger" : "text-[11px] text-jn-text-3"}>
-          {loading ? "汇率…" : hint.fallback ? "参考" : `≈${hint.rate.toFixed(2)}`}
+        <span className={hint.fallback ? "text-[11px] text-jn-danger" : hint.fixed ? "text-[11px] font-medium text-jn-primary-ink" : "text-[11px] text-jn-text-3"}>
+          {loading ? "汇率…" : hint.fallback ? "参考" : hint.fixed ? `固定 ${hint.rate.toFixed(2)}` : `≈${hint.rate.toFixed(2)}`}
         </span>
       )}
     </span>

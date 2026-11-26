@@ -157,7 +157,7 @@ const TONE: Record<ToastTone, { icon: IconName; className: string }> = {
   danger: { icon: "close", className: "bg-jn-danger-soft text-jn-danger" },
 }
 
-/** 右下角公共通知区（R1-C）；卡片能接收指针，其余区域继续透传给页面。 */
+/** 右上角公共通知区；卡片能接收指针，其余区域继续透传给页面。 */
 export function ToastViewport({ className }: { className?: string }) {
   const toast = useToast()
   const state = useContext(ToastStateContext)
@@ -216,13 +216,13 @@ export function ToastViewport({ className }: { className?: string }) {
     <div
       ref={viewport}
       popover={dialog ? "manual" : undefined}
-      style={dialog ? { position: "fixed", bottom: Math.max(20, window.innerHeight - (bounds?.bottom ?? window.innerHeight) + 20), right: Math.max(20, window.innerWidth - (bounds?.right ?? window.innerWidth) + 20), left: "auto", top: "auto", margin: 0, border: 0, background: "transparent" } : undefined}
+      style={dialog ? { position: "fixed", top: (bounds?.top ?? 0) + 110, right: window.innerWidth - (bounds?.right ?? window.innerWidth) + 20, left: "auto", bottom: "auto", margin: 0, border: 0, background: "transparent" } : undefined}
       role="region"
       aria-label="操作通知"
       aria-live="polite"
       aria-relevant="additions text"
       className={cn(
-        "pointer-events-none absolute right-5 bottom-5 z-[60] flex max-h-[calc(100dvh-110px)] w-[360px] max-w-[calc(100%-32px)] flex-col-reverse gap-2.5 bg-transparent p-1 shadow-none",
+        "pointer-events-none absolute right-5 top-[110px] z-[60] flex max-h-[calc(100dvh-130px)] w-[360px] max-w-[calc(100%-32px)] flex-col gap-2.5 bg-transparent p-1 shadow-none",
         scrollable ? "overflow-y-auto overscroll-contain" : "overflow-visible",
         className,
       )}

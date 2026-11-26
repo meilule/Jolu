@@ -32,7 +32,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::db::{RequestRecord, Store};
 use crate::session_threads::SessionItem;
+use crate::source_store::{self, Record};
 
 /// 一个会话文件的首行 `session` 事件。
 #[derive(Debug, Deserialize)]
@@ -49,6 +51,8 @@ struct SessionEvent {
 #[derive(Debug, Deserialize)]
 struct MessageEvent {
     #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
     message: Option<InnerMessage>,
     #[serde(default)]
     timestamp: Option<String>,
@@ -58,6 +62,8 @@ struct MessageEvent {
 struct InnerMessage {
     #[serde(default)]
     role: String,
+    #[serde(default)]
+    model: Option<String>,
     #[serde(default)]
     content: serde_json::Value,
     #[serde(default)]
@@ -74,6 +80,30 @@ struct Usage {
     cache_read: Option<i64>,
     #[serde(default, rename = "cacheWrite")]
     cache_write: Option<i64>,
+    #[serde(default)]
+    reasoning: Option<i64>,
+    #[serde(default, rename = "totalTokens")]
+    total_tokens: Option<i64>,
+}
+
+/// 判定 Pi 的 `usage.input` 是否包含缓存读取。
+/// 实测 Pi (2026-11-26) 样本：`input=6641, output=388, cacheRead=5888, totalTokens=12917`，
+/// `6641 + 388 + 5888 = 12917`，明确为 `excludes_cache`（不能再扣一次 `cacheRead`）。
+/// 只有当 `totalTokens` 明确等于 `input + output + cacheWrite`（或旧格式缺 `totalTokens` 且 `input >= cacheRead`）时按 `includes_cache` 处理。
+fn pi_input_includes_cache(usage: &Usage) -> bool {
+    match (usage.input, usage.output, usage.cache_read, usage.total_tokens) {
+        (Some(i), Some(o), Some(r), Some(t)) if r > 0 => {
+            let excl = i + o + r + usage.cache_write.unwrap_or(0);
+            let incl = i + o + usage.cache_write.unwrap_or(0);
+            if excl == t {
+                false
+            } else {
+                incl == t
+            }
+        }
+        (Some(i), _, Some(r), None) if r > 0 => i >= r,
+        _ => false,
+    }
 }
 
 /// Pi 配置根目录：`PI_CODING_AGENT_DIR` 覆盖，否则 `~/.pi/agent`。
@@ -162,10 +192,13 @@ fn scan(path: &Path) -> Option<(String, Option<String>, Totals)> {
                 if message.role == "assistant" {
                     totals.requests += 1;
                 }
-                // `input` 可能已含缓存读取：扣掉才是不重复的新输入
                 if let Some(input) = usage.input {
-                    let cache = usage.cache_read.unwrap_or(0);
-                    sum.0 += (input - cache).max(0);
+                    let fresh = if pi_input_includes_cache(&usage) {
+                        (input - usage.cache_read.unwrap_or(0)).max(0)
+                    } else {
+                        input
+                    };
+                    sum.0 += fresh;
                     known.0 = true;
                 }
                 if let Some(v) = usage.output {
@@ -255,6 +288,194 @@ pub(crate) fn sessions(home: &Path, since: Option<i64>) -> Vec<SessionItem> {
     out
 }
 
+fn file_stamp(path: &Path) -> (i64, i64) {
+    let Ok(meta) = std::fs::metadata(path) else { return (0, 0) };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    (meta.len() as i64, mtime)
+}
+
+fn save_stamp(conn: &rusqlite::Connection, key: &str, size: i64, time: i64) -> rusqlite::Result<()> {
+    conn.prepare_cached(
+        "INSERT INTO scan_state(path,offset,mtime,parser_initialized) VALUES(?1,?2,?3,1)
+         ON CONFLICT(path) DO UPDATE SET offset=?2,mtime=?3,parser_initialized=1",
+    )?
+    .execute(rusqlite::params![key, size, time])?;
+    Ok(())
+}
+
+struct ParsedPiFile {
+    session_id: String,
+    cwd: Option<String>,
+    title: Option<String>,
+    records: Vec<Record>,
+}
+
+fn parse_usage_file(path: &Path) -> Option<ParsedPiFile> {
+    let text = crate::steady::read_to_string(path).ok()?;
+    let mut session_id: Option<String> = None;
+    let mut cwd: Option<String> = None;
+    let mut title: Option<String> = None;
+    let mut prev_turn_ts: Option<i64> = None;
+    let mut records = Vec::new();
+    for (line_idx, line) in text.lines().enumerate() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        match value.get("type").and_then(|t| t.as_str()) {
+            Some("session") => {
+                if let Ok(event) = serde_json::from_value::<SessionEvent>(value) {
+                    if !event.id.trim().is_empty() {
+                        session_id = Some(event.id);
+                    }
+                    cwd = event.cwd.filter(|c| !c.trim().is_empty());
+                }
+            }
+            Some("message") => {
+                let Ok(event) = serde_json::from_value::<MessageEvent>(value) else { continue };
+                let Some(message) = event.message else { continue };
+                let ts = ts_of(event.timestamp.as_deref());
+                if message.role == "user" {
+                    if title.is_none() {
+                        title = first_text(&message.content);
+                    }
+                    prev_turn_ts = ts;
+                    continue;
+                }
+                if message.role != "assistant" {
+                    if ts.is_some() {
+                        prev_turn_ts = ts;
+                    }
+                    continue;
+                }
+                let Some(usage) = message.usage else { continue };
+                let Some(ts) = ts else { continue };
+                let Some(sid) = session_id.as_ref() else { continue };
+                let input = usage.input.filter(|v| *v >= 0);
+                let output = usage.output.filter(|v| *v >= 0);
+                let cache_read = usage.cache_read.filter(|v| *v >= 0);
+                let cache_write = usage.cache_write.filter(|v| *v >= 0);
+                let reasoning = usage.reasoning.filter(|v| *v >= 0);
+                if [input, output, cache_read, cache_write, usage.total_tokens].iter().all(Option::is_none) {
+                    continue;
+                }
+                let includes_cache = pi_input_includes_cache(&usage);
+                let semantics = if includes_cache { "includes_cache" } else { "excludes_cache" };
+                let total = usage.total_tokens.filter(|v| *v >= 0).or_else(|| {
+                    input.zip(output).map(|(i, o)| {
+                        if includes_cache {
+                            i + o + cache_write.unwrap_or(0)
+                        } else {
+                            i + o + cache_read.unwrap_or(0) + cache_write.unwrap_or(0)
+                        }
+                    })
+                });
+                let duration_ms = prev_turn_ts
+                    .take()
+                    .and_then(|start| ts.checked_sub(start))
+                    .filter(|d| (100..=3_600_000).contains(d));
+                let dedup_suffix = event
+                    .id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .unwrap_or_else(|| format!("line-{line_idx}-{ts}"));
+                records.push(Record {
+                    request: RequestRecord {
+                        platform: "pi".into(),
+                        source: "native:pi:agent".into(),
+                        dedup_key: format!("{sid}:{dedup_suffix}"),
+                        session_id: Some(format!("pi:{sid}")),
+                        ts,
+                        model: message.model.filter(|m| !m.trim().is_empty()),
+                        input_tokens: input,
+                        output_tokens: output,
+                        cache_read_tokens: cache_read,
+                        cache_write_tokens: cache_write,
+                        total_tokens: total,
+                        effort: None,
+                    },
+                    input_semantics: semantics,
+                    credits: None,
+                    original_credits: None,
+                    billable: None,
+                    context_ratio: None,
+                    reasoning,
+                    tool: None,
+                    duration_ms,
+                    first_token_ms: None,
+                });
+            }
+            _ => {}
+        }
+    }
+    Some(ParsedPiFile {
+        session_id: session_id?,
+        cwd,
+        title,
+        records,
+    })
+}
+
+/// 增量将 Pi 用量与会话元数据写入 `requests` / `sessions`（P2）。
+pub(crate) fn scan_usage(db: &mut impl Store, home: &Path) -> Result<(usize, Vec<String>), String> {
+    let root = pi_agent_dir(home).join("sessions");
+    let Ok(dirs) = std::fs::read_dir(&root) else {
+        return Ok((0, Vec::new()));
+    };
+    let mut changed = 0usize;
+    let errors = Vec::new();
+    for entry in dirs.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Ok(files) = std::fs::read_dir(&dir) else { continue };
+        for file in files.flatten() {
+            let path = file.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let stamp = file_stamp(&path);
+            let key = format!("pi-usage:{}", path.to_string_lossy());
+            if db.write(|conn| crate::db::get_scan_state(conn, &key) == Some(stamp)) {
+                continue;
+            }
+            let Some(parsed) = parse_usage_file(&path) else {
+                let _ = db.write(|conn| save_stamp(conn, &key, stamp.0, stamp.1));
+                continue;
+            };
+            let prefixed_session = format!("pi:{}", parsed.session_id);
+            let n = db
+                .write(|conn| -> Result<usize, String> {
+                    let tx = conn.transaction().map_err(|e| e.to_string())?;
+                    let written = source_store::write(&tx, &parsed.records).map_err(|e| e.to_string())?;
+                    if let Some(title) = parsed.title.as_deref() {
+                        crate::db::upsert_session_title(&tx, "pi", &prefixed_session, title)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    if let Some(cwd) = parsed.cwd.as_deref() {
+                        crate::db::set_session_cwd(&tx, "pi", &prefixed_session, cwd)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    if let Some(last_ts) = parsed.records.iter().map(|r| r.request.ts).max() {
+                        crate::db::set_session_activity(&tx, "pi", &prefixed_session, "done", last_ts)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    save_stamp(&tx, &key, stamp.0, stamp.1).map_err(|e| e.to_string())?;
+                    tx.commit().map_err(|e| e.to_string())?;
+                    Ok(written)
+                })
+                .map_err(|e| e.to_string())?;
+            changed += n;
+        }
+    }
+    Ok((changed, errors))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,6 +541,55 @@ mod tests {
         let list = sessions(&root, None);
         assert_eq!(list.len(), 1, "只有一个有 session 事件的会话");
         assert_eq!(list[0].session_id, "pi:sess-pi-1");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn scan_usage_detects_real_excludes_cache_semantics_without_double_subtraction() {
+        let root = std::env::temp_dir().join(format!("jolu-pi-usage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join(".pi").join("agent").join("sessions").join("--proj--");
+        std::fs::create_dir_all(&dir).unwrap();
+        // 实测 Pi 样本：6641 + 388 + 5888 = 12917，证明 input 不含 cacheRead（excludes_cache）
+        std::fs::write(
+            dir.join("2026-11-26T00-00-00-000Z_real.jsonl"),
+            [
+                r#"{"type":"session","version":3,"id":"pi-real-1","timestamp":"2026-11-26T00:00:00.000Z","cwd":"D:\\develop\\Jolu"}"#,
+                r#"{"type":"message","id":"u1","timestamp":"2026-11-26T00:00:01.000Z","message":{"role":"user","content":"检查用量"}}"#,
+                r#"{"type":"message","id":"a1","timestamp":"2026-11-26T00:00:06.000Z","message":{"role":"assistant","model":"deepseek-v4-flash","usage":{"input":6641,"output":388,"cacheRead":5888,"cacheWrite":0,"totalTokens":12917}}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let mut db = crate::db::open(Path::new(":memory:")).unwrap();
+        let (n, errs) = scan_usage(&mut db, &root).unwrap();
+        assert!(errs.is_empty());
+        assert_eq!(n, 1);
+        assert_eq!(scan_usage(&mut db, &root).unwrap().0, 0);
+
+        let start = chrono::DateTime::parse_from_rfc3339("2026-11-25T00:00:00Z").unwrap().timestamp_millis();
+        let end = chrono::DateTime::parse_from_rfc3339("2026-11-27T00:00:00Z").unwrap().timestamp_millis();
+        let ov = crate::usage_stats::overview(
+            &db,
+            &crate::usage_stats::StatsFilter { start, end, platform: Some("pi".into()), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(ov.requests, 1);
+        assert_eq!(ov.tokens.fresh_input, Some(6641), "excludes_cache 不应误扣 cacheRead");
+        assert_eq!(ov.tokens.cache_read, Some(5888));
+        assert_eq!(ov.tokens.output, Some(388));
+        assert_eq!(ov.tokens.total, Some(12917));
+        let expected_rate = 5888.0 / (6641.0 + 5888.0);
+        assert!((ov.cache_hit_rate.unwrap() - expected_rate).abs() < 1e-6);
+
+        let page = crate::usage_stats::calls(
+            &db,
+            &crate::usage_stats::StatsFilter { start, end, platform: Some("pi".into()), ..Default::default() },
+            1,
+        )
+        .unwrap();
+        assert_eq!(page.rows[0].duration_ms, Some(5_000));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

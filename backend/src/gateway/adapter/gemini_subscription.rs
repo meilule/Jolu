@@ -201,9 +201,13 @@ async fn forward_at(
         let deps = deps.clone();
         let entry = entry.clone();
         let model = model.to_string();
+        let mut first_token_ms: Option<i64> = None;
         return sse_response(relay(response, move |inner, usage| {
+            if inner.is_some() && first_token_ms.is_none() {
+                first_token_ms = Some(started.elapsed().as_millis() as i64);
+            }
             if let Some(usage) = usage {
-                record(&deps, &entry, &model, usage, started);
+                record(&deps, &entry, &model, usage, started, first_token_ms);
             }
             inner.map(|v| vec![v]).unwrap_or_default()
         }));
@@ -218,7 +222,7 @@ async fn forward_at(
     if let Some(id) = value.get("traceId") {
         result["responseId"] = id.clone();
     }
-    record(&deps, entry, model, &json!({"id": result["responseId"], "usageMetadata": result["usageMetadata"]}), started);
+    record(&deps, entry, model, &json!({"id": result["responseId"], "usageMetadata": result["usageMetadata"]}), started, None);
     Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "application/json")
@@ -253,16 +257,17 @@ async fn call(deps: &Arc<ProxyDeps>, entry: &PoolEntry, model: &str, request: Va
 }
 
 /// 用量入库（Gemini 的 usageMetadata 换成通用字段）。
-fn record(deps: &Arc<ProxyDeps>, entry: &PoolEntry, model: &str, response: &Value, started: std::time::Instant) {
+fn record(deps: &Arc<ProxyDeps>, entry: &PoolEntry, model: &str, response: &Value, started: std::time::Instant, first_token_ms: Option<i64>) {
     let usage = &response["usageMetadata"];
     if !usage.is_object() {
         return;
     }
-    crate::gateway::subscription::record_usage(
+    crate::gateway::subscription::record_usage_with_timing(
         deps,
         entry,
         &json!({"id":response["id"],"model":model,"usage":{"input_tokens":usage["promptTokenCount"],"output_tokens":usage["candidatesTokenCount"],"total_tokens":usage["totalTokenCount"],"cache_read_input_tokens":usage["cachedContentTokenCount"]}}),
         started.elapsed().as_millis() as i64,
+        first_token_ms,
     );
 }
 
@@ -352,11 +357,17 @@ async fn forward_chat_at(deps: Arc<ProxyDeps>, entry: &PoolEntry, model: &str, b
         let deps = deps.clone();
         let entry = entry.clone();
         let model = model.to_string();
+        let mut first_token_ms: Option<i64> = None;
         let stream = relay(response, move |inner, usage| match inner {
-            Some(inner) => chunker.feed(&inner),
+            Some(inner) => {
+                if first_token_ms.is_none() {
+                    first_token_ms = Some(started.elapsed().as_millis() as i64);
+                }
+                chunker.feed(&inner)
+            }
             None => {
                 if let Some(usage) = usage {
-                    record(&deps, &entry, &model, usage, started);
+                    record(&deps, &entry, &model, usage, started, first_token_ms);
                 }
                 chunker.finish()
             }
@@ -372,7 +383,7 @@ async fn forward_chat_at(deps: Arc<ProxyDeps>, entry: &PoolEntry, model: &str, b
     let Some(result) = value.get("response").filter(|v| v.is_object()) else {
         return error_response(StatusCode::BAD_GATEWAY, "Gemini 未返回模型响应");
     };
-    record(&deps, entry, model, &json!({"id": value["traceId"], "usageMetadata": result["usageMetadata"]}), started);
+    record(&deps, entry, model, &json!({"id": value["traceId"], "usageMetadata": result["usageMetadata"]}), started, None);
     let reply = super::gemini_chat::gemini_to_chat(result, model, &id);
     Response::builder()
         .status(StatusCode::OK)

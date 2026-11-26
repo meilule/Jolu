@@ -8,10 +8,10 @@ pub(crate) fn take_main_intent() -> Option<MainIntent> {
     MAIN_INTENT.lock().ok().and_then(|mut intent| intent.take())
 }
 
-/// 灵动岛上的「打开模型入口」「修复」：打开主窗口并切到对应页面。只接受已知页面。
+/// 灵动岛上的快捷跳转：打开主窗口并切到对应页面。只接受已知页面。
 #[tauri::command]
 pub(crate) fn open_main_section(app: tauri::AppHandle, section: String) -> Result<(), String> {
-    if !matches!(section.as_str(), "gateway" | "island" | "connections") {
+    if !matches!(section.as_str(), "gateway" | "island" | "connections" | "checkin" | "sessions" | "automation") {
         return Err(format!("未知的主窗口页面：{section}"));
     }
     show_main_with_intent(&app, MainIntent::Settings { section });
@@ -34,6 +34,14 @@ pub(crate) fn open_main_session(app: tauri::AppHandle, platform: String, session
 pub(crate) fn open_main_usage(app: tauri::AppHandle, platform: Option<String>, connection_id: Option<String>) -> Result<(), String> {
     let clean = |value: Option<String>| value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     show_main_with_intent(&app, MainIntent::Usage { platform: clean(platform), connection_id: clean(connection_id) });
+    Ok(())
+}
+
+/// 灵动岛快捷动作「建自动化」（R2-I-06）：打开主窗口自动化页并唤起新建任务弹窗。
+#[tauri::command]
+pub(crate) fn open_main_automation_new(app: tauri::AppHandle, platform: Option<String>, session_id: Option<String>) -> Result<(), String> {
+    let clean = |value: Option<String>| value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    show_main_with_intent(&app, MainIntent::AutomationNew { platform: clean(platform), session_id: clean(session_id) });
     Ok(())
 }
 

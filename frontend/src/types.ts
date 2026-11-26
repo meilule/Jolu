@@ -1,6 +1,6 @@
 /** 平台、连接、来源、模型的区分见需求文档 §7.2 —— 四者是不同层级，不可混用 */
 /** 已知平台（与 `lib/platformCatalog.json` 一致）；需要枚举全部平台的地方用这个常量 */
-export const KNOWN_PLATFORM_IDS = ["claude", "codex", "gemini", "grok", "opencode", "zcode", "trae", "qoder", "workbuddy", "custom"] as const
+export const KNOWN_PLATFORM_IDS = ["claude", "codex", "gemini", "grok", "opencode", "zcode", "trae", "qoder", "workbuddy", "ollama", "custom", "antigravity", "kimi", "pi", "dsh"] as const
 export type KnownPlatformId = (typeof KNOWN_PLATFORM_IDS)[number]
 /**
  * 平台 id（4.3 放宽为字符串）：新增供应商只要在注册表登记描述符，不必再改这个联合类型。
@@ -67,6 +67,13 @@ export interface Connection {
   startChannel?: "start-plan" | "coding-plan" | null
   /** 模型入口的持久化菜单 id 前缀（`<slug>/<model>`）；改名不变 */
   slug?: string | null
+  /** 连接级计费口径：auto（按连接类型自动）/ api / subscription / free */
+  billingMode?: "auto" | "api" | "subscription" | "free"
+  /** 连接级价格倍率（缩放目录与全局基准价，不影响该连接专属覆盖价） */
+  priceMultiplier?: number
+  budgetDailyUsd?: number | null
+  budgetMonthlyUsd?: number | null
+  budgetAction?: "alert" | "block"
 }
 
 /** 额度窗口是一组可变窗口，不是固定的两个字段（§7.4） */

@@ -161,6 +161,8 @@ pub fn parse(usage: &Value, source: &str, session: &str, id: &str, ts: i64) -> O
         context_ratio: None,
         reasoning: None,
         tool: None,
+        duration_ms: None,
+        first_token_ms: None,
     })
 }
 

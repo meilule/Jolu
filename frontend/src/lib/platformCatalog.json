@@ -118,6 +118,18 @@
     "limitation": "国内版与国际版分别读取原工具登录，或通过系统默认浏览器独立授权查询；不跨账号回退，企业私有域名和未知认证格式明确不支持"
   },
   {
+    "id": "ollama",
+    "name": "Ollama",
+    "availability": "available",
+    "capabilities": [
+      "auth_connection",
+      "api_connection",
+      "subscription_quota",
+      "credits"
+    ],
+    "limitation": "订阅额度读取本机 Ollama 的官方登录与 /api/balance；Cloud API Key 使用 https://ollama.com/v1。"
+  },
+  {
     "id": "custom",
     "name": "自定义供应商",
     "availability": "available",
@@ -126,5 +138,49 @@
       "gateway_balance"
     ],
     "limitation": "按配置的服务地址独立查询额度、套餐与余额；支持已接入的编程套餐、官方余额和 sub2api / new-api / one-api 网关接口，缺失字段明确显示未提供"
+  },
+  {
+    "id": "antigravity",
+    "name": "Antigravity",
+    "availability": "available",
+    "capabilities": [
+      "local_sessions",
+      "realtime_delta",
+      "cost_estimate"
+    ],
+    "limitation": "只读采集 Antigravity CLI（官方目录与 CCS 托管目录）的本地会话用量、首字与耗时；不读取对话正文或凭证"
+  },
+  {
+    "id": "kimi",
+    "name": "Kimi Code",
+    "availability": "available",
+    "capabilities": [
+      "local_sessions",
+      "realtime_delta",
+      "cost_estimate"
+    ],
+    "limitation": "只读采集 Kimi Code 本地会话日志用量；不读取对话正文或凭证"
+  },
+  {
+    "id": "pi",
+    "name": "Pi",
+    "availability": "available",
+    "capabilities": [
+      "local_sessions",
+      "realtime_delta",
+      "cost_estimate"
+    ],
+    "limitation": "只读采集 Pi 本地会话日志用量；不读取对话正文或凭证"
+  },
+  {
+    "id": "dsh",
+    "name": "DeepSeek Harness",
+    "availability": "available",
+    "capabilities": [
+      "local_sessions",
+      "realtime_delta",
+      "cost_estimate"
+    ],
+    "limitation": "只读采集 DeepSeek Harness 本地会话（含子代理）用量；不读取对话正文或凭证"
   }
 ]

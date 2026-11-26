@@ -384,6 +384,7 @@ export function routeCommand(cmd: string, args: Args): unknown {
     case "open_main_section":
     case "open_main_session":
     case "open_main_usage":
+    case "open_main_automation_new":
     case "open_zcode_client": return null
     case "retry_startup": return null
 

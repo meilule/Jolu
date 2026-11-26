@@ -9,16 +9,20 @@ import { isUsageChange, throttleTrailing, USAGE_REFRESH_THROTTLE_MS } from "./us
 export function onUsageChanged(platform: string, refresh: () => void, wait = USAGE_REFRESH_THROTTLE_MS): () => void {
   const throttled = throttleTrailing(refresh, wait)
   let stopped = false
-  let off: (() => void) | null = null
+  const offs: Array<() => void> = []
+  const keep = (unlisten: () => void) => {
+    if (stopped) unlisten()
+    else offs.push(unlisten)
+  }
   void listenEvent(EVENTS.LIVE_USAGE, (usage) => {
     if (!stopped && isUsageChange(usage, platform)) throttled()
-  }).then((unlisten) => {
-    if (stopped) unlisten()
-    else off = unlisten
-  }).catch(() => {})
+  }).then(keep).catch(() => {})
+  void listenEvent(EVENTS.PRICING_CHANGED, () => {
+    if (!stopped) refresh()
+  }).then(keep).catch(() => {})
   return () => {
     stopped = true
     throttled.cancel()
-    off?.()
+    offs.forEach((off) => off())
   }
 }

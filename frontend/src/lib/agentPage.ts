@@ -16,6 +16,7 @@ export const AGENT_PLATFORM: Readonly<Record<string, string>> = {
   "claude-code": "claude",
   codex: "codex",
   gemini: "gemini",
+  antigravity: "antigravity",
   opencode: "opencode",
   zcode: "zcode",
   kimi: "kimi",
@@ -125,6 +126,7 @@ const AVAILABLE_SUBTITLES: Readonly<Record<string, string>> = {
   "claude-code": "用它自己的登录",
   codex: "用它自己的登录",
   gemini: "用它自己的登录",
+  antigravity: "用它自己的登录",
   opencode: "用它自己的 API Key",
   zcode: "用 ZCode 自己的账号",
   kimi: "用它自己的账号",
@@ -138,7 +140,7 @@ const AVAILABLE_SUBTITLES: Readonly<Record<string, string>> = {
 }
 
 function wiringName(agent: string): string {
-  return ({ "claude-code": "Claude Code", codex: "Codex", gemini: "Gemini CLI", opencode: "OpenCode", zcode: "ZCode", kimi: "Kimi CLI",
+  return ({ "claude-code": "Claude Code", antigravity: "Antigravity CLI", codex: "Codex", gemini: "Gemini CLI", opencode: "OpenCode", zcode: "ZCode", kimi: "Kimi CLI",
     pencil: "Pencil", dsh: "DeepSeek Harness", copilot: "Copilot CLI", vscode: "VS Code",
     agy: "Antigravity CLI", atomcode: "AtomCode", ante: "Ante", jcode: "jcode", minimax: "MiniMax Code",
     empryo: "Empryo", commandcode: "Command Code", muse: "Muse", mothx: "Mothx", devin: "Devin",
@@ -363,6 +365,12 @@ export function wireExplanation(agent: string): { icon: "file" | "shield" | "und
         { icon: "file", text: "在 ~/.qwen/settings.json 的 modelProviders.openai 里追加网关模型，并把默认模型指向它" },
         { icon: "shield", text: "你原有的 provider 与默认模型原样保留（你的条目留在前面）；密钥单独放在 env 里" },
         undo,
+      ]
+    case "antigravity":
+      return [
+        { icon: "file", text: "在 ~/.gemini/antigravity-cli/settings.json 里写入 jolu/ 自定义模型并选中，同时在同目录生成带网关地址与令牌的 jolu-agy.cmd 启动脚本" },
+        { icon: "shield", text: "你原有的自定义模型、modelProvider 与工作区信任等配置先存快照，原样保留；用 jolu-agy.cmd 启动即可经模型路由转发" },
+        { icon: "undo", text: "断开时还原 model / modelProvider / customModelsConfig 并删除 jolu-agy.cmd；接入后你自己改过的值不会被还原" },
       ]
     case "workbuddy":
       return [

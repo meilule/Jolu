@@ -505,7 +505,14 @@ enum Ended {
 }
 
 /// 从客户端的输出里读出一段回复（到 message_stop），改好名字后发给 `tx`。
-async fn pump(run: &Run, model: &str, tx: &mpsc::Sender<Result<Value, String>>, usage: &mut Map<String, Value>) -> Ended {
+async fn pump(
+    run: &Run,
+    model: &str,
+    tx: &mpsc::Sender<Result<Value, String>>,
+    usage: &mut Map<String, Value>,
+    started: std::time::Instant,
+    first_token_ms: &mut Option<i64>,
+) -> Ended {
     let mut events = run.events.lock().await;
     let mut tracked: HashMap<u64, (Issued, String)> = HashMap::new();
     let mut issued: Vec<Issued> = Vec::new();
@@ -561,6 +568,9 @@ async fn pump(run: &Run, model: &str, tx: &mpsc::Sender<Result<Value, String>>, 
                     _ => {}
                 }
                 let stop = event["type"] == "message_stop";
+                if first_token_ms.is_none() && matches!(event["type"].as_str(), Some("content_block_start" | "content_block_delta")) {
+                    *first_token_ms = Some(started.elapsed().as_millis() as i64);
+                }
                 if tx.send(Ok(event)).await.is_err() {
                     // 调用方断开：本段作废
                     return Ended::Failed;
@@ -748,11 +758,18 @@ pub(super) async fn forward(
     let pump_entry = entry.clone();
     tokio::spawn(async move {
         let mut usage = Map::new();
-        let ended = pump(&pump_run, &pump_model, &tx, &mut usage).await;
+        let mut first_token_ms = None;
+        let ended = pump(&pump_run, &pump_model, &tx, &mut usage, started, &mut first_token_ms).await;
         drop(tx);
         if isolated && !usage.is_empty() {
             let record = json!({"model": pump_model, "usage": usage});
-            crate::gateway::subscription::record_usage(&pump_deps, &pump_entry, &record, started.elapsed().as_millis() as i64);
+            crate::gateway::subscription::record_usage_with_timing(
+                &pump_deps,
+                &pump_entry,
+                &record,
+                started.elapsed().as_millis() as i64,
+                first_token_ms,
+            );
         }
         match ended {
             Ended::Parked(issued) => {

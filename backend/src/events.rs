@@ -42,16 +42,18 @@ pub(crate) const TRAY_SUMMARY_CLOSE: &str = "tray-summary-close";
 pub(crate) const STARTUP_ERROR: &str = "startup-error";
 /// 主窗口当前在看哪个连接（4.2b #9「跟随主窗口」）；载荷见 `commands::island_window::MainContext`
 pub(crate) const MAIN_CONTEXT: &str = "main-context";
+/// 模型价目覆盖、同价映射、连接倍率或 models.dev 价格更新时发出，前端立刻刷新用量与会话费用。
+pub(crate) const PRICING_CHANGED: &str = "pricing-changed";
 
 /// 全部事件名（测试用来与前端表核对）。
 #[cfg(test)]
-pub(crate) const ALL: [&str; 29] = [
+pub(crate) const ALL: [&str; 30] = [
     SETTINGS_CHANGED, CONNECTIONS_CHANGED, REFRESH_REQUESTED, COLLECTION_STATUS, LIVE_USAGE,
     GATEWAY_ROUTE_START, GATEWAY_ROUTE, GATEWAY_WIRING_CHANGED, GATEWAY_CATALOG_CHANGED,
     AUTOMATION_CHANGED, WARMUP_FINISHED, DAILY_CHECKIN_CHANGED, LIBRARY_CHANGED, PRIVACY_FIRST_MASK,
     HANDOFF_CHAT, DOCK_CHANGED, DOCK_HINT, ISLAND_POINTER, ISLAND_BLUR, ISLAND_REFRESH, MAIN_INTENT,
     APP_NOTICE, UPDATE_DOWNLOAD_PROGRESS, MENU_REOPEN, MENU_STATE_CHANGED, TRAY_SUMMARY_OPEN,
-    TRAY_SUMMARY_CLOSE, STARTUP_ERROR, MAIN_CONTEXT,
+    TRAY_SUMMARY_CLOSE, STARTUP_ERROR, MAIN_CONTEXT, PRICING_CHANGED,
 ];
 
 /// 发 `settings-changed`：载荷是发送这一刻的设置快照（含修订号），不是调用方手里的副本。
@@ -69,6 +71,11 @@ pub(crate) fn refresh_requested(app: &AppHandle, connection_id: Option<&str>) {
 /// 模型清单刷新、路由分组增删改），前端重读 `gateway_catalog`。
 pub(crate) fn catalog_changed(app: &AppHandle) {
     let _ = app.emit(GATEWAY_CATALOG_CHANGED, ());
+}
+
+/// 发 `pricing-changed`：价目、映射或连接计费规则变化后通知前端重算展示。
+pub(crate) fn pricing_changed(app: &AppHandle) {
+    let _ = app.emit(PRICING_CHANGED, ());
 }
 
 #[cfg(test)]

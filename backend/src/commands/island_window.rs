@@ -198,20 +198,40 @@ pub(crate) fn set_island_style(app: tauri::AppHandle, style: String) -> Result<s
     Ok(next)
 }
 
-/// 主窗口当前在看的页面与连接（4.2b #9）。只在内存里，重启清空；本体岛开了「跟随主窗口」才用它
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// 主窗口当前在看的页面、连接与主窗口中心物理坐标（R2-I-06 看向主窗口）。只在内存里，重启清空
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct MainContext {
     pub page: String,
     pub connection_id: Option<String>,
+    /// 主窗口当前在桌面上的物理中心点 `(x, y)`，供本体岛转头看向主窗口；主窗口隐藏或不可读时为 None
+    #[serde(default)]
+    pub main_center: Option<(f64, f64)>,
 }
 
 static MAIN_CONTEXT: std::sync::Mutex<Option<MainContext>> = std::sync::Mutex::new(None);
+
+fn main_window_center(app: &tauri::AppHandle) -> Option<(f64, f64)> {
+    let win = app.get_webview_window(MAIN)?;
+    if !win.is_visible().unwrap_or(false) || win.is_minimized().unwrap_or(false) {
+        return None;
+    }
+    let pos = win.outer_position().ok()?;
+    let size = win.outer_size().ok()?;
+    Some((
+        f64::from(pos.x) + f64::from(size.width) / 2.0,
+        f64::from(pos.y) + f64::from(size.height) / 2.0,
+    ))
+}
 
 /// 主窗口报告「正在看哪个连接」（离开时报 connection_id = null）；变了才广播 `main-context`
 #[tauri::command]
 pub(crate) fn set_main_context(app: tauri::AppHandle, page: String, connection_id: Option<String>) -> Result<(), String> {
     use tauri::Emitter;
-    let next = MainContext { page, connection_id: connection_id.filter(|id| !id.trim().is_empty()) };
+    let next = MainContext {
+        page,
+        connection_id: connection_id.filter(|id| !id.trim().is_empty()),
+        main_center: main_window_center(&app),
+    };
     let mut slot = MAIN_CONTEXT.lock().map_err(|e| e.to_string())?;
     if slot.as_ref() == Some(&next) {
         return Ok(());
@@ -224,14 +244,19 @@ pub(crate) fn set_main_context(app: tauri::AppHandle, page: String, connection_i
 
 /// 岛打开时读一次当前的主窗口上下文
 #[tauri::command]
-pub(crate) fn main_context() -> Option<MainContext> {
-    MAIN_CONTEXT.lock().ok().and_then(|slot| slot.clone())
+pub(crate) fn main_context(app: tauri::AppHandle) -> Option<MainContext> {
+    let mut current = MAIN_CONTEXT.lock().ok().and_then(|slot| slot.clone())?;
+    if current.main_center.is_none() {
+        current.main_center = main_window_center(&app);
+    }
+    Some(current)
 }
 
-/// 灵动岛联动开关（4.2b）：严格模式、信号动效、跟随主窗口与自动选主
+/// 灵动岛联动与趣味开关（R2-I-04）
 #[tauri::command]
 pub(crate) fn set_island_linkage(app: tauri::AppHandle, linkage: settings::IslandLinkage) -> Result<settings::Settings, String> {
-    let next = app.state::<Cfg>().0.try_update(|settings| settings.island_linkage = linkage)?;
+    let normalized = settings::normalize_island_linkage(linkage);
+    let next = app.state::<Cfg>().0.try_update(|settings| settings.island_linkage = normalized)?;
     crate::events::settings_changed(&app);
     Ok(next)
 }

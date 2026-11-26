@@ -38,14 +38,34 @@ export interface MetricCardProps {
   spark?: ReactNode
   /** 底部来源脚注。传 `SourceNote` */
   source?: ReactNode
+  /** 可交互指标卡（与趋势图联动，R1-51 / R1-52）：点击切换联动维度 */
+  active?: boolean
+  onClick?: () => void
   className?: string
 }
 
-export function MetricCard({ title, scope, value, compare, spark, source, className }: MetricCardProps) {
+export function MetricCard({ title, scope, value, compare, spark, source, active, onClick, className }: MetricCardProps) {
+  const interactive = typeof onClick === "function"
   return (
     <div
+      role={interactive ? "button" : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      aria-pressed={interactive ? Boolean(active) : undefined}
+      onClick={onClick}
+      onKeyDown={
+        interactive
+          ? (event) => {
+              if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
+                event.preventDefault()
+                onClick()
+              }
+            }
+          : undefined
+      }
       className={cn(
-        "flex flex-col gap-1.5 rounded-jn-card border border-jn-line bg-jn-surface px-[18px] pt-[18px] pb-3.5 shadow-jn-surface",
+        "flex flex-col gap-1.5 rounded-jn-card border bg-jn-surface px-[18px] pt-[18px] pb-3.5 shadow-jn-surface",
+        interactive && "jn-interactive cursor-pointer text-left outline-none focus-visible:ring-2 focus-visible:ring-jn-primary/40",
+        active ? "border-jn-primary ring-1 ring-jn-primary/20" : interactive ? "border-jn-line hover:border-jn-primary/40" : "border-jn-line",
         className,
       )}
     >

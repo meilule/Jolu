@@ -11,14 +11,31 @@ import { AgentStack, GatewaySection, RelayRoute, wiredAgents } from "./CapsuleGa
 import { IslandContour, type IslandBubbleSpec } from "./IslandContour"
 import { useBotShots } from "@/hooks/useBotShots"
 import type { GatewayActivity } from "@/hooks/useGatewayActivity"
-import { botExpression, BOT_NAMES, islandAmbientGlow, type BotExpr, type BotProp } from "@/lib/botExpression"
+import {
+  botExpression,
+  BOT_NAMES,
+  isAlertExpr,
+  islandAmbientGlow,
+  type BotExpr,
+  type BotProp,
+  type BotShot,
+} from "@/lib/botExpression"
 import { carriedDeltaSegment, type CarriedDeltaSource } from "@/lib/carriedDelta"
 import { quotaRowsFor } from "@/lib/authQuotaRows"
 import { capsuleQuotaChips, CHIP_NAME_MAX_WIDTH, compactQuotaNumber, type CapsuleChipWindow } from "@/lib/capsuleQuotaChips"
 import { islandBucketQuotaView } from "@/lib/islandQuotaBuckets"
 import { quotaRings } from "@/lib/quotaRings"
 import { edgeCornerRadii } from "@/lib/squircle"
-import { api, compactTokens, isTauri, listenEvent, type IslandHitRectDto } from "@/lib/api"
+import type { TheaterAction, TheaterCue } from "@/lib/islandTheater"
+import {
+  api,
+  compactTokens,
+  DEFAULT_ISLAND_LINKAGE,
+  isTauri,
+  listenEvent,
+  type IslandHitRectDto,
+  type IslandLinkageDto,
+} from "@/lib/api"
 import { sourceBreakdownView } from "@/lib/islandPresentation"
 import { useLiveCount } from "@/lib/liveCounts"
 import { islandIdFromSearch } from "@/lib/islandProfile"
@@ -29,10 +46,9 @@ import type { PlatformId, QuotaWindow } from "@/types"
 import "./capsule.css"
 
 /**
- * 胶囊灵动岛 R2（docs/specs/2026-11-24-island-rendering-tech.md）：
- * - C 硬件材质：实体深黑表面 + 1px 内描边 + 顶部内高光 + 两层真实阴影 + 底部状态光晕；
- * - B 连续轮廓：一条由 `SPRING.island` 驱动的超椭圆路径 + SVG Goo 液体分离气泡；
- * - 四边统一「从屏幕边缘长出来」：贴哪条边，靠边两角平滑变直角，悬停 400ms 沿同路径长出。
+ * 胶囊灵动岛 R2（docs/specs/2026-11-24-island-rendering-tech.md + jolu-new.pen R2-I-01～07）：
+ * - C 硬件材质 + B 连续超椭圆轮廓 + Goo 液体分离气泡；
+ * - 完整接入 R2-I-04 联动开关、R2-I-05 bot 道具与小剧场、R2-I-06 戳一戳 / 长按快捷动作 / 看向主窗口、R2-I-07 今日回顾入口。
  */
 const CAP_H = 40
 const EDGE_TAB_H = 36
@@ -43,10 +59,10 @@ type CapsuleView = "card" | "capsule" | "edgeTab"
 const windowLabel = (q: QuotaWindow) => windowShortLabel(q.key) ?? q.windowName
 const resetText = (q: QuotaWindow) => q.resetCountdown?.replace(/^还剩\s*/, "") ?? null
 
-function ringColor(q: QuotaWindow, platform: PlatformId): string {
+function ringColor(q: QuotaWindow, platform: PlatformId, warnAt: number): string {
   const p = q.usedPercent
   if (p !== null && p >= 100) return "var(--pn-capsule-red)"
-  if (p !== null && p >= 80) return "var(--pn-capsule-orange)"
+  if (p !== null && p >= warnAt) return "var(--pn-capsule-orange)"
   return windowRingColor(q.key, platform)
 }
 
@@ -94,6 +110,15 @@ export function CapsuleIsland({
   dockEdge = null,
   visualDockEdge,
   gateway = null,
+  linkage = DEFAULT_ISLAND_LINKAGE,
+  lookAtPhysical = null,
+  theaterCue = null,
+  onTheaterAction,
+  onBotFacePointerDown,
+  suppressPokeClickRef,
+  onBotActivity,
+  canViewRecap = false,
+  onOpenRecap,
   zoom = 1,
   reduced = false,
   onHoverChange,
@@ -104,7 +129,15 @@ export function CapsuleIsland({
 }: {
   data: IslandData
   gateway?: GatewayActivity | null
-  /** 贴边收起态（四边统一「从屏幕边缘长出来」）：只露出 bot + 额度环 */
+  linkage?: Required<IslandLinkageDto>
+  lookAtPhysical?: { x: number; y: number } | null
+  theaterCue?: TheaterCue | null
+  onTheaterAction?: (action: TheaterAction) => void
+  onBotFacePointerDown?: (event: React.PointerEvent) => void
+  suppressPokeClickRef?: { current: boolean }
+  onBotActivity?: (state: { shot: BotShot | null; inactiveMs: number }) => void
+  canViewRecap?: boolean
+  onOpenRecap?: () => void
   mini?: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -112,20 +145,17 @@ export function CapsuleIsland({
   connectionMenuOpen?: boolean
   dragging?: boolean
   refreshing?: boolean
-  /** 逻辑停靠边 */
   dockEdge?: "top" | "bottom" | "left" | "right" | null
-  /** 视觉停靠边（拖动离边时提前为 null，让直角平滑变回圆角） */
   visualDockEdge?: "top" | "bottom" | "left" | "right" | null
   zoom?: number
   reduced?: boolean
   onHoverChange?: (over: boolean) => void
-  /** 向舞台窗口上报当前轮廓与气泡的窗口内命中矩形 */
   onHitRects?: (rects: IslandHitRectDto[], immediate?: boolean) => void
   previewExpr?: BotExpr | null
   previewProp?: BotProp
-  /** 浏览器预览开关：强制展示液体分离气泡以便验收 goo 形变 */
   previewBubble?: boolean
 }) {
+  const warnAt = linkage.quota_warn_percent ?? 80
   const showQuotas = data.kind === "auth" && !data.unavailable
   const quotaRows = useMemo(() => quotaRowsFor(data.platform, data.quotas).slice(0, 2), [data.platform, data.quotas])
   const follow = data.relayQuota ?? null
@@ -141,8 +171,8 @@ export function CapsuleIsland({
     return {
       p: q.usedPercent,
       geometry: ring.geometry,
-      color: ringColor(q, ringPlatform),
-      warn: q.usedPercent !== null && q.usedPercent >= 80,
+      color: ringColor(q, ringPlatform, warnAt),
+      warn: q.usedPercent !== null && q.usedPercent >= warnAt,
       aria: aria ? `${follow ? `正在调用「${follow.name}」· ` : ""}${windowLabel(q)}额度${q.usedPercent === null ? "未知" : `已用 ${Math.round(q.usedPercent)}%`}${reset ? `，${reset} 后重置` : ""}。按 Enter 固定显示` : undefined,
     }
   })
@@ -183,9 +213,14 @@ export function CapsuleIsland({
     identity: `${data.platform}:${data.kind}:${data.connectionId ?? ""}`,
   })
 
+  useEffect(() => {
+    onBotActivity?.({ shot, inactiveMs })
+  }, [shot, inactiveMs, onBotActivity])
+
   const relayOn = Boolean(gateway?.relay)
-  const relay = relayOn ? gateway!.activity.shown : null
-  const agents = useMemo(() => (relayOn ? wiredAgents(gateway!.status, gateway!.activity) : []), [relayOn, gateway])
+  const relayRaw = relayOn ? gateway!.activity.shown : null
+  const relay = linkage.show_route_flow ? relayRaw : null
+  const agents = useMemo(() => (relayOn && linkage.multi_tool_stack ? wiredAgents(gateway!.status, gateway!.activity) : []), [relayOn, linkage.multi_tool_stack, gateway])
   const drifted = agents.filter((w) => w.drift).length
   const segment = carriedDeltaSegment({
     value: data.carriedDelta ?? data.deltaTokens ?? null,
@@ -201,9 +236,9 @@ export function CapsuleIsland({
     if (!relayOn) return
     setNow(Date.now())
     const timer = window.setInterval(() => setNow(Date.now()), 30_000)
-    const dot = relay?.phase === "ok" ? window.setTimeout(() => setNow(Date.now()), 10_100) : 0
+    const dot = relayRaw?.phase === "ok" ? window.setTimeout(() => setNow(Date.now()), 10_100) : 0
     return () => { window.clearInterval(timer); window.clearTimeout(dot) }
-  }, [relayOn, relay?.requestId, relay?.phase])
+  }, [relayOn, relayRaw?.requestId, relayRaw?.phase])
 
   const [hover, setHover] = useState(false)
   const [focusRing, setFocusRing] = useState<number | null>(null)
@@ -212,12 +247,17 @@ export function CapsuleIsland({
     connected: data.connected ?? data.status?.tone === "success",
     queryFailed: showQuotas && Boolean(data.queryFailed),
     quotaUsed: quotaRows.map((q) => q.usedPercent),
-    dragging, waiting: Boolean(data.automationWaiting), refreshing, working: writing, shot, inactiveMs: relay ? 0 : inactiveMs,
+    dragging, waiting: Boolean(data.automationWaiting), refreshing, working: writing, shot, inactiveMs: relayRaw ? 0 : inactiveMs,
     docked: Boolean(dockEdge) && !open, hover,
-    relay: relay ? (relay.phase === "failed" ? "rejected" : relay.phase) : null,
+    relay: relayRaw && linkage.route_feedback ? (relayRaw.phase === "failed" ? "rejected" : relayRaw.phase) : null,
+    warnThreshold: warnAt,
   })
-  const expr = previewExpr ?? derived.expr
-  const reason = previewExpr ? `表情库预览：${BOT_NAMES[previewExpr]}` : derived.reason
+
+  // 道具小剧场只在非告警态时联动表情，告警始终优先
+  const theaterExpr = theaterCue && !theaterCue.quiet && !isAlertExpr(derived.expr) ? theaterCue.expr : null
+  const expr = previewExpr ?? theaterExpr ?? derived.expr
+  const activeProp: BotProp = previewProp !== "none" ? previewProp : (theaterCue?.prop ?? "none")
+  const reason = previewExpr ? `表情库预览：${BOT_NAMES[previewExpr]}` : theaterCue ? theaterCue.title : derived.reason
   const isReduced = reduced || reducedMotion()
   const glow = islandAmbientGlow(expr, data.writingLevel)
   const ticker = writing && showDelta && data.deltaCountKey ? { countKey: data.deltaCountKey, label: "本段 Token", sub: `${running} 个会话写入中` } : null
@@ -228,7 +268,6 @@ export function CapsuleIsland({
     ? [`${Math.round(focusWindow.usedPercent)}%`, windowLabel(focusWindow), resetText(focusWindow) ? `${resetText(focusWindow)} 后重置` : undefined]
     : null
 
-  // ---------- 连续轮廓尺寸与四角圆角计算（§4 / §5） ----------
   const activeVisualEdge = visualDockEdge !== undefined ? visualDockEdge : dockEdge
   const view: CapsuleView = open ? "card" : mini ? "edgeTab" : "capsule"
   const mainRef = useRef<HTMLSpanElement>(null)
@@ -250,22 +289,18 @@ export function CapsuleIsland({
     return () => observer.disconnect()
   }, [])
 
-  // 舞台窗口固定高度上限（保留投影边距），卡片超出时改为内部滚动
   const stageMaxH = Math.max(CAP_H, ((isTauri ? window.innerHeight : 660) - 72) / (zoom || 1))
   const fullCardH = exH + 2
   const cardH = Math.max(CAP_H, Math.min(fullCardH, stageMaxH))
   const scroll = view === "card" && fullCardH > stageMaxH
 
-  // 完整胶囊宽 = 左 4 + bot 32 + 间距 10 + 内容 + 右 14
   const capsuleW = Math.max(48, mainW + 60)
-  // 四边统一的「贴边长出来」收起态：只露 bot 28 + 边距（写入中加 6px 脉冲点）
   const edgeTabW = writing ? 52 : 40
   const shellW = view === "card" ? EXPANDED_W : view === "edgeTab" ? edgeTabW : capsuleW
   const shellH = view === "card" ? cardH : view === "edgeTab" ? EDGE_TAB_H : CAP_H
   const baseRadius = view === "card" ? 28 : view === "edgeTab" ? 18 : 20
   const targetRadii = edgeCornerRadii(baseRadius, activeVisualEdge)
 
-  // ---------- 交互 ----------
   const collapse = useCallback(() => { setPinRing(null); setFocusRing(null); onOpenChange(false) }, [onOpenChange])
   useEffect(() => { if (!open) { setPinRing(null); setFocusRing(null) } }, [open])
   const leaveTimer = useRef(0)
@@ -294,7 +329,7 @@ export function CapsuleIsland({
       const target = event.target as HTMLElement | null
       if (!target) return
       if (target.closest("[data-capsule-island]")) return
-      if (target.closest("[role=menu], [role=listbox], [role=dialog], [data-radix-popper-content-wrapper], .panel")) return
+      if (target.closest("[role=menu], [role=listbox], [role=dialog], [data-radix-popper-content-wrapper], [data-quick-wheel], [data-island-recap], .panel")) return
       collapse()
     }
     document.addEventListener("pointerdown", onDown, true)
@@ -323,20 +358,29 @@ export function CapsuleIsland({
     }
   }, [open, connectionMenuOpen, collapse])
 
-  // ---------- 液体分离气泡（§4.4 / R2-I-01）：多会话 / 自动化等额度 / 接线偏移 ----------
+  // 液体分离气泡（R2-I-01 / R2-I-04 自动化等额度气泡开关控制）
   const bubbleSpec = useMemo<IslandBubbleSpec | null>(() => {
     if (view !== "capsule") return { visible: false, width: 40, side: dockEdge === "right" ? "left" : "right", children: null }
     const side: "left" | "right" = dockEdge === "right" ? "left" : "right"
-    if (data.automationWaiting) {
+    if (data.automationWaiting && linkage.automation_bubble) {
       return {
         visible: true,
         width: 82,
         side,
         children: (
-          <span className="flex items-center gap-1.5" role="status" aria-label="自动化任务等待额度恢复">
+          <button
+            type="button"
+            className="flex items-center gap-1.5 border-0 bg-transparent p-0 text-inherit cursor-pointer"
+            role="status"
+            aria-label="自动化任务等待额度恢复，点击查看"
+            onClick={(e) => {
+              e.stopPropagation()
+              if (isTauri) void api.openMainSection("automation").catch(() => {})
+            }}
+          >
             <span className="cap-wdot" />
             <span>等额度</span>
-          </span>
+          </button>
         ),
       }
     }
@@ -380,9 +424,8 @@ export function CapsuleIsland({
       }
     }
     return { visible: false, width: 40, side, children: null }
-  }, [view, dockEdge, data.automationWaiting, writing, running, drifted, previewBubble])
+  }, [view, dockEdge, data.automationWaiting, linkage.automation_bubble, writing, running, drifted, previewBubble])
 
-  // ---------- 内容装配 ----------
   const attributed = data.activeConnection ?? null
   const plat = (
     <span
@@ -411,7 +454,20 @@ export function CapsuleIsland({
     : null
   const dashOnly = <span className="cap-num cap-t3 text-[13px]">—</span>
 
-  const collapsedMain = relay ? (
+  const showTheaterPill = Boolean(theaterCue && !theaterCue.quiet && !open && !previewExpr)
+  const collapsedMain = showTheaterPill && theaterCue ? (
+    <button
+      type="button"
+      data-theater-cue={theaterCue.prop}
+      className="cap-theater-pill"
+      onClick={(e) => {
+        e.stopPropagation()
+        onTheaterAction?.(theaterCue.action)
+      }}
+    >
+      <span>{theaterCue.title}</span>
+    </button>
+  ) : relay ? (
     <RelayRoute relay={relay} />
   ) : data.unavailable ? (
     <>
@@ -461,7 +517,7 @@ export function CapsuleIsland({
           onClick={() => togglePin(index)}
           onDoubleClick={(event) => event.stopPropagation()}
         >
-          <span className="cap-sw" style={{ background: ringColor(q, data.platform) }} />
+          <span className="cap-sw" style={{ background: ringColor(q, data.platform, warnAt) }} />
           <span className="cap-t">
             <span className="cap-w">{windowLabel(q)} · {index === 0 ? "外圈" : "内圈"}</span>
             <span className="cap-p cap-num">{q.usedPercent === null ? "—" : Math.round(q.usedPercent)}<small>{q.usedPercent === null ? "" : "%"}</small></span>
@@ -496,6 +552,7 @@ export function CapsuleIsland({
   const sessionTotal = data.sessions?.length ?? 0
   const breakdown = sourceBreakdownView(data.sourceBreakdown ?? null, compactTokens)
   const sectionTitle = sessionTotal > 0 ? (data.sessionSectionTitle ?? `运行中的会话 · ${sessionTotal}`) : "本轮 Token"
+  const pokeable = !dragging && linkage.poke_reaction
 
   return (
     <IslandContour
@@ -522,7 +579,6 @@ export function CapsuleIsland({
       onPointerEnter={() => { setHover(true); onHoverChange?.(true) }}
       onPointerLeave={() => { setHover(false); onHoverChange?.(false) }}
     >
-      {/* 收缩 / 贴边长出层（常驻，不卸载） */}
       <div
         className="cap-layer cap-cl cap-toggle"
         role="button"
@@ -535,22 +591,25 @@ export function CapsuleIsland({
         <Bot
           certainty={data.writingLevel}
           size={view === "edgeTab" ? 28 : 32}
-          ringWidth={view === "edgeTab" ? 2 : 2}
+          ringWidth={2}
           ringGap={view === "edgeTab" ? 1.2 : 1.5}
           inset={view === "edgeTab" ? 2 : 3}
           rings={ringsFor(false)}
           expr={expr}
-          prop={view === "edgeTab" ? "none" : previewProp}
+          prop={view === "edgeTab" ? "none" : activeProp}
           shot={shot}
           reduced={isReduced}
-          pokeable={!dragging}
+          pokeable={pokeable}
+          lookAtPhysical={lookAtPhysical}
+          onFacePointerDown={onBotFacePointerDown}
+          suppressPokeClickRef={suppressPokeClickRef}
           dockEdge={dockEdge}
-          ticker={open || view === "edgeTab" || relay ? null : ticker}
+          ticker={open || view === "edgeTab" || relay || showTheaterPill ? null : ticker}
         />
         {view === "edgeTab" && writing && <span className="cap-pulse" />}
         <span ref={mainRef} className="cap-main">
           {collapsedMain}
-          {segment.visible && (
+          {!showTheaterPill && segment.visible && (
             <>
               <span className="cap-hair" />
               <LiveTokens
@@ -562,12 +621,11 @@ export function CapsuleIsland({
               />
             </>
           )}
-          {relayOn && agents.length > 0 && <>{!relay && <span className="cap-hair" />}<AgentStack agents={agents} activity={gateway!.activity} now={now} /></>}
+          {!showTheaterPill && relayOn && agents.length > 0 && <>{!relay && <span className="cap-hair" />}<AgentStack agents={agents} activity={gateway!.activity} now={now} /></>}
         </span>
         {relay?.phase === "in" && <span className="cap-flow" />}
       </div>
 
-      {/* 展开卡片层（常驻，轮廓先动 80ms 后轻模糊淡入） */}
       <div ref={exRef} className="cap-layer cap-ex" inert={!open} style={connectionMenuOpen ? { minHeight: 240 } : undefined}>
         <div className="cap-sec cap-hd">
           <div className="cap-id">
@@ -593,10 +651,13 @@ export function CapsuleIsland({
               inset={28}
               rings={ringsFor(true)}
               expr={expr}
-              prop={previewProp}
+              prop={activeProp}
               shot={shot}
               reduced={isReduced}
-              pokeable={!dragging}
+              pokeable={pokeable}
+              lookAtPhysical={lookAtPhysical}
+              onFacePointerDown={onBotFacePointerDown}
+              suppressPokeClickRef={suppressPokeClickRef}
               dockEdge={dockEdge}
               ticker={open ? ticker : null}
               focus={focused}
@@ -660,14 +721,19 @@ export function CapsuleIsland({
           )}
           {notes.map((text) => <p key={text} className="cap-note">{text}</p>)}
           {data.sourceText && <SourceFooter text={data.sourceText} />}
-          {isTauri && (
-            <div className="cap-lnk">
-              <span>今日用量明细</span>
-              <button type="button" onClick={() => void api.openMainUsage(data.platform, data.usageConnectionId ?? null).catch(() => {})}>
-                在主窗口查看
-              </button>
-            </div>
-          )}
+          <div className="cap-lnk">
+            <span>今日用量明细</span>
+            <span className="flex items-center gap-3">
+              {canViewRecap && onOpenRecap && (
+                <button type="button" onClick={onOpenRecap}>今日回顾</button>
+              )}
+              {isTauri && (
+                <button type="button" onClick={() => void api.openMainUsage(data.platform, data.usageConnectionId ?? null).catch(() => {})}>
+                  在主窗口查看
+                </button>
+              )}
+            </span>
+          </div>
         </div>
       </div>
     </IslandContour>

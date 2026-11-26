@@ -66,7 +66,10 @@ export const PROVIDERS: readonly ProviderEntry[] = [
   { id: "fireworks", platformId: "custom", name: "Fireworks", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "https://api.fireworks.ai/inference/v1", locked: false } },
   { id: "siliconflow", platformId: "custom", name: "SiliconFlow（硅基流动）", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "https://api.siliconflow.cn/v1", locked: false } },
   { id: "groq", platformId: "custom", name: "Groq", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "https://api.groq.com/openai/v1", locked: false } },
-  { id: "ollama", platformId: "custom", name: "Ollama（本机）", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "http://127.0.0.1:11434/v1", locked: false } },
+  { id: "ollama", platformId: "ollama", name: "Ollama", access: "订阅账号 / API Key", subscription: "ready", apiKey: "ready", baseUrl: { value: "http://127.0.0.1:11434/v1", locked: false }, baseUrlChoices: [
+    { label: "本机 · OpenAI 兼容", value: "http://127.0.0.1:11434/v1", protocol: "openai" },
+    { label: "Cloud · OpenAI 兼容", value: "https://ollama.com/v1", protocol: "openai" },
+  ] },
   { id: "lmstudio", platformId: "custom", name: "LM Studio（本机）", access: "名称 / Base URL / API Key", subscription: "none", apiKey: "ready", baseUrl: { value: "http://127.0.0.1:1234/v1", locked: false } },
   // Trae 不在原画板里，按鼠鼠要求保留并已补进 Jolu.pen 画板 05 / 06 / 29
   { id: "trae-cn", platformId: "trae", edition: "cn", name: "Trae CN", access: "账号登录 / 本机登录", subscription: "ready", apiKey: "none" },
@@ -106,6 +109,14 @@ const PLATFORM_NAMES: Record<string, string> = {
  * 有多条时只给平台级名称，因为版本拆分需要连接 edition 与 `provider_key` 这类
  * 可验证的归因事实，本函数拿不到，不能猜。
  */
+/** 本机采集 CLI 平台：不在供应商连接目录 `PROVIDERS` 中，但参与用量统计与会话线程。 */
+const LOCAL_PLATFORM_NAMES: Readonly<Record<string, string>> = {
+  antigravity: "Antigravity",
+  kimi: "Kimi Code",
+  pi: "Pi",
+  dsh: "DeepSeek Harness",
+}
+
 export function providerName(platform: string): string {
   const entries = PROVIDERS.filter((entry) => entry.platformId === platform)
   // 多条目平台：返回平台级名称。目录里新增多版本平台却漏登时退回平台 id，
@@ -113,6 +124,8 @@ export function providerName(platform: string): string {
   if (entries.length > 1) return PLATFORM_NAMES[platform] ?? platform
   // 单条目平台：条目即平台，沿用条目名
   if (entries.length === 1) return entries[0].name
+  // 仅本机采集的 CLI 平台：优先返回对应 CLI 工具名（如 kimi → Kimi Code）
+  if (LOCAL_PLATFORM_NAMES[platform]) return LOCAL_PLATFORM_NAMES[platform]
   // 没有这个 platformId：调用方可能传的是条目 id（如 zcode-bigmodel），按条目再查一次；
   // 都查不到就原样返回，不臆测名称
   return PROVIDERS.find((entry) => entry.id === platform)?.name ?? platform
@@ -122,6 +135,12 @@ export function providerName(platform: string): string {
 export function providerPlatformOptions(): { value: string; label: string }[] {
   return [...new Set(PROVIDERS.map((entry) => entry.platformId))]
     .map((value) => ({ value, label: providerName(value) }))
+}
+
+/** 用量统计与会话线程筛选可用的完整平台清单（含仅本机采集的 CLI 平台）。 */
+export function usagePlatformOptions(): { value: string; label: string }[] {
+  const ids = [...new Set([...PROVIDERS.map((entry) => entry.platformId), ...Object.keys(LOCAL_PLATFORM_NAMES)])]
+  return ids.map((value) => ({ value, label: providerName(value) }))
 }
 
 interface ProviderConnection {

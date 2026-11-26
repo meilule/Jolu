@@ -299,13 +299,18 @@ pub(crate) fn proxy_status(app: tauri::AppHandle) -> proxy::ProxyStatus {
     proxy::status(&app)
 }
 
-/// 费用估算的汇率（USD → 目标币种）。带 24 小时缓存；失败时 fallback=true 用参考价。
+/// 费用估算的汇率（USD → 目标币种）。支持自动在线汇率与自定义固定汇率。
 #[derive(serde::Serialize)]
 pub(crate) struct FxRateDto {
     currency: String,
     rate: f64,
     as_of: String,
     fallback: bool,
+    fixed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    live_rate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    live_as_of: Option<String>,
 }
 
 /// 设置费用估算的显示币种
@@ -320,9 +325,37 @@ pub(crate) fn set_cost_currency(app: tauri::AppHandle, currency: String) -> Resu
 }
 
 #[tauri::command]
-pub(crate) fn fx_rate(currency: String) -> Result<FxRateDto, String> {
+pub(crate) fn fx_rate(app: tauri::AppHandle, currency: String) -> Result<FxRateDto, String> {
     if currency != "CNY" {
-        return Ok(FxRateDto { currency, rate: 1.0, as_of: "基准币种".into(), fallback: false });
+        return Ok(FxRateDto {
+            currency,
+            rate: 1.0,
+            as_of: "基准币种".into(),
+            fallback: false,
+            fixed: false,
+            live_rate: None,
+            live_as_of: None,
+        });
+    }
+    let settings = app.state::<Cfg>().0.get();
+    if settings.fx_mode == "fixed" {
+        if let Some(fixed_rate) = settings.fx_fixed_usd_cny.filter(|r| r.is_finite() && (1.0..=20.0).contains(r)) {
+            let client = crate::net::blocking_builder()
+                .timeout(std::time::Duration::from_secs(4))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .ok();
+            let live = client.map(|c| crate::fx::usd_cny(&c));
+            return Ok(FxRateDto {
+                currency,
+                rate: fixed_rate,
+                as_of: "自定义固定汇率".into(),
+                fallback: false,
+                fixed: true,
+                live_rate: live.as_ref().map(|r| r.rate),
+                live_as_of: live.map(|r| r.as_of),
+            });
+        }
     }
     let client = crate::net::blocking_builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -330,7 +363,15 @@ pub(crate) fn fx_rate(currency: String) -> Result<FxRateDto, String> {
         .build()
         .map_err(|e| format!("创建汇率客户端失败：{e}"))?;
     let rate = crate::fx::usd_cny(&client);
-    Ok(FxRateDto { currency, rate: rate.rate, as_of: rate.as_of, fallback: rate.fallback })
+    Ok(FxRateDto {
+        currency,
+        rate: rate.rate,
+        as_of: rate.as_of.clone(),
+        fallback: rate.fallback,
+        fixed: false,
+        live_rate: Some(rate.rate),
+        live_as_of: Some(rate.as_of),
+    })
 }
 
 // 任务 2.2 结束

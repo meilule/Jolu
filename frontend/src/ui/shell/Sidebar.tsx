@@ -22,6 +22,7 @@
  */
 import type { ReactNode } from "react"
 import { cn } from "@/lib/utils"
+import { useGlidePill } from "@/motion"
 
 export interface SidebarProps {
   collapsed: boolean
@@ -37,6 +38,12 @@ export interface SidebarProps {
 }
 
 export function Sidebar({ collapsed, logo, toggle, children, footer, className }: SidebarProps) {
+  const hoverGlide = useGlidePill({
+    selector: "button",
+    background: "color-mix(in oklab, var(--jn-surface) 65%, transparent)",
+    skipActive: true,
+  })
+
   return (
     <aside
       aria-label="主导航"
@@ -52,8 +59,10 @@ export function Sidebar({ collapsed, logo, toggle, children, footer, className }
         {!collapsed && <span className="min-w-0 flex-1" />}
         {toggle}
       </div>
-      {/* 导航区上边距 14：与 Logo 行拉开一档层级 */}
-      <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-hidden pt-3.5">{children}</nav>
+      {/* 导航区上边距 14：与 Logo 行拉开一档层级；不设 overflow-hidden 避免裁断选中滑块跨项滑行 */}
+      <nav ref={hoverGlide} className="relative flex min-h-0 flex-1 flex-col gap-1 pt-3.5">
+        {children}
+      </nav>
       {footer && <div className="flex shrink-0 flex-col gap-2">{footer}</div>}
     </aside>
   )

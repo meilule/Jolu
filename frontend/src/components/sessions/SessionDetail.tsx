@@ -3,9 +3,12 @@ import { useEffect, useRef, useState, type ReactNode } from "react"
 import { useContentMotion } from "@/lib/motion"
 import { LoadingSurface } from "@/components/ui/LoadingSurface"
 import { cn } from "@/lib/utils"
+import { useGlidePill } from "@/motion"
 import { api, isTauri, type MessageDto, type MessagePageDto, type SessionItemDto } from "@/lib/api"
 import { canCompress, canContinue, consumption, middleEllipsis, projectName, sessionTitle, spanLabel, statusLabel } from "@/lib/sessionThreads"
-import { formatTokens, formatUsd, modelDisplayName } from "@/lib/usageStats"
+import { formatMoney, formatTokens, modelDisplayName } from "@/lib/usageStats"
+import { convertFromUsd, useCostFx } from "@/lib/costCurrency"
+import { useSettings } from "@/hooks/useSettings"
 import { accountLabel } from "@/lib/usageFilters"
 import { demoMessages } from "@/mock/sessionThreads"
 import { PlatformLogo } from "@/components/brand/PlatformLogo"
@@ -92,6 +95,7 @@ export function SessionDetail({ session, connections, onDrillUsage, onContinue, 
       压缩会话
     </Button>
   )
+  const glide = useGlidePill()
   const continueButton = (
     <Button kind="primary" size="sm" icon="external" disabled={!resumable} onClick={onContinue}>
       在 {name} 中继续
@@ -110,7 +114,7 @@ export function SessionDetail({ session, connections, onDrillUsage, onContinue, 
             <IconButton icon="more" label="更多会话操作" size="sm" kind="ghost" />
           </Menu.Trigger>
           <Menu.Portal>
-            <Menu.Content align="end" sideOffset={6} className="jn-popover z-[140] w-[200px] rounded-[16px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface">
+            <Menu.Content ref={glide} align="end" sideOffset={6} className="jn-popover z-[140] w-[200px] rounded-[16px] border border-jn-line bg-jn-surface p-1.5 shadow-jn-surface">
               <MenuItem icon="copy" onSelect={() => copy(session.session_id, "会话 ID")}>复制会话 ID</MenuItem>
               <MenuItem icon="folder" disabled={!session.cwd} onSelect={() => session.cwd && copy(session.cwd, "项目路径")}>复制项目路径</MenuItem>
               <MenuItem icon="navUsage" onSelect={onDrillUsage}>查看用量明细</MenuItem>
@@ -289,6 +293,8 @@ function InfoPanel({ session, page, accountText, onCopy, onDrillUsage }: {
       {copyText && <IconButton icon="copy" label={`复制${what}`} size="sm" kind="ghost" onClick={() => onCopy(copyText, what!)} />}
     </div>
   )
+  const cfg = useSettings()
+  const fx = useCostFx((cfg.settings.cost_currency === "CNY" ? "CNY" : "USD") as "USD" | "CNY")
   const models = page?.models ?? []
   const split: [string, number | null][] = [["普通输入", session.fresh_input], ["输出", session.output], ["缓存读取", session.cache_read], ["缓存写入", session.cache_write]]
   return (
@@ -312,7 +318,7 @@ function InfoPanel({ session, page, accountText, onCopy, onDrillUsage }: {
       </div>
       <div className="flex items-center gap-2.5">
         <span className="text-xs text-jn-text-3">
-          估算费用 {page && page.priced_requests ? formatUsd(page.cost) : "—"} · {session.requests} 次调用
+          估算费用 {page && page.priced_requests ? formatMoney(convertFromUsd(page.cost, fx), fx.currency) : "—"} · {session.requests} 次调用
           {page && page.priced_requests < page.requests ? `（${page.requests - page.priced_requests} 次未计价）` : ""}
         </span>
         <span className="flex-1" />

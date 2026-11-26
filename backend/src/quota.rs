@@ -858,7 +858,7 @@ fn validate_connection_with(
     model: Option<&str>,
     remote: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
-    if !matches!(platform,"custom"|"opencode") {
+    if !matches!(platform,"custom"|"opencode"|"ollama") {
         return remote();
     }
     if kind != "api" {
