@@ -10,7 +10,7 @@ import { AnimatedTokens, TokenDelta, type DeltaPhase } from "./TokenDelta"
 import { SessionList } from "./SessionList"
 import type { CarriedDeltaSource } from "@/lib/carriedDelta"
 import type { PlatformId, QuotaWindow, SessionActivity } from "@/types"
-import type { SourceBreakdownDto } from "@/lib/api"
+import { api, isTauri, type SourceBreakdownDto } from "@/lib/api"
 
 /**
  * UsageIsland —— 宽 400、padding [12,16]、gap 10、圆角 18（附录 A.4）
@@ -100,11 +100,47 @@ export interface IslandData {
   /** 跳到用量页时带的连接筛选：只在归属确定（exact）时有值，见 `usageJumpConnection` */
   usageConnectionId?: string | null
   /**
-   * 胶囊样式用：本平台正在跑的那条**已存连接**（连接归因的 exact / mapped 两档）。
+   * 胶囊样式用：本平台正在跑的那条**已存连接**（连接归因的 exact / active_config / mapped 三档）。
    * `platform` 档或缺失时为 null —— 收缩态那一行继续显示平台名，绝不显示猜出来的连接。
    * 经典样式不读这个字段。
    */
-  activeConnection?: { id: string; name: string; confidence: "exact" | "mapped" } | null
+  activeConnection?: { id: string; name: string; confidence: "exact" | "active_config" | "mapped" } | null
+  /** 3A 陌生 Key 防呆：当前平台在本机生效了一把尚未录入 Jolu 的外部 Key / 登录 */
+  unregisteredLocal?: { platform: string; kind: "auth" | "api"; masked: string; baseUrl: string | null; sourceAgent?: string | null } | null
+  enrollingLocal?: boolean
+  enrollNotice?: { tone: "ok" | "warn" | "err"; text: string } | null
+  onEnrollLocal?: () => void
+  /** 1A 并发多 Agent 气泡：后台同时在写的其它平台及一键轮换回调 */
+  concurrentPeers?: {
+    platform: string
+    platformName: string
+    runningCount: number
+    runningTokens: number | null
+    todayTokens: number | null
+    connectionName: string | null
+  }[]
+  onCycleConcurrent?: () => void
+  /** 1A 展开态跨平台活跃会话列表（除当前主平台外仍在跑的其它平台会话） */
+  crossPlatformSessions?: {
+    platform: PlatformId
+    platformName: string
+    id: string
+    title: string
+    state: "running" | "done" | "failed" | "unknown"
+    deltaTokens: number | null
+    connectionName: string | null
+    confidence: "exact" | "active_config" | "mapped" | "platform"
+  }[]
+  /** 4B 受控 Agent Hooks 高优提醒（后台等待授权确认 / 等待输入 / 本轮完成） */
+  approvalAlert?: {
+    platform: string
+    platformName: string
+    kind: "waiting_approval" | "waiting_input" | "turn_complete" | "running" | "idle"
+    sessionId: string | null
+    summary: string
+  } | null
+  /** 1A / 3A 切换或接力 1.5s 轻提示 */
+  dynamicCue?: { kind: "agent" | "account" | "unregistered"; label: string } | null
   /** 4.2b：短时信号（额度 80% / 用尽 / 网关拒绝 / 新会话）；motion=false 时只改颜色 */
   signal?: { kind: string; label: string; at: number; motion: boolean } | null
   /** 4.2b：正在跟随主窗口看的连接（本体岛）；点「解除」回到自己的连接 */
@@ -191,7 +227,17 @@ export function IslandCollapsed({
 
       <div className="flex w-full items-center gap-4">
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-          {data.unavailable ? (
+          {data.unregisteredLocal ? (
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-1.5">
+                <StatusDot tone="warn" />
+                <span className="text-xs font-medium text-warn">
+                  未收录凭证 {data.unregisteredLocal.masked}
+                </span>
+              </div>
+              <p className="text-[11px] text-text-tertiary">双击卡片一键收录到账号管理</p>
+            </div>
+          ) : data.unavailable ? (
             <div className="flex flex-col gap-1">
               <div className="flex items-center gap-1.5">
                 <StatusDot tone={data.unavailable.tone} />
@@ -309,7 +355,41 @@ export function IslandExpanded({
 
       <Divider />
 
-      {data.unavailable ? (
+      {data.unregisteredLocal ? (
+        <div className="flex flex-col gap-2">
+          <p className="text-[11px] leading-relaxed text-text-secondary">
+            检测到{data.unregisteredLocal.sourceAgent ? ` ${data.unregisteredLocal.sourceAgent} ` : "本机"}当前生效凭证{" "}
+            <code className="font-mono text-warn">{data.unregisteredLocal.masked}</code>{" "}
+            尚未收录，已隐藏旧账号额度以防误导。
+          </p>
+          {data.enrollNotice?.tone === "err" && (
+            <p className="text-[11px] leading-relaxed text-danger">{data.enrollNotice.text}</p>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {data.onEnrollLocal && (
+              <button
+                type="button"
+                disabled={Boolean(data.enrollingLocal)}
+                onDoubleClick={(e) => e.stopPropagation()}
+                onClick={() => data.onEnrollLocal?.()}
+                className="rounded-[8px] bg-warn-soft px-2.5 py-1 text-[11px] font-medium text-warn transition-opacity hover:opacity-90 disabled:opacity-50"
+              >
+                {data.enrollingLocal ? "正在收录…" : "一键收录到账号管理"}
+              </button>
+            )}
+            {isTauri && (
+              <button
+                type="button"
+                onDoubleClick={(e) => e.stopPropagation()}
+                onClick={() => void api.openMainSection("connections").catch(() => {})}
+                className="rounded-[8px] border px-2.5 py-1 text-[11px] text-text-secondary transition-colors hover:text-text-primary"
+              >
+                供应商页 →
+              </button>
+            )}
+          </div>
+        </div>
+      ) : data.unavailable ? (
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-1.5">
             <StatusDot tone={data.unavailable.tone} />
@@ -370,6 +450,12 @@ export function IslandExpanded({
           </div>
           {sessionTotal > 0 && <SessionList sessions={data.sessions!} showUnknownTag={data.sessionStatusUnknown} />}
         </>
+      )}
+
+      {!data.unregisteredLocal && data.enrollNotice && (
+        <p className={cn("text-[10px] leading-relaxed", data.enrollNotice.tone === "warn" ? "text-warn" : "text-success-text")}>
+          {data.enrollNotice.text}
+        </p>
       )}
 
       {data.todayTokenText && (

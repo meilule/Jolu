@@ -37,8 +37,8 @@ export function islandActiveConnection(
  * 「未命名连接」这种假归属。三档的语义由后端给出，前端不再二次推断。
  */
 export function islandAttribution(
-  attribution: { connection_id: string | null; name: string | null; confidence: "exact" | "mapped" | "platform" } | null | undefined,
-): { id: string; name: string; confidence: "exact" | "mapped" } | null {
+  attribution: { connection_id: string | null; name: string | null; confidence: "exact" | "active_config" | "mapped" | "platform" } | null | undefined,
+): { id: string; name: string; confidence: "exact" | "active_config" | "mapped" } | null {
   if (!attribution || attribution.confidence === "platform") return null
   const id = attribution.connection_id?.trim()
   const name = attribution.name?.trim()
@@ -138,7 +138,9 @@ export function relayQuotaConnection(
  * 档只预筛平台，不猜连接。
  */
 export function usageJumpConnection(attribution: { connection_id: string | null; confidence: string } | null | undefined): string | null {
-  return attribution?.confidence === "exact" ? attribution.connection_id : null
+  return attribution?.confidence === "exact" || attribution?.confidence === "active_config"
+    ? attribution.connection_id
+    : null
 }
 
 /**

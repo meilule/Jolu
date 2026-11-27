@@ -6,11 +6,13 @@
  * 写错名字编译就报错。目录与含义见 `docs/specs/2026-11-16-baseline-and-contracts.md` §4。
  */
 import type {
+  AgentHookAlertDto,
   AppSettings,
   CollectionStatusDto,
   DockChangedEvent,
   DockHintEvent,
   LiveUsageDto,
+  LocalActiveAccountDto,
   MenuSourceEvent,
   UpdateProgressDto,
 } from "@/lib/api"
@@ -48,6 +50,8 @@ export const EVENTS = {
   STARTUP_ERROR: "startup-error",
   MAIN_CONTEXT: "main-context",
   PRICING_CHANGED: "pricing-changed",
+  ACTIVE_ACCOUNT_CHANGED: "active-account-changed",
+  AGENT_HOOK_CHANGED: "agent-hook-changed",
 } as const
 
 /** 最近一次 warm-up 的结果（`warmup-finished` 载荷，也是 `warmup_last_outcome` 的返回） */
@@ -113,6 +117,10 @@ export interface EventPayloads {
   /** 主窗口当前在看哪个连接（4.2b「跟随主窗口」） */
   "main-context": MainContextDto
   "pricing-changed": null
+  /** 本机 CLI 生效凭证变化（3A 外部切号跟随 + 陌生 Key 防呆） */
+  "active-account-changed": LocalActiveAccountDto[]
+  /** 受控轻量级 Agent Hooks 状态回执变化（4B） */
+  "agent-hook-changed": AgentHookAlertDto[]
 }
 
 export type EventName = keyof EventPayloads

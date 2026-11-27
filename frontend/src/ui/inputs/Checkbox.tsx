@@ -23,6 +23,7 @@
 import { useEffect, useRef, type InputHTMLAttributes } from "react"
 import { cn } from "@/lib/utils"
 import { Icon } from "@/icons"
+import { m, Presence, SPRING, TACTILE, useEffectiveReducedMotion } from "@/motion"
 
 export interface CheckboxProps
   extends Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "size" | "onChange"> {
@@ -44,6 +45,7 @@ export function Checkbox({
   ...rest
 }: CheckboxProps) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const reduced = useEffectiveReducedMotion()
 
   // indeterminate 只能通过 DOM 属性设置，且每次渲染都要重新同步：
   // 用户点一下之后浏览器会把 indeterminate 清掉，React 不会替我们恢复。
@@ -54,9 +56,12 @@ export function Checkbox({
   const active = checked || indeterminate
 
   return (
-    <label
+    <m.label
+      whileHover={reduced || disabled ? undefined : TACTILE.icon.hover}
+      whileTap={reduced || disabled ? undefined : TACTILE.icon.tap}
+      transition={reduced ? { duration: 0 } : SPRING.tactile}
       className={cn(
-        "relative inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-[7px] border-[1.5px] transition-colors",
+        "jn-spring relative inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-[7px] border-[1.5px] transition-colors",
         active ? "border-transparent bg-jn-primary" : "border-jn-text-3 bg-jn-surface",
         disabled && "pointer-events-none opacity-45",
         className,
@@ -72,13 +77,33 @@ export function Checkbox({
         onChange={(event) => onChange(event.target.checked)}
         {...rest}
       />
-      {indeterminate ? (
-        // 半选：一条 8px 的横线，比缩小版的勾更不容易被误读成「已选」
-        <span aria-hidden className="h-[2px] w-2 rounded-full bg-jn-on-primary" />
-      ) : (
-        checked && <Icon name="check" size="xs" className="text-jn-on-primary" />
-      )}
+      <Presence initial={false}>
+        {indeterminate ? (
+          // 半选：一条 8px 的横线，比缩小版的勾更不容易被误读成「已选」
+          <m.span
+            key="mixed"
+            aria-hidden
+            initial={reduced ? false : { scaleX: 0.4, opacity: 0 }}
+            animate={{ scaleX: 1, opacity: 1 }}
+            exit={reduced ? undefined : { scaleX: 0.4, opacity: 0, transition: { duration: 0.08 } }}
+            transition={reduced ? { duration: 0 } : SPRING.tactile}
+            className="absolute h-[2px] w-2 rounded-full bg-jn-on-primary"
+          />
+        ) : checked ? (
+          <m.span
+            key="checked"
+            aria-hidden
+            initial={reduced ? false : { scale: 0.55, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={reduced ? undefined : { scale: 0.55, opacity: 0, transition: { duration: 0.08 } }}
+            transition={reduced ? { duration: 0 } : SPRING.tactile}
+            className="absolute inset-0 flex items-center justify-center"
+          >
+            <Icon name="check" size="xs" className="text-jn-on-primary" />
+          </m.span>
+        ) : null}
+      </Presence>
       <span className="pointer-events-none absolute inset-0 rounded-[7px] peer-focus-visible:outline-[3px] peer-focus-visible:outline-offset-1 peer-focus-visible:outline-jn-focus" />
-    </label>
+    </m.label>
   )
 }

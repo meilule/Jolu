@@ -1,7 +1,16 @@
 //! 主窗口、启动与页面跳转。
 
-#[allow(unused_imports)]
-use crate::*;
+use std::sync::atomic::Ordering;
+
+use tauri::{Manager};
+
+use crate::app::state::{
+    Cfg, MainIntent, MAIN, MAIN_INTENT, MAIN_PLACEMENT, MAIN_READY, STARTUP, STARTUP_ERROR,
+    STARTUP_INITIALIZING, STARTUP_READY,
+};
+use crate::app::state::data_paths;
+use crate::app::windows::apply_main_zoom;
+use crate::{main_window, settings, show_main, show_main_with_intent, start_initialization};
 
 #[tauri::command]
 pub(crate) fn take_main_intent() -> Option<MainIntent> {
@@ -114,14 +123,6 @@ pub(crate) fn main_panel_ready(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 // 任务 2.2 开始
-/// 界面缩放只作用于 `main` 窗口（D-21）；灵动岛、菜单等窗口各自独立，保持原大小。
-pub(crate) fn apply_main_zoom(window: &WebviewWindow, zoom: u16) -> Result<(), String> {
-    window.set_zoom(f64::from(zoom) / 100.0).map_err(|error| {
-        eprintln!("[窗口] 设置主面板缩放失败: {error}");
-        error.to_string()
-    })
-}
-
 /// 外观（画板 88）：界面缩放、列表密度、减少动效一起保存；主窗口已打开时立即应用缩放。
 #[tauri::command]
 pub(crate) fn set_appearance_preferences(app: tauri::AppHandle, zoom: u16, density: String, reduce_motion: bool) -> Result<settings::Settings, String> {

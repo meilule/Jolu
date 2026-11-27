@@ -125,6 +125,7 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
     const reload = () => { void loadCore() }
     void listenEvent(EVENTS.GATEWAY_CATALOG_CHANGED, reload).then(keep)
     void listenEvent(EVENTS.CONNECTIONS_CHANGED, reload).then(keep)
+    void listenEvent(EVENTS.GATEWAY_WIRING_CHANGED, reload).then(keep)
     return () => { window.clearInterval(timer); disposed = true; offs.forEach((off) => off()) }
   }, [loadCore, detect])
 

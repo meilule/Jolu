@@ -75,6 +75,24 @@ pub fn status_without_db(settings: &Settings) -> GatewayStatus {
     }
 }
 
+/// 校验拟设为默认来源的连接当前已在模型池中对外服务且拥有有效 slug。
+pub fn validate_default_source(conn: &Connection, connection_id: &str) -> Result<(), String> {
+    let serving: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT name, slug FROM connections WHERE id = ?1 AND serve_enabled = 1",
+            [connection_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok();
+    match serving {
+        None => Err("该来源不在模型池中：请先在「管理来源」里让它加入，再设为默认来源".into()),
+        Some((name, slug)) if slug.as_deref().unwrap_or("").is_empty() => {
+            Err(format!("来源「{name}」还没有 id，无法作为默认来源"))
+        }
+        Some(_) => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
 

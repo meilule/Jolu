@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, type ReactNode } from "react"
 import { SPRING, useMotionValue, useSpring } from "@/motion"
-import { squirclePath, type CornerRadii, type EdgeKind } from "@/lib/squircle"
+import { edgeCornerRadii, squirclePath, type CornerRadii, type EdgeKind } from "@/lib/squircle"
 import type { IslandHitRectDto } from "@/lib/api"
 import type { IslandAmbientGlow } from "@/lib/botExpression"
 import { cn } from "@/lib/utils"
@@ -79,6 +79,7 @@ export function IslandContour({
   const bubblePathRef = useRef<SVGPathElement>(null)
   const strokePathRef = useRef<SVGPathElement>(null)
   const hlPathRef = useRef<SVGPathElement>(null)
+  const bubbleHlRef = useRef<SVGPathElement>(null)
   const bubbleStrokeRef = useRef<SVGPathElement>(null)
   const gooGroupRef = useRef<SVGGElement>(null)
   const bubbleBoxRef = useRef<HTMLDivElement>(null)
@@ -108,10 +109,11 @@ export function IslandContour({
     bubbleTargetW,
     bubbleSide,
     bubbleVisible,
+    dockEdge,
     reduced,
     onHitRects,
   })
-  latestRef.current = { bubbleTargetW, bubbleSide, bubbleVisible, reduced, onHitRects }
+  latestRef.current = { bubbleTargetW, bubbleSide, bubbleVisible, dockEdge, reduced, onHitRects }
 
   const paint = (immediate = false) => {
     const w = Math.max(24, sW.get())
@@ -124,7 +126,13 @@ export function IslandContour({
       snapCorner(sBL.get()),
     ]
     const bt = Math.max(0, Math.min(1.15, sBubble.get()))
-    const { bubbleTargetW: bwTarget, bubbleSide: bSide, reduced: isReduced, onHitRects: report } = latestRef.current
+    const {
+      bubbleTargetW: bwTarget,
+      bubbleSide: bSide,
+      dockEdge: curEdge,
+      reduced: isReduced,
+      onHitRects: report,
+    } = latestRef.current
 
     const mainD = squirclePath(w, h, curRadii, 0, 0)
     const innerD = squirclePath(Math.max(2, w - 1), Math.max(2, h - 1), curRadii.map((r) => Math.max(0, r - 0.5)) as CornerRadii, 0.5, 0.5)
@@ -150,16 +158,26 @@ export function IslandContour({
       ? w - bw * 0.55 + bt * (bw * 0.55 + BUBBLE_GAP)
       : -bw * 0.45 - bt * (bw * 0.55 + BUBBLE_GAP)
     const br = bh / 2
+    // 正圆卫星气泡（如多会话并发旋转圆圈 40×40）保持完整圆形；横向长条气泡在顶/底贴边时同步贴齐屏幕边直角
+    const bRadii: CornerRadii = bwTarget > bh + 4 && (curEdge === "top" || curEdge === "bottom")
+      ? edgeCornerRadii(br, curEdge)
+      : [br, br, br, br]
 
     if (showB) {
-      const bD = squirclePath(bw, bh, [br, br, br, br], bx, by)
-      const bInnerD = squirclePath(Math.max(2, bw - 1), Math.max(2, bh - 1), [br - 0.5, br - 0.5, br - 0.5, br - 0.5], bx + 0.5, by + 0.5)
+      const bInnerRadii = bRadii.map((r) => Math.max(0, r - 0.5)) as CornerRadii
+      const bD = squirclePath(bw, bh, bRadii, bx, by)
+      const bInnerD = squirclePath(Math.max(2, bw - 1), Math.max(2, bh - 1), bInnerRadii, bx + 0.5, by + 0.5)
+      const rimAlpha = String(Math.max(0, (bt - 0.45) / 0.55))
       bubblePathRef.current?.setAttribute("d", bD)
+      bubbleHlRef.current?.setAttribute("d", bInnerD)
       bubbleStrokeRef.current?.setAttribute("d", bInnerD)
-      if (bubbleStrokeRef.current) bubbleStrokeRef.current.style.opacity = String(Math.max(0, (bt - 0.45) / 0.55))
+      if (bubbleHlRef.current) bubbleHlRef.current.style.opacity = rimAlpha
+      if (bubbleStrokeRef.current) bubbleStrokeRef.current.style.opacity = rimAlpha
     } else {
       bubblePathRef.current?.setAttribute("d", "")
+      bubbleHlRef.current?.setAttribute("d", "")
       bubbleStrokeRef.current?.setAttribute("d", "")
+      if (bubbleHlRef.current) bubbleHlRef.current.style.opacity = "0"
       if (bubbleStrokeRef.current) bubbleStrokeRef.current.style.opacity = "0"
     }
 
@@ -207,7 +225,12 @@ export function IslandContour({
             y: box.top + by * scaleY,
             width: bw * scaleX,
             height: bh * scaleY,
-            radii: [br * scaleX, br * scaleX, br * scaleX, br * scaleX],
+            radii: [
+              bRadii[0] * scaleX,
+              bRadii[1] * scaleX,
+              bRadii[2] * scaleX,
+              bRadii[3] * scaleX,
+            ],
           })
         }
         report(rects, immediate)
@@ -291,6 +314,7 @@ export function IslandContour({
           <path ref={bubblePathRef} fill="var(--pn-capsule-bg)" />
         </g>
         <path ref={hlPathRef} fill={`url(#${hlId})`} />
+        <path ref={bubbleHlRef} fill={`url(#${hlId})`} style={{ opacity: 0 }} />
         <path ref={strokePathRef} fill="none" stroke="var(--pn-capsule-stroke)" strokeWidth={1} />
         <path ref={bubbleStrokeRef} fill="none" stroke="var(--pn-capsule-stroke)" strokeWidth={1} style={{ opacity: 0 }} />
       </svg>

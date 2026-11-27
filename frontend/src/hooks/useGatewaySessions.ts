@@ -20,6 +20,8 @@ export interface GatewaySessionsState {
   error: string | null
   freshness: TokenFreshness
   views: SessionView[]
+  /** 当前在途的路由请求总数（含无会话标识的请求） */
+  inFlightCount: number
   /** 没有会话标识的在途请求，按来源 id 汇总（来源卡显示运行中） */
   sourceLive: Map<string, SourceLive>
   /** 快照里是否已有数据（用于区分「真实为空」与「还没读到」） */
@@ -45,6 +47,7 @@ export function useGatewaySessions(): GatewaySessionsState {
   const lastOk = useRef(0)
   const known = useRef(new Set<string>())
   const followUp = useRef<number | null>(null)
+  const followUpAt = useRef<number>(0)
 
   const load = useCallback(async () => {
     if (!isTauri) return
@@ -71,8 +74,11 @@ export function useGatewaySessions(): GatewaySessionsState {
   }, [])
 
   const scheduleFollowUp = useCallback((delay: number) => {
+    const due = Date.now() + delay
+    if (followUp.current && followUpAt.current <= due) return
     if (followUp.current) window.clearTimeout(followUp.current)
-    followUp.current = window.setTimeout(() => { followUp.current = null; void load() }, delay)
+    followUpAt.current = due
+    followUp.current = window.setTimeout(() => { followUp.current = null; followUpAt.current = 0; void load() }, delay)
   }, [load])
 
   useEffect(() => {
@@ -86,12 +92,12 @@ export function useGatewaySessions(): GatewaySessionsState {
     }
     listen(listenEvent(EVENTS.GATEWAY_ROUTE_START, (event) => {
       push({ kind: "start", event })
-      // 新会话第一次出现：尽快补全显示信息
-      if (event.session_platform && event.session_id && !known.current.has(sessionKey(event.session_platform, event.session_id))) scheduleFollowUp(600)
+      // 新会话第一次出现：尽快补全标题、项目与 Token
+      if (event.session_platform && event.session_id && !known.current.has(sessionKey(event.session_platform, event.session_id))) scheduleFollowUp(400)
     }))
     listen(listenEvent(EVENTS.GATEWAY_ROUTE, (event) => {
       push({ kind: "end", event })
-      if (event.session_id) scheduleFollowUp(3000)
+      if (event.session_id) scheduleFollowUp(800)
     }))
     void load()
     const timer = window.setInterval(() => {
@@ -127,12 +133,14 @@ export function useGatewaySessions(): GatewaySessionsState {
   }, [expiry, liveMap])
 
   const views = useMemo(() => buildSessionViews(overview?.sessions ?? [], liveMap, priority), [overview, liveMap, priority])
+  const inFlightCount = useMemo(() => Object.keys(live.requests).length, [live])
 
   return {
     loading,
     error: overview ? null : error,
     freshness: failed ? "failed" : stale ? "stale" : "fresh",
     views,
+    inFlightCount,
     sourceLive,
     loaded: overview !== null,
     refresh: () => void load(),

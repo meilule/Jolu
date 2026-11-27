@@ -17,7 +17,7 @@ import { useSettings } from "@/hooks/useSettings"
 import { useConnections } from "@/hooks/useConnections"
 import { ContentTransition, LoadingSurface } from "@/components/ui/LoadingSurface"
 import { Icon, type IconName } from "@/icons"
-import { useGlidePill } from "@/motion"
+import { TactileButton, useGlidePill } from "@/motion"
 import {
   Banner,
   Button,
@@ -159,6 +159,30 @@ export function IslandView() {
               </GroupCard>
 
               <GroupCard icon="connect" title="联动与判定">
+                <Row
+                  title="智能跟随活跃 Agent 与账号"
+                  desc="本体灵动岛自动跟随正在写入的工具与本机外部切换的账号（CC Switch / CLI 登录）；多工具并发时锁定主胶囊并弹出右侧气泡一键轮换，遇到未录入 Key 自动隐藏旧额度防误导"
+                  control={
+                    <Switch
+                      checked={linkage.follow_active}
+                      disabled={disabled || linkageSaving}
+                      label="智能跟随活跃 Agent 与账号"
+                      onChange={(on) => void cfg.setIslandLinkage({ follow_active: on })}
+                    />
+                  }
+                />
+                <Row
+                  title="后台等待确认提醒（Claude Hooks / Codex Notify）"
+                  desc="默认关闭；开启后向本机 Claude Code 与 Codex 注入受控轻量级通知钩子，后台终端等待权限确认时在灵动岛琥珀色置顶提醒，关闭或卸载时零残留还原"
+                  control={
+                    <Switch
+                      checked={linkage.agent_hooks}
+                      disabled={disabled || linkageSaving || !isTauri}
+                      label="后台等待确认提醒（Claude Hooks / Codex Notify）"
+                      onChange={(on) => void cfg.setIslandLinkage({ agent_hooks: on })}
+                    />
+                  }
+                />
                 <Row
                   title="跟随主窗口"
                   desc="主窗口在看某个连接的用量、账号或会话时，本体岛临时显示它并转头看向主窗口；分身不跟随"
@@ -469,8 +493,9 @@ function StyleSection({ value, disabled, onChange }: { value: IslandStyle; disab
         {STYLE_OPTIONS.map((option) => {
           const active = option.value === value
           return (
-            <button
+            <TactileButton
               key={option.value}
+              variant="tile"
               type="button"
               role="radio"
               aria-checked={active}
@@ -501,7 +526,7 @@ function StyleSection({ value, disabled, onChange }: { value: IslandStyle; disab
                   <Icon name="check" size="xs" />
                 </span>
               </span>
-            </button>
+            </TactileButton>
           )
         })}
       </div>

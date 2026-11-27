@@ -15,6 +15,7 @@ function make(now: number): SessionItemDto[] {
     connection_id: null, status, has_source: status !== "usage_only",
   })
   return [
+    row("antigravity", "native:antigravity:ccs-demo:a52d96ef-f771-4799", "排查 Antigravity 会话读取与用量统计", "D:/develop/jolu", at(0, 12, 46), "done", [28_400, 2_610_000, 0, 21_600]),
     row("codex", "session_demo_71fa0c1d2c08", "优化 Jolu 的会话界面", "D:/develop/jolu", at(0, 12, 38), "done", [12_400, 8_600, 0, 5_200]),
     row("claude", "session_demo_82ac5e1b91f0", "排查缓存 Token 统计", "D:/develop/jolu", at(0, 12, 26), "running", [9_000, 21_000, 1_400, 4_100]),
     row("codex", "session_demo_3c11d0a7e5b2", "实现日期范围筛选", "D:/develop/jolu", at(1, 16, 0), "done", [6_000, 4_000, 0, 2_000]),
@@ -39,7 +40,17 @@ export function demoMessages(platform: string, sessionId: string): MessagePageDt
     available: !usageOnly,
     total: usageOnly ? 0 : 24,
     offset: usageOnly ? 0 : 22,
-    messages: usageOnly ? [] : [
+    messages: usageOnly ? [] : platform === "antigravity" ? [
+      { role: "user", ts: base, text: "会话线程无法读取到 Antigravity CLI 的会话记录，查明原因并修复。", tools: [] },
+      {
+        role: "assistant",
+        ts: base + 120_000,
+        model: "gemini-4-neon-xhigh",
+        reasoning: "先核对 session_threads.rs 的源文件定位逻辑，再检查 brain/*/transcript.jsonl 的事件结构。",
+        text: "已查明并修复：\n\n• 接入 Antigravity CLI 的 transcript.jsonl 只读流式解析\n• 自动从首个 USER_INPUT 提取会话标题并支持正文搜索\n• 按顺序配对 PLANNER_RESPONSE 工具调用与 GENERIC 执行结果",
+        tools: [{ name: "read_file", summary: "backend/src/session_threads.rs", output: "Showing lines 1-250 of 1774" }],
+      },
+    ] : [
       { role: "user", ts: base, text: "把会话列表和详情放在同一页，切换会话时不要丢失筛选条件。", tools: [] },
       {
         role: "assistant",
@@ -48,7 +59,7 @@ export function demoMessages(platform: string, sessionId: string): MessagePageDt
         tools: [{ name: "查看文件", summary: "SessionList.tsx", output: "已读取 128 行\n输出按原记录展示\n长内容可展开或复制" }],
       },
     ],
-    models: [platform === "codex" ? "gpt-5" : "claude-sonnet-4-5"],
+    models: [platform === "antigravity" ? "gemini-4-neon-xhigh" : platform === "codex" ? "gpt-5" : "claude-sonnet-4-5"],
     cost: 0.42,
     priced_requests: 12,
     requests: 12,

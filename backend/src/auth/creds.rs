@@ -1,0 +1,642 @@
+//! 接入方式探测（§6.3）
+//!
+//! 只判断**本机配置了哪种接入方式**，用于灵动岛与主面板上的
+//! 绿色 `Auth` / 蓝色 `API` 连接方式标签。
+//!
+//! 安全约束：本模块只检查文件是否存在、JSON 里**键是否存在且非空**，
+//! 凭证仅在后端读取，候选只返回脱敏标识和配置地址。接入方式只有
+//! 官方订阅（Auth）与 API Key 两种，不存在第三种。
+
+use serde::Serialize;
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Serialize)]
+pub struct ConnectionInfo {
+    /// "auth" | "api"，未检测到任何配置时为 None
+    pub kind: Option<String>,
+    /// 界面上的来源说明，不含任何凭证内容
+    pub label: Option<String>,
+}
+
+pub(crate) fn home() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+}
+
+/// 与 CLI 写入、登录检测共享目录，避免读默认目录却写到另一个账号目录。
+pub(crate) fn codex_dir() -> Option<PathBuf> {
+    std::env::var_os("CODEX_HOME").filter(|value| !value.is_empty()).map(PathBuf::from)
+        .or_else(|| home().map(|path| path.join(".codex")))
+}
+
+pub(crate) fn claude_dir() -> Option<PathBuf> {
+    std::env::var_os("CLAUDE_CONFIG_DIR").filter(|value| !value.is_empty()).map(PathBuf::from)
+        .or_else(|| home().map(|path| path.join(".claude")))
+}
+
+/// 绝对路径，或 Windows 上以 `\` / `/` 开头的根路径（magpie `appdir/env.go::rooted` 同款）。
+fn rooted(text: &str) -> bool {
+    Path::new(text).is_absolute() || (cfg!(windows) && (text.starts_with('\\') || text.starts_with('/')))
+}
+
+/// ZCode 读的主目录：Windows 上 `HOME` 已设、是根路径、且默认主目录就是 `USERPROFILE` 时用
+/// `HOME`（ZCode 是 Node 程序，先认 `HOME`），否则原样用 `home`。测试的临时 home 不是
+/// `USERPROFILE`，不受影响。参照 magpie `appdir/zcode.go::ZCodeHomeOn`。
+pub(crate) fn zcode_home(home: &Path) -> PathBuf {
+    if !cfg!(windows) {
+        return home.to_path_buf();
+    }
+    let from_env = std::env::var("HOME").ok().map(|value| value.trim().to_string()).filter(|value| !value.is_empty() && rooted(value));
+    let is_profile = std::env::var_os("USERPROFILE").is_some_and(|profile| profile.eq_ignore_ascii_case(home.as_os_str()));
+    match from_env {
+        Some(dir) if is_profile => PathBuf::from(dir),
+        _ => home.to_path_buf(),
+    }
+}
+
+/// ZCode 数据（`.zcode`）所在的上一级目录：用户在 ZCode 设置里改过「数据存储路径」时，
+/// 选择记在原位置 `.zcode/v2/setting.json` 的 `dataBaseDir`，ZCode 把 `.zcode/v2` 整体搬过去。
+/// 文件缺失、JSON 不合法、字段不是字符串、为空或不是根路径，一律回退 `home`，不报错。
+/// 参照 magpie `appdir/zcode.go::ZCodeDataIn`。
+fn zcode_data_base(home: &Path) -> PathBuf {
+    let setting = home.join(".zcode").join("v2").join("setting.json");
+    let moved = crate::steady::read_to_string(&setting)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| value.get("dataBaseDir").and_then(Value::as_str).map(|dir| dir.trim().to_string()))
+        .filter(|dir| !dir.is_empty() && rooted(dir));
+    moved.map(PathBuf::from).unwrap_or_else(|| home.to_path_buf())
+}
+
+/// ZCode 的 `.zcode` 数据目录（`v2` 的 provider、config、登录凭据都在这里）。
+/// 优先 Jolu 的 `ZCODE_HOME` 覆盖（值就是 `.zcode` 目录本身，空值视为未设），
+/// 否则 `<ZCode 主目录或 dataBaseDir>/.zcode`。探测与接线共用这一个函数，保证探测到的
+/// 目录就是接线写的目录。
+///
+/// 只给 `v2` 数据用：Skills、`AGENTS.md`、`cli/config.json` 留在 ZCode 主目录下，
+/// `cli/db/db.sqlite` 会话库留在 `USERPROFILE` 下，都不跟 `dataBaseDir` 搬（magpie 注释）。
+pub(crate) fn zcode_data_dir(home: &Path) -> PathBuf {
+    if let Some(dir) = std::env::var_os("ZCODE_HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    zcode_data_base(&zcode_home(home)).join(".zcode")
+}
+
+fn read_json(path: &PathBuf) -> Option<Value> {
+    serde_json::from_str(&crate::steady::read_to_string(path).ok()?).ok()
+}
+
+/// 原生平台的凭证格式必须由其专用适配器验证，禁止猜测通用 token 键。
+pub(crate) fn is_fetch_only_platform(platform: &str) -> bool { crate::platforms::native(platform) }
+
+/// 本机 Codex Auth 仅在后端用于官方额度只读查询，不落库、不返回前端。
+pub fn local_codex_auth() -> Option<(String, Option<String>)> {
+    let dir = codex_dir()?;
+    let v = read_json(&dir.join("auth.json"))?;
+    Some((str_at(&v, &["tokens", "access_token"])?, str_at(&v, &["tokens", "account_id"])))
+}
+
+/// 键存在、非 null、且不是空字符串
+fn has_value(v: &Value, key: &str) -> bool {
+    match v.get(key) {
+        None | Some(Value::Null) => false,
+        Some(Value::String(s)) => !s.trim().is_empty(),
+        Some(Value::Object(o)) => !o.is_empty(),
+        Some(_) => true,
+    }
+}
+
+/// Claude Code：API Key 优先于订阅（CLI 自身也是这个优先级）
+fn claude() -> ConnectionInfo {
+    let Ok(settings) = claude_settings() else { return ConnectionInfo { kind: None, label: None }; };
+    if claude_api_from_settings(settings.as_ref()).is_some() {
+        return ConnectionInfo {
+            kind: Some("api".into()),
+            label: Some("API Key（本机配置或环境变量）".into()),
+        };
+    }
+    let Some(dir) = claude_dir() else {
+        return ConnectionInfo { kind: None, label: None };
+    };
+
+    if let Some(v) = settings {
+        if has_value(&v, "apiKeyHelper") {
+            return ConnectionInfo {
+                kind: Some("api".into()),
+                label: Some("API Key（本机配置）".into()),
+            };
+        }
+    }
+
+    if let Some(v) = read_json(&dir.join(".credentials.json")) {
+        if has_value(&v, "claudeAiOauth") {
+            return ConnectionInfo {
+                kind: Some("auth".into()),
+                label: Some("官方订阅".into()),
+            };
+        }
+    }
+    ConnectionInfo { kind: None, label: None }
+}
+
+/// Codex：`~/.codex/auth.json` 同时可能有两者，OPENAI_API_KEY 非空时以 API Key 为准
+fn codex() -> ConnectionInfo {
+    if read_secret("codex", "api").is_some() {
+        return ConnectionInfo {
+            kind: Some("api".into()),
+            label: Some("API Key（本机配置或环境变量）".into()),
+        };
+    }
+    let Some(dir) = codex_dir() else {
+        return ConnectionInfo { kind: None, label: None };
+    };
+    if let Some(v) = read_json(&dir.join("auth.json")) {
+        if has_value(&v, "OPENAI_API_KEY") {
+            return ConnectionInfo {
+                kind: Some("api".into()),
+                label: Some("API Key（本机配置）".into()),
+            };
+        }
+        if has_value(&v, "tokens") {
+            return ConnectionInfo {
+                kind: Some("auth".into()),
+                label: Some("官方订阅".into()),
+            };
+        }
+    }
+    ConnectionInfo { kind: None, label: None }
+}
+
+pub fn detect(platform: &str) -> ConnectionInfo {
+    match platform {
+        "codex" => codex(),
+        "claude" => claude(),
+        other if crate::platforms::native(other) => ConnectionInfo {kind: None,label: Some("本机来源监控（非账号授权）".into())},
+        _ => ConnectionInfo {kind:None,label:None},
+    }
+}
+
+/// 取出 JSON 里的字符串值，空串视为缺失
+fn str_at(v: &Value, path: &[&str]) -> Option<String> {
+    let mut cur = v;
+    for k in path {
+        cur = cur.get(k)?;
+    }
+    let s = cur.as_str()?.trim();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}
+
+/// 读取一份配置快照。损坏或正在写入的配置不能回退成启动器中的旧凭证。
+fn claude_settings() -> Result<Option<Value>, ()> {
+    let Some(dir) = claude_dir() else { return Ok(None); };
+    let text = match crate::steady::read_to_string(dir.join("settings.json")) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(()),
+    };
+    let settings: Value = serde_json::from_str(&text).map_err(|_| ())?;
+    if !settings.is_object() || settings.get("env").is_some_and(|env| !env.is_object()) { return Err(()); }
+    Ok(Some(settings))
+}
+
+/// 普通 CLI 会话中 settings.env 覆盖同名继承变量；空字符串显式取消旧变量。
+/// 地址和凭证按同一份快照解析，Bearer token 的优先级高于 API Key。
+fn claude_api_from_settings(settings: Option<&Value>) -> Option<(String, Option<String>)> {
+    let value = |key: &str| {
+        match settings.and_then(|settings| settings.get("env")).and_then(|env| env.get(key)) {
+            Some(value) => value.as_str().map(str::to_string),
+            None => std::env::var(key).ok(),
+        }.map(|value| value.trim().to_string()).filter(|value| !value.is_empty())
+    };
+    let secret = value("ANTHROPIC_AUTH_TOKEN").or_else(|| value("ANTHROPIC_API_KEY"))?;
+    let base = value("ANTHROPIC_BASE_URL").map(|base| base.trim_end_matches('/').to_string());
+    Some((secret, base))
+}
+
+fn local_claude_api_pair() -> Option<(String, Option<String>)> {
+    claude_api_from_settings(claude_settings().ok()?.as_ref())
+}
+
+/// 「获取」按钮的实际读取（§6.3）。
+///
+/// 这是**唯一**会把凭证原值读进内存的函数，调用方必须立刻脱敏后再落库，
+/// 且不得把返回值写进日志或传给前端。
+pub fn read_secret(platform: &str, kind: &str) -> Option<String> {
+    match (platform, kind) {
+        ("claude", "api") => local_claude_api_pair().map(|pair| pair.0),
+
+        ("claude", _) => {
+            let v = read_json(&claude_dir()?.join(".credentials.json"))?;
+            str_at(&v, &["claudeAiOauth", "accessToken"])
+        }
+
+        ("codex", "api") => local_connections("codex", "api").ok()?.into_iter().next()?.secret,
+
+        ("codex", _) => {
+            let v = read_json(&codex_dir()?.join("auth.json"))?;
+            str_at(&v, &["tokens", "access_token"])
+        }
+
+        _ => None,
+    }
+}
+
+/// 本机可自动发现的连接候选。用于「+ 添加连接」第 2 步预填，
+/// 让用户不必手抄 Key。**只返回是否存在与脱敏标识，不返回原值。**
+#[derive(Debug, Serialize)]
+pub struct Candidate {
+    pub base_url: Option<String>,
+    pub platform: String,
+    pub kind: String,
+    /// 建议的连接名称，用户可改
+    pub suggested_name: String,
+    /// 脱敏标识，让用户确认这是自己要的那个账号
+    pub masked: String,
+}
+
+/// 与本机 Claude Key 配套的网关，避免把网关 Key 发往官方端点。
+pub fn local_base_url(platform: &str, kind: &str) -> Option<String> {
+    if platform != "claude" || kind != "api" { return None; }
+    local_claude_api_pair().and_then(|pair| pair.1)
+}
+
+/// Codex 自定义供应商的网关地址（与 local_connections 同一来源）。
+/// 配置缺失或暂时不可解析（写了一半）时返回 None，由调用方跳过本次。
+pub fn codex_api_base_url() -> Option<String> {
+    let dir = codex_dir()?;
+    let text = crate::steady::read_to_string(dir.join("config.toml")).ok()?;
+    codex_provider(&text).ok()?.0
+}
+
+/* ─────────────────────── Grok CLI 凭证 ─────────────────────── */
+
+/// Grok CLI 的 OAuth 凭证（~/.grok/auth.json）。
+/// Ok(token)；Err 为可直接展示给用户的原因。
+pub fn local_grok_auth() -> Result<String, String> {
+    let home = home().ok_or_else(|| "未找到用户主目录".to_string())?;
+    local_grok_auth_in(&home, chrono::Utc::now().timestamp())
+}
+
+pub(crate) fn local_grok_auth_in(home: &Path, now_secs: i64) -> Result<String, String> {
+    let path = home
+        .join(".grok")
+        .join("auth.json");
+    if !path.exists() {
+        return Err("未找到本机 Grok 凭证（~/.grok/auth.json），请先 grok login".to_string());
+    }
+    let content = crate::steady::read_to_string(&path)
+        .map_err(|e| format!("读取 Grok 凭证失败: {e}"))?;
+    parse_grok_auth_json(&content, now_secs)
+}
+
+/// 顶层是 scope → 条目的 map；选 `key` 非空的首选条目（OIDC `https://auth.x.ai::`
+/// 前缀优先、legacy `https://accounts.x.ai/sign-in` 兜底），过期视为失效。
+/// `now_secs` 注入以便确定性单测。
+fn parse_grok_auth_json(content: &str, now_secs: i64) -> Result<String, String> {
+    let root: std::collections::BTreeMap<String, serde_json::Value> = serde_json::from_str(content)
+        .map_err(|e| format!("Grok auth.json 不是有效 JSON: {e}"))?;
+    const OIDC_PREFIX: &str = "https://auth.x.ai::";
+    const LEGACY_SCOPE: &str = "https://accounts.x.ai/sign-in";
+    let mut oidc = None;
+    let mut legacy = None;
+    for (scope, value) in &root {
+        let key = value.get("key").and_then(|v| v.as_str()).unwrap_or("");
+        if key.is_empty() { continue; } // 残缺条目不能遮蔽健康条目
+        if scope.starts_with(OIDC_PREFIX) { oidc = Some((key, value)); }
+        else if scope == LEGACY_SCOPE || scope.contains("/sign-in") { legacy = Some((key, value)); }
+    }
+    let (key, entry) = oidc.or(legacy)
+        .ok_or_else(|| "Grok auth.json 中没有可用的 access token".to_string())?;
+    if let Some(expires_at) = entry.get("expires_at").and_then(|v| v.as_str()) {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(expires_at) {
+            if dt.timestamp() < now_secs {
+                return Err("Grok OAuth token 已过期，请重新 grok login".into());
+            }
+        }
+    }
+    Ok(key.to_string())
+}
+
+/// 「更新」与自动同步共用的单次读取：本机当前应用的凭证 + 地址。
+/// 与 local_connections（添加）同源，保证两条路径口径一致；
+/// 返回 None 表示本机没有可用的该类凭证。
+pub fn read_local_pair(platform: &str, kind: &str) -> Option<(String, Option<String>)> {
+    if platform == "claude" && kind == "api" { return local_claude_api_pair(); }
+    if platform == "codex" {
+        let connection = local_connections(platform, kind).ok()?.into_iter().next()?;
+        return Some((connection.secret?, connection.base_url));
+    }
+    let secret = read_secret(platform, kind)?;
+    let base_url = match (platform, kind) {
+        ("codex", "api") => codex_api_base_url(),
+        _ => local_base_url(platform, kind),
+    };
+    Some((secret, base_url))
+}
+
+pub fn discover() -> Vec<Candidate> {
+    let mut out = Vec::new();
+    for platform in ["claude", "codex"] {
+        for kind in ["auth", "api"] {
+            // 读到值就立刻脱敏，原值随作用域结束即丢弃
+            if let Some((secret, base_url)) = read_local_pair(platform, kind) {
+                let name = match (platform, kind) {
+                    ("claude", "auth") => "Claude 官方订阅",
+                    ("claude", _) => "Claude API Key",
+                    ("codex", "auth") => "Codex 官方订阅",
+                    _ => "Codex API Key",
+                };
+                out.push(Candidate {
+                    base_url,
+                    platform: platform.into(),
+                    kind: kind.into(),
+                    suggested_name: name.into(),
+                    masked: crate::connections::mask(&secret),
+                });
+            }
+        }
+    }
+    out
+}
+
+fn codex_provider(text: &str) -> Result<(Option<String>, Option<String>), String> {
+    let config: toml::Value = toml::from_str(text).map_err(|_| "Codex config.toml 格式无效，请在 CC Switch 中检查配置")?;
+    let name = config.get("model_provider").and_then(toml::Value::as_str).unwrap_or("openai");
+    let provider = config.get("model_providers").and_then(|p| p.get(name));
+    let string = |key: &str| provider.and_then(|p| p.get(key)).and_then(toml::Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let base = string("base_url");
+    if name != "openai" && base.is_none() { return Err("Codex 自定义供应商缺少 base_url，请在 CC Switch 中检查配置".into()); }
+    Ok((base, string("env_key")))
+}
+
+/// 只读取 CC Switch 已应用到 CLI 的配置，凭证原值不跨越后端边界。
+pub fn local_connections(platform: &str, kind: &str) -> Result<Vec<crate::connections::NewConnection>, String> {
+    if !matches!(platform, "claude" | "codex") || !matches!(kind, "auth" | "api") {
+        return Err("不支持的平台或连接类型".into());
+    }
+    let mut out = Vec::new();
+    if platform == "claude" {
+        if let Some((secret, base_url)) = read_local_pair("claude", kind) {
+            out.push(crate::connections::NewConnection { service: None,
+                platform: platform.into(), kind: kind.into(), name: if kind == "auth" { "Claude 官方订阅" } else { "Claude API Key" }.into(),
+                secret: Some(secret), base_url,
+                model: None, effort: None, context_1m: None, protocol: None, slug_base: None,
+            });
+        }
+        return Ok(out);
+    }
+    let dir = codex_dir().ok_or("无法确定用户配置目录")?;
+    let auth = read_json(&dir.join("auth.json"));
+    // Auth 不依赖 API 提供商配置，错误的 API 地址不能阻断订阅凭证读取。
+    if kind == "auth" {
+        if let Some(secret) = auth.as_ref().and_then(|v| str_at(v, &["tokens", "access_token"])) {
+            out.push(crate::connections::NewConnection { service: None, platform: platform.into(), kind: kind.into(), name: "Codex 官方订阅".into(), secret: Some(secret), base_url: None, model: None, effort: None, context_1m: None, protocol: None, slug_base: None });
+        }
+        return Ok(out);
+    }
+    let (base_url, env_key) = match crate::steady::read_to_string(dir.join("config.toml")) {
+        Ok(text) => codex_provider(&text)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, None),
+        Err(_) => return Err("无法读取 Codex config.toml".into()),
+    };
+    let key = if let Some(env_key) = env_key {
+        // CLI 显式指定 env_key 时，缺失就是配置错误，不能把另一服务保存的 Key 配到此地址。
+        Some(std::env::var(&env_key).ok().filter(|s| !s.trim().is_empty())
+            .ok_or("Codex 当前供应商指定的密钥环境变量未设置，请在原工具配置后重试")?)
+    } else {
+        std::env::var("OPENAI_API_KEY").ok().filter(|s| !s.trim().is_empty())
+            .or_else(|| auth.as_ref().and_then(|v| str_at(v, &["OPENAI_API_KEY"])))
+    };
+    if let Some(secret) = key {
+        out.push(crate::connections::NewConnection { service: None, platform: platform.into(), kind: kind.into(), name: "Codex API Key".into(), secret: Some(secret), base_url, model: None, effort: None, context_1m: None, protocol: None, slug_base: None });
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod zcode_dir_tests {
+    use super::*;
+
+    fn temp_home(tag: &str) -> PathBuf {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("jolu-zcode-dir-{tag}-{}-{stamp}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".zcode").join("v2")).unwrap();
+        dir
+    }
+
+    fn write_setting(home: &Path, text: &str) {
+        std::fs::write(home.join(".zcode").join("v2").join("setting.json"), text).unwrap();
+    }
+
+    /// 没有 setting.json、或没有 dataBaseDir → 仍是 `<home>/.zcode`（与改动前一致）
+    #[test]
+    fn data_dir_defaults_to_home() {
+        let home = temp_home("default");
+        assert_eq!(zcode_data_base(&home), home);
+        write_setting(&home, r#"{"locale":"zh-CN"}"#);
+        assert_eq!(zcode_data_base(&home), home);
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// dataBaseDir 是绝对路径 → 数据目录跟过去；首尾空白去掉
+    #[test]
+    fn data_dir_follows_absolute_data_base_dir() {
+        let home = temp_home("moved");
+        let moved = temp_home("moved-target");
+        let value = serde_json::to_string(&format!("  {}  ", moved.display())).unwrap();
+        write_setting(&home, &format!(r#"{{"dataBaseDir":{value}}}"#));
+        assert_eq!(zcode_data_base(&home), moved);
+        std::fs::remove_dir_all(&home).ok();
+        std::fs::remove_dir_all(&moved).ok();
+    }
+
+    /// 任何异常都回退 home：相对路径、空串、数字、null、JSON 坏掉
+    #[test]
+    fn data_dir_ignores_unusable_values() {
+        let home = temp_home("bad");
+        for text in [
+            r#"{"dataBaseDir":"relative\\dir"}"#,
+            r#"{"dataBaseDir":"   "}"#,
+            r#"{"dataBaseDir":42}"#,
+            r#"{"dataBaseDir":null}"#,
+            "{not json",
+        ] {
+            write_setting(&home, text);
+            assert_eq!(zcode_data_base(&home), home, "{text} 应回退 home");
+        }
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// 测试的临时 home 不是 USERPROFILE：HOME 设没设都不挪
+    #[test]
+    fn zcode_home_keeps_non_profile_home() {
+        let home = temp_home("not-profile");
+        assert_eq!(zcode_home(&home), home);
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn rooted_accepts_absolute_and_windows_root_paths() {
+        assert!(!rooted("relative/dir"));
+        assert!(!rooted(""));
+        if cfg!(windows) {
+            assert!(rooted("D:\\ZCodeData"));
+            assert!(rooted("\\ZCodeData"));
+            assert!(rooted("/ZCodeData"));
+        } else {
+            assert!(rooted("/var/zcode"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+    #[test]
+    fn custom_provider_retains_endpoint_and_never_falls_back_to_official() {
+        assert_eq!(codex_provider("model_provider='gateway'\n[model_providers.gateway]\nbase_url='https://example.test/v1'\nenv_key='CUSTOM_KEY'").unwrap(), (Some("https://example.test/v1".into()), Some("CUSTOM_KEY".into())));
+        assert!(codex_provider("model_provider='gateway'").is_err());
+        assert!(codex_provider("[").is_err());
+        assert_eq!(codex_provider("").unwrap(), (None, None));
+    }
+
+    #[test]
+    fn grok_auth_prefers_oidc_entry_and_reports_expiry() {
+        assert_eq!(
+            parse_grok_auth_json(r#"{
+                "https://accounts.x.ai/sign-in": {"key": "legacy-token"},
+                "https://auth.x.ai::client-abc": {"key": "oidc-token", "expires_at": "2099-01-01T00:00:00Z"}
+            }"#, 0).unwrap(),
+            "oidc-token"
+        );
+        let expired = r#"{"https://auth.x.ai::c": {"key": "t", "expires_at": "2000-01-01T00:00:00Z"}}"#;
+        assert!(parse_grok_auth_json(expired, 1_500_000_000).unwrap_err().contains("过期"));
+        let only_legacy = r#"{"https://accounts.x.ai/sign-in": {"key": "legacy"}}"#;
+        assert_eq!(parse_grok_auth_json(only_legacy, 0).unwrap(), "legacy");
+        // key 为空的残缺 OIDC 条目不遮蔽健康条目
+        let broken = r#"{"https://auth.x.ai::c": {}, "https://accounts.x.ai/sign-in": {"key": "ok"}}"#;
+        assert_eq!(parse_grok_auth_json(broken, 0).unwrap(), "ok");
+        assert!(parse_grok_auth_json("{}", 0).is_err());
+        assert!(parse_grok_auth_json("not-json", 0).is_err());
+    }
+}
+
+/// 界面需要说明「扫描了哪些路径与环境变量」，不静默读取用户未预期的位置（§6.3）
+pub fn scanned_locations(platform: &str, kind: &str) -> Vec<String> {
+    let claude = claude_dir().map(|path| path.display().to_string()).unwrap_or_else(|| "~/.claude".into());
+    let codex = codex_dir().map(|path| path.display().to_string()).unwrap_or_else(|| "~/.codex".into());
+    match (platform, kind) {
+        ("claude", "api") => vec!["环境变量 ANTHROPIC_API_KEY".into(), "环境变量 ANTHROPIC_AUTH_TOKEN".into(), format!("{claude}/settings.json 的 env 段")],
+        ("claude", _) => vec![format!("{claude}/.credentials.json")],
+        ("codex", "api") => vec!["环境变量 OPENAI_API_KEY 或当前供应商 env_key".into(), format!("{codex}/auth.json"), format!("{codex}/config.toml")],
+        ("codex", _) => vec![format!("{codex}/auth.json")],
+        _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod directory_tests {
+    #[test]
+    fn settings_environment_overrides_stale_launcher_for_every_read_path() {
+        const CHILD: &str = "JOLU_CLAUDE_PRECEDENCE_CASE";
+        if let Ok(case) = std::env::var(CHILD) {
+            let expected = match case.as_str() {
+                "configured" => Some(("current-settings-token".to_string(), Some("https://current.example.test".to_string()))),
+                "partial" => Some(("stale-launcher-token".to_string(), Some("https://current.example.test".to_string()))),
+                "missing" => Some(("stale-launcher-token".to_string(), Some("https://stale.example.test".to_string()))),
+                _ => None,
+            };
+            assert_eq!(super::read_local_pair("claude", "api"), expected);
+            assert_eq!(super::read_secret("claude", "api"), expected.as_ref().map(|pair| pair.0.clone()));
+            assert_eq!(super::local_base_url("claude", "api"), expected.as_ref().and_then(|pair| pair.1.clone()));
+            assert_eq!(super::detect("claude").kind.as_deref(), expected.as_ref().map(|_| "api"));
+            let saved = super::local_connections("claude", "api").unwrap();
+            assert_eq!(saved.len(), usize::from(expected.is_some()));
+            if let Some((secret, base)) = expected {
+                assert_eq!(saved[0].secret.as_deref(), Some(secret.as_str()));
+                assert_eq!(saved[0].base_url, base);
+            }
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("jolu-claude-precedence-{}-{}", std::process::id(), chrono::Utc::now().timestamp_nanos_opt().unwrap()));
+        std::fs::create_dir_all(&root).unwrap();
+        for (case, settings) in [
+            ("configured", Some(r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"current-settings-token","ANTHROPIC_BASE_URL":"https://current.example.test/"}}"#)),
+            ("partial", Some(r#"{"env":{"ANTHROPIC_BASE_URL":"https://current.example.test/"}}"#)),
+            ("missing", None),
+            ("empty", Some(r#"{"env":{"ANTHROPIC_API_KEY":"","ANTHROPIC_AUTH_TOKEN":"","ANTHROPIC_BASE_URL":""}}"#)),
+            ("invalid", Some("{")),
+        ] {
+            let dir = root.join(case);
+            std::fs::create_dir_all(&dir).unwrap();
+            if let Some(settings) = settings { std::fs::write(dir.join("settings.json"), settings).unwrap(); }
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &format!("{}::settings_environment_overrides_stale_launcher_for_every_read_path", module_path!().trim_start_matches("jolu_lib::"))])
+                .env(CHILD, case).env("USERPROFILE", root.join("empty-home")).env("HOME", root.join("empty-home"))
+                .env("CLAUDE_CONFIG_DIR", &dir).env("CODEX_HOME", root.join("empty-codex"))
+                .env("ANTHROPIC_API_KEY", "stale-launcher-api-key").env("ANTHROPIC_AUTH_TOKEN", "stale-launcher-token")
+                .env("ANTHROPIC_BASE_URL", "https://stale.example.test/")
+                .output().unwrap();
+            assert!(result.status.success(), "case={case}: {}", String::from_utf8_lossy(&result.stdout));
+        }
+        // 仅清理本测试新建的临时目录。
+        for case in ["configured", "partial", "missing", "empty", "invalid"] {
+            let dir = root.join(case);
+            let file = dir.join("settings.json");
+            if file.exists() { std::fs::remove_file(file).unwrap(); }
+            std::fs::remove_dir(dir).unwrap();
+        }
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn overridden_directories_are_used_for_detection_credentials_and_addresses() {
+        const CHILD: &str = "JOLU_CREDS_DIRECTORY_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            if std::env::var_os("JOLU_CREDS_MISSING_ENV_TEST").is_some() {
+                assert!(super::local_connections("codex", "api").is_err());
+                assert!(super::read_secret("codex", "api").is_none());
+                assert!(super::read_local_pair("codex", "api").is_none());
+                return;
+            }
+            assert_eq!(super::read_secret("codex", "auth").as_deref(), Some("fixture-codex"));
+            assert_eq!(super::read_secret("claude", "auth").as_deref(), Some("fixture-claude"));
+            assert_eq!(super::read_local_pair("claude", "api"), Some(("fixture-api".into(), Some("https://fixture.example".into()))));
+            assert_eq!(super::codex_api_base_url().as_deref(), Some("https://codex-fixture.example/v1"));
+            assert_eq!(super::read_local_pair("codex", "api"), Some(("fixture-custom-key".into(), Some("https://codex-fixture.example/v1".into()))));
+            assert_eq!(super::detect("codex").kind.as_deref(), Some("api"));
+            assert_eq!(super::detect("claude").kind.as_deref(), Some("api"));
+            let locations = super::scanned_locations("codex", "auth").join(" ");
+            assert!(locations.contains("codex-override"));
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("jolu-credentials-dir-{}-{}", std::process::id(), chrono::Utc::now().timestamp_nanos_opt().unwrap()));
+        let codex = root.join("codex-override"); let claude = root.join("claude-override");
+        std::fs::create_dir_all(&codex).unwrap(); std::fs::create_dir_all(&claude).unwrap();
+        std::fs::write(codex.join("auth.json"), r#"{"OPENAI_API_KEY":"unrelated-stored-key","tokens":{"access_token":"fixture-codex"}}"#).unwrap();
+        std::fs::write(codex.join("config.toml"), "model_provider='fixture'\n[model_providers.fixture]\nbase_url='https://codex-fixture.example/v1'\nenv_key='JOLU_FIXTURE_CODEX_KEY'\n").unwrap();
+        std::fs::write(claude.join(".credentials.json"), r#"{"claudeAiOauth":{"accessToken":"fixture-claude"}}"#).unwrap();
+        std::fs::write(claude.join("settings.json"), r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"fixture-api","ANTHROPIC_BASE_URL":"https://fixture.example/"}}"#).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("{}::overridden_directories_are_used_for_detection_credentials_and_addresses", module_path!().trim_start_matches("jolu_lib::"))])
+            .env(CHILD, "1").env("USERPROFILE", root.join("empty-home")).env("HOME", root.join("empty-home"))
+            .env("CODEX_HOME", &codex).env("CLAUDE_CONFIG_DIR", &claude)
+            .env("JOLU_FIXTURE_CODEX_KEY", "fixture-custom-key")
+            .env_remove("OPENAI_API_KEY").env_remove("ANTHROPIC_API_KEY").env_remove("ANTHROPIC_AUTH_TOKEN").env_remove("ANTHROPIC_BASE_URL")
+            .output().unwrap();
+        let missing = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("{}::overridden_directories_are_used_for_detection_credentials_and_addresses", module_path!().trim_start_matches("jolu_lib::"))])
+            .env(CHILD, "1").env("JOLU_CREDS_MISSING_ENV_TEST", "1").env("CODEX_HOME", &codex)
+            .env("USERPROFILE", root.join("empty-home")).env("HOME", root.join("empty-home"))
+            .env_remove("JOLU_FIXTURE_CODEX_KEY").env_remove("OPENAI_API_KEY").output().unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
+        assert!(missing.status.success(), "{}", String::from_utf8_lossy(&missing.stdout));
+    }
+}

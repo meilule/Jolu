@@ -8,7 +8,7 @@ import { settingsApi } from "@/lib/settingsApi"
 import { applyAppearance, normalizeDensity } from "@/lib/appearance"
 import { useSettings } from "@/hooks/useSettings"
 import { Icon } from "@/icons"
-import { MotionProvider } from "@/motion"
+import { MotionProvider, TactileButton } from "@/motion"
 import { Button, Dialog, NavItem, PageActionsProvider, PageHeader, SHELL_HEIGHT, SHELL_WIDTH, Sidebar, Tooltip, WindowShell, usesOwnScroll } from "@/ui"
 import { Wordmark } from "@/components/brand/Wordmark"
 import { NAV_ICONS } from "@/ui/shell/navIcons"
@@ -286,7 +286,8 @@ export function MainPanelWindow({
             logo={<span className={collapsed ? "text-jn-text" : "flex items-center gap-2.5 text-jn-text"}>{collapsed ? <AppIcon size={30} /> : <><AppIcon size={30} /><Wordmark /></>}</span>}
             toggle={
               <Tooltip content={collapsed ? "展开侧栏" : "收起侧栏"} side="right">
-                <button
+                <TactileButton
+                  variant="icon"
                   type="button"
                   onClick={toggleSidebar}
                   aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
@@ -294,7 +295,7 @@ export function MainPanelWindow({
                   className="jn-interactive flex size-8 shrink-0 items-center justify-center rounded-[10px] text-jn-text-3 hover:bg-jn-surface/70 hover:text-jn-text"
                 >
                   <Icon name="sidebarToggle" size="md" />
-                </button>
+                </TactileButton>
               </Tooltip>
             }
             footer={
@@ -404,13 +405,14 @@ export function MainPanelWindow({
         <p className="text-xs leading-relaxed text-jn-text-2">
           在本机运行的 AI 编程工具管理器。统计来自本地会话记录与服务商接口，凭证只保存在本机。
         </p>
-        <button
+        <TactileButton
+          variant="row"
           type="button"
           onClick={() => void openUrl(REPO_URL)}
           className="jn-interactive self-start rounded text-xs font-medium text-jn-primary-ink underline"
         >
           {REPO_URL}
-        </button>
+        </TactileButton>
       </Dialog>
       <UpdateDialog onViewTasks={() => navigate("automation")} />
     </div>

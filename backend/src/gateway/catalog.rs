@@ -144,3 +144,122 @@ mod tests {
         assert!(!list.iter().any(|v| v.model == "unverified-cache"));
     }
 }
+
+/// 合并用的元数据查询：给模型名，返回可选元数据。
+pub type MetaLookup<'a> = dyn Fn(&str) -> Option<crate::gateway::models_dev::ModelMeta> + 'a;
+
+/// 列出模型目录，并并入 `models.dev` 元数据与来源级上限覆盖。
+pub fn list_with_meta(conn: &Connection, meta: &MetaLookup<'_>) -> Result<Vec<CatalogModel>, String> {
+    let mut out = list(conn).map_err(|error| error.to_string())?;
+    if let Ok(groups) = crate::gateway::routing_groups::list(conn) {
+        for group in groups {
+            out.push(CatalogModel {
+                id: format!("group/{}", group.slug),
+                source: group.name,
+                slug: "group".into(),
+                model: group.slug,
+                kind: "group".into(),
+                platform: None,
+                status: "connected".into(),
+                context_window: None,
+                max_output: None,
+                label: None,
+            });
+        }
+    }
+    for entry in out.iter_mut() {
+        if let Some(meta) = meta(&entry.model) {
+            merge_meta(entry, &meta);
+        }
+        if let Some(platform) = entry.platform.as_deref() {
+            if let Some(over) = crate::gateway::model_overrides::lookup(platform, &entry.model) {
+                crate::gateway::model_overrides::apply(entry, over);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn merge_meta(entry: &mut CatalogModel, meta: &crate::gateway::models_dev::ModelMeta) {
+    entry.context_window = Some(meta.context_window).filter(|value| *value > 0);
+    entry.max_output = Some(meta.max_output).filter(|value| *value > 0);
+    entry.label = Some(meta.label.clone()).filter(|label| !label.is_empty());
+}
+
+#[cfg(test)]
+mod meta_merge_tests {
+    use super::*;
+    use crate::gateway::models_dev::ModelMeta;
+
+    fn database() -> (Connection, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "jolu-catalog-svc-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        (crate::db::open(&path).unwrap(), path)
+    }
+
+    #[test]
+    fn no_meta_lookup_leaves_catalog_untouched() {
+        let (conn, path) = database();
+        let without = list_with_meta(&conn, &|_| None).unwrap();
+        assert_eq!(without.len(), 0, "空库没有模型");
+        drop(conn);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn meta_merge_skips_zero_and_empty_values() {
+        let mut entry = CatalogModel {
+            id: "src/glm-5.3".into(),
+            source: "来源".into(),
+            slug: "src".into(),
+            model: "glm-5.3".into(),
+            kind: "api".into(),
+            platform: Some("workbuddy".into()),
+            status: "connected".into(),
+            context_window: None,
+            max_output: None,
+            label: None,
+        };
+        let meta = ModelMeta {
+            context_window: 0,
+            max_output: 0,
+            label: String::new(),
+            description: String::new(),
+            ..Default::default()
+        };
+        merge_meta(&mut entry, &meta);
+        assert_eq!(entry.context_window, None, "0 当作没给");
+        assert_eq!(entry.max_output, None);
+        assert_eq!(entry.label, None, "空串当作没给");
+    }
+
+    #[test]
+    fn meta_merge_applies_real_values() {
+        let mut entry = CatalogModel {
+            id: "src/glm-5.3".into(),
+            source: "来源".into(),
+            slug: "src".into(),
+            model: "glm-5.3".into(),
+            kind: "api".into(),
+            platform: Some("workbuddy".into()),
+            status: "connected".into(),
+            context_window: None,
+            max_output: None,
+            label: None,
+        };
+        let meta = ModelMeta {
+            context_window: 128_000,
+            max_output: 8_192,
+            label: "GLM-5.3".into(),
+            description: String::new(),
+            ..Default::default()
+        };
+        merge_meta(&mut entry, &meta);
+        assert_eq!(entry.context_window, Some(128_000));
+        assert_eq!(entry.max_output, Some(8_192));
+        assert_eq!(entry.label.as_deref(), Some("GLM-5.3"));
+    }
+}

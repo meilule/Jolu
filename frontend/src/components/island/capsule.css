@@ -224,6 +224,114 @@
 .cap-q i { font-style: normal; font-size: 11px; color: var(--pn-capsule-text-3); font-weight: 500; }
 .cap-hair { width: 1px; height: 14px; background: var(--pn-capsule-fill-2); flex: none; }
 .cap-chip { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 6px; background: var(--pn-capsule-fill); letter-spacing: .2px; }
+/* 2B 本机配置匹配（青色虚线微签，严格区分于网关中转实心确证） */
+.cap-chip-local {
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 5px;
+  border: 1px dashed rgba(90, 200, 250, 0.55);
+  background: rgba(90, 200, 250, 0.1);
+  color: var(--pn-capsule-cyan);
+  line-height: 1.25;
+}
+/* 3A 陌生未录入 Key 防呆徽标 */
+.cap-chip-unreg {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px dashed rgba(245, 184, 61, 0.58);
+  background: rgba(245, 184, 61, 0.12);
+  color: var(--pn-capsule-orange);
+}
+/* 1A / 3A 切换轻提示 + 4B 等待确认提醒 + 并发气泡按钮 */
+.cap-switch-cue {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.cap-hook-pill {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.cap-peer-stack {
+  border: 0;
+  background: transparent;
+  padding: 0 1px;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  border-radius: 999px;
+}
+.cap-peer-stack:focus-visible {
+  outline: 2px solid var(--pn-capsule-green);
+  outline-offset: 2px;
+}
+.cap-av.cap-peer-av {
+  width: 22px;
+  height: 22px;
+  border-radius: 11px;
+  margin-left: -5px;
+  background: var(--pn-capsule-fill);
+  border: 1.5px solid rgba(61, 214, 140, 0.34);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: transform 200ms var(--cap-spring), border-color 160ms ease, background-color 160ms ease;
+}
+.cap-peer-stack > .cap-peer-av:first-child {
+  margin-left: 0;
+}
+.cap-peer-stack:hover .cap-peer-av {
+  border-color: var(--pn-capsule-green);
+  background: var(--pn-capsule-fill-2);
+  transform: translateY(-1px) scale(1.06);
+}
+.cap-peer-av .cap-av-dot {
+  right: -2px;
+  bottom: -2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 3.5px;
+  animation: cap-pulse 1.4s ease-in-out infinite;
+}
+.cap-hook-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(245, 184, 61, 0.12);
+  border: 1px solid rgba(245, 184, 61, 0.32);
+}
+.cap-xplat-row {
+  border: 0;
+  background: transparent;
+  padding: 4px 6px;
+  margin: 0 -6px;
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.cap-xplat-row:hover { background: var(--pn-capsule-fill); }
 .cap-t2 { color: var(--pn-capsule-text-2); font-size: 12px; font-weight: 500; }
 .cap-t3 { color: var(--pn-capsule-text-3); font-size: 11px; font-weight: 500; }
 .cap-g { color: var(--pn-capsule-green); }
@@ -404,6 +512,7 @@
     transform: none !important;
   }
   .cap-pulse,
+  .cap-peer-av .cap-av-dot,
   .cap-live::before,
   .cap-flow,
   .cap-bubble-content .cap-spinner,
@@ -423,6 +532,7 @@ html.reduce-motion .cap-ex > .cap-sec {
   transform: none !important;
 }
 html.reduce-motion .cap-pulse,
+html.reduce-motion .cap-peer-av .cap-av-dot,
 html.reduce-motion .cap-live::before,
 html.reduce-motion .cap-flow,
 html.reduce-motion .cap-bubble-content .cap-spinner,

@@ -61,7 +61,10 @@ export function useConnectionKind(platform: string) {
   return info
 }
 
-/** 日志事件驱动真实目标值；合计与各会话在同一个帧循环中追数。 */
+/** 具备明确请求/工具开始与结束事件的平台：按生命周期展示 running / failed */
+const LIFECYCLE_PLATFORMS = new Set(["codex", "claude", "antigravity", "kimi", "opencode", "pi", "dsh"])
+/** 快照与最近活跃混合状态平台：保留最近窗口内的 running / done / failed */
+const TYPED_STATE_PLATFORMS = new Set(["zcode", "qwen", "gemini"])
 export function useLiveUsage(platform: string, enabled = true, dnd = false, paused = false): LiveUsage {
   const [counts] = useState(() => new LiveCounts())
   const [deltaPositive, setDeltaPositive] = useState(false)
@@ -195,11 +198,11 @@ export function useLiveUsage(platform: string, enabled = true, dnd = false, paus
         animate()
       }
       // 失败会话由后端保证只在 90 秒窗口内出现，这里放行展示「失败」标签。
-      // Zcode 的本机库给每条请求带状态：最近活跃窗口内的会话按完成 / 失败 / 运行中真实标注。
+      // 生命周期来源只展示 running / failed；混合状态来源（zcode / qwen / gemini）保留窗口内真实状态。
       const visibleSessions = u.active_sessions.filter((session) =>
-        (platform === "codex" || platform === "claude")
+        LIFECYCLE_PLATFORMS.has(platform)
           ? session.state === "running" || session.state === "failed"
-          : platform === "zcode" ? true : session.state === "recent",
+          : TYPED_STATE_PLATFORMS.has(platform) ? true : session.state === "recent",
       )
       if (!dnd) {
         for (const session of visibleSessions) {
@@ -280,17 +283,18 @@ export function useLiveUsage(platform: string, enabled = true, dnd = false, paus
       if (sessions.length === 0) return null
       const running = sessions.filter((session) => session.state === "running").length
       const failed = sessions.filter((session) => session.state === "failed").length
-      // Zcode 有真实状态：有运行 / 失败时按状态计数，否则仍是「最近活跃」
-      if (platform === "zcode" && running === 0 && failed === 0) return `${sessions.length} 个最近活跃会话`
-      if (platform !== "codex" && platform !== "claude" && platform !== "zcode") return `${sessions.length} 个最近活跃会话`
+      if (TYPED_STATE_PLATFORMS.has(platform) && running === 0 && failed === 0) {
+        return `${sessions.length} 个最近活跃会话`
+      }
+      if (!LIFECYCLE_PLATFORMS.has(platform) && !TYPED_STATE_PLATFORMS.has(platform)) {
+        return `${sessions.length} 个最近活跃会话`
+      }
       if (running === 0 && failed === 0) return null
       if (running === 0) return `${failed} 个会话失败`
       return failed > 0 ? `${running} 个会话运行中 · ${failed} 个失败` : `${running} 个会话运行中`
     })(),
-    // zcode 的会话状态来自后端按 session.time_updated 推导（ZCODE_TURN_GAP_MS），
-    // 有 running 会话时与 claude / codex 同为 running 档；一个都没有就还是「最近活跃」。
-    activityKind: (platform === "codex" || platform === "claude"
-      || (platform === "zcode" && sessions.some((session) => session.state === "running")))
+    activityKind: (LIFECYCLE_PLATFORMS.has(platform)
+      || (TYPED_STATE_PLATFORMS.has(platform) && sessions.some((session) => session.state === "running")))
       ? "running"
       : "recent",
     todayTokenText: today === null ? null : compactTokens(today),

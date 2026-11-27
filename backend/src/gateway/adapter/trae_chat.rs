@@ -21,52 +21,8 @@ pub(super) fn nonce() -> Result<String, String> {
     ))
 }
 
-pub(super) fn request(
-    body: &[u8],
-    slug: &str,
-    route: &ModelRoute,
-    session: &str,
-) -> Result<Value, String> {
-    let value: Value = serde_json::from_slice(body).map_err(|_| "Trae 请求不是有效 JSON")?;
-    let object = value.as_object().ok_or("Trae 请求格式无效")?;
-    const FIELDS: &[&str] = &[
-        "model",
-        "messages",
-        "stream",
-        "stream_options",
-        "max_tokens",
-        "max_completion_tokens",
-        "temperature",
-        "tools",
-        "tool_choice",
-        "parallel_tool_calls",
-        "reasoning_effort",
-    ];
-    if object.keys().any(|k| !FIELDS.contains(&k.as_str())) {
-        return Err("Trae 请求含不支持字段，内部授权与会话参数不可透传".into());
-    }
-    let prefix = format!("{slug}/");
-    let model = value["model"]
-        .as_str()
-        .and_then(|m| m.strip_prefix(&prefix))
-        .filter(|m| !m.trim().is_empty() && m.len() <= 512 && !m.chars().any(char::is_control))
-        .ok_or("Trae 模型来源无效")?;
-    if value.get("stream").is_some_and(|v| !v.is_boolean())
-        || value
-            .get("parallel_tool_calls")
-            .is_some_and(|v| !v.is_boolean())
-    {
-        return Err("Trae 流式或并行工具参数无效".into());
-    }
-    if let Some(options) = value.get("stream_options") {
-        let options = options.as_object().ok_or("Trae stream_options 无效")?;
-        if options
-            .iter()
-            .any(|(k, v)| k != "include_usage" || !v.is_boolean())
-        {
-            return Err("Trae 不支持此流式选项".into());
-        }
-    }
+
+fn parse_native_tools(value: &Value) -> Result<(Vec<Value>, Vec<Value>), String> {
     let tools = value
         .get("tools")
         .map(|v| v.as_array().ok_or("Trae tools 必须是数组"))
@@ -93,19 +49,31 @@ pub(super) fn request(
         if f.get("description").is_some_and(|v| !v.is_string()) {
             return Err("Trae 工具描述无效".into());
         }
-        native.push(json!({"type":"function","function":{"name":name,"description":f["description"].as_str().unwrap_or(""),"parameters":parameters.to_string()}}));
+        native.push(json!({
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": f["description"].as_str().unwrap_or(""),
+                "parameters": parameters.to_string(),
+            }
+        }));
     }
-    // Max 派生模型（3.5）：配置名用基础模型，model_name 是 __max 那个
-    let model = route.max_base.as_deref().unwrap_or(model);
-    let mut out = json!({"function":route.function,"config_name":model,"model":model,"stream":true,"request_id":nonce()?,"session_id":session});
+    Ok((tools, native))
+}
+
+fn apply_request_options(
+    value: &Value,
+    route: &ModelRoute,
+    tools: &[Value],
+    native: Vec<Value>,
+    out: &mut Value,
+) -> Result<(), String> {
     if let Some(name) = &route.model_name {
         out["model_name"] = json!(name);
     }
     if let Some(effort) = value.get("reasoning_effort") {
         let effort = match effort.as_str() {
-            Some("none") => {
-                return Err("Trae 当前账号目录未声明支持关闭思考，不能兑现显式禁用请求".into())
-            }
+            Some("none") => return Err("Trae 当前账号目录未声明支持关闭思考，不能兑现显式禁用请求".into()),
             Some("low" | "light") => "light",
             Some("xhigh" | "extra_high") => "extra_high",
             Some("medium") => "medium",
@@ -122,13 +90,9 @@ pub(super) fn request(
         .get("max_completion_tokens")
         .or_else(|| value.get("max_tokens"))
     {
-        let tokens = tokens
-            .as_u64()
-            .filter(|n| *n > 0)
-            .ok_or("Trae 输出预算必须是正整数")?;
+        let tokens = tokens.as_u64().filter(|n| *n > 0).ok_or("Trae 输出预算必须是正整数")?;
         out["max_tokens"] = json!(route.max_tokens.map_or(tokens, |max| tokens.min(max)));
     }
-    // Max 模式：一定带 max_tokens，并把窗口里剩下的空间给提示词（与 IDE 的 Max 模式一致）
     if let Some(window) = route.max_window {
         if out.get("max_tokens").is_none() {
             if let Some(most) = route.max_tokens {
@@ -136,13 +100,11 @@ pub(super) fn request(
             }
         }
         let output = out["max_tokens"].as_u64().unwrap_or(0);
-        out["user_message_context"] = json!({"model_info": {"prompt_max_tokens": window.saturating_sub(output)}});
+        out["user_message_context"] =
+            json!({"model_info": {"prompt_max_tokens": window.saturating_sub(output)}});
     }
     if let Some(t) = value.get("temperature") {
-        let t = t
-            .as_f64()
-            .filter(|t| t.is_finite())
-            .ok_or("Trae temperature 无效")?;
+        let t = t.as_f64().filter(|t| t.is_finite()).ok_or("Trae temperature 无效")?;
         out["temperature"] = json!(t);
     }
     if !native.is_empty() {
@@ -173,6 +135,10 @@ pub(super) fn request(
     if let Some(p) = value.get("parallel_tool_calls") {
         out["parallel_tool_calls"] = p.clone();
     }
+    Ok(())
+}
+
+fn convert_messages(value: &Value, route: &ModelRoute) -> Result<Vec<Value>, String> {
     let input = value["messages"]
         .as_array()
         .filter(|m| !m.is_empty())
@@ -310,9 +276,70 @@ pub(super) fn request(
     if !pending.is_empty() {
         return Err("Trae 历史工具调用缺少结果".into());
     }
-    out["messages"] = json!(messages);
+    Ok(messages)
+}
+
+pub(super) fn request(
+    body: &[u8],
+    slug: &str,
+    route: &ModelRoute,
+    session: &str,
+) -> Result<Value, String> {
+    let value: Value = serde_json::from_slice(body).map_err(|_| "Trae 请求不是有效 JSON")?;
+    let object = value.as_object().ok_or("Trae 请求格式无效")?;
+    const FIELDS: &[&str] = &[
+        "model",
+        "messages",
+        "stream",
+        "stream_options",
+        "max_tokens",
+        "max_completion_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "reasoning_effort",
+    ];
+    if object.keys().any(|k| !FIELDS.contains(&k.as_str())) {
+        return Err("Trae 请求含不支持字段，内部授权与会话参数不可透传".into());
+    }
+    let prefix = format!("{slug}/");
+    let model = value["model"]
+        .as_str()
+        .and_then(|m| m.strip_prefix(&prefix))
+        .filter(|m| !m.trim().is_empty() && m.len() <= 512 && !m.chars().any(char::is_control))
+        .ok_or("Trae 模型来源无效")?;
+    if value.get("stream").is_some_and(|v| !v.is_boolean())
+        || value
+            .get("parallel_tool_calls")
+            .is_some_and(|v| !v.is_boolean())
+    {
+        return Err("Trae 流式或并行工具参数无效".into());
+    }
+    if let Some(options) = value.get("stream_options") {
+        let options = options.as_object().ok_or("Trae stream_options 无效")?;
+        if options
+            .iter()
+            .any(|(k, v)| k != "include_usage" || !v.is_boolean())
+        {
+            return Err("Trae 不支持此流式选项".into());
+        }
+    }
+    let (tools, native) = parse_native_tools(&value)?;
+    let model = route.max_base.as_deref().unwrap_or(model);
+    let mut out = json!({
+        "function": route.function,
+        "config_name": model,
+        "model": model,
+        "stream": true,
+        "request_id": nonce()?,
+        "session_id": session,
+    });
+    apply_request_options(&value, route, &tools, native, &mut out)?;
+    out["messages"] = json!(convert_messages(&value, route)?);
     Ok(out)
 }
+
 
 pub(super) fn conversation(
     id: &str,

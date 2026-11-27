@@ -8,6 +8,7 @@
 import type { ReactNode } from "react"
 import { cn } from "@/lib/utils"
 import { Icon, type IconName } from "@/icons"
+import { TactileButton } from "@/motion"
 
 export interface OptionTileProps {
   active: boolean
@@ -29,7 +30,8 @@ export function OptionTile({
   className,
 }: OptionTileProps) {
   return (
-    <button
+    <TactileButton
+      variant="tile"
       type="button"
       role="radio"
       aria-checked={active}
@@ -58,6 +60,6 @@ export function OptionTile({
           {description}
         </span>
       )}
-    </button>
+    </TactileButton>
   )
 }

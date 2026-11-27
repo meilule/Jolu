@@ -192,7 +192,7 @@ test("后端 status.wiring 必须覆盖接线注册表的全部 id", async () =>
   const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
 
   // 注册表的 11 条 AgentSpec → id
-  const specs = readFileSync(resolve(repo, "backend/src/gateway/wiring_specs.rs"), "utf8")
+  const specs = readFileSync(resolve(repo, "backend/src/gateway/wiring/specs.rs"), "utf8")
   const registered = [...specs.matchAll(/AgentSpec\s*\{([\s\S]*?)\n\s*\},/g)]
     .map((block) => block[1].match(/id:\s*"([^"]+)"/)?.[1])
     .filter((id) => typeof id === "string")
@@ -223,16 +223,15 @@ test("后端 status.wiring 必须覆盖接线注册表的全部 id", async () =>
 // 这三家要明确说明，其余默认能观测。
 test("会话记录能力：不支持的要明说，能观测的不占位置", () => {
   assert.equal(sessionRecordCapability("pencil"), "no-record", "Pencil 只有模型配置，没有会话存储")
-  assert.equal(sessionRecordCapability("qwen"), "not-yet")
   assert.equal(sessionRecordCapability("workbuddy"), "not-yet")
-  // 能读到会话的 10 家都不该有说明（不占位置）
-  for (const agent of ["claude-code", "codex", "zcode", "gemini", "antigravity", "opencode", "kimi", "pi", "dsh", "qoder"]) {
+  // 能读到会话的 11 家都不该有说明（不占位置）
+  for (const agent of ["claude-code", "codex", "zcode", "gemini", "antigravity", "opencode", "kimi", "pi", "dsh", "qoder", "qwen"]) {
     assert.equal(sessionRecordCapability(agent), "observable", agent)
     assert.equal(sessionRecordNote(agent), null, `${agent} 不该有说明`)
   }
   // 说明文案要能区分「本来就没有」与「还没接」
   assert.match(sessionRecordNote("pencil"), /不产生会话记录/)
-  assert.match(sessionRecordNote("qwen"), /还没接入/)
+  assert.match(sessionRecordNote("workbuddy"), /还没接入/)
 })
 
 // AGENT_PLATFORM 是「会话 / Skills / 自动化里用的平台 id」，必须与后端实际写进

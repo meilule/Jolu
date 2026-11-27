@@ -41,9 +41,10 @@ test("结果停留到期后收起：成功 2.4 秒，被拒 4.8 秒", () => {
   assert.equal(onTick(s, T0 + REJECT_HOLD_MS).shown, null)
 })
 
-test("只有开始没有结束的请求 120 秒后收回", () => {
+test("只有开始没有结束的孤儿请求超过兜底时限后收回，长耗时推理（>2 分钟）期间不误判结束", () => {
   const s = onStart(emptyActivity(T0), start(1), T0)
   assert.equal(nextTickAt(s), T0 + STALE_IN_FLIGHT_MS)
+  assert.equal(onTick(s, T0 + 180_000).shown.phase, "in", "3 分钟长推理/命令不得在 120 秒被提前掐断")
   assert.equal(onTick(s, T0 + STALE_IN_FLIGHT_MS - 1).shown.phase, "in")
   const done = onTick(s, T0 + STALE_IN_FLIGHT_MS)
   assert.equal(done.shown, null)

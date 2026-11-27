@@ -268,7 +268,6 @@ export type SessionRecordCapability = "observable" | "no-record" | "not-yet"
 
 const SESSION_RECORD: Readonly<Record<string, SessionRecordCapability>> = {
   pencil: "no-record",
-  qwen: "not-yet",
   workbuddy: "not-yet",
 }
 

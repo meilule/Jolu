@@ -41,9 +41,14 @@ impl PoolEntry {
     }
 }
 
+pub(crate) trait RouteDeps {
+    fn db(&self) -> &Mutex<rusqlite::Connection>;
+    fn opt_pool_index(&self) -> Option<&Mutex<PoolIndex>>;
+}
+
 /// 菜单快照不能授权调用：发出请求前复查来源，关闭、切号或换地址立即生效。
-pub(crate) fn source_is_current(deps: &crate::proxy::ProxyDeps, entry: &PoolEntry) -> bool {
-    let current = deps.db.lock().ok().and_then(|conn| {
+pub(crate) fn source_is_current(deps: &impl RouteDeps, entry: &PoolEntry) -> bool {
+    let current = deps.db().lock().ok().and_then(|conn| {
         conn.query_row(
             "SELECT serve_enabled, platform, kind, slug, status, account_fp, secret, base_url, protocol
              FROM connections WHERE id=?1",
@@ -68,7 +73,7 @@ pub(crate) fn source_is_current(deps: &crate::proxy::ProxyDeps, entry: &PoolEntr
         ).ok()
     }).unwrap_or(false);
     if !current {
-        if let Ok(index) = deps.pool_index() {
+        if let Some(index) = deps.opt_pool_index() {
             if let Ok(mut index) = index.lock() { index.refreshed_ms = 0; }
         }
     }

@@ -1,0 +1,430 @@
+//! 原生应用白名单用量字段。只保存统计，不复制提示词、工具参数或凭证。
+use crate::{db::RequestRecord, source_store::Record};
+use serde_json::Value;
+use std::collections::HashMap;
+
+pub fn num(v: &Value, key: &str) -> Option<i64> {
+    v.get(key)?.as_i64().filter(|n| *n >= 0)
+}
+pub fn amount(v: &Value, key: &str) -> Option<f64> {
+    v.get(key)?.as_f64().filter(|n| n.is_finite() && *n >= 0.0)
+}
+pub fn text<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
+    v.get(key)?.as_str().filter(|s| !s.is_empty())
+}
+pub fn timestamp(v: &Value) -> Option<i64> {
+    v.as_i64().filter(|n| *n > 0).or_else(|| {
+        chrono::DateTime::parse_from_rfc3339(v.as_str()?)
+            .ok()
+            .map(|d| d.timestamp_millis())
+    })
+}
+
+fn base(platform: &str, source: &str, session: &str, id: &str, ts: i64) -> Record {
+    Record {
+        request: RequestRecord {
+            platform: platform.into(),
+            source: source.into(),
+            dedup_key: format!("{session}:{id}"),
+            session_id: Some(format!("{source}:{session}")),
+            ts,
+            model: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            total_tokens: None,
+            effort: None,
+        },
+        input_semantics: "unknown",
+        credits: None,
+        original_credits: None,
+        billable: None,
+        context_ratio: None,
+        reasoning: None,
+        tool: None,
+        duration_ms: None,
+        first_token_ms: None,
+    }
+}
+
+pub fn workbuddy(v: &Value, source: &str, fallback_session: &str) -> Option<Record> {
+    let pd = v.get("providerData")?;
+    let u = pd.get("usage").unwrap_or(&Value::Null);
+    let raw = pd.get("rawUsage").unwrap_or(&Value::Null);
+    if !u.is_object() && !raw.is_object() {
+        return None;
+    }
+    let id = text(v, "id").or_else(|| text(v, "messageId"))?;
+    let session = text(v, "sessionId").unwrap_or(fallback_session);
+    let mut item = base(
+        "workbuddy",
+        source,
+        session,
+        id,
+        timestamp(v.get("timestamp")?)?,
+    );
+    item.request.model = text(pd, "requestModelId")
+        .or_else(|| text(pd, "model"))
+        .map(str::to_string);
+    item.request.input_tokens = num(u, "inputTokens").or_else(|| num(raw, "prompt_tokens"));
+    item.request.output_tokens = num(u, "outputTokens").or_else(|| num(raw, "completion_tokens"));
+    item.request.total_tokens = num(u, "totalTokens").or_else(|| num(raw, "total_tokens"));
+    let details = raw.get("prompt_tokens_details").unwrap_or(&Value::Null);
+    item.request.cache_read_tokens =
+        num(details, "cached_tokens").or_else(|| num(raw, "prompt_cache_hit_tokens"));
+    if item.request.cache_read_tokens.is_none() {
+        item.request.cache_read_tokens = u
+            .get("inputTokensDetails")
+            .and_then(Value::as_array)
+            .and_then(|a| a.iter().find_map(|v| num(v, "cached_tokens")));
+    }
+    // prompt_tokens（含缓存）的原始形状已确认；不将其他供应商形状套进此口径。
+    if raw.get("prompt_tokens").is_some() {
+        item.input_semantics = "includes_cache";
+    }
+    item.request.cache_write_tokens =
+        num(raw, "prompt_cache_write_tokens").or_else(|| num(raw, "cache_creation_input_tokens"));
+    item.reasoning = raw
+        .get("completion_tokens_details")
+        .and_then(|v| num(v, "reasoning_tokens"))
+        .or_else(|| num(raw, "completion_thinking_tokens"));
+    item.credits = amount(raw, "credit");
+    Some(item)
+}
+
+pub fn qoder(
+    v: &Value,
+    source: &str,
+    fallback_session: &str,
+    token_counts_available: Option<bool>,
+) -> Option<Record> {
+    if text(v, "type") != Some("assistant")
+        || v.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
+    {
+        return None;
+    }
+    let msg = v.get("message")?;
+    let u = msg.get("usage")?;
+    let id = text(u, "request_id")
+        .or_else(|| text(msg, "id"))
+        .or_else(|| text(v, "uuid"))?;
+    let session = text(v, "sessionId").unwrap_or(fallback_session);
+    let mut item = base(
+        "qoder",
+        source,
+        session,
+        id,
+        timestamp(v.get("timestamp")?)?,
+    );
+    item.request.model = text(msg, "model").map(str::to_string);
+    // 可用性明确为 false 时零值是占位，非零历史实测值仍保留。
+    let has_positive = [
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    ]
+    .iter()
+    .any(|key| num(u, key).is_some_and(|n| n > 0));
+    let count = |key| {
+        num(u, key).filter(|n| {
+            *n > 0
+                || token_counts_available == Some(true)
+                || (token_counts_available.is_none() && has_positive)
+        })
+    };
+    item.request.input_tokens = count("input_tokens");
+    item.request.output_tokens = count("output_tokens");
+    item.request.cache_read_tokens = count("cache_read_input_tokens");
+    item.request.cache_write_tokens = count("cache_creation_input_tokens");
+    item.request.total_tokens = count("total_tokens").or_else(|| {
+        item.request
+            .input_tokens
+            .zip(item.request.output_tokens)
+            .zip(item.request.cache_read_tokens)
+            .zip(item.request.cache_write_tokens)
+            .map(|(((i, o), r), w)| i + o + r + w)
+    });
+    item.input_semantics = "excludes_cache";
+    item.credits = amount(u, "credits");
+    item.original_credits = amount(u, "original_credits");
+    item.billable = u.get("billable").and_then(Value::as_bool);
+    item.context_ratio = amount(u, "context_usage_ratio").filter(|r| *r <= 1.0);
+    Some(item)
+}
+
+pub fn gemini_message(v: &Value, source: &str, session: &str) -> Option<Record> {
+    if text(v, "type") != Some("gemini") {
+        return None;
+    }
+    let u = v.get("tokens")?;
+    let mut item = base(
+        "gemini",
+        source,
+        session,
+        text(v, "id")?,
+        timestamp(v.get("timestamp")?)?,
+    );
+    item.input_semantics = "includes_cache";
+    item.request.model = text(v, "model").map(str::to_string);
+    item.request.input_tokens = num(u, "input");
+    item.request.output_tokens = num(u, "output");
+    item.request.cache_read_tokens = num(u, "cached");
+    item.request.total_tokens = num(u, "total");
+    item.reasoning = num(u, "thoughts");
+    // 官方字段：工具调用提示 Token 已计入 total，不再加到输入 / 输出里。
+    item.tool = num(u, "tool");
+    Some(item)
+}
+
+/// 重建官方留存会话。整条消息更新替换；checkpoint / rewind 不当作额外请求。
+pub fn gemini_records(lines: &[Value], source: &str) -> Vec<Record> {
+    let mut session = String::new();
+    let mut messages: Vec<Value> = Vec::new();
+    // 消息 ID → 首次出现的位置。长会话逐行线性查找是平方级，改为哈希定位。
+    let mut positions: HashMap<String, usize> = HashMap::new();
+    let reindex = |messages: &[Value]| {
+        let mut positions = HashMap::new();
+        for (index, message) in messages.iter().enumerate() {
+            if let Some(id) = text(message, "id") {
+                positions.entry(id.to_string()).or_insert(index);
+            }
+        }
+        positions
+    };
+    for line in lines {
+        if let Some(id) = text(line, "sessionId") {
+            session = id.into();
+        }
+        if let Some(all) = line.get("messages").and_then(Value::as_array) {
+            messages = all.clone();
+            positions = reindex(&messages);
+            continue;
+        }
+        if let Some(set) = line.get("$set") {
+            if let Some(id) = text(set, "sessionId") {
+                session = id.into();
+            }
+            if let Some(all) = set.get("messages").and_then(Value::as_array) {
+                messages = all.clone();
+                positions = reindex(&messages);
+            }
+            continue;
+        }
+        if let Some(target) = text(line, "$rewindTo") {
+            let index = positions.get(target).copied().unwrap_or(0);
+            messages.truncate(index);
+            positions.retain(|_, position| *position < index);
+            continue;
+        }
+        if let Some(id) = text(line, "id") {
+            if let Some(&index) = positions.get(id) {
+                messages[index] = line.clone();
+            } else {
+                positions.insert(id.to_string(), messages.len());
+                messages.push(line.clone());
+            }
+        }
+    }
+    if session.is_empty() {
+        return vec![];
+    }
+    let mut out = Vec::new();
+    let mut prev_user_ts: Option<i64> = None;
+    for m in &messages {
+        let ty = text(m, "type");
+        if ty == Some("user") {
+            prev_user_ts = m.get("timestamp").and_then(timestamp);
+            continue;
+        }
+        if let Some(mut rec) = gemini_message(m, source, &session) {
+            if let Some(start) = prev_user_ts.take() {
+                let dur = rec.request.ts.saturating_sub(start);
+                if (100..=3_600_000).contains(&dur) {
+                    rec.duration_ms = Some(dur);
+                }
+            }
+            out.push(rec);
+        }
+    }
+    out
+}
+
+/// 从 Gemini CLI 快照行推导当前会话生命周期：末条为 `user` 或含 `toolCalls` 视为本轮命令/推理仍在运行。
+pub fn gemini_activity(lines: &[Value], source: &str, fallback_session: &str) -> Option<(String, &'static str, i64, Option<i64>)> {
+    let mut session = String::new();
+    let mut messages: Vec<Value> = Vec::new();
+    let mut positions: HashMap<String, usize> = HashMap::new();
+    let reindex = |msgs: &[Value]| {
+        let mut pos = HashMap::new();
+        for (idx, m) in msgs.iter().enumerate() {
+            if let Some(id) = text(m, "id") {
+                pos.entry(id.to_string()).or_insert(idx);
+            }
+        }
+        pos
+    };
+    for line in lines {
+        if let Some(id) = text(line, "sessionId") {
+            session = id.into();
+        }
+        if let Some(all) = line.get("messages").and_then(Value::as_array) {
+            messages = all.clone();
+            positions = reindex(&messages);
+            continue;
+        }
+        if let Some(set) = line.get("$set") {
+            if let Some(id) = text(set, "sessionId") {
+                session = id.into();
+            }
+            if let Some(all) = set.get("messages").and_then(Value::as_array) {
+                messages = all.clone();
+                positions = reindex(&messages);
+            }
+            continue;
+        }
+        if let Some(target) = text(line, "$rewindTo") {
+            let index = positions.get(target).copied().unwrap_or(0);
+            messages.truncate(index);
+            positions.retain(|_, p| *p < index);
+            continue;
+        }
+        if let Some(id) = text(line, "id") {
+            if let Some(&index) = positions.get(id) {
+                messages[index] = line.clone();
+            } else {
+                positions.insert(id.to_string(), messages.len());
+                messages.push(line.clone());
+            }
+        }
+    }
+    if session.is_empty() {
+        session = fallback_session.to_string();
+    }
+    let mut state: Option<&'static str> = None;
+    let mut state_ts: Option<i64> = None;
+    let mut turn_start: Option<i64> = None;
+    for m in &messages {
+        let Some(ts) = m.get("timestamp").and_then(timestamp) else { continue };
+        match text(m, "type") {
+            Some("user") => {
+                if state != Some("running") {
+                    turn_start = Some(ts);
+                }
+                state = Some("running");
+                state_ts = Some(state_ts.map_or(ts, |old| old.max(ts)));
+            }
+            Some("gemini") => {
+                let has_tools = m.get("toolCalls").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+                if has_tools && turn_start.is_none() {
+                    turn_start = Some(ts);
+                }
+                state = Some(if has_tools { "running" } else { "done" });
+                state_ts = Some(state_ts.map_or(ts, |old| old.max(ts)));
+            }
+            _ => {}
+        }
+    }
+    let (st, ts) = state.zip(state_ts)?;
+    Some((format!("{source}:{session}"), st, ts, turn_start))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn workbuddy_function_usage_uses_actual_cached_tokens_and_keeps_credits() {
+        let v = json!({"id":"m","sessionId":"s","timestamp":1000,"type":"function_call","providerData":{
+            "usage":{"inputTokens":1000,"outputTokens":20,"totalTokens":1020},
+            "rawUsage":{"prompt_tokens":1000,"prompt_tokens_details":{"cached_tokens":800},"cache_read_input_tokens":0,"credit":0.65}}});
+        let r = workbuddy(&v, "native:workbuddy:main", "s").unwrap();
+        assert_eq!(r.request.cache_read_tokens, Some(800));
+        assert_eq!(r.request.cache_write_tokens, None);
+        assert_eq!(r.request.total_tokens, Some(1020));
+        assert_eq!(r.credits, Some(0.65));
+    }
+    /// P0-3 WorkBuddy 对账的对照基准：`scripts/acceptance/reconcile-usage-by-id.py`
+    /// 的 `read_workbuddy` 必须与这里逐字段一致，否则对账报告里的「字段差异」是假的。
+    ///
+    /// 本机没有 WorkBuddy 客户端，无法用真实样本对账；这条 + Python 侧同一组样本
+    /// 至少保证「两边读法相同」。样本覆盖四种形状：
+    /// rawUsage 带缓存、只有 usage、messageId + inputTokensDetails 数组、缓存写。
+    #[test]
+    fn workbuddy_shapes_that_the_reconcile_script_must_match() {
+        let cases = [
+            // (输入, 期望 input, cache_read, cache_write, output, total, includes_cache)
+            (
+                json!({"id":"m1","sessionId":"s1","timestamp":1700000000000i64,
+                    "providerData":{"usage":{"inputTokens":1000,"outputTokens":20,"totalTokens":1020},
+                                    "rawUsage":{"prompt_tokens":1000,"completion_tokens":20,"total_tokens":1020,
+                                                "prompt_tokens_details":{"cached_tokens":800}}}}),
+                (1000, Some(800), None, 20, Some(1020), true),
+            ),
+            (
+                json!({"id":"m2","sessionId":"s1","timestamp":1700000001000i64,
+                    "providerData":{"usage":{"inputTokens":500,"outputTokens":10,"totalTokens":510}}}),
+                (500, None, None, 10, Some(510), false),
+            ),
+            (
+                json!({"messageId":"m3","sessionId":"s2","timestamp":1700000002000i64,
+                    "providerData":{"usage":{"inputTokens":2000,"outputTokens":30,"totalTokens":2030,
+                                             "inputTokensDetails":[{"cached_tokens":1500}]}}}),
+                (2000, Some(1500), None, 30, Some(2030), false),
+            ),
+            (
+                json!({"id":"m4","sessionId":"s2","timestamp":1700000003000i64,
+                    "providerData":{"usage":{"inputTokens":300,"outputTokens":5},
+                                    "rawUsage":{"prompt_tokens":300,"completion_tokens":5,
+                                                "prompt_cache_write_tokens":120}}}),
+                // m4 的 rawUsage 没有 total_tokens：解析器留 None，不自己加总
+                (300, None, Some(120), 5, None, true),
+            ),
+        ];
+        for (value, (input, read, write, output, total, includes_cache)) in cases {
+            let r = workbuddy(&value, "native:workbuddy:main", "fallback").unwrap();
+            let id = value.get("id").or_else(|| value.get("messageId")).and_then(|v| v.as_str()).unwrap();
+            let session = value.get("sessionId").and_then(|v| v.as_str()).unwrap();
+            assert_eq!(r.request.dedup_key, format!("{session}:{id}"));
+            // 存原始输入，缓存单列：不能在这里提前扣（会被消费方按 includes_cache 再扣一次）
+            assert_eq!(r.request.input_tokens, Some(input), "{id} input");
+            assert_eq!(r.request.cache_read_tokens, read, "{id} cache_read");
+            assert_eq!(r.request.cache_write_tokens, write, "{id} cache_write");
+            assert_eq!(r.request.output_tokens, Some(output), "{id} output");
+            assert_eq!(r.request.total_tokens, total, "{id} total");
+            assert_eq!(r.input_semantics == "includes_cache", includes_cache, "{id} semantics");
+        }
+    }
+
+    #[test]
+    fn qoder_unavailable_zero_is_unknown_not_free_usage() {
+        let v = json!({"type":"assistant","timestamp":1000,"message":{"id":"m","usage":{
+            "input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"credits":0.65,"billable":false}}});
+        let r = qoder(&v, "native:qoder:cn", "s", Some(false)).unwrap();
+        assert_eq!(r.request.total_tokens, None);
+        assert_eq!(r.credits, Some(0.65));
+        assert_eq!(r.billable, Some(false));
+        assert_eq!(
+            qoder(&v, "native:qoder:cn", "s", Some(true))
+                .unwrap()
+                .request
+                .total_tokens,
+            Some(0)
+        );
+    }
+    #[test]
+    fn gemini_updates_rewind_and_total_do_not_double_count() {
+        let mut m = json!({"type":"gemini","id":"m","timestamp":1000,"tokens":{"input":1000,"output":20,"cached":800,"thoughts":10,"tool":7,"total":1037}});
+        let mut lines = vec![json!({"sessionId":"s"}), m.clone()];
+        m["tokens"]["total"] = json!(1040);
+        lines.push(m);
+        let r = gemini_records(&lines, "native:gemini:cli");
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].request.total_tokens, Some(1040));
+        assert_eq!(r[0].request.cache_write_tokens, None);
+        assert_eq!((r[0].reasoning, r[0].tool), (Some(10), Some(7)), "thoughts / tool 分别落到推理与工具字段");
+        lines.push(json!({"$rewindTo":"m"}));
+        assert!(gemini_records(&lines, "native:gemini:cli").is_empty());
+    }
+}

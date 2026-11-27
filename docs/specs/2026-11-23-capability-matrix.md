@@ -106,7 +106,7 @@
 | **claude-code** | ✅ `agent_discovery.rs:342` Standard，`bin=claude` | ✅ `wiring_specs.rs:217` → `adapters.rs:19/395`，1 文件，`LegacyLiteral` | ✅ `collector.rs:544`（`~/.claude/projects/*.jsonl`，支持 `CLAUDE_CONFIG_DIR`） | ✅ 正文可读 `session_threads.rs:95` | ✅ 可写 `skills.rs:105` | — | ✅ `adapter/claude.rs:207` |
 | **codex** | ✅ `:343` Standard，`sign_in=auth.json` | ✅ `:232` → `adapters.rs:101/432`，1 文件，`Ignored` | ✅ `collector.rs:545`（`rollout-*.jsonl`） | ✅ 正文可读 `:97` | ✅ 可写 `:117` | — | ✅ `adapter/codex.rs:260` |
 | **gemini** | ✅ `:345` **CliOnly** | ✅ `:251` → `adapters.rs:135/635`，**2 文件** | ✅ `native_sources.rs:42`（整份快照重建） | 🟡 列表有、**正文不可读** | ✅ 可写 `:130` | — | ✅ `adapter/gemini_subscription.rs:329` |
-| **antigravity** | ✅ `:346` Standard，`bin=agy`（含 `%LOCALAPPDATA%\agy\bin` 与双数据目录） | ✅ `:403` → `wiring_antigravity.rs`，**2 文件**（`settings.json` + `jolu-agy.cmd`），`Exact` | ✅ `antigravity_usage.rs`（`conversations/*.db` Protobuf + `transcript.jsonl` + `conversation_summaries.db`） | 🟡 列表有（标题与 `cwd` 同步）、**正文不可读** | — | — | — |
+| **antigravity** | ✅ `:346` Standard，`bin=agy`（含 `%LOCALAPPDATA%\agy\bin` 与双数据目录） | ✅ `:403` → `wiring_antigravity.rs`，**2 文件**（`settings.json` + `jolu-agy.cmd`），`Exact` | ✅ `antigravity_usage.rs`（`conversations/*.db` Protobuf + `transcript.jsonl` + `conversation_summaries.db`） | ✅ 正文可读 `session_threads.rs::parse_antigravity`（`brain/*/transcript.jsonl` + `conversation_summaries.db`） | — | — | — |
 | **opencode** | ✅ `:347` Standard | ✅ `:266` → `adapters.rs:160/451`，1 文件 | ✅ `:40`（sqlite v1/v2 双分支） | 🟡 列表有、正文不可读 | ✅ 可写 `:131` | — | ✅ 复用 codex 适配器 `wire.rs:1135` |
 | **zcode** | ✅ `:344` Standard | ✅ `:281` → `adapters.rs:179/608`，**2 文件** | ✅ `:45`（`cli/db/db.sqlite`） | ✅ 正文读 sqlite `:1164`，含子代理过滤 | ✅ 可写 `:134` | ⚠️ **礼包领取**非每日签到 | ✅ `adapter/zcode.rs:595` |
 | **kimi** | ✅ `:349` Standard | ✅ `:296` → `adapters.rs:224/470`，1 文件，`Exact` | ✅ `kimi_sessions.rs::scan_usage`（全量 `agents/*/wire.jsonl` 增量入库） | ✅ `kimi_sessions.rs:193`（入库去重，`has_source=false`） | — | — | — |
@@ -392,7 +392,7 @@
 
 ### 5.2 实现完成度
 
-14 家 Agent 全部可探测、全部可接线。**用量采集覆盖 12 家**（claude / codex / gemini / antigravity / opencode / zcode / kimi / dsh / pi / qoder / qoder-cn / workbuddy），**会话读取覆盖 12 家**（gemini / antigravity / opencode / qoder / workbuddy 正文不可读），**Skills 覆盖 8 个平台**（claude / codex / gemini / opencode / qoder / trae / zcode / workbuddy，其中 workbuddy 只读），**签到覆盖 4 个平台**（WorkBuddy 国内、Qoder 双版、Trae 国内、ZCode 礼包），**续跑只覆盖 Claude Code / Codex**，**MCP 搜索只装进 4 家**。连接侧 22 种全部有账号识别与转发路径；实时模型拉取覆盖 6 个订阅平台和全部 API Key 连接；额度覆盖除 Gemini / Grok API Key 外的全部连接。
+14 家 Agent 全部可探测、全部可接线。**用量采集覆盖 12 家**（claude / codex / gemini / antigravity / opencode / zcode / kimi / dsh / pi / qoder / qoder-cn / workbuddy），**会话读取覆盖 12 家**（gemini / opencode / qoder / workbuddy 正文不可读），**Skills 覆盖 8 个平台**（claude / codex / gemini / opencode / qoder / trae / zcode / workbuddy，其中 workbuddy 只读），**签到覆盖 4 个平台**（WorkBuddy 国内、Qoder 双版、Trae 国内、ZCode 礼包），**续跑只覆盖 Claude Code / Codex**，**MCP 搜索只装进 4 家**。连接侧 22 种全部有账号识别与转发路径；实时模型拉取覆盖 6 个订阅平台和全部 API Key 连接；额度覆盖除 Gemini / Grok API Key 外的全部连接。
 
 ### 5.3 已知未实现（不是样本问题）
 

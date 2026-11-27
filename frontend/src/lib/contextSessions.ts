@@ -35,6 +35,10 @@ export interface CacheCell {
 export interface StatusCell {
   text: string
   tone: "on" | "muted"
+  /** 次级补充说明（如「无在途请求」），放在副行以免撑破窄列状态胶囊 */
+  note?: string | null
+  /** 悬停说明 */
+  title?: string
 }
 
 export interface ActiveSessionRow {
@@ -106,19 +110,18 @@ export function cacheCell(row: ContextSessionRowDto | null): CacheCell {
   return { text: `${compactTokens(row.cache_read)} · ${share.toFixed(1)}%`, title: "缓存读取已包含在输入中" }
 }
 
-/** 状态：只有在途请求算「正在生成」；没有阶段数据，不细分「调用工具」（待确认） */
 /**
  * 状态列。在途请求只是「正在生成」的证据；没有在途请求时还要看会话自己的生命周期状态
  * （`thread_status`，灵动岛与会话页用的同一份），否则 Claude Code 在思考、执行本地工具时
- * 这里写「空闲」，而灵动岛和会话页写「运行中」（P4 审计 D12）。没有证据时写「最近活跃」，
- * 不断言「空闲」。文案无画板，待确认。
+ * 这里写「空闲」，而灵动岛和会话页写「运行中」（P4 审计 D12）。
+ * 胶囊本身只放简短状态词，避免撑破表格状态列；补充说明放进 `note` / `title`。
  */
 export function statusCell(running: boolean, threadStatus: string | null = null): StatusCell {
-  if (running) return { text: "正在生成", tone: "on" }
-  if (threadStatus === "running") return { text: "运行中（无在途请求）", tone: "on" }
-  if (threadStatus === "done") return { text: "已完成", tone: "muted" }
-  if (threadStatus === "failed") return { text: "失败", tone: "muted" }
-  return { text: "最近活跃", tone: "muted" }
+  if (running) return { text: "正在生成", tone: "on", title: "当前有在途模型路由请求" }
+  if (threadStatus === "running") return { text: "运行中", note: "无在途请求", tone: "on", title: "会话仍在运行，当前无在途路由请求" }
+  if (threadStatus === "done") return { text: "已完成", tone: "muted", title: "会话已完成" }
+  if (threadStatus === "failed") return { text: "失败", tone: "muted", title: "会话以失败结束" }
+  return { text: "最近活跃", tone: "muted", title: "最近经过模型路由的会话" }
 }
 
 /** 项目名：工作目录的最后一段 */
@@ -139,17 +142,31 @@ export function accountOf(row: ContextSessionRowDto | null, fallbackSource: stri
 
 const bareModel = (model: string | null | undefined) => (model ? model.replace(/^[^/]+\//, "") : null)
 
+/** 判断这条会话是否确实经过模型路由（在途请求、路由流水、网关时间戳或上下文快照任一成立）。 */
+function isRoutedView(view: SessionView, ctx: ContextSessionRowDto | null): boolean {
+  return view.running || view.session.links.length > 0 || view.session.gateway_last_ts != null || ctx != null
+}
+
 /**
- * 合并「最近会话」（标题、项目、运行状态）与每个会话最近一次快照。
- * 顺序：运行中在前，其余按最近活动倒序；只有快照、不在最近会话里的也列出。
+ * 合并「经模型路由的会话」（标题、项目、运行状态）与每个会话最近一次快照。
+ * 未经过模型路由的纯本机会话会被过滤掉；顺序：运行中在前，其余按最近活动倒序。
  */
 export function activeSessionRows(views: SessionView[], contexts: ContextSessionRowDto[]): ActiveSessionRow[] {
   const byKey = new Map(contexts.map((row) => [sessionKey(row.session_platform, row.session_id), row]))
   const seen = new Set<string>()
   const rows: ActiveSessionRow[] = []
-  const push = (key: string, session: GatewaySessionDto | null, running: boolean, activity: number, ctx: ContextSessionRowDto | null) => {
+  const push = (
+    key: string,
+    session: GatewaySessionDto | null,
+    running: boolean,
+    activity: number,
+    ctx: ContextSessionRowDto | null,
+    liveModel: string | null = null,
+    liveSource: string | null = null,
+  ) => {
     seen.add(key)
     const link = session?.links[0] ?? null
+    const routed = running || (session?.links.length ?? 0) > 0 || session?.gateway_last_ts != null || ctx != null
     rows.push({
       key,
       platform: session?.platform ?? ctx?.session_platform ?? "",
@@ -160,14 +177,18 @@ export function activeSessionRows(views: SessionView[], contexts: ContextSession
       running,
       threadStatus: session?.thread_status ?? null,
       lastTs: Math.max(activity, ctx?.ts ?? 0),
-      model: ctx?.upstream_model ?? bareModel(ctx?.requested_model) ?? link?.upstream_model ?? bareModel(link?.requested_model),
-      account: accountOf(ctx, link?.source ?? null),
-      context: contextCell(ctx, (session?.links.length ?? 0) > 0 || ctx != null),
+      model: ctx?.upstream_model ?? bareModel(ctx?.requested_model) ?? link?.upstream_model ?? bareModel(link?.requested_model) ?? bareModel(liveModel),
+      account: accountOf(ctx, link?.source ?? liveSource ?? null),
+      context: contextCell(ctx, routed),
       cache: cacheCell(ctx),
       snapshotId: ctx?.id ?? null,
     })
   }
-  for (const view of views) push(view.key, view.session, view.running, view.activity, byKey.get(view.key) ?? null)
+  for (const view of views) {
+    const ctx = byKey.get(view.key) ?? null
+    if (!isRoutedView(view, ctx)) continue
+    push(view.key, view.session, view.running, view.activity, ctx, view.liveModel ?? null, view.liveSource ?? null)
+  }
   for (const [key, ctx] of byKey) if (!seen.has(key)) push(key, null, false, 0, ctx)
   return rows.sort((a, b) => Number(b.running) - Number(a.running) || b.lastTs - a.lastTs)
 }

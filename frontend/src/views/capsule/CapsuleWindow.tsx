@@ -436,9 +436,24 @@ export function CapsuleWindow() {
                 <LazyConnectionSwitcher
                   connections={connections}
                   selectedId={active?.id}
+                  followActive={!cloneId && linkage.follow_active}
                   loading={connectionsLoading}
                   onOpenChange={setConnectionMenuOpen}
-                  onSelect={isTauri ? (id) => api.setIslandConnection(id, cloneId) : undefined}
+                  onSelectFollowActive={
+                    isTauri && !cloneId
+                      ? () => api.setIslandLinkage({ ...linkage, follow_active: true })
+                      : undefined
+                  }
+                  onSelect={
+                    isTauri
+                      ? async (id) => {
+                          if (!cloneId && linkage.follow_active) {
+                            await api.setIslandLinkage({ ...linkage, follow_active: false })
+                          }
+                          return api.setIslandConnection(id, cloneId)
+                        }
+                      : undefined
+                  }
                 />
               }
             />

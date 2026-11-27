@@ -1,7 +1,19 @@
 //! 额度、余额与 API 用量查询。
 
-#[allow(unused_imports)]
-use crate::*;
+use std::sync::{Arc, Mutex};
+
+use tauri::{Emitter, Manager, State};
+
+use crate::app::state::{
+    api_usage_cache_outcome, balance_cache_outcome, cached_native_quota, cached_query,
+    quota_cache_outcome, refresh_mode, with_database, Cfg, Db, QueryCache, Refresh,
+    API_USAGE_CACHE, BALANCE_CACHE, QUOTA_CACHE,
+};
+use crate::{
+    coding_plan, connections, creds, db, grok_quota, native_sources, notify, platforms,
+    provider_browser_auth, qoder_desktop, qoder_quota, quota, quota_registry, service_balance,
+    trae_quota, update_tray_icon, validation, workbuddy_quota, zcode_quota,
+};
 
 #[tauri::command]
 pub(crate) async fn local_codex_quota(app: tauri::AppHandle, force: bool, max_age_ms: Option<u64>) -> Result<quota::QuotaState, String> {
@@ -452,4 +464,63 @@ pub(crate) async fn connection_balance(app: tauri::AppHandle, db: State<'_, Db>,
     // 仅仍属于当前凭证的余额可以触发提醒。
     if let quota::BalanceState::Ok { balance, currency, .. } = &state { notify::check_balance(&app, &id, &c.name, &c.platform, *balance, currency); }
     Ok(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_observation;
+    use crate::quota::QuotaState;
+
+    #[test]
+    fn only_missing_official_quota_falls_back_to_the_last_observation() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-ratelimit-limit-requests", "10".parse().unwrap());
+        headers.insert("x-ratelimit-remaining-requests", "4".parse().unwrap());
+        crate::gateway::ratelimit::observe(
+            "obs-conn",
+            &headers,
+            chrono::Utc::now().timestamp_millis(),
+        );
+        let unsupported = with_observation(
+            "obs-conn",
+            QuotaState::Unsupported {
+                reason: "API Key 不提供订阅额度".into(),
+            },
+        );
+        match unsupported {
+            QuotaState::Observed {
+                windows, reason, ..
+            } => {
+                assert_eq!(reason, "API Key 不提供订阅额度");
+                assert_eq!(windows[0].used_percent, Some(60.0));
+            }
+            other => panic!("应该用观测兜底：{other:?}"),
+        }
+        assert!(matches!(
+            with_observation("obs-conn", QuotaState::Failed { reason: "x".into() }),
+            QuotaState::Observed { .. }
+        ));
+        assert!(matches!(
+            with_observation("obs-conn", QuotaState::Unauthorized { reason: "x".into() }),
+            QuotaState::Unauthorized { .. }
+        ));
+        assert!(matches!(
+            with_observation(
+                "obs-conn",
+                QuotaState::Ok {
+                    windows: vec![],
+                    plan: None,
+                    account: None
+                }
+            ),
+            QuotaState::Ok { .. }
+        ));
+        assert!(matches!(
+            with_observation(
+                "no-observation",
+                QuotaState::Unsupported { reason: "x".into() }
+            ),
+            QuotaState::Unsupported { .. }
+        ));
+    }
 }

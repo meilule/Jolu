@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { EVENTS } from "@/lib/events"
 import type { DeltaPhase } from "@/components/island/TokenDelta"
 import type { IslandData } from "@/components/island/UsageIsland"
@@ -9,9 +9,24 @@ import { useConnections } from "@/hooks/useConnections"
 import { shouldRefreshConnection } from "@/lib/refreshScope"
 import { useApiUsage, useBalance, useCostEstimate, useQuota } from "@/hooks/useQuota"
 import { toQuotaWindows } from "@/lib/quotaMap"
-import { api, compactTokens, isTauri, listenEvent, resolveIslandLinkage, type SourceBreakdownDto } from "@/lib/api"
+import {
+  api,
+  compactTokens,
+  isTauri,
+  listenEvent,
+  resolveIslandLinkage,
+  type AgentHookAlertDto,
+  type LocalActiveAccountDto,
+  type PlatformLiveBriefDto,
+  type SourceBreakdownDto,
+} from "@/lib/api"
 import type { MainContextDto } from "@/lib/events"
 import { SIGNAL_LABEL, SIGNAL_SHOW_MS, emptySignals, stepSignals, type ActiveSignal } from "@/lib/islandSignals"
+import {
+  cycleDynamicFocus,
+  emptyDynamicFollowState,
+  stepDynamicFollow,
+} from "@/lib/islandDynamicFollow"
 import { islandIdFromSearch, islandProfile } from "@/lib/islandProfile"
 import { authQuotaRows } from "@/lib/authQuotaRows"
 import type { IslandMode, PlatformId } from "@/types"
@@ -81,25 +96,237 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
   const followed = followOn && contextKey && unfollowed !== contextKey
     ? connections.find((c) => c.id === mainContext?.connection_id && c.status !== "paused") ?? null
     : null
+
+  // ---------- 1A 全平台活跃监听 + 3A 本机切号防呆 + 4B 等待确认提醒（仅本体岛启用） ----------
+  const primaryDynamicScope = isTauri && !cloneId
+  const [liveOverview, setLiveOverview] = useState<PlatformLiveBriefDto[]>([])
+  const [activeAccounts, setActiveAccounts] = useState<LocalActiveAccountDto[]>([])
+  const [hookAlerts, setHookAlerts] = useState<AgentHookAlertDto[]>([])
+  const [dynamicClock, setDynamicClock] = useState(() => Date.now())
+  const followStateRef = useRef(emptyDynamicFollowState())
+  const pendingTurnQuotaRefreshRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!primaryDynamicScope) {
+      setLiveOverview([])
+      setActiveAccounts([])
+      setHookAlerts([])
+      return
+    }
+    let disposed = false
+    let overviewTimer = 0
+    let lastOverviewPullAt = 0
+    const OVERVIEW_THROTTLE_MS = 80
+    const offs: Array<() => void> = []
+    const bind = (p: Promise<() => void>) =>
+      void p.then((un) => { if (disposed) un(); else offs.push(un) }).catch(() => {})
+
+    const fetchOverviewNow = () => {
+      lastOverviewPullAt = Date.now()
+      void api.islandLiveOverview().then((rows) => {
+        if (!disposed) {
+          setLiveOverview(rows)
+          setDynamicClock(Date.now())
+        }
+      }).catch(() => {})
+    }
+
+    // 首事件零延迟立即拉取，连续高频流式推送按 80ms 节流尾随补齐，避免纯尾去抖在持续输出期被饿死
+    const pullOverview = () => {
+      const elapsed = Date.now() - lastOverviewPullAt
+      if (elapsed >= OVERVIEW_THROTTLE_MS) {
+        window.clearTimeout(overviewTimer)
+        overviewTimer = 0
+        fetchOverviewNow()
+        return
+      }
+      if (overviewTimer === 0) {
+        overviewTimer = window.setTimeout(() => {
+          overviewTimer = 0
+          fetchOverviewNow()
+        }, OVERVIEW_THROTTLE_MS - elapsed)
+      }
+    }
+
+    void api.islandLiveOverview().then((rows) => { if (!disposed) setLiveOverview(rows) }).catch(() => {})
+    void api.islandActiveAccounts().then((rows) => { if (!disposed) { setActiveAccounts(rows); setDynamicClock(Date.now()) } }).catch(() => {})
+    if (linkage.agent_hooks) {
+      void api.islandAgentHooksState().then((rows) => { if (!disposed) { setHookAlerts(rows); setDynamicClock(Date.now()) } }).catch(() => {})
+    } else {
+      setHookAlerts([])
+    }
+
+    bind(listenEvent(EVENTS.LIVE_USAGE, () => pullOverview()))
+    bind(listenEvent(EVENTS.ACTIVE_ACCOUNT_CHANGED, (rows) => {
+      if (!disposed) {
+        setActiveAccounts(rows)
+        setDynamicClock(Date.now())
+      }
+    }))
+    bind(listenEvent(EVENTS.CONNECTIONS_CHANGED, () => {
+      void api.islandActiveAccounts().then((rows) => {
+        if (!disposed) {
+          setActiveAccounts(rows)
+          setDynamicClock(Date.now())
+        }
+      }).catch(() => {})
+    }))
+    bind(listenEvent(EVENTS.AGENT_HOOK_CHANGED, (rows) => {
+      if (!disposed) {
+        setHookAlerts(rows)
+        setDynamicClock(Date.now())
+      }
+    }))
+
+    return () => {
+      disposed = true
+      window.clearTimeout(overviewTimer)
+      offs.forEach((off) => off())
+    }
+  }, [primaryDynamicScope, linkage.agent_hooks])
+
+  const followActiveEnabled = primaryDynamicScope && linkage.follow_active && !followed
+  const baselineConnection = islandActiveConnection(ownProfile.connection_id, connections, ownProfile.platform)
+
+  const dynamicOut = useMemo(() => {
+    const out = stepDynamicFollow(
+      followStateRef.current,
+      {
+        enabled: followActiveEnabled,
+        strictWriting: linkage.strict_writing,
+        configuredPlatform: ownProfile.platform,
+        overview: liveOverview,
+        activeAccounts,
+        hookAlerts: linkage.agent_hooks ? hookAlerts : [],
+        currentConnectionId: followStateRef.current.focusedPlatform
+          ? (connections.find((c) => c.platformId === followStateRef.current.focusedPlatform && c.status !== "paused")?.id ?? baselineConnection?.id ?? null)
+          : (baselineConnection?.id ?? null),
+        nowMs: Math.max(quotaNow, dynamicClock),
+      },
+      (plat) => platformConfig(plat as PlatformId).name,
+    )
+    followStateRef.current = out.state
+    if (out.refreshQuotaConnectionId) {
+      pendingTurnQuotaRefreshRef.current = out.refreshQuotaConnectionId
+    }
+    return out
+  }, [
+    followActiveEnabled,
+    linkage.strict_writing,
+    linkage.agent_hooks,
+    ownProfile.platform,
+    liveOverview,
+    activeAccounts,
+    hookAlerts,
+    connections,
+    baselineConnection?.id,
+    quotaNow,
+    dynamicClock,
+  ])
+
+  // 到期自动唤醒防抖驻留（2.4s）与轻提示（1.5s），无需轮询
+  useEffect(() => {
+    const deadlines = [
+      dynamicOut.state.holdUntilMs,
+      dynamicOut.activeCue?.untilMs ?? null,
+    ].filter((t): t is number => t !== null)
+    if (deadlines.length === 0) return
+    const earliest = Math.min(...deadlines)
+    const waitMs = Math.max(20, earliest - Date.now() + 15)
+    const timer = window.setTimeout(() => setDynamicClock(Date.now()), waitMs)
+    return () => window.clearTimeout(timer)
+  }, [dynamicOut.state.holdUntilMs, dynamicOut.activeCue?.untilMs])
+
+  const handleCycleConcurrent = useCallback(() => {
+    const activePlatforms = liveOverview
+      .filter((b) => b.running_count > 0 || (!linkage.strict_writing && b.recent_count > 0))
+      .map((b) => b.platform)
+    followStateRef.current = cycleDynamicFocus(
+      followStateRef.current,
+      activePlatforms,
+      (plat) => platformConfig(plat as PlatformId).name,
+      Date.now(),
+    )
+    setDynamicClock(Date.now())
+  }, [liveOverview, linkage.strict_writing])
+
+  const dynamicConnection = followActiveEnabled && dynamicOut.targetConnectionId
+    ? connections.find((c) => c.id === dynamicOut.targetConnectionId && c.status !== "paused") ?? null
+    : null
+
   const profile = followed
     ? { ...ownProfile, platform: followed.platformId, kind: followed.kind, connection_id: followed.id, connection_name: followed.name }
-    : ownProfile
+    : followActiveEnabled
+      ? {
+          ...ownProfile,
+          platform: dynamicOut.targetPlatform,
+          kind: dynamicOut.unregisteredLocal
+            ? dynamicOut.unregisteredLocal.kind
+            : (dynamicConnection?.kind ?? ownProfile.kind),
+          connection_id: dynamicOut.unregisteredLocal
+            ? null
+            : (dynamicConnection?.id ?? (dynamicOut.targetPlatform === ownProfile.platform ? ownProfile.connection_id : null)),
+          connection_name: dynamicOut.unregisteredLocal
+            ? null
+            : (dynamicConnection?.name ?? (dynamicOut.targetPlatform === ownProfile.platform ? ownProfile.connection_name : null)),
+        }
+      : ownProfile
   const islandPlatform = profile.platform
   const live = useLiveUsage(islandPlatform, true, settings.dnd, dragging)
   const collection = useCollectionStatus()
   // 接入方式来自本机真实配置，不写死
   const conn = useConnectionKind(islandPlatform)
 
-  // 额度按连接查；灵动岛只看当前配置平台的那一个连接（§7.3）
-  // 灵动岛生效连接：明确选择优先；未选择时自动启用当前平台第一个连接成功的
-  // 连接（2026-09-19 鼠鼠定版）。仍不回退到本机账号或唯一候选。
-  const active = islandActiveConnection(profile.connection_id, connections, islandPlatform)
-  // 连接归因（P0）：收缩态那一行要说得出「哪条已存连接在跑」。它和上面的 `active`
-  // 不是一件事——`active` 是本岛选中/生效的连接（配置），这里是后端按请求事实归出来的
-  // 结论（exact / mapped / platform）。归不出唯一一条时给 null，界面保持平台名，
-  // 绝不拿配置里的选择去冒充「正在跑的那条」。
-  const activeConnection = islandAttribution(live.attribution)
-  const islandKind = active?.kind ?? profile.kind
+  // 3A 陌生 Key 防呆：当本机生效了一把未录入 Jolu 的外部 Key 且未手动钉死其它连接时，清空已存连接引用，绝不张冠李戴展示旧账号额度
+  const safeguardUnregistered = Boolean(
+    dynamicOut.unregisteredLocal &&
+    dynamicOut.unregisteredLocal.platform === islandPlatform &&
+    (followActiveEnabled || !ownProfile.connection_id),
+  )
+  const [enrollingLocal, setEnrollingLocal] = useState(false)
+  const [enrollNotice, setEnrollNotice] = useState<{ tone: "ok" | "warn" | "err"; text: string } | null>(null)
+  useEffect(() => {
+    setEnrollNotice(null)
+  }, [islandPlatform])
+  useEffect(() => {
+    if (!enrollNotice || enrollNotice.tone === "err") return
+    const timer = window.setTimeout(() => setEnrollNotice(null), 5_000)
+    return () => window.clearTimeout(timer)
+  }, [enrollNotice])
+
+  const handleEnrollLocal = useCallback(() => {
+    const unreg = dynamicOut.unregisteredLocal
+    if (!isTauri || !unreg || enrollingLocal) return
+    setEnrollingLocal(true)
+    setEnrollNotice(null)
+    void api
+      .islandEnrollLocalAccount(unreg.platform, unreg.sourceAgent)
+      .then(async (enrolled) => {
+        if (!followActiveEnabled && enrolled.platform === ownProfile.platform) {
+          await api.setIslandConnection(enrolled.connection_id, cloneId).catch(() => {})
+        }
+        const modelHint = enrolled.models_fetched > 0 ? `（已同步 ${enrolled.models_fetched} 个模型）` : ""
+        setEnrollNotice({
+          tone: enrolled.warning ? "warn" : "ok",
+          text: enrolled.warning ?? `已收录「${enrolled.name}」${modelHint}`,
+        })
+      })
+      .catch((err) => {
+        setEnrollNotice({ tone: "err", text: String(err) })
+      })
+      .finally(() => {
+        setEnrollingLocal(false)
+      })
+  }, [dynamicOut.unregisteredLocal, enrollingLocal, followActiveEnabled, ownProfile.platform, cloneId])
+
+  const active = safeguardUnregistered
+    ? null
+    : islandActiveConnection(profile.connection_id, connections, islandPlatform)
+  // 连接归因（P0 / 2B）：收缩态那一行要说得出「哪条已存连接在跑」（exact / active_config / mapped）
+  const activeConnection = safeguardUnregistered ? null : islandAttribution(live.attribution)
+  const islandKind = safeguardUnregistered && dynamicOut.unregisteredLocal
+    ? dynamicOut.unregisteredLocal.kind
+    : (active?.kind ?? profile.kind)
   const localQuotaPlatform = (islandPlatform === "grok" || islandPlatform === "zcode") && islandKind === "auth"
   const queries = localQuotaPlatform
     ? { quota: null, balance: null, usage: null }
@@ -114,7 +341,7 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
   const officialApiUsage = useApiUsage(queries.usage, cardsVisible)
   const localCost = useCostEstimate(islandPlatform, "today", undefined, undefined, undefined, cardsVisible)
   useEffect(() => setQuotaNow(Date.now()), [islandPlatform])
-  const nativeMonitor = isFetchOnlyPlatform(islandPlatform as PlatformId) && islandPlatform !== "grok"
+  const nativeMonitor = isFetchOnlyPlatform(islandPlatform as PlatformId) && islandPlatform !== "grok" && islandKind !== "api"
   // 本机积分只有原生来源平台在卡片里展示；其他平台不查
   const sourceMetrics = useSourceMetrics(islandPlatform, "today", null, null, quotaNow, nativeMonitor && cardsVisible)
   const remainingQuota = islandPlatform === "grok" && islandKind === "auth" ? grokLocalQuota
@@ -157,6 +384,10 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
     listen(listenEvent(EVENTS.REFRESH_REQUESTED, (connectionId) => {
       if (shouldRefreshConnection(connectionId, active?.id)) refreshNetwork(false)
     }))
+    if (pendingTurnQuotaRefreshRef.current && pendingTurnQuotaRefreshRef.current === active?.id) {
+      pendingTurnQuotaRefreshRef.current = null
+      refreshNetwork(false)
+    }
     // 主面板「启用」完成后 settings-changed 与连接列表可能先后到达。
     // 等新连接实际成为灵动岛生效连接，再用它强制刷新额度与本机会话。
     const selectedKey = active?.id && profile.connection_id === active.id
@@ -210,15 +441,23 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
   //   3. 来源只给「最近活跃」窗口时（zcode 没有运行中会话的时刻），窗口内仍有写入——
   //      ZCode 的 model_usage 只在请求结束时落行，这是它唯一的落库痕迹。
   // 采集源出错（`sourceFailed`）只让展示的状态变「未知」，不再把「明明有请求在途」压成 false。
+  const writingNow = Math.max(quotaNow, dynamicClock)
   const writing = islandWriting({
     sessions: live.sessions,
     recentWindow: live.activityKind === "recent",
     activeWindowSeconds: live.activeWindowSeconds,
     inFlight: gateway.relay ? gateway.activity.inFlight.length : 0,
-    now: quotaNow,
+    now: writingNow,
     sourceFailed,
     strict: linkage.strict_writing,
   })
+  useEffect(() => {
+    if (!writing.recentWrite || writing.lastWriteMs == null) return
+    const windowMs = (live.activeWindowSeconds > 0 ? live.activeWindowSeconds : 90) * 1_000
+    const waitMs = Math.max(50, writing.lastWriteMs + windowMs - Date.now() + 25)
+    const timer = window.setTimeout(() => setDynamicClock(Date.now()), waitMs)
+    return () => window.clearTimeout(timer)
+  }, [writing.recentWrite, writing.lastWriteMs, live.activeWindowSeconds])
   const working = writing.working
   // 会话状态展示仍按来源可信度收敛：采集源出错时状态不可判定，逐条标「未知」。
   // 本轮增量取后端 running_tokens（只含 running 会话），拿不到就是 null——胶囊显示未知，
@@ -312,6 +551,45 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
     format: compactTokens,
   })
 
+  const crossPlatformSessions = useMemo(() => {
+    if (!primaryDynamicScope || mode !== "expanded") return []
+    return liveOverview
+      .filter((b) => b.platform !== islandPlatform)
+      .flatMap((b) =>
+        b.sessions.slice(0, 3).map((s) => ({
+          platform: b.platform as PlatformId,
+          platformName: platformConfig(b.platform as PlatformId).name,
+          id: s.session_id,
+          title: s.title,
+          state: (s.state !== "recent" ? s.state : "unknown") as "running" | "done" | "failed" | "unknown",
+          deltaTokens: s.running_tokens ?? (s.delta_tokens > 0 ? s.delta_tokens : null),
+          connectionName: s.attribution?.confidence && s.attribution.confidence !== "platform" ? s.attribution.name : null,
+          confidence: s.attribution?.confidence ?? "platform",
+        })),
+      )
+  }, [primaryDynamicScope, mode, liveOverview, islandPlatform])
+
+  const concurrentPeersView = useMemo(
+    () =>
+      dynamicOut.concurrentPeers.map((p) => ({
+        ...p,
+        platformName: platformConfig(p.platform as PlatformId).name,
+      })),
+    [dynamicOut.concurrentPeers],
+  )
+
+  const approvalAlertView = useMemo(() => {
+    const alert = dynamicOut.approvalAlert
+    if (!alert) return null
+    return {
+      platform: alert.platform,
+      platformName: platformConfig(alert.platform as PlatformId).name,
+      kind: alert.kind,
+      sessionId: alert.session_id,
+      summary: alert.summary,
+    }
+  }, [dynamicOut.approvalAlert])
+
   const data: IslandData = isTauri || live.live
     ? {
         platform: islandPlatform as PlatformId,
@@ -335,9 +613,20 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
         connected: localQuotaPlatform || Boolean(active && active.status !== "paused"),
         connectionId: active?.id ?? null,
         usageConnectionId: usageJumpConnection(live.attribution),
-        // 收缩态那一行按置信度渲染：`exact` / `mapped` 显示连接名（mapped 用弱化样式），
+        // 收缩态那一行按置信度渲染：`exact` / `active_config` / `mapped` 显示连接名，
         // `platform` 或 null 保持现在的平台名。
         activeConnection,
+        unregisteredLocal: safeguardUnregistered ? dynamicOut.unregisteredLocal : null,
+        enrollingLocal,
+        enrollNotice,
+        onEnrollLocal: safeguardUnregistered ? handleEnrollLocal : undefined,
+        concurrentPeers: concurrentPeersView,
+        onCycleConcurrent: concurrentPeersView.length > 0 ? handleCycleConcurrent : undefined,
+        crossPlatformSessions,
+        approvalAlert: approvalAlertView,
+        dynamicCue: !settings.dnd && dynamicOut.activeCue
+          ? { kind: dynamicOut.activeCue.kind, label: dynamicOut.activeCue.label }
+          : null,
         // 4.2b：短时信号（免打扰或减少动效时只改颜色）、跟随主窗口
         signal: signal ? { kind: signal.kind, label: SIGNAL_LABEL[signal.kind], at: signal.at, motion: !settings.dnd && !settings.reduce_motion } : null,
         following: followed ? { label: `跟随中：${mainContext?.page === "usage" ? "用量" : mainContext?.page === "providers" ? "供应商" : "主窗口"} · ${followed.name}`, onUnfollow: () => setUnfollowed(contextKey) } : null,
@@ -393,7 +682,11 @@ export function useIslandWindowModel({ capsule, mode, peek, dragging }: IslandWi
         carriedDelta,
         carriedSource,
         carriedCountKey,
-        status: nativeMonitor && active?.status === "connected" ? { tone: "success", label: "本机监控" } : islandConnectionStatus(active?.status ?? null, false, Boolean(profile.connection_id)),
+        status: safeguardUnregistered && dynamicOut.unregisteredLocal
+          ? { tone: "warn", label: `本机未保存凭证（${dynamicOut.unregisteredLocal.masked}）` }
+          : nativeMonitor && active?.status === "connected"
+            ? { tone: "success", label: "本机监控" }
+            : islandConnectionStatus(active?.status ?? null, false, Boolean(profile.connection_id)),
         sourceText: `${collection.status && !collection.status.ok ? `采集异常：${collection.status.errors.join("；")} · ` : ""}${officialApiUsage.state?.state === "ok" ? `API 用量来源：${officialApiUsage.state.source} · ` : ""}统计来源：本机 ${PLATFORM_NAMES[islandPlatform] ?? islandPlatform} 会话记录（无法按账号区分）· ${live.activityKind === "running" ? "按本轮开始／结束事件及会话存活状态判断；思考、等待输入及压缩期间保留会话与 Token" : islandPlatform === "zcode" ? `${live.activeWindowSeconds} 秒内有新记录视为最近活跃；完成 / 失败 / 运行中按本机库的请求状态标注` : `${live.activeWindowSeconds} 秒内有新记录视为最近活跃`}`,
       }
     : {

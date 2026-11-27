@@ -12,6 +12,7 @@ import { useSettings } from "@/hooks/useSettings"
 import { useConnections } from "@/hooks/useConnections"
 import { useQuota } from "@/hooks/useQuota"
 import { PLATFORMS } from "@/lib/platforms"
+import { TactileButton } from "@/motion"
 import { Progress, QuotaRing, Tooltip } from "@/ui"
 
 export function SidebarIslandCard({
@@ -60,20 +61,22 @@ export function SidebarIslandCard({
   if (collapsed) {
     return (
       <Tooltip content={`${title} · ${subtitle}`} side="right">
-        <button
+        <TactileButton
+          variant="icon"
           type="button"
           onClick={onOpenIsland}
           aria-label={`灵动岛状态：${title}`}
           className="jn-interactive flex h-12 w-full items-center justify-center rounded-2xl bg-jn-primary-wash hover:brightness-[0.98]"
         >
           <QuotaRing usedPercent={usedPercent} size="sm" />
-        </button>
+        </TactileButton>
       </Tooltip>
     )
   }
 
   return (
-    <button
+    <TactileButton
+      variant="tile"
       type="button"
       onClick={onOpenIsland}
       className="jn-interactive flex w-full flex-col gap-2 rounded-2xl bg-jn-primary-wash p-3 text-left hover:brightness-[0.98]"
@@ -97,6 +100,6 @@ export function SidebarIslandCard({
       </span>
       <Progress percent={usedPercent} highAt={85} />
       <span className="truncate text-[11px] text-jn-text-3">{subtitle}</span>
-    </button>
+    </TactileButton>
   )
 }

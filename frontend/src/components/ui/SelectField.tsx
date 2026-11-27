@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react"
 import * as Menu from "@radix-ui/react-dropdown-menu"
 import { Check, ChevronDown, Search } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { useGlidePill } from "@/motion"
+import { TactileButton, useGlidePill } from "@/motion"
 
 export interface SelectOption {
   value: string
@@ -80,16 +80,23 @@ export function SelectField({ value, options, onValueChange, label, disabled,
     : options
   return (
     <Menu.Root modal={false} onOpenChange={(open) => { if (!open) setQuery(""); onOpenChange?.(open) }}>
-      <Menu.Trigger disabled={disabled} type="button" aria-label={label}
-        className={cn(
-          "jn-interactive inline-flex min-w-0 shrink-0 items-center justify-between gap-2 text-left text-jn-text outline-none disabled:cursor-not-allowed disabled:opacity-45",
-          VARIANT[variant],
-          variant !== "filter" && variant !== "form" && variant !== "picker" && WIDTH[width],
-          className,
-        )}>
-        {triggerIcon ? <span aria-hidden className="flex shrink-0 items-center">{triggerIcon}</span> : null}
-        <span className="min-w-0 flex-1 truncate text-left">{triggerLabel ?? selected?.label ?? placeholder}</span>
-        <ChevronDown aria-hidden className="jn-chevron size-3.5 shrink-0 text-jn-text-3" />
+      <Menu.Trigger asChild disabled={disabled}>
+        <TactileButton
+          variant="control"
+          disabled={disabled}
+          type="button"
+          aria-label={label}
+          className={cn(
+            "jn-interactive inline-flex min-w-0 shrink-0 items-center justify-between gap-2 text-left text-jn-text outline-none disabled:cursor-not-allowed disabled:opacity-45",
+            VARIANT[variant],
+            variant !== "filter" && variant !== "form" && variant !== "picker" && WIDTH[width],
+            className,
+          )}
+        >
+          {triggerIcon ? <span aria-hidden className="flex shrink-0 items-center">{triggerIcon}</span> : null}
+          <span className="min-w-0 flex-1 truncate text-left">{triggerLabel ?? selected?.label ?? placeholder}</span>
+          <ChevronDown aria-hidden className="jn-chevron size-3.5 shrink-0 text-jn-text-3" />
+        </TactileButton>
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Content

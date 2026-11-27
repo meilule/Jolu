@@ -6,6 +6,7 @@
  */
 import type { ReactNode } from "react"
 import { cn } from "@/lib/utils"
+import { TactileButton } from "@/motion"
 import { VIZ_BG, type VizSeries } from "./Legend"
 
 export interface BarRowProps {
@@ -58,7 +59,8 @@ export function BarRow({
 
   if (onClick) {
     return (
-      <button
+      <TactileButton
+        variant="row"
         type="button"
         title={title}
         onClick={onClick}
@@ -68,7 +70,7 @@ export function BarRow({
         )}
       >
         {content}
-      </button>
+      </TactileButton>
     )
   }
 

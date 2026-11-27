@@ -7,6 +7,7 @@ import { useLatestGate } from "@/hooks/useLatestGate"
 import { gatewayApi, type CatalogModelDto, type GroupMemberDto, type SourceUsageDto } from "@/lib/gatewayApi"
 import { useToast } from "@/components/ui/Toast"
 import { JoluButton } from "@/components/ui/JoluButton"
+import { Switch } from "@/ui"
 import type { Connection } from "@/types"
 
 /**
@@ -160,12 +161,7 @@ function ModelCountLine({ account, models, groups }: { account: Connection; mode
 }
 
 function RouteSwitch({ on, busy, label, onClick }: { on: boolean; busy: boolean; label: string; onClick: () => void }) {
-  return (
-    <button type="button" role="switch" aria-checked={on} aria-label={label} disabled={busy || !isTauri} onClick={onClick}
-      className={cn("flex h-4 w-7 shrink-0 items-center rounded-full p-0.5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jn-focus disabled:opacity-45", on ? "justify-end bg-jn-primary" : "justify-start bg-jn-track")}>
-      <span className="size-3 rounded-full bg-white shadow-sm" />
-    </button>
-  )
+  return <Switch size="sm" checked={on} disabled={busy || !isTauri} label={label} onChange={() => onClick()} />
 }
 
 /**

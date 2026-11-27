@@ -22,6 +22,7 @@
  */
 import type { HTMLAttributes, ReactNode } from "react"
 import { cn } from "@/lib/utils"
+import { TactileBox } from "@/motion"
 
 const STATE = {
   default: "",
@@ -58,7 +59,9 @@ export function ListRow({
 }: ListRowProps) {
   const interactive = Boolean(onClick)
   return (
-    <div
+    <TactileBox
+      interactive={interactive}
+      variant="row"
       role={interactive ? "button" : undefined}
       tabIndex={interactive ? 0 : undefined}
       onClick={onClick}
@@ -97,6 +100,6 @@ export function ListRow({
         {subtitle && <span className="truncate text-[11px] text-jn-text-3">{subtitle}</span>}
       </span>
       {trailing && <span className="flex shrink-0 items-center gap-1.5">{trailing}</span>}
-    </div>
+    </TactileBox>
   )
 }

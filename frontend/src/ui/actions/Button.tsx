@@ -18,12 +18,13 @@
  *
  * ## 状态
  *
- * 悬停加深 / 按下缩到 0.97 / 聚焦 3px 绿圈 / 禁用 45% / 加载中换转圈且不可点。
- * 具体实现集中在 `theme/states.css`（四种 kind 共用一套，不为每种重写）。
+ * 悬停加深与轻胀 / 按下弹簧回弹 / 聚焦 3px 绿圈 / 禁用 45% / 加载中换转圈且不可点。
+ * 颜色叠层在 `theme/states.css`，弹簧触感统一由 `@/motion` 的 `TactileButton` 接管。
  */
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react"
 import { cn } from "@/lib/utils"
 import { Icon, type IconName } from "@/icons"
+import { TactileButton } from "@/motion"
 
 /** 四种视觉重量。变体表与设计稿的 kind 一一对应。 */
 const KIND = {
@@ -74,8 +75,9 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   ...rest
 }, ref) {
   return (
-    <button
+    <TactileButton
       ref={ref}
+      variant="button"
       type={type}
       disabled={disabled || loading}
       className={cn(
@@ -92,6 +94,6 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
         icon && <Icon name={icon} size={size === "md" ? "md" : "sm"} />
       )}
       {children}
-    </button>
+    </TactileButton>
   )
 })

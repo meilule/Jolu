@@ -53,7 +53,7 @@ mod tests {
     }
     #[test]
     fn all_fifteen_platforms_have_unique_ids() {
-        assert_eq!(CATALOG.len(), 15);
+        assert_eq!(CATALOG.len(), 16);
         for id in [
             "claude",
             "codex",
@@ -70,13 +70,14 @@ mod tests {
             "kimi",
             "pi",
             "dsh",
+            "qwen",
         ] {
             assert_eq!(CATALOG.iter().filter(|p| p.id == id).count(), 1);
         }
         assert!(!known("tare"));
         assert!(!supports("trae", "local_sessions"));
         assert!(supports("opencode","local_sessions"));
-        for id in ["antigravity", "kimi", "pi", "dsh"] {
+        for id in ["antigravity", "kimi", "pi", "dsh", "qwen"] {
             assert!(known(id) && native(id) && supports(id, "local_sessions"));
             assert!(!supports(id, "auth_connection") && !supports(id, "subscription_quota"));
         }

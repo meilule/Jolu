@@ -103,7 +103,7 @@ Remove-Item Env:JOLU_DEV_URL                                 # 验收结束后�
 
 查看方法：让 Claude Code / Codex 经代理发一次请求，抓响应头（或用 `curl -si` 按该工具的接口路径直接请求代理端口）。
 
-没有这个头说明请求没走代理（或走的是统一网关，看 `x-jolu-gateway`）。单测见 `backend/src/proxy.rs` 中断言 `x-jolu-proxy` 的用例。
+没有这个头说明请求没走代理（或走的是统一网关，看 `x-jolu-gateway`）。单测见 `backend/src/proxy/` 中断言 `x-jolu-proxy` 的用例。
 
 ## 灵动岛分身（画布 22）
 
@@ -120,7 +120,7 @@ Remove-Item Env:JOLU_DEV_URL                                 # 验收结束后�
 - `node scripts/acceptance/account-quota-sources.cjs`：同样使用 5193 前端服务与合成桥接；覆盖真实重置卡对象才出现查询入口、服务未返回字段、单卡查询归属，以及套餐 Key 额度与余额并存、真实零、自定义供应商额度和余额、旧值标记与不支持状态。截图保存在 `output/playwright/account-sources-*.png`。
 - `node scripts/acceptance/account-cards.cjs`：默认使用 5314 开发服务器（`JOLU_COMPONENT_URL` 可覆盖，仅限本机），挂载真实 MainPanelWindow、懒加载外层、供应商页与合成桥接。验证 1280×900 和 1920×1080 下四列、首屏两行八张、仅列表滚轮查看后续账号、筛选归零滚动位置，以及完整六模型详情、Auth 订阅到期、ApiKey 独立摘要和真实套餐到期、类型/供应商/搜索组合筛选及清除、隐私隐藏、真实零、按来源显示重置卡和单账号查询。浅深色截图位于 `output/acceptance/account-cards/`；不访问真实桌面或账号。
 - `node scripts/acceptance/usage-overview.cjs`：同样默认使用 5314，挂载真实概览组件。验证混合已知/未知记录时显示已知 Token、缓存可计算覆盖次数、模型占比、不做部分总量环比、未知不变零，以及四条趋势线跨缺失点连续且悬浮说明保留。仅使用合成数据；截图位于 `output/acceptance/usage-overview/`。
-- `node --test backend/src/workbuddy_auth.test.mjs`：通过合成官方 sym-v1 信封和原生存储替身，验证 WorkBuddy 凭证内存解码、篡改拒绝、不同客户端密钥拒绝及错误输出脱敏；不读取真实账号或联网。真实只读查询仍需单独运行 Rust 的忽略测试。
+- `node --test backend/src/quota/vendors/workbuddy_auth.test.mjs`：通过合成官方 sym-v1 信封和原生存储替身，验证 WorkBuddy 凭证内存解码、篡改拒绝、不同客户端密钥拒绝及错误输出脱敏；不读取真实账号或联网。真实只读查询仍需单独运行 Rust 的忽略测试。
 - `node scripts/acceptance/update-flow.cjs`：使用单独的 5197 前端服务（可用 `JOLU_PREVIEW_URL` 覆盖），合成更新 API 验证检查后自动下载、取消、重试、稍后安装、任务导航和点击版本按钮直接安装。不会安装更新；真实安装链路见 `scripts/release/local-update-e2e.md`。
 
 ## 组件异步状态回归

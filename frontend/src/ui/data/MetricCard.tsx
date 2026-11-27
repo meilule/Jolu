@@ -25,6 +25,7 @@
  */
 import type { ReactNode } from "react"
 import { cn } from "@/lib/utils"
+import { TactileBox } from "@/motion"
 
 export interface MetricCardProps {
   title: ReactNode
@@ -47,7 +48,9 @@ export interface MetricCardProps {
 export function MetricCard({ title, scope, value, compare, spark, source, active, onClick, className }: MetricCardProps) {
   const interactive = typeof onClick === "function"
   return (
-    <div
+    <TactileBox
+      interactive={interactive}
+      variant="tile"
       role={interactive ? "button" : undefined}
       tabIndex={interactive ? 0 : undefined}
       aria-pressed={interactive ? Boolean(active) : undefined}
@@ -79,6 +82,6 @@ export function MetricCard({ title, scope, value, compare, spark, source, active
       {compare && <p className="text-xs text-jn-text-3">{compare}</p>}
       {spark && <div className="h-2 w-full">{spark}</div>}
       {source}
-    </div>
+    </TactileBox>
   )
 }

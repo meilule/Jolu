@@ -25,13 +25,7 @@ pub(crate) fn bound(
     conn: &rusqlite::Connection,
     id: &str,
 ) -> Result<(String, crate::zcode_browser_auth::Session), String> {
-    let secret: String = conn
-        .query_row(
-            "SELECT secret FROM connections WHERE id=?1 AND platform='zcode' AND kind='auth'",
-            [id],
-            |r| r.get(0),
-        )
-        .map_err(|_| "所选 ZCode 账号缺少完整授权，请重新登录")?;
+    let secret: String = crate::gateway::subscription::ConnectionSecretStore::auth_secret(conn, id, "zcode", "所选 ZCode 账号缺少完整授权，请重新登录")?;
     let Credential::Zcode { session } = provider_browser_auth::load(id, "zcode", &secret)? else {
         return Err("ZCode 授权类型不匹配".into());
     };

@@ -93,13 +93,7 @@ fn check_identity(value: &Value, expected: &str) -> Result<(), String> {
 }
 
 pub(crate) fn bound(conn: &rusqlite::Connection, id: &str) -> Result<(String, String, Session), String> {
-    let sealed: String = conn
-        .query_row(
-            "SELECT secret FROM connections WHERE id=?1 AND platform='qoder' AND kind='auth'",
-            [id],
-            |r| r.get(0),
-        )
-        .map_err(|_| "所选 Qoder 账号缺少授权")?;
+    let sealed: String = crate::gateway::subscription::ConnectionSecretStore::auth_secret(conn, id, "qoder", "所选 Qoder 账号缺少授权")?;
     let Credential::Qoder { edition, session } = provider_browser_auth::load(id, "qoder", &sealed)? else {
         return Err("Qoder 授权类型不匹配".into());
     };
@@ -342,13 +336,7 @@ fn scene_entries(listing: &Value) -> Vec<Value> {
 
 /// 本适配器为当前授权保存的列表条目：(获取时间, 条目)。
 fn stored(conn: &rusqlite::Connection, id: &str) -> Option<(i64, Vec<Value>)> {
-    let (secret, text): (String, String) = conn
-        .query_row(
-            "SELECT secret,models_json FROM connections WHERE id=?1 AND platform='qoder' AND kind='auth'",
-            [id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .ok()?;
+    let (secret, text) = crate::gateway::subscription::ConnectionSecretStore::secret_and_models_json(conn, id, "qoder")?;
     let value: Value = serde_json::from_str(&text).ok()?;
     if value["credential_hash"].as_str()? != credential_hash(&secret) {
         return None;
@@ -396,15 +384,7 @@ async fn fetch_entries(deps: &Arc<ProxyDeps>, entry: &PoolEntry, chat: &Chat, te
     let entries = scene_entries(&listing);
     let cache = json!({"credential_hash":credential_hash(&chat.sealed),"fetched_ms":chrono::Utc::now().timestamp_millis(),"entries":entries}).to_string();
     let conn = deps.db.lock().map_err(|_| "无法保存 Qoder 模型列表")?;
-    let changed = conn
-        .execute(
-            "UPDATE connections SET models_json=?3 WHERE id=?1 AND platform='qoder' AND kind='auth' AND secret=?2",
-            rusqlite::params![entry.connection_id, chat.sealed, cache],
-        )
-        .map_err(|_| "无法保存 Qoder 模型列表")?;
-    if changed != 1 {
-        return Err("Qoder 授权已变化，已丢弃旧账号的模型列表".into());
-    }
+    crate::gateway::subscription::ConnectionSecretStore::save_models_json_if_secret(&conn, &entry.connection_id, "qoder", &chat.sealed, &cache, "无法保存 Qoder 模型列表", "Qoder 授权已变化，已丢弃旧账号的模型列表")?;
     Ok(entries)
 }
 

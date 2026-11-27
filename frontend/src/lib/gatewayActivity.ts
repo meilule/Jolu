@@ -75,10 +75,10 @@ export interface ActivityState {
   todayPartial?: boolean
 }
 
-/** 成功停留 2.4s，被拒 / 失败停留 4.8s；只有开始没有结束的请求 120s 后收回 */
+/** 成功停留 2.4s，被拒 / 失败停留 4.8s；只有开始没有结束的孤儿请求 600s（10 分钟）后兜底收回 */
 export const OK_HOLD_MS = 2400
 export const REJECT_HOLD_MS = 4800
-export const STALE_IN_FLIGHT_MS = 120_000
+export const STALE_IN_FLIGHT_MS = 600_000
 
 export const dayKey = (ts: number) => {
   const d = new Date(ts)

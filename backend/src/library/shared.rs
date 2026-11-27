@@ -27,32 +27,7 @@ pub const SUBAGENT_AGENTS: &[&str] = &["claude-code", "codex", "gemini", "openco
 const RESERVED_NAMES: &[&str] = &["self", "system", "user", "model", "tool", "config", "default", "main"];
 
 pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS library_instructions (
-            id          TEXT PRIMARY KEY,
-            text        TEXT NOT NULL,
-            agents_json TEXT NOT NULL,
-            updated_ms  INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS library_subagents (
-            name        TEXT PRIMARY KEY,
-            description TEXT NOT NULL,
-            prompt      TEXT NOT NULL,
-            model       TEXT,
-            agents_json TEXT NOT NULL,
-            updated_ms  INTEGER NOT NULL
-        );
-        -- Jolu 写进 agent 目录的每一处：kind = instructions / subagent，owner = 'default' 或子代理名
-        CREATE TABLE IF NOT EXISTS library_files (
-            kind       TEXT NOT NULL,
-            owner      TEXT NOT NULL,
-            agent      TEXT NOT NULL,
-            path       TEXT NOT NULL,
-            hash       TEXT NOT NULL,
-            written_ms INTEGER NOT NULL,
-            PRIMARY KEY (kind, owner, agent)
-        );",
-    )
+    crate::db::schema::ensure_library_shared_schema(conn)
 }
 
 fn hash(text: &str) -> String {

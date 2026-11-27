@@ -19,6 +19,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window"
 import { cn } from "@/lib/utils"
 import { isTauri } from "@/lib/api"
 import { Icon, type IconName } from "@/icons"
+import { TactileButton } from "@/motion"
 
 const ACTIONS: { action: "minimize" | "maximize" | "close"; label: string; icon: IconName }[] = [
   { action: "minimize", label: "最小化", icon: "minimize" },
@@ -62,8 +63,9 @@ export function WindowControls({ className }: { className?: string }) {
         </span>
       )}
       {ACTIONS.map(({ action, label, icon }) => (
-        <button
+        <TactileButton
           key={action}
+          variant="icon"
           type="button"
           aria-label={action === "maximize" && maximized ? "还原" : label}
           title={isTauri ? (action === "maximize" && maximized ? "还原" : label) : `${label}（仅桌面端可用）`}
@@ -80,7 +82,7 @@ export function WindowControls({ className }: { className?: string }) {
             name={action === "maximize" && maximized ? "restore" : icon}
             size={action === "maximize" ? "sm" : "md"}
           />
-        </button>
+        </TactileButton>
       ))}
     </div>
   )

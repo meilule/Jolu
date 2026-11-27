@@ -140,8 +140,8 @@ fn format_hits(hits: &[search::SearchHit]) -> String {
 
 /// 读搜索配置：全部未暂停的后端，按用户排的顺序。与 CLI `jolu search` 同一份数据源。
 fn search_configs() -> Vec<SearchApiConfig> {
-    let Ok(directory) = crate::service::paths::config_directory() else { return Vec::new() };
-    let settings = crate::service::settings::read_settings(&directory);
+    let Ok(directory) = crate::infra::paths::config_directory() else { return Vec::new() };
+    let settings = crate::settings::read_readonly(&directory);
     settings.search_apis.into_iter().filter(|api| !api.off).collect()
 }
 

@@ -191,6 +191,102 @@ fn check_threshold(spend: f64, limit: Option<f64>, warn_percent: u8) -> (bool, b
     (ratio >= f64::from(warn_percent) / 100.0, spend >= lim)
 }
 
+fn accumulate_month_spend(
+    conn: &Connection,
+    today_start: i64,
+    month_start: i64,
+    now_ms: i64,
+) -> Result<(f64, f64, HashMap<String, f64>, HashMap<String, f64>), String> {
+    let snapshot = crate::attribution::Snapshot::load(conn).ok();
+    let mut resolver = PriceResolver::load(conn);
+    let mut global_today = 0.0;
+    let mut global_month = 0.0;
+    let mut per_conn_today: HashMap<String, f64> = HashMap::new();
+    let mut per_conn_month: HashMap<String, f64> = HashMap::new();
+
+    let sql = format!(
+        "SELECT r.platform, r.model, r.upstream_model, r.served_model, r.ts,
+                r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_write_tokens,
+                r.cache_write_1h_tokens, r.input_known, r.output_known, r.cache_read_known, r.cache_write_known,
+                r.input_semantics, r.connection_id, r.provider_key, m.reasoning, m.tool
+         FROM requests r LEFT JOIN request_metrics m ON m.request_id = r.id
+         WHERE r.ts >= ?1 AND r.ts < ?2{}",
+        crate::db::EXCLUDE_DEGENERATE_SQL
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![month_start, now_ms.max(month_start + 1)], |r| {
+            let opt = |v: usize, k: usize| -> rusqlite::Result<Option<i64>> {
+                Ok(if r.get::<_, i64>(k)? != 0 { Some(r.get(v)?) } else { None })
+            };
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, i64>(4)?,
+                opt(5, 10)?,
+                opt(6, 11)?,
+                opt(7, 12)?,
+                opt(8, 13)?,
+                r.get::<_, Option<i64>>(9)?.unwrap_or(0),
+                r.get::<_, String>(14)?,
+                r.get::<_, Option<String>>(15)?,
+                r.get::<_, Option<String>>(16)?,
+                r.get::<_, Option<i64>>(17)?.unwrap_or(0),
+                r.get::<_, Option<i64>>(18)?.unwrap_or(0),
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for row in rows {
+        let (platform, model, upstream, served, ts, input, output, cr, cw, cw1h, semantics, conn_id, provider_key, reasoning, tool) =
+            row.map_err(|e| e.to_string())?;
+        let attribution = snapshot
+            .as_ref()
+            .map_or_else(crate::attribution::AttributionView::platform, |snap| {
+                snap.resolve(&platform, conn_id.as_deref(), provider_key.as_deref(), model.as_deref())
+            });
+        let effective_conn = attribution
+            .is_connection()
+            .then(|| attribution.connection_id.as_deref())
+            .flatten();
+        let (billing_mode, _) = resolver.billing_for(effective_conn);
+        if billing_mode != BillingMode::Api {
+            continue;
+        }
+        let at = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now);
+        let res = resolver.price_request(&PriceRequest {
+            platform: &platform,
+            model: model.as_deref(),
+            upstream_model: upstream.as_deref(),
+            served_model: served.as_deref(),
+            connection_id: effective_conn,
+            input_semantics: &semantics,
+            input,
+            output,
+            cache_read: cr,
+            cache_write: cw,
+            cache_write_1h: cw1h,
+            reasoning,
+            tool,
+            at,
+        });
+        let Some(cost) = res.cost else { continue };
+        global_month += cost;
+        if ts >= today_start {
+            global_today += cost;
+        }
+        if let Some(cid) = effective_conn {
+            *per_conn_month.entry(cid.to_string()).or_default() += cost;
+            if ts >= today_start {
+                *per_conn_today.entry(cid.to_string()).or_default() += cost;
+            }
+        }
+    }
+    Ok((global_today, global_month, per_conn_today, per_conn_month))
+}
+
 pub fn compute_budget_status(
     conn: &Connection,
     settings: &Settings,
@@ -199,96 +295,8 @@ pub fn compute_budget_status(
     let (today_start, month_start, next_month_start) = month_bounds_ms(now_ms);
     let warn_percent = settings.global_budget_warn_percent.clamp(50, 99);
 
-    let snapshot = crate::attribution::Snapshot::load(conn).ok();
-    let mut resolver = PriceResolver::load(conn);
-
-    let mut global_today = 0.0;
-    let mut global_month = 0.0;
-    let mut per_conn_today: HashMap<String, f64> = HashMap::new();
-    let mut per_conn_month: HashMap<String, f64> = HashMap::new();
-
-    {
-        let sql = format!(
-            "SELECT r.platform, r.model, r.upstream_model, r.served_model, r.ts,
-                    r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_write_tokens,
-                    r.cache_write_1h_tokens, r.input_known, r.output_known, r.cache_read_known, r.cache_write_known,
-                    r.input_semantics, r.connection_id, r.provider_key, m.reasoning, m.tool
-             FROM requests r LEFT JOIN request_metrics m ON m.request_id = r.id
-             WHERE r.ts >= ?1 AND r.ts < ?2{}",
-            crate::db::EXCLUDE_DEGENERATE_SQL
-        );
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(params![month_start, now_ms.max(month_start + 1)], |r| {
-                let opt = |v: usize, k: usize| -> rusqlite::Result<Option<i64>> {
-                    Ok(if r.get::<_, i64>(k)? != 0 { Some(r.get(v)?) } else { None })
-                };
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, Option<String>>(1)?,
-                    r.get::<_, Option<String>>(2)?,
-                    r.get::<_, Option<String>>(3)?,
-                    r.get::<_, i64>(4)?,
-                    opt(5, 10)?,
-                    opt(6, 11)?,
-                    opt(7, 12)?,
-                    opt(8, 13)?,
-                    r.get::<_, Option<i64>>(9)?.unwrap_or(0),
-                    r.get::<_, String>(14)?,
-                    r.get::<_, Option<String>>(15)?,
-                    r.get::<_, Option<String>>(16)?,
-                    r.get::<_, Option<i64>>(17)?.unwrap_or(0),
-                    r.get::<_, Option<i64>>(18)?.unwrap_or(0),
-                ))
-            })
-            .map_err(|e| e.to_string())?;
-
-        for row in rows {
-            let (platform, model, upstream, served, ts, input, output, cr, cw, cw1h, semantics, conn_id, provider_key, reasoning, tool) =
-                row.map_err(|e| e.to_string())?;
-            let attribution = snapshot
-                .as_ref()
-                .map_or_else(crate::attribution::AttributionView::platform, |snap| {
-                    snap.resolve(&platform, conn_id.as_deref(), provider_key.as_deref(), model.as_deref())
-                });
-            let effective_conn = attribution
-                .is_connection()
-                .then(|| attribution.connection_id.as_deref())
-                .flatten();
-            let (billing_mode, _) = resolver.billing_for(effective_conn);
-            if billing_mode != BillingMode::Api {
-                continue;
-            }
-            let at = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now);
-            let res = resolver.price_request(&PriceRequest {
-                platform: &platform,
-                model: model.as_deref(),
-                upstream_model: upstream.as_deref(),
-                served_model: served.as_deref(),
-                connection_id: effective_conn,
-                input_semantics: &semantics,
-                input,
-                output,
-                cache_read: cr,
-                cache_write: cw,
-                cache_write_1h: cw1h,
-                reasoning,
-                tool,
-                at,
-            });
-            let Some(cost) = res.cost else { continue };
-            global_month += cost;
-            if ts >= today_start {
-                global_today += cost;
-            }
-            if let Some(cid) = effective_conn {
-                *per_conn_month.entry(cid.to_string()).or_default() += cost;
-                if ts >= today_start {
-                    *per_conn_today.entry(cid.to_string()).or_default() += cost;
-                }
-            }
-        }
-    }
+    let (global_today, global_month, per_conn_today, per_conn_month) =
+        accumulate_month_spend(conn, today_start, month_start, now_ms)?;
 
     let mut connections = Vec::new();
     let mut exceeded_connections = 0usize;

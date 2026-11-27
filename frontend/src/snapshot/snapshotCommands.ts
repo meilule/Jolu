@@ -169,6 +169,20 @@ export function routeCommand(cmd: string, args: Args): unknown {
     /* ─────────── 供应商与连接 ─────────── */
     case "list_connections": return CONNECTIONS
     case "current_connections": return ["conn-claude-momo", "conn-codex-alex"]
+    case "island_active_accounts": return [
+      { platform: "claude", kind: "auth", state: "matched", connection_id: "conn-claude-momo", connection_name: "Momo · Max", masked: "sk-ant-****3f9a", account_email: "momo@example.com", base_url: null, updated_ms: NOW },
+      { platform: "codex", kind: "auth", state: "matched", connection_id: "conn-codex-alex", connection_name: "Alex · Plus", masked: "eyJh****91bc", account_email: "alex@example.com", base_url: null, updated_ms: NOW },
+    ]
+    case "island_agent_hooks_state": return []
+    case "island_live_overview": return []
+    case "island_enroll_local_account": return {
+      connection_id: `conn-${Date.now()}`,
+      platform: str(args.platform) || "custom",
+      kind: "api",
+      name: `${str(args.sourceAgent) || "本机工具"} · 已收录连接`,
+      models_fetched: 6,
+      warning: null,
+    }
     case "connection_kind": return demoConnectionKind(str(args.platform))
     case "discover_connections": return demoCandidates()
     case "detect_local_login": return demoLoginDetection(str(args.platform))

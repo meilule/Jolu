@@ -116,7 +116,11 @@ export function statusLabel(status: SessionStatus): string {
 }
 
 export function sessionTitle(s: Pick<SessionItemDto, "title" | "session_id">): string {
-  return s.title ?? `会话 ${s.session_id.slice(0, 8)}`
+  if (s.title) return s.title
+  const bare = s.session_id.startsWith("native:")
+    ? s.session_id.split(":").filter(Boolean).pop() ?? s.session_id
+    : s.session_id
+  return `会话 ${bare.slice(0, 8)}`
 }
 
 /** 长 ID 中间省略：session_demo_82ac…91f0 */
@@ -133,13 +137,15 @@ export function middleEllipsis(id: string, head = 12, tail = 4): string {
  * 全部未知时各项为 null（显示「—」），没有会话时为真实的 0。
  */
 export function sessionTotals(sessions: readonly SessionItemDto[]) {
-  const known = sessions.filter((s) => s.fresh_input !== null && s.cache_read !== null && s.cache_write !== null && s.output !== null)
+  // 部分平台（如 Antigravity / Codex / Qoder）原生不单列缓存写入，cache_write 为 null 时按 0 计入汇总，
+  // 仅当核心三项（fresh_input / cache_read / output）缺失时才归入未知，避免筛选单平台时整行变「—」。
+  const known = sessions.filter((s) => s.fresh_input !== null && s.cache_read !== null && s.output !== null)
   const unknown = sessions.length - known.length
   const sum = (pick: (s: SessionItemDto) => number | null) =>
     sessions.length > 0 && known.length === 0 ? null : known.reduce((total, s) => total + (pick(s) ?? 0), 0)
   const fresh = sum((s) => s.fresh_input)
   const read = sum((s) => s.cache_read)
-  const write = sum((s) => s.cache_write)
+  const write = sum((s) => s.cache_write ?? 0)
   const output = sum((s) => s.output)
   const cache = read === null || write === null ? null : read + write
   const input = fresh === null || cache === null ? null : fresh + cache

@@ -165,14 +165,29 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
       void refresh()
       setTick((value) => value + 1)
     }, 5_000)
-    // 模型目录或连接变了立即重读；5 秒轮询保留作兜底
+    // 模型目录、连接或路由请求变了立即重读；5 秒轮询保留作兜底
     let disposed = false
+    let routeTimer: number | null = null
     const offs: Array<() => void> = []
     const keep = (off: () => void) => { if (disposed) off(); else offs.push(off) }
     const onReload = () => { void refresh() }
+    const onRouteActivity = () => {
+      if (routeTimer !== null) return
+      routeTimer = window.setTimeout(() => {
+        routeTimer = null
+        if (!disposed && !document.hidden) void refresh()
+      }, 400)
+    }
     void listenEvent(EVENTS.GATEWAY_CATALOG_CHANGED, onReload).then(keep)
     void listenEvent(EVENTS.CONNECTIONS_CHANGED, onReload).then(keep)
-    return () => { window.clearInterval(timer); disposed = true; offs.forEach((off) => off()) }
+    void listenEvent(EVENTS.GATEWAY_ROUTE_START, onRouteActivity).then(keep)
+    void listenEvent(EVENTS.GATEWAY_ROUTE, onRouteActivity).then(keep)
+    return () => {
+      window.clearInterval(timer)
+      if (routeTimer !== null) window.clearTimeout(routeTimer)
+      disposed = true
+      offs.forEach((off) => off())
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -341,6 +356,7 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
               void refresh()
             }}
             sessions={sessions.views}
+            inFlightCount={sessions.inFlightCount}
             contexts={contexts}
             logRows={logRows}
             nowMs={Date.now()}

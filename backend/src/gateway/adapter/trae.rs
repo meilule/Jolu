@@ -23,13 +23,7 @@ pub(crate) fn bound(
     conn: &rusqlite::Connection,
     id: &str,
 ) -> Result<(String, String, Session), String> {
-    let sealed: String = conn
-        .query_row(
-            "SELECT secret FROM connections WHERE id=?1 AND platform='trae' AND kind='auth'",
-            [id],
-            |r| r.get(0),
-        )
-        .map_err(|_| "所选 Trae 账号缺少完整授权，请重新登录")?;
+    let sealed: String = crate::gateway::subscription::ConnectionSecretStore::auth_secret(conn, id, "trae", "所选 Trae 账号缺少完整授权，请重新登录")?;
     let Credential::Trae { edition, session } = provider_browser_auth::load(id, "trae", &sealed)?
     else {
         return Err("Trae 授权类型不匹配".into());
@@ -109,12 +103,124 @@ async fn forward_at(
 ) -> Response {
     forward_inner(deps, entry, protocol, body, test_base, None).await
 }
+fn build_trae_client(test_base: Option<&str>) -> Result<reqwest::Client, Response> {
+    let builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(180));
+    let builder = if cfg!(test) && test_base.is_some() {
+        builder.no_proxy()
+    } else {
+        match crate::net::current_mode() {
+            crate::net::NetMode::Direct => builder.no_proxy(),
+            crate::net::NetMode::Manual(url) => match reqwest::Proxy::all(url) {
+                Ok(proxy) => builder.proxy(proxy),
+                Err(_) => return Err(error_response(StatusCode::BAD_GATEWAY, "Trae 代理配置无效")),
+            },
+            crate::net::NetMode::System => match crate::net::system_proxy_url() {
+                Some(url) => match reqwest::Proxy::all(url) {
+                    Ok(proxy) => builder.proxy(proxy),
+                    Err(_) => return Err(error_response(StatusCode::BAD_GATEWAY, "Trae 系统代理无效")),
+                },
+                None => builder,
+            },
+        }
+    };
+    builder
+        .build()
+        .map_err(|_| error_response(StatusCode::BAD_GATEWAY, "无法创建 Trae 上游连接"))
+}
+
+async fn collect_trae_stream(
+    upstream: reqwest::Response,
+    deps: Arc<ProxyDeps>,
+    entry: PoolEntry,
+    sealed: String,
+    guard: tokio::sync::MutexGuard<'static, ()>,
+    value: &Value,
+    streaming: bool,
+) -> Response {
+    if !upstream
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|s| {
+            s.split(';')
+                .next()
+                .is_some_and(|s| s.trim().eq_ignore_ascii_case("text/event-stream"))
+        })
+    {
+        return error_response(StatusCode::BAD_GATEWAY, "Trae 未返回 SSE 对话协议");
+    }
+    let tools = if value["tool_choice"] == "none" {
+        Vec::new()
+    } else {
+        value["tools"].as_array().cloned().unwrap_or_default()
+    };
+    super::trae_stream::response(
+        super::trae_stream::Reader::new(
+            upstream,
+            deps,
+            entry,
+            sealed,
+            guard,
+            value["model"].as_str().unwrap_or("").into(),
+            &tools,
+        ),
+        streaming,
+    )
+    .await
+}
+
+async fn verify_trae_identity(
+    client: &reqwest::Client,
+    identity_origin: &str,
+    edition: &str,
+    session: &Session,
+) -> Result<(), Response> {
+    let resp = client
+        .post(format!("{identity_origin}/cloudide/api/v3/trae/GetUserInfo"))
+        .header("x-cloudide-token", &session.token)
+        .json(&json!({"ReqSource":"IDE","IDEVersion":if edition=="cn"{"3.4.4"}else{"3.6.4"}}))
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await;
+    let resp = match resp {
+        Ok(v) if v.status().is_success() => v,
+        _ => {
+            return Err(error_response(
+                StatusCode::UNAUTHORIZED,
+                "Trae 所选账号身份核实失败，请重新登录",
+            ))
+        }
+    };
+    let identity = read_json(resp, 128 * 1024)
+        .await
+        .map_err(|e| error_response(StatusCode::UNAUTHORIZED, &e))?;
+    let user = identity["Result"]["UserID"]
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| identity["Result"]["UserID"].as_u64().map(|v| v.to_string()));
+    if identity
+        .pointer("/ResponseMetadata/Error")
+        .is_some_and(|v| !v.is_null())
+        || user.as_deref() != Some(&session.user_id)
+    {
+        return Err(error_response(
+            StatusCode::UNAUTHORIZED,
+            "Trae 返回账号与所选连接不一致，已停止转发",
+        ));
+    }
+    Ok(())
+}
+
 async fn forward_inner(
     deps: Arc<ProxyDeps>,
     entry: &PoolEntry,
     protocol: CallerProtocol,
     body: Bytes,
     test_base: Option<&str>,
+
     caller_session: Option<&str>,
 ) -> Response {
     if protocol != CallerProtocol::Chat {
@@ -194,71 +300,15 @@ async fn forward_inner(
         Ok(v) => v,
         Err(e) => return error_response(StatusCode::UNAUTHORIZED, &e),
     };
-    // 遵循 Jolu 联网方式；凭据请求绝不跟随服务器重定向。
-    let builder = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(std::time::Duration::from_secs(15))
-        .timeout(std::time::Duration::from_secs(180));
-    let builder = if cfg!(test) && test_base.is_some() {
-        builder.no_proxy()
-    } else {
-        match crate::net::current_mode() {
-            crate::net::NetMode::Direct => builder.no_proxy(),
-            crate::net::NetMode::Manual(url) => match reqwest::Proxy::all(url) {
-                Ok(proxy) => builder.proxy(proxy),
-                Err(_) => return error_response(StatusCode::BAD_GATEWAY, "Trae 代理配置无效"),
-            },
-            crate::net::NetMode::System => match crate::net::system_proxy_url() {
-                Some(url) => match reqwest::Proxy::all(url) {
-                    Ok(proxy) => builder.proxy(proxy),
-                    Err(_) => return error_response(StatusCode::BAD_GATEWAY, "Trae 系统代理无效"),
-                },
-                None => builder,
-            },
-        }
-    };
-    let client = match builder.build() {
-        Ok(v) => v,
-        Err(_) => return error_response(StatusCode::BAD_GATEWAY, "无法创建 Trae 上游连接"),
+    let client = match build_trae_client(test_base) {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
     let test_base = if cfg!(test) { test_base } else { None };
     let identity_origin = test_base.unwrap_or(&session.host);
     let model_origin = test_base.unwrap_or(model_origin);
-    let identity = client
-        .post(format!(
-            "{identity_origin}/cloudide/api/v3/trae/GetUserInfo"
-        ))
-        .header("x-cloudide-token", &session.token)
-        .json(&json!({"ReqSource":"IDE","IDEVersion":if edition=="cn"{"3.4.4"}else{"3.6.4"}}))
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await;
-    let identity = match identity {
-        Ok(v) if v.status().is_success() => v,
-        _ => {
-            return error_response(
-                StatusCode::UNAUTHORIZED,
-                "Trae 所选账号身份核实失败，请重新登录",
-            )
-        }
-    };
-    let identity = match read_json(identity, 128 * 1024).await {
-        Ok(v) => v,
-        Err(e) => return error_response(StatusCode::UNAUTHORIZED, &e),
-    };
-    let user = identity["Result"]["UserID"]
-        .as_str()
-        .map(str::to_owned)
-        .or_else(|| identity["Result"]["UserID"].as_u64().map(|v| v.to_string()));
-    if identity
-        .pointer("/ResponseMetadata/Error")
-        .is_some_and(|v| !v.is_null())
-        || user.as_deref() != Some(&session.user_id)
-    {
-        return error_response(
-            StatusCode::UNAUTHORIZED,
-            "Trae 返回账号与所选连接不一致，已停止转发",
-        );
+    if let Err(resp) = verify_trae_identity(&client, identity_origin, &edition, &session).await {
+        return resp;
     }
     let current = deps
         .db
@@ -319,36 +369,7 @@ async fn forward_inner(
         }
         return response;
     }
-    if !upstream
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|s| {
-            s.split(';')
-                .next()
-                .is_some_and(|s| s.trim().eq_ignore_ascii_case("text/event-stream"))
-        })
-    {
-        return error_response(StatusCode::BAD_GATEWAY, "Trae 未返回 SSE 对话协议");
-    }
-    let tools = if value["tool_choice"] == "none" {
-        Vec::new()
-    } else {
-        value["tools"].as_array().cloned().unwrap_or_default()
-    };
-    super::trae_stream::response(
-        super::trae_stream::Reader::new(
-            upstream,
-            deps,
-            entry.clone(),
-            sealed,
-            guard,
-            value["model"].as_str().unwrap_or("").into(),
-            &tools,
-        ),
-        streaming,
-    )
-    .await
+    collect_trae_stream(upstream, deps, entry.clone(), sealed, guard, &value, streaming).await
 }
 
 #[cfg(all(test, windows))]

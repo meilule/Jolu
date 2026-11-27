@@ -1,7 +1,9 @@
 //! 能力汇聚：隐私脱敏、联网搜索与 Library。
 
-#[allow(unused_imports)]
-use crate::*;
+use tauri::{Emitter, Manager};
+
+use crate::app::state::{Cfg, Db};
+use crate::{library, settings};
 
 /// 隐私脱敏开关（P5，gateway/mask.rs）：只影响网关中转模式的请求 / 响应。
 /// 进程级开关改完立即生效，不需要重启代理；前端接入口 = `settings.privacy_masking` 字段
@@ -56,25 +58,6 @@ pub(crate) fn privacy_records() -> Vec<crate::gateway::mask::MaskRecord> {
 #[tauri::command]
 pub(crate) fn privacy_records_clear() {
     crate::gateway::mask::clear_records();
-}
-
-/// 第一次真的遮住值：发一次系统通知并记下（之后不再提醒）。
-pub(crate) fn privacy_first_notice(app: &tauri::AppHandle) {
-    let cfg = &app.state::<Cfg>().0;
-    if cfg.get().privacy_first_noticed {
-        return;
-    }
-    if cfg.try_update(|settings| settings.privacy_first_noticed = true).is_ok() {
-        crate::events::settings_changed(&app);
-    }
-    let _ = app.emit(crate::events::PRIVACY_FIRST_MASK, ());
-    use tauri_plugin_notification::NotificationExt;
-    let _ = app
-        .notification()
-        .builder()
-        .title("隐私脱敏已生效")
-        .body("Jolu 第一次在请求离开本机前把敏感值换成了占位符，回复里会自动换回。可在设置 › 隐私脱敏查看记录。")
-        .show();
 }
 
 /// 联网搜索：可选的后端清单（界面下拉用）。

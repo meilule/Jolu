@@ -1,7 +1,9 @@
 //! Agent：本机探测、版本、接线与自定义工具。
 
-#[allow(unused_imports)]
-use crate::*;
+use tauri::{Emitter, Manager};
+
+use crate::app::state::{Cfg, Db};
+use crate::{agent_discovery, agent_version, wsl_probe};
 
 /// 各 agent CLI 的版本与建议更新命令（只读：不自动执行升级）。
 /// 版本读不到、命令不在 PATH、安装方式认不出来都如实分开表达，不猜。

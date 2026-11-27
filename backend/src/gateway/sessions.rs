@@ -56,15 +56,7 @@ pub struct GatewaySession {
     pub links: Vec<SessionLink>,
 }
 
-/// 会话的平台名 → 接线注册表的 agent id。
-///
-/// 为什么需要这张表：`gateway_route_log` 的会话链接里带 `agent`，但**只在本地会话文件里**
-/// 的会话没有链接——它的平台名来自 `requests.platform`（`claude` / `zcode` / `workbuddy`…），
-/// 而前端要用 agent id 才能画图标、查接线状态。两个命名空间不完全一样（`claude` vs
-/// `claude-code`），所以显式列出来而不是做字符串变换。
-///
-/// 只在平台确实对应一个**已接线**工具时给值；对不上的返回 None，界面显示「—」，
-/// 不猜一个近似的 agent。
+/// 会话的平台名 → 接线注册表的 agent id（作为旧流水缺少 `agent` 字段时的兜底反查）。
 fn agent_of_platform(platform: &str) -> Option<&'static str> {
     Some(match platform {
         "claude" => "claude-code",
@@ -84,12 +76,6 @@ fn agent_of_platform(platform: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
-
-/// 「活跃会话」只看最近这段时间内有动静的本机会话。
-///
-/// 24 小时：够覆盖「今天在用」的范围，又不会把几个月前的历史会话全倒进这张表
-/// （本机 ZCode 有 2 万多条历史请求，全列出来反而看不出现在在跑什么）。
-const RECENT_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 
 fn tokens(item: Option<&crate::session_threads::SessionItem>) -> SessionTokens {
     let Some(item) = item else {
@@ -144,46 +130,46 @@ pub fn overview(conn: &Connection) -> rusqlite::Result<SessionsOverview> {
         }
     }
 
-    // 第三路：本机会话文件里活跃的会话（方案 C，2026-11-22）。
-    //
-    // 为什么需要：`session_identity` 只能从请求头取会话 ID，而实测 ZCode 的模型请求
-    // 完全不带会话标识（`bootstrap/src/model-config.ts` 的 defaultHeaders 里没有任何
-    // session 字段），WorkBuddy 同理。它们接线成功、流水也记了，但**建不了上下文快照**，
-    // 于是活跃会话表里永远看不到。
-    //
-    // 这里的做法是并列而不是合并：网关观测到的会话（有快照、有来源关联）与本机会话
-    // 文件读到的会话（有标题、有 cwd、有 Token 累计）各自是真实数据，只是维度不同。
-    // 用时间或 token 去「猜」它们的对应关系会在并发请求上关联错，所以不猜——
-    // 同一平台同一会话若两边都有，按 (platform, session_id) 自然合并成一行；
-    // 只有本机会话文件的那些，靠下面的 `threads` 查询补上标题与 Token。
-    let now_ms = chrono::Local::now().timestamp_millis();
-    // 只取最近活跃的：把几个月没动过的历史会话全塞进「活跃会话」没有意义
-    let recent_since = now_ms - RECENT_WINDOW_MS;
-    let local = crate::session_threads::list(conn, &crate::session_threads::SessionFilter {
-        since: Some(recent_since),
-        ..Default::default()
-    })?;
-    for item in &local.sessions {
-        let key = (item.platform.clone(), item.session_id.clone());
-        if seen.insert(key.clone()) {
-            order.push(key);
+    // 第三路：网关上下文快照表里保留的已路由会话。
+    // 该表只由模型路由入口（wire / gemini）写入，不含未经路由的本机会话；
+    // 当路由流水滚动清理掉旧行后，仍保留其会话标识以便回查标题、项目与状态。
+    let mut snap_last_ts: HashMap<(String, String), i64> = HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT session_platform, session_id, MAX(ts) AS last_ts
+             FROM gateway_context_snapshot
+             WHERE session_platform IS NOT NULL AND session_id IS NOT NULL AND session_id <> ''
+             GROUP BY session_platform, session_id
+             ORDER BY last_ts DESC",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?;
+        for row in rows {
+            let (platform, session_id, ts) = row?;
+            let key = (platform, session_id);
+            if seen.insert(key.clone()) {
+                order.push(key.clone());
+            }
+            snap_last_ts.insert(key, ts);
         }
     }
 
-    let ids: Vec<String> = order.iter().map(|(_, id)| id.clone()).collect::<HashSet<_>>().into_iter().collect();
-    // 第二次查询只为「已知的这批会话」补标题与 Token。它带着 `session_ids`，
-    // 而 Kimi / Pi / dsh 的读取器要遍历磁盘（dsh 还要 zstd 解压，本机实测约 1 秒），
-    // 且它们不按 `session_ids` 过滤——所以必须显式跳过，否则整个 overview 白跑两遍扫描。
-    let filter = crate::session_threads::SessionFilter {
-        session_ids: Some(ids),
-        skip_external: true,
-        ..Default::default()
+    // 只为已确认经过模型路由的会话补标题、项目与 Token，不再扫全量本机会话。
+    let threads: HashMap<(String, String), crate::session_threads::SessionItem> = if order.is_empty() {
+        HashMap::new()
+    } else {
+        let ids: Vec<String> = order.iter().map(|(_, id)| id.clone()).collect::<HashSet<_>>().into_iter().collect();
+        // Kimi / Pi / dsh 的外部扫描不按 `session_ids` 过滤，必须跳过避免白跑磁盘扫描。
+        let filter = crate::session_threads::SessionFilter {
+            session_ids: Some(ids),
+            skip_external: true,
+            ..Default::default()
+        };
+        crate::session_threads::list(conn, &filter)?
+            .sessions
+            .into_iter()
+            .map(|item| ((item.platform.clone(), item.session_id.clone()), item))
+            .collect()
     };
-    let threads: HashMap<(String, String), crate::session_threads::SessionItem> = crate::session_threads::list(conn, &filter)?
-        .sessions
-        .into_iter()
-        .map(|item| ((item.platform.clone(), item.session_id.clone()), item))
-        .collect();
 
     let mut sessions: Vec<GatewaySession> = order
         .into_iter()
@@ -191,19 +177,22 @@ pub fn overview(conn: &Connection) -> rusqlite::Result<SessionsOverview> {
             let links = by_key.remove(&key).unwrap_or_default();
             let thread = threads.get(&key);
             let live = live_agent.get(&key);
-            // 优先级：在途请求记的 agent > 流水链接里的 agent > 平台名反查。
-            // 最后一个分支是方案 C 加的：只在本地会话文件里的会话没有链接，
-            // 若不反查，Agent 列会空着（截图上就是这个现象）。
+            let snap_ts = snap_last_ts.get(&key).copied();
+            // 优先级：在途请求记的 agent > 流水链接里的 agent > 平台名反查兜底。
             let agent = live
                 .and_then(|(_, a)| a.clone())
                 .or_else(|| links.first().and_then(|l| l.agent.clone()))
                 .or_else(|| agent_of_platform(&key.0).map(str::to_string));
+            let gateway_last_ts = [links.iter().map(|l| l.last_ts).max(), snap_ts]
+                .into_iter()
+                .flatten()
+                .max();
             GatewaySession {
                 agent,
                 title: thread.and_then(|t| t.title.clone()),
                 cwd: thread.and_then(|t| t.cwd.clone()),
                 thread_last_ts: thread.map(|t| t.last_ts),
-                gateway_last_ts: links.iter().map(|l| l.last_ts).max(),
+                gateway_last_ts,
                 thread_status: thread.map(|t| t.status.clone()),
                 tokens: tokens(thread),
                 links,
@@ -241,42 +230,69 @@ mod tests {
             session_platform: Some(platform), session_id: Some(session), client_key: None, request_id: None, request_uid: None, resolved_from: None, profile: None, decision: None }
     }
 
-    /// 方案 C：只在本地会话文件里、从未经过网关的会话也要出现在活跃会话里。
-    ///
-    /// 现场：ZCode 的模型请求不带任何会话标识（`bootstrap/src/model-config.ts` 的
-    /// defaultHeaders 里没有 session 字段），所以它永远建不了上下文快照。可它是接了线的，
-    /// 用户预期在活跃会话里能看到它 —— 本机会话文件里明明有记录。
-    ///
-    /// 这条锁三件事：本机会话会进来、Agent 从平台名反查得到、子会话被过滤掉。
+    /// 模型路由的活跃会话只监听和监测经过模型路由的会话，不包含未经路由的本机会话。
     #[test]
-    fn local_only_sessions_appear_with_their_agent() {
+    fn local_only_sessions_without_gateway_routing_are_excluded() {
         let conn = crate::db::open(std::path::Path::new(":memory:")).unwrap();
         let now = chrono::Local::now().timestamp_millis();
-        // 一条只在 requests 表里、没有走网关（没有 route_log 链接）的 ZCode 会话
+        // 只在本地 requests 表里、从未经过模型路由的会话（ZCode / Antigravity / Claude）
         conn.execute(
             "INSERT INTO requests(platform, source, dedup_key, session_id, ts, model)
              VALUES('zcode', 'native:zcode:main', 'u-1', 'native:zcode:main:sess_root', ?1, 'glm-4.7')",
             [now],
         ).unwrap();
-        let view = overview(&conn).unwrap();
-        let row = view.sessions.iter().find(|s| s.session_id == "native:zcode:main:sess_root");
-        let row = row.expect("只在本地会话文件里的会话也要出现在活跃会话里");
-        assert_eq!(
-            row.agent.as_deref(),
-            Some("zcode"),
-            "Agent 列不能空着：平台名要反查成接线注册表的 agent id"
-        );
-        assert!(row.links.is_empty(), "它确实没有网关来源关联");
-
-        // Antigravity 本地会话同样映射回接线注册表的 agent id
         conn.execute(
             "INSERT INTO requests(platform, source, dedup_key, session_id, ts, model)
              VALUES('antigravity', 'native:antigravity:default', 'ag-1', 'native:antigravity:default:conv-1', ?1, 'gemini-4-neon-xhigh')",
             [now],
         ).unwrap();
-        let view2 = overview(&conn).unwrap();
-        let agy = view2.sessions.iter().find(|s| s.session_id == "native:antigravity:default:conv-1").expect("Antigravity 本机会话应进入活跃会话");
-        assert_eq!(agy.agent.as_deref(), Some("antigravity"));
+        conn.execute(
+            "INSERT INTO requests(platform, source, dedup_key, session_id, ts, model)
+             VALUES('claude', 'claude', 'cl-1', 'local-only-claude', ?1, 'claude-sonnet-4-5')",
+            [now],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO sessions(platform, session_id, title, cwd)
+             VALUES('claude', 'routed-claude', '经路由的会话', 'D:\\work\\Jolu')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO requests(platform, source, dedup_key, session_id, ts, model)
+             VALUES('claude', 'claude', 'cl-2', 'routed-claude', ?1, 'claude-sonnet-4-5')",
+            [now],
+        ).unwrap();
+
+        let before = overview(&conn).unwrap();
+        assert!(
+            before.sessions.is_empty(),
+            "没有任何路由流水、在途请求或上下文快照时，本机会话不应混入模型路由活跃会话：{:?}",
+            before.sessions.iter().map(|s| &s.session_id).collect::<Vec<_>>()
+        );
+
+        // 只有写入路由流水或上下文快照的会话才会进入活跃会话，且能补全本地标题与项目
+        record(&conn, NewEntry { agent: Some("claude-code"), ..link("c1", "claude", "routed-claude") });
+        crate::gateway::context::store::insert(
+            &conn,
+            &crate::gateway::context::store::NewSnapshot {
+                session_platform: "codex",
+                session_id: "snap-only-codex",
+                request_id: 9,
+                request_uid: Some(9),
+                protocol: "responses",
+                ts: now,
+            },
+        ).unwrap();
+
+        let after = overview(&conn).unwrap();
+        let ids: Vec<&str> = after.sessions.iter().map(|s| s.session_id.as_str()).collect();
+        assert_eq!(ids.len(), 2, "只应返回 2 条经模型路由的会话，实际：{ids:?}");
+        let claude = after.sessions.iter().find(|s| s.session_id == "routed-claude").unwrap();
+        assert_eq!(claude.title.as_deref(), Some("经路由的会话"));
+        assert_eq!(claude.cwd.as_deref(), Some("D:\\work\\Jolu"));
+        assert_eq!(claude.agent.as_deref(), Some("claude-code"));
+        let codex = after.sessions.iter().find(|s| s.session_id == "snap-only-codex").unwrap();
+        assert_eq!(codex.agent.as_deref(), Some("codex"));
+        assert_eq!(codex.gateway_last_ts, Some(now));
     }
 
     #[test]

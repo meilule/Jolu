@@ -1,7 +1,16 @@
 //! 用量统计、本机会话与数据导出。
 
-#[allow(unused_imports)]
-use crate::*;
+use tauri::{Manager, State};
+
+use crate::app::state::{
+    emit_collection_status, with_database, with_reader, Cfg, CollectionStatus, Db, DbRead,
+    COLLECTION_STATUS,
+};
+use crate::commands::quotas::validate_query_range;
+use crate::{
+    collector, creds, db, otlp, platforms, session_presence, session_threads,
+    source_store, usage_stats, validation,
+};
 
 #[tauri::command]
 pub(crate) fn collection_status() -> CollectionStatus {
@@ -61,6 +70,17 @@ pub(crate) async fn live_usage(
             );
         }
         Ok(r)
+    })
+    .await
+}
+
+/// 灵动岛跨平台实时概览（1A 智能跟随与多平台活跃会话列表）
+#[tauri::command]
+pub(crate) async fn island_live_overview(
+    db: State<'_, DbRead>,
+) -> Result<Vec<session_presence::PlatformLiveBrief>, String> {
+    with_reader(db.0.clone(), move |conn| {
+        session_presence::live_overview(conn).map_err(|e| e.to_string())
     })
     .await
 }
@@ -153,12 +173,6 @@ pub(crate) async fn otlp_export_usage(
         headers.push(("authorization".to_string(), value));
     }
     otlp::export(&endpoint, &headers, &points, &keys, now_ms).await
-}
-
-/// 导出备份的核心逻辑，由 `data_files` 的文件导出命令调用；日期区间左闭右开
-pub(crate) async fn export_data(db: State<'_, DbRead>, platform: Option<String>, start_ms: Option<i64>, end_ms: Option<i64>) -> Result<String, String> {
-    data_files::valid_export_scope(platform.as_deref(), start_ms, end_ms)?;
-    with_reader(db.0.clone(), move |conn| db::export_backup(conn, platform.as_deref(), start_ms, end_ms)).await
 }
 
 #[tauri::command]

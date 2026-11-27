@@ -14,9 +14,10 @@
  * **必须传 `label`。** 没有可见文字时读屏只能靠它，漏了就是一个无法被辅助技术
  * 识别的按钮。这里把它做成必填参数，不是可选项。
  */
-import type { ButtonHTMLAttributes } from "react"
+import { forwardRef, type ButtonHTMLAttributes } from "react"
 import { cn } from "@/lib/utils"
 import { Icon, type IconName } from "@/icons"
+import { TactileButton } from "@/motion"
 
 const KIND = {
   /** 页头 / 工具条：well 底 */
@@ -46,17 +47,22 @@ export interface IconButtonProps
   size?: IconButtonSize
 }
 
-export function IconButton({
-  icon,
-  label,
-  kind = "ghost",
-  size = "md",
-  className,
-  type = "button",
-  ...rest
-}: IconButtonProps) {
+export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
+  {
+    icon,
+    label,
+    kind = "ghost",
+    size = "md",
+    className,
+    type = "button",
+    ...rest
+  },
+  ref,
+) {
   return (
-    <button
+    <TactileButton
+      ref={ref}
+      variant="icon"
       type={type}
       title={label}
       aria-label={label}
@@ -69,6 +75,6 @@ export function IconButton({
       {...rest}
     >
       <Icon name={icon} size={ICON_SIZE[size]} />
-    </button>
+    </TactileButton>
   )
-}
+})

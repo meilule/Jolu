@@ -17,7 +17,7 @@ import { isMemberPaused, strategyText, type RoutingGroupDto } from "@/components
 import { AgentBadge } from "@/components/agents/AgentBadge"
 import { PlatformLogo } from "@/components/brand/PlatformLogo"
 import { Icon } from "@/icons"
-import { AnimatedNumber } from "@/motion"
+import { AnimatedNumber, TactileButton } from "@/motion"
 import { cn } from "@/lib/utils"
 import {
   DataValue, IconButton, Input, QuotaRing, Select, StatusPill, Switch, Tag, type StatusTone,
@@ -37,9 +37,9 @@ const HOUR = 3_600_000
 /** 请求趋势看最近 12 个小时 */
 const TREND_HOURS = 12
 
-/** R1-01 活跃会话 6 列网格（与画板 186/146/150/96/76/24 比例一致，窄屏折 4 列不错位） */
+/** R1-01 活跃会话 6 列网格（状态列 96px 容得下四字胶囊不溢出；窄屏折 4 列不错位） */
 const OVERVIEW_SESSION_GRID =
-  "grid-cols-[minmax(152px,1.25fr)_minmax(108px,1fr)_minmax(118px,1fr)_minmax(72px,0.72fr)_78px_18px] @max-[680px]:grid-cols-[minmax(0,1fr)_minmax(112px,0.9fr)_78px_18px]"
+  "grid-cols-[minmax(144px,1.25fr)_minmax(104px,1fr)_minmax(114px,1fr)_minmax(72px,0.72fr)_96px_18px] @max-[680px]:grid-cols-[minmax(0,1fr)_minmax(108px,0.9fr)_96px_18px]"
 
 /**
  * 模型路由 · 概览 —— 设计稿 R1-01（浅色）/ R1-02（深色，同构，颜色全走令牌）。
@@ -62,6 +62,7 @@ export function OverviewPanel(props: {
   range: OverviewRange["id"]
   onRange: (next: OverviewRange["id"]) => void
   sessions: SessionView[]
+  inFlightCount?: number
   contexts: ContextSessionRowDto[] | null
   logRows: RouteLogDto[]
   nowMs: number
@@ -149,7 +150,7 @@ export function OverviewPanel(props: {
       {/* 第一行：本机路由（506 比例） / 今日请求 / 今日 Token */}
       <div className="grid grid-cols-1 gap-3.5 @[900px]:grid-cols-[minmax(390px,1.72fr)_minmax(0,1fr)_minmax(0,1fr)]">
         <RouterCard status={status} running={props.running} wired={props.wired} sharedLan={props.sharedLan} day={day} busy={busy}
-          handling={runningSessions.length} groups={props.groups}
+          handling={props.inFlightCount ?? runningSessions.length} groups={props.groups}
           onToggleRunning={props.onToggleRunning} />
         <TrendCard
           title={rangeText.period}
@@ -199,7 +200,7 @@ export function OverviewPanel(props: {
           </span>
           <Switch checked={props.sharedLan} disabled={busy} label="局域网共享" onChange={props.onSharedLan} />
         </section>
-        <button type="button" onClick={props.onOpenMiddleware}
+        <TactileButton variant="tile" type="button" onClick={props.onOpenMiddleware}
           className="jn-interactive flex h-[68px] items-center gap-3 rounded-jn-card border border-jn-line bg-jn-surface pr-4 pl-[18px] text-left shadow-jn-surface">
           <Icon name="sliders" size="md" className="shrink-0 text-jn-text-2" />
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -209,7 +210,7 @@ export function OverviewPanel(props: {
             </span>
           </span>
           <Icon name="next" size="sm" className="shrink-0 text-jn-text-3" />
-        </button>
+        </TactileButton>
       </div>
 
       {/* 第三行：来源额度（246） / 需要关注（弹性） / 响应头耗时（224） */}
@@ -293,18 +294,19 @@ function RouterCard({ status, running, wired, sharedLan, day, busy, handling, gr
       </div>
 
       <div className="relative z-10 flex w-[138px] shrink-0 flex-col items-center justify-center gap-2.5">
-        <button
+        <TactileButton
+          variant="petal"
           type="button"
           aria-label={running ? "停止中转" : "开启中转"}
           disabled={busy}
           onClick={onToggleRunning}
-          className="group relative flex size-[120px] items-center justify-center rounded-full outline-none transition-transform duration-150 active:scale-[0.94] disabled:pointer-events-none disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-jn-focus"
+          className="group relative flex size-[120px] items-center justify-center rounded-full outline-none disabled:pointer-events-none disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-jn-focus"
         >
           <svg
             viewBox="0 0 120 120"
             aria-hidden
             className={cn(
-              "size-full transition-transform duration-300 group-hover:scale-[1.03]",
+              "size-full",
               running && "jn-petal-spin drop-shadow-[0_10px_24px_var(--jn-glow)]",
             )}
           >
@@ -319,7 +321,7 @@ function RouterCard({ status, running, wired, sharedLan, day, busy, handling, gr
           <span className={cn("absolute inset-0 flex items-center justify-center", running ? "text-jn-on-primary" : "text-jn-primary-ink")}>
             <Icon name="power" className="size-8" />
           </span>
-        </button>
+        </TactileButton>
         <span className="text-[12px] font-medium text-jn-text-2">{running ? "停止中转" : "开启中转"}</span>
       </div>
     </section>
@@ -363,8 +365,9 @@ function StrategyQuickCard({ group, busy, onSelect, onOpenGroups }: {
           {QUICK_STRATEGIES.map((item) => {
             const active = item.matches.includes(group.strategy)
             return (
-              <button
+              <TactileButton
                 key={item.key}
+                variant="tile"
                 type="button"
                 role="radio"
                 aria-checked={active}
@@ -378,19 +381,20 @@ function StrategyQuickCard({ group, busy, onSelect, onOpenGroups }: {
                 )}
               >
                 {item.label}
-              </button>
+              </TactileButton>
             )
           })}
         </div>
       ) : (
-        <button
+        <TactileButton
+          variant="button"
           type="button"
           onClick={onOpenGroups}
           className="jn-interactive ml-auto flex h-9 items-center gap-1.5 rounded-full bg-jn-well px-3.5 text-xs font-medium text-jn-text-2 hover:bg-jn-track hover:text-jn-text"
         >
           <span>去新建路由分组</span>
           <Icon name="next" size="xs" />
-        </button>
+        </TactileButton>
       )}
     </section>
   )
@@ -542,7 +546,8 @@ function QuotaCard({ connections, defaultConnection, onOpen }: {
   const resetText = win ? formatResetAt(win.resets_at) : null
 
   return (
-    <button
+    <TactileButton
+      variant="tile"
       type="button"
       onClick={() => onOpen(target?.id ?? null)}
       className="jn-interactive flex min-h-[186px] flex-col justify-between gap-3 rounded-jn-card border border-jn-line bg-jn-surface p-[18px] text-left shadow-jn-surface"
@@ -584,7 +589,7 @@ function QuotaCard({ connections, defaultConnection, onOpen }: {
           </span>
         </span>
       </span>
-    </button>
+    </TactileButton>
   )
 }
 
@@ -606,7 +611,7 @@ function AttentionCard({ attention }: { attention: AttentionItem[] }) {
       {attention.slice(0, 3).map((item) => {
         const spec = tone(item.kind)
         return (
-          <button key={item.key} type="button" onClick={item.onAction} className="jn-interactive flex items-center gap-2.5 rounded-[12px] p-1 text-left hover:bg-jn-well">
+          <TactileButton key={item.key} variant="row" type="button" onClick={item.onAction} className="jn-interactive flex items-center gap-2.5 rounded-[12px] p-1 text-left hover:bg-jn-well">
             <span className={cn("flex size-[30px] shrink-0 items-center justify-center rounded-full", spec.box)}>
               <Icon name={spec.icon} size="sm" />
             </span>
@@ -615,7 +620,7 @@ function AttentionCard({ attention }: { attention: AttentionItem[] }) {
               <span className="truncate text-[11px] text-jn-text-3">{item.detail}</span>
             </span>
             <Icon name="next" size="sm" className="shrink-0 text-jn-text-3" />
-          </button>
+          </TactileButton>
         )
       })}
     </section>
@@ -697,12 +702,12 @@ function SessionsCard({ rows, shown, running, total, failed, search, onSearch, f
         <span className="flex h-8 items-center gap-1.5 rounded-full bg-jn-primary px-3.5 text-[13px] font-semibold text-jn-on-primary">
           <span className="tabular-nums font-bold">{running}</span> 活跃会话
         </span>
-        <button type="button" onClick={onOpenLog} className="jn-interactive flex h-8 items-center gap-1.5 rounded-full bg-jn-well px-3.5 text-[13px] font-medium text-jn-text-2 hover:bg-jn-track hover:text-jn-text">
+        <TactileButton variant="button" type="button" onClick={onOpenLog} className="jn-interactive flex h-8 items-center gap-1.5 rounded-full bg-jn-well px-3.5 text-[13px] font-medium text-jn-text-2 hover:bg-jn-track hover:text-jn-text">
           <span className="tabular-nums font-bold text-jn-text">{total}</span> 路由流水
-        </button>
-        <button type="button" onClick={onOpenLog} className="jn-interactive flex h-8 items-center gap-1.5 rounded-full bg-jn-well px-3.5 text-[13px] font-medium text-jn-text-2 hover:bg-jn-track hover:text-jn-text">
+        </TactileButton>
+        <TactileButton variant="button" type="button" onClick={onOpenLog} className="jn-interactive flex h-8 items-center gap-1.5 rounded-full bg-jn-well px-3.5 text-[13px] font-medium text-jn-text-2 hover:bg-jn-track hover:text-jn-text">
           <span className="tabular-nums font-bold text-jn-text">{failed}</span> 失败请求
-        </button>
+        </TactileButton>
         <span className="min-w-0 flex-1" />
         <Input size="md" icon="search" value={search} onChange={(event) => onSearch(event.target.value)} placeholder="搜索会话或项目" aria-label="搜索会话" className="h-8 w-[176px] shrink-0" />
         <div className="w-[106px] shrink-0">
@@ -760,8 +765,9 @@ function GroupsCard({ groups, onOpen }: { groups: RoutingGroupDto[]; onOpen: () 
             ? `正在用 ${activeMember.slug}`
             : "暂无成员"
         return (
-          <button
+          <TactileButton
             key={group.slug}
+            variant="tile"
             type="button"
             onClick={onOpen}
             className="jn-interactive flex items-center gap-3 rounded-[18px] bg-jn-well p-3 text-left hover:bg-jn-primary-wash/60"
@@ -781,7 +787,7 @@ function GroupsCard({ groups, onOpen }: { groups: RoutingGroupDto[]; onOpen: () 
               </span>
             </span>
             <span className="shrink-0 text-[11px] font-medium text-jn-text-3">{group.members.length} 个</span>
-          </button>
+          </TactileButton>
         )
       })}
     </section>
@@ -793,16 +799,24 @@ function SessionLine({ row, nowMs, contextsFailed, onOpen }: { row: ActiveSessio
   const status = statusCell(row.running, row.threadStatus)
   const context = contextsFailed && row.snapshotId === null ? { text: "读取失败", ratio: null, tone: "danger" as const, title: "上下文快照读取失败，稍后自动重试" } : row.context
   const agentName = row.agent ? agentLabel(row.agent) : null
-  const tone: StatusTone = row.running ? "active" : context.tone === "danger" ? "danger" : context.ratio != null && context.ratio >= 0.85 ? "warning" : "success"
+  const tone: StatusTone = row.running || row.threadStatus === "running"
+    ? "active"
+    : row.threadStatus === "failed"
+      ? "danger"
+      : row.threadStatus === "done"
+        ? "success"
+        : "neutral"
   const highCtx = context.tone === "danger" || (context.ratio != null && context.ratio >= 0.8)
+  const statusSub = [status.note, relativeTime(row.lastTs, nowMs)].filter(Boolean).join(" · ")
 
   return (
-    <button
+    <TactileButton
+      variant="row"
       role="button"
       type="button"
       onClick={onOpen}
       className={cn(
-        "jn-interactive grid h-[52px] items-center gap-3 rounded-[14px] px-2.5 text-left odd:bg-jn-well hover:bg-jn-primary-wash/50",
+        "jn-interactive grid h-[52px] w-full min-w-0 items-center gap-3 overflow-hidden rounded-[14px] px-2.5 text-left odd:bg-jn-well hover:bg-jn-primary-wash/50",
         OVERVIEW_SESSION_GRID,
       )}
     >
@@ -841,12 +855,12 @@ function SessionLine({ row, nowMs, contextsFailed, onOpen }: { row: ActiveSessio
 
       <span className="truncate text-[12px] font-medium tabular-nums text-jn-text-2 @max-[680px]:hidden" title={row.cache.title}>{row.cache.text}</span>
 
-      <span className="flex min-w-0 flex-col">
-        <StatusPill tone={tone} className="self-start">{status.text}</StatusPill>
-        <span className="mt-0.5 truncate text-[10.5px] tabular-nums text-jn-text-3">{relativeTime(row.lastTs, nowMs)}</span>
+      <span className="flex min-w-0 flex-col items-start overflow-hidden" title={status.title ?? status.text}>
+        <StatusPill tone={tone} className="max-w-full">{status.text}</StatusPill>
+        <span className="mt-0.5 w-full truncate text-[10.5px] tabular-nums text-jn-text-3" title={statusSub}>{statusSub}</span>
       </span>
 
       <span className="justify-self-end text-jn-text-3"><Icon name="next" size="sm" /></span>
-    </button>
+    </TactileButton>
   )
 }

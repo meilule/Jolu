@@ -1,6 +1,6 @@
 /** 平台、连接、来源、模型的区分见需求文档 §7.2 —— 四者是不同层级，不可混用 */
 /** 已知平台（与 `lib/platformCatalog.json` 一致）；需要枚举全部平台的地方用这个常量 */
-export const KNOWN_PLATFORM_IDS = ["claude", "codex", "gemini", "grok", "opencode", "zcode", "trae", "qoder", "workbuddy", "ollama", "custom", "antigravity", "kimi", "pi", "dsh"] as const
+export const KNOWN_PLATFORM_IDS = ["claude", "codex", "gemini", "grok", "opencode", "zcode", "trae", "qoder", "workbuddy", "ollama", "custom", "antigravity", "kimi", "pi", "dsh", "qwen"] as const
 export type KnownPlatformId = (typeof KNOWN_PLATFORM_IDS)[number]
 /**
  * 平台 id（4.3 放宽为字符串）：新增供应商只要在注册表登记描述符，不必再改这个联合类型。
@@ -119,8 +119,8 @@ export interface SessionActivity {
   updatedAtMs?: number
   startedAtMs?: number
   highlighted?: boolean
-  /** 这条会话最近一次请求归到的已存连接（4.2）；归不出唯一连接时缺省，不拿岛的配置冒充 */
-  source?: { id: string; name: string; confidence: "exact" | "mapped" }
+  /** 这条会话最近一次请求归到的已存连接（4.2 / 2B）；归不出唯一连接时缺省，不拿岛的配置冒充 */
+  source?: { id: string; name: string; confidence: "exact" | "active_config" | "mapped" }
 }
 
 /** 灵动岛形态：自由态（收缩 / 展开）与停靠态是两个维度（§2.1.3） */

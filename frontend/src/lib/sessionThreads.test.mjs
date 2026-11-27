@@ -84,5 +84,18 @@ test("压缩只对 Claude Code / Codex 会话开放（P4 审计 §3.2）", async
   const { canCompress } = await import("./sessionThreads.ts")
   assert.equal(canCompress("claude"), true)
   assert.equal(canCompress("codex"), true)
-  for (const platform of ["zcode", "opencode", "qoder", "kimi", "pi", "dsh"]) assert.equal(canCompress(platform), false, platform)
+  for (const platform of ["zcode", "opencode", "qoder", "kimi", "pi", "dsh", "antigravity"]) assert.equal(canCompress(platform), false, platform)
+})
+
+test("Antigravity 等不提供 cache_write 的平台仍正确汇总顶部统计，无标题时剥掉 native 前缀", async () => {
+  const { sessionTitle } = await import("./sessionThreads.ts")
+  const agy = { ...item("native:antigravity:ccs-337fd115:a52d96ef-f771", "D:/develop/Jolu", 3, [20, 80, null, 10]), platform: "antigravity" }
+  const totals = sessionTotals([agy])
+  assert.equal(totals.unknown, 0)
+  assert.equal(totals.input, 100)
+  assert.equal(totals.cache, 80)
+  assert.equal(totals.output, 10)
+  assert.equal(totals.consumption, 110)
+  assert.equal(totals.hitRate, 0.8)
+  assert.equal(sessionTitle(agy), "会话 a52d96ef")
 })

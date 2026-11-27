@@ -19,13 +19,7 @@ pub(crate) fn bound(
     conn: &rusqlite::Connection,
     id: &str,
 ) -> Result<(String, crate::workbuddy_browser_auth::Session), String> {
-    let secret: String = conn
-        .query_row(
-            "SELECT secret FROM connections WHERE id=?1 AND platform='workbuddy' AND kind='auth'",
-            [id],
-            |r| r.get(0),
-        )
-        .map_err(|_| "所选 WorkBuddy 账号缺少完整授权，请重新登录")?;
+    let secret: String = crate::gateway::subscription::ConnectionSecretStore::auth_secret(conn, id, "workbuddy", "所选 WorkBuddy 账号缺少完整授权，请重新登录")?;
     let Credential::Workbuddy { edition, session } =
         provider_browser_auth::load(id, "workbuddy", &secret)?
     else {
@@ -178,10 +172,7 @@ fn credential_hash(secret: &str) -> String {
 
 /// 本适配器为当前授权保存的目录：(获取时间, 模型)。换过授权的旧缓存不可信。
 fn stored(conn: &rusqlite::Connection, id: &str) -> Option<(i64, Vec<String>)> {
-    let (secret, text): (String, String) = conn.query_row(
-        "SELECT secret,models_json FROM connections WHERE id=?1 AND platform='workbuddy' AND kind='auth'",
-        [id], |r| Ok((r.get(0)?,r.get(1)?)),
-    ).ok()?;
+    let (secret, text) = crate::gateway::subscription::ConnectionSecretStore::secret_and_models_json(conn, id, "workbuddy")?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
     if value["credential_hash"].as_str()? != credential_hash(&secret) {
         return None;
@@ -358,10 +349,7 @@ async fn models_fetch(
     let cache=serde_json::json!({"credential_hash":credential_hash(&sealed),"fetched_ms":chrono::Utc::now().timestamp_millis(),"models":models}).to_string();
     let conn = deps.db.lock().map_err(|_| "无法保存 WorkBuddy 模型目录")?;
     bound(&conn, id)?;
-    let changed=conn.execute("UPDATE connections SET models_json=?3 WHERE id=?1 AND platform='workbuddy' AND kind='auth' AND secret=?2",rusqlite::params![id,sealed,cache]).map_err(|_| "无法保存 WorkBuddy 模型目录")?;
-    if changed != 1 {
-        return Err("WorkBuddy 授权已变化，已丢弃旧账号目录".into());
-    }
+    crate::gateway::subscription::ConnectionSecretStore::save_models_json_if_secret(&conn, id, "workbuddy", &sealed, &cache, "无法保存 WorkBuddy 模型目录", "WorkBuddy 授权已变化，已丢弃旧账号目录")?;
     Ok(models)
 }
 

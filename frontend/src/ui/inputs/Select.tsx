@@ -25,7 +25,7 @@ import type { ReactNode } from "react"
 import * as Menu from "@radix-ui/react-dropdown-menu"
 import { cn } from "@/lib/utils"
 import { Icon } from "@/icons"
-import { useGlidePill } from "@/motion"
+import { TactileButton, useGlidePill } from "@/motion"
 
 const VARIANT = {
   /** 表单与设置：well 底、圆角 14（与 Input lg 对齐） */
@@ -81,21 +81,25 @@ export function Select({
   const glide = useGlidePill()
   return (
     <Menu.Root>
-      <Menu.Trigger
-        disabled={disabled}
-        aria-label={label}
-        className={cn(
-          "jn-interactive flex shrink-0 items-center justify-between gap-2 text-left",
-          VARIANT[variant],
-          WIDTH[width],
-          disabled && "pointer-events-none opacity-45",
-          className,
-        )}
-      >
-        <span className={cn("min-w-0 truncate text-[13px]", selected ? "text-jn-text" : "text-jn-text-3")}>
-          {selected?.label ?? placeholder}
-        </span>
-        <Icon name="expand" size="sm" className="jn-chevron shrink-0 text-jn-text-3" />
+      <Menu.Trigger asChild disabled={disabled}>
+        <TactileButton
+          type="button"
+          variant="control"
+          disabled={disabled}
+          aria-label={label}
+          className={cn(
+            "jn-interactive flex shrink-0 items-center justify-between gap-2 text-left",
+            VARIANT[variant],
+            WIDTH[width],
+            disabled && "pointer-events-none opacity-45",
+            className,
+          )}
+        >
+          <span className={cn("min-w-0 truncate text-[13px]", selected ? "text-jn-text" : "text-jn-text-3")}>
+            {selected?.label ?? placeholder}
+          </span>
+          <Icon name="expand" size="sm" className="jn-chevron shrink-0 text-jn-text-3" />
+        </TactileButton>
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Content

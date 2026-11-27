@@ -18,6 +18,7 @@
  */
 import type { ReactNode } from "react"
 import { cn } from "@/lib/utils"
+import { TactileBox } from "@/motion"
 
 export interface TableColumn {
   key: string
@@ -90,7 +91,9 @@ export function TableRow({
 }) {
   const cells = Array.isArray(children) ? children : [children]
   return (
-    <div
+    <TactileBox
+      interactive={Boolean(onClick)}
+      variant="row"
       role={onClick ? "button" : "row"}
       tabIndex={onClick ? 0 : undefined}
       onClick={onClick}
@@ -127,6 +130,6 @@ export function TableRow({
           </span>
         )
       })}
-    </div>
+    </TactileBox>
   )
 }

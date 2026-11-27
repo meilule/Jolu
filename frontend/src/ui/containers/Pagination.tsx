@@ -19,6 +19,7 @@
  */
 import { cn } from "@/lib/utils"
 import { Icon } from "@/icons"
+import { TactileButton } from "@/motion"
 import { pageItems } from "./pageItems"
 
 // 纯逻辑单独放 pageItems.ts：node --test 只能直接跑 .ts，跑不了含 JSX 的 .tsx。
@@ -45,7 +46,8 @@ export function Pagination({ page, pageCount, onChange, summary, className }: Pa
     <div className={cn("flex w-full items-center gap-1.5", className)}>
       {summary && <span className="text-xs text-jn-text-3">{summary}</span>}
       <span className="flex-1" />
-      <button
+      <TactileButton
+        variant="icon"
         type="button"
         aria-label="上一页"
         disabled={page <= 1}
@@ -53,30 +55,38 @@ export function Pagination({ page, pageCount, onChange, summary, className }: Pa
         className={cn(CELL, "jn-interactive bg-jn-well text-jn-text-2 disabled:pointer-events-none disabled:opacity-45")}
       >
         <Icon name="prev" size="sm" />
-      </button>
+      </TactileButton>
       {pageItems(page, pageCount).map((item, index) =>
         item == null ? (
           <span key={`gap-${index}`} aria-hidden className={cn(CELL, "text-jn-text-3")}>
             …
           </span>
-        ) : (
+        ) : item === page ? (
           <button
             key={item}
             type="button"
             aria-label={`第 ${item} 页`}
-            aria-current={item === page ? "page" : undefined}
+            aria-current="page"
             onClick={() => go(item)}
-            className={cn(
-              CELL,
-              "jn-interactive",
-              item === page ? "bg-jn-primary text-jn-on-primary" : "bg-jn-well text-jn-text-2",
-            )}
+            className={cn(CELL, "jn-interactive jn-no-press bg-jn-primary text-jn-on-primary")}
           >
             {item}
           </button>
+        ) : (
+          <TactileButton
+            key={item}
+            variant="icon"
+            type="button"
+            aria-label={`第 ${item} 页`}
+            onClick={() => go(item)}
+            className={cn(CELL, "jn-interactive bg-jn-well text-jn-text-2")}
+          >
+            {item}
+          </TactileButton>
         ),
       )}
-      <button
+      <TactileButton
+        variant="icon"
         type="button"
         aria-label="下一页"
         disabled={page >= pageCount}
@@ -84,7 +94,7 @@ export function Pagination({ page, pageCount, onChange, summary, className }: Pa
         className={cn(CELL, "jn-interactive bg-jn-well text-jn-text-2 disabled:pointer-events-none disabled:opacity-45")}
       >
         <Icon name="next" size="sm" />
-      </button>
+      </TactileButton>
     </div>
   )
 }

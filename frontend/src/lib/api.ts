@@ -43,12 +43,58 @@ export interface SourceMetrics {
 }
 
 /**
- * 归因置信度。三档不能合并：
- * - `exact`：本应用请求路径（网关 / 本地代理）写入的连接，确定；
- * - `mapped`：由 provider 端点地址或模型清单**唯一**推出，确定但不是请求自己报的；
+ * 归因置信度。四档分开表达：
+ * - `exact`：本应用请求路径（网关 / 本地代理）写入的连接，确证；
+ * - `active_config`：实时采集入库时刻按本机确认生效的凭证指纹唯一匹配（2B），用青色虚线与网关确证区分；
+ * - `mapped`：由 provider 端点地址或模型清单**唯一**推出；
  * - `platform`：归不出唯一一条（多命中、无匹配、缺数据），只说得出平台。
  */
-export type AttributionConfidence = "exact" | "mapped" | "platform"
+export type AttributionConfidence = "exact" | "active_config" | "mapped" | "platform"
+
+/** 本机磁盘配置当前生效的账号状态（3A；不含任何明文凭据） */
+export interface LocalActiveAccountDto {
+  platform: string
+  kind: "auth" | "api"
+  state: "matched" | "unregistered" | "gateway_wired"
+  connection_id: string | null
+  connection_name: string | null
+  masked: string
+  account_email: string | null
+  base_url: string | null
+  source_agent?: string | null
+  updated_ms: number
+}
+
+/** 灵动岛未收录凭证「一键收录」入库结果 */
+export interface EnrolledLocalAccountDto {
+  connection_id: string
+  platform: string
+  kind: "auth" | "api"
+  name: string
+  models_fetched: number
+  warning: string | null
+}
+
+/** 受控轻量级 Agent Hooks 状态回执（4B；不含提示词正文或密钥） */
+export interface AgentHookAlertDto {
+  platform: string
+  kind: "waiting_approval" | "waiting_input" | "turn_complete" | "running" | "idle"
+  session_id: string | null
+  summary: string
+  updated_ms: number
+}
+
+/** 跨平台实时活跃概览项（1A） */
+export interface PlatformLiveBriefDto {
+  platform: string
+  running_count: number
+  recent_count: number
+  running_tokens: number | null
+  today_tokens: number | null
+  last_seen_ms: number | null
+  attribution: AttributionDto
+  sessions: ActiveSession[]
+}
 
 /** 请求归到的已存连接。`platform` 档不带连接——后端不给假 id，界面显示平台名。 */
 export interface AttributionDto {
@@ -394,6 +440,10 @@ export interface IslandLinkageDto {
   signals: boolean
   /** 跟随主窗口：主窗口在看某个连接时本体岛临时显示它并转头看向主窗口 */
   follow_main: boolean
+  /** 1A + 3A：本体岛动态跟随当前活跃 Agent 与本机切换的账号 */
+  follow_active?: boolean
+  /** 4B：受控轻量级后台等待确认提醒（Claude Hooks / Codex Notify，默认关闭） */
+  agent_hooks?: boolean
   /** 旧版筛选值，仅为兼容既有设置保留。 */
   zcode_provider: string | null
   /** 按最近活跃自动选主：分身所在平台明显更活跃时自动与本体互换 */
@@ -426,6 +476,8 @@ export const DEFAULT_ISLAND_LINKAGE: Required<IslandLinkageDto> = {
   strict_writing: false,
   signals: true,
   follow_main: false,
+  follow_active: true,
+  agent_hooks: false,
   zcode_provider: null,
   auto_focus: false,
   show_route_flow: true,
@@ -654,6 +706,11 @@ export const api = {
   setDisplayPreferences: (opacity: number, scale: number, shrinkScale: number, refreshMinutes: number) => invoke<AppSettings>("set_display_preferences", { opacity, scale, shrinkScale, refreshMinutes }),
   setIslandStyle: (style: IslandStyle) => invoke<AppSettings>("set_island_style", { style }),
   setIslandLinkage: (linkage: IslandLinkageDto) => invoke<AppSettings>("set_island_linkage", { linkage }),
+  islandActiveAccounts: () => invoke<LocalActiveAccountDto[]>("island_active_accounts"),
+  islandAgentHooksState: () => invoke<AgentHookAlertDto[]>("island_agent_hooks_state"),
+  islandLiveOverview: () => invoke<PlatformLiveBriefDto[]>("island_live_overview"),
+  islandEnrollLocalAccount: (platform: string, sourceAgent: string | null = null) =>
+    invoke<EnrolledLocalAccountDto>("island_enroll_local_account", { platform, sourceAgent }),
   /** 主窗口报告当前在看哪个连接（4.2b「跟随主窗口」；离开时传 null） */
   setMainContext: (page: string, connectionId: string | null) => invoke<void>("set_main_context", { page, connectionId }),
   mainContext: () => invoke<{ page: string; connection_id: string | null } | null>("main_context"),

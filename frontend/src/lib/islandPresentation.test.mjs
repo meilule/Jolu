@@ -84,6 +84,11 @@ test("收缩态只在确定档显示连接名：exact 与 mapped 分开表达", 
     islandAttribution({ connection_id: "c-2", name: "华龙 2", confidence: "mapped" }),
     { id: "c-2", name: "华龙 2", confidence: "mapped" },
   )
+  // active_config（2B 入库时刻本机配置匹配）保留独立档位，胶囊用青色虚线「本机」标签区分
+  assert.deepEqual(
+    islandAttribution({ connection_id: "c-3", name: "Momo", confidence: "active_config" }),
+    { id: "c-3", name: "Momo", confidence: "active_config" },
+  )
 })
 
 test("platform 档、缺字段、旧后端无字段一律回落到平台名", () => {
@@ -184,6 +189,7 @@ test("今日 Token：老后端没有覆盖字段时有数按已知、没数按�
 test("跳到用量页只在归属确定时带连接筛选（P4 审计 D7）", async () => {
   const { usageJumpConnection } = await import("./islandPresentation.ts")
   assert.equal(usageJumpConnection({ connection_id: "c1", confidence: "exact" }), "c1")
+  assert.equal(usageJumpConnection({ connection_id: "c1", confidence: "active_config" }), "c1")
   assert.equal(usageJumpConnection({ connection_id: "c1", confidence: "mapped" }), null, "映射出来的不算确定")
   assert.equal(usageJumpConnection({ connection_id: null, confidence: "platform" }), null)
   assert.equal(usageJumpConnection(null), null)

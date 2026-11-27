@@ -148,7 +148,7 @@
       "realtime_delta",
       "cost_estimate"
     ],
-    "limitation": "只读采集 Antigravity CLI（官方目录与 CCS 托管目录）的本地会话用量、首字与耗时；不读取对话正文或凭证"
+    "limitation": "只读采集 Antigravity CLI（官方目录与 CCS 托管目录）的本地会话记录与用量（含首字与耗时）；不改写原工具数据，不读取凭证"
   },
   {
     "id": "kimi",
@@ -182,5 +182,16 @@
       "cost_estimate"
     ],
     "limitation": "只读采集 DeepSeek Harness 本地会话（含子代理）用量；不读取对话正文或凭证"
+  },
+  {
+    "id": "qwen",
+    "name": "Qwen Code",
+    "availability": "available",
+    "capabilities": [
+      "local_sessions",
+      "realtime_delta",
+      "cost_estimate"
+    ],
+    "limitation": "只读采集 Qwen Code 本地会话日志用量；不读取凭证"
   }
 ]

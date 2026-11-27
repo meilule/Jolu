@@ -621,7 +621,7 @@ fn zcode_models(app: &tauri::AppHandle) -> Vec<crate::gateway::wiring::ZcodeMode
     let lookup = |model: &str| catalog.as_ref().and_then(|c| crate::gateway::models_dev::lookup_meta(c, model));
     let state = app.state::<crate::Db>();
     let Ok(conn) = state.0.lock() else { return Vec::new() };
-    let Ok(entries) = crate::service::gateway::catalog::list(&conn, &|model: &str| lookup(model)) else { return Vec::new() };
+    let Ok(entries) = crate::gateway::catalog::list_with_meta(&conn, &|model: &str| lookup(model)) else { return Vec::new() };
     entries
         .into_iter()
         .map(|entry| {

@@ -10,6 +10,9 @@ fn main() {
     if std::env::args().any(|arg| arg == "--restore-agents") {
         std::process::exit(jolu_lib::restore_agents_headless());
     }
+    if std::env::args().any(|arg| arg == "--agent-hook") {
+        std::process::exit(jolu_lib::run_agent_hook());
+    }
     // 搜索 MCP server（批 5）：agent 的 mcpServers 配置指向本 exe + 此参数，
     // agent 启动时拉起本进程、stdio 说 MCP；stdin 关闭（agent 退出）即随之退出。
     if std::env::args().any(|arg| arg == "--mcp-search") {

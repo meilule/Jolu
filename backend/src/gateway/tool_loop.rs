@@ -308,7 +308,7 @@ pub(crate) fn message_to_sse(message: &Value) -> String {
 pub(crate) async fn execute(call: &Call) -> (String, bool, String) {
     match call.kind {
         "search" => {
-            let configs = crate::service::settings::load().map(|s| s.search_apis).unwrap_or_default();
+            let configs = crate::infra::paths::locate().map(|(d, _)| crate::settings::read_readonly(&d).search_apis).unwrap_or_default();
             if configs.iter().all(|api| api.off) {
                 return ("搜索不可用：用户还没有在 Jolu 里配置搜索后端。".into(), true, format!("搜索「{}」失败（未配置搜索后端）", call.argument));
             }

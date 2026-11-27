@@ -1,15 +1,16 @@
 //! 设置、数据目录、清理与开机自启。
 
-#[allow(unused_imports)]
-use crate::*;
+use std::sync::atomic::Ordering;
 
-pub(crate) fn data_paths(app: &tauri::AppHandle) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
-    let directory = match validation::data_dir() {
-        Some(path) => path,
-        None => app.path().app_data_dir().map_err(|error| error.to_string())?,
-    };
-    Ok((directory.clone(), directory.join("usage.db")))
-}
+use tauri::{Manager, State};
+use tauri_plugin_opener::OpenerExt;
+
+use crate::app::state::{data_paths, retention_cutoff, with_database, with_reader, Cfg, DataInfo, Db, DbRead, FIRST_INSTALL_INTRO};
+use crate::app::island::{emit_dock_changed, island_dock, island_ids, island_windows};
+use crate::{
+    db, dock, island_clones, keep_awake, otlp, proxy, refresh_tray_menu, settings, startup,
+    validation,
+};
 
 #[tauri::command]
 pub(crate) fn data_info(app: tauri::AppHandle) -> Result<DataInfo, String> {
@@ -232,13 +233,6 @@ pub(crate) fn set_balance_alert(app: tauri::AppHandle, threshold: Option<f64>, c
     })?;
     crate::events::settings_changed(&app);
     Ok(next)
-}
-
-pub(crate) fn retention_cutoff(days: u32) -> Result<i64, String> {
-    if !matches!(days, 30 | 90 | 180 | 365) {
-        return Err("历史保留天数必须是 30、90、180 或 365".into());
-    }
-    Ok(chrono::Utc::now().timestamp_millis() - i64::from(days) * 86_400_000)
 }
 
 #[tauri::command]

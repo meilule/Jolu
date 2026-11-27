@@ -5,12 +5,39 @@
  * `LazyMotion`（domMax，含 layout/layoutId 投影）+ `m.*` + `tokens.ts` 的参数，
  * 并通过根部 `<MotionProvider>` 接管系统偏好与 Jolu 的「减少动效」设置。
  */
-import { useEffect, useRef, useState, type ComponentPropsWithoutRef, type ReactNode, type Ref } from "react"
-import { AnimatePresence, LazyMotion, MotionConfig, domMax, m, useMotionValue, useReducedMotion, useSpring } from "framer-motion"
+import { forwardRef, useEffect, useRef, useState, type ButtonHTMLAttributes, type ComponentPropsWithoutRef, type HTMLAttributes, type ReactNode, type Ref } from "react"
+import { AnimatePresence, LazyMotion, MotionConfig, animate, domMax, m, useMotionValue, useReducedMotion, useSpring, useTransform, useVelocity, type HTMLMotionProps } from "framer-motion"
 import { cn } from "@/lib/utils"
-import { DURATION, EASE, SPRING, STAGGER, STAGGER_LIMIT } from "./tokens"
+import { DURATION, EASE, SPRING, STAGGER, STAGGER_LIMIT, TACTILE, type TactileVariant } from "./tokens"
 
-export { useMotionValue, useReducedMotion, useSpring }
+export { animate, m, useMotionValue, useReducedMotion, useSpring, useTransform, useVelocity }
+
+/**
+ * 同时尊重系统 `prefers-reduced-motion`、根部 `<MotionProvider>`，
+ * 以及主窗口设置页挂在 `<html class="reduce-motion">` 的用户偏好。
+ *
+ * 为什么不能只靠 Framer 的 `<MotionConfig>`：
+ * `animate(motionValue, ...)` 是命令式 API，不经过 React Context 读取 `<MotionConfig>`，
+ * 且预览路由 / 独立节点不一定总是在 `<MotionProvider>` 内。这里双轨监听确保任何情况下都不会漏掉减少动效。
+ */
+export function useEffectiveReducedMotion(): boolean {
+  const framerReduced = Boolean(useReducedMotion())
+  const [classReduced, setClassReduced] = useState(() =>
+    typeof document !== "undefined" && document.documentElement.classList.contains("reduce-motion"),
+  )
+
+  useEffect(() => {
+    if (typeof document === "undefined") return
+    const root = document.documentElement
+    const sync = () => setClassReduced(root.classList.contains("reduce-motion"))
+    sync()
+    const observer = new MutationObserver(sync)
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] })
+    return () => observer.disconnect()
+  }, [])
+
+  return framerReduced || classReduced
+}
 
 /** 全局动效容器：挂在主窗口根部一次，统一接管 reducedMotion 与默认缓动。 */
 export function MotionProvider({
@@ -224,15 +251,21 @@ export function DialogPanel({
   )
 }
 
-/** AnimatePresence 薄封装，给需要退场动画的容器（Dialog / Toast / 抽屉）使用。 */
+/** AnimatePresence 薄封装，给需要退场动画的容器（Dialog / Toast / 抽屉 / 勾选态）使用。 */
 export function Presence({
   children,
   mode = "sync",
+  initial = true,
 }: {
   children: ReactNode
   mode?: "sync" | "wait" | "popLayout"
+  initial?: boolean
 }) {
-  return <AnimatePresence mode={mode}>{children}</AnimatePresence>
+  return (
+    <AnimatePresence mode={mode} initial={initial}>
+      {children}
+    </AnimatePresence>
+  )
 }
 
 /**
@@ -283,3 +316,80 @@ export function AnimatedNumber({
 
   return <span className={className}>{format(shown)}</span>
 }
+
+export interface TactileButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  /** 触感档位（按钮 / 图标 / 选项块 / 控件 / 行 / 花瓣主开关） */
+  variant?: TactileVariant
+}
+
+/**
+ * 统一触感弹簧按钮：用 Motion 弹簧驱动悬停与按压弹性，完全保留原生 `<button>` 属性、
+ * `forwardRef`（支持 Radix `asChild`）与无障碍语义。
+ *
+ * 注意两点工程细节：
+ * 1. Framer Motion 默认仍会在原生 `disabled` 按钮上触发手势，这里显式在禁用/旋转态屏蔽 `whileHover` / `whileTap`；
+ * 2. 配合 `.jn-interactive.jn-spring` 屏蔽 CSS 的 `transform` transition 与 `:active scale(0.97)`，防止两套缩放互相重插值发糊。
+ */
+export const TactileButton = forwardRef<HTMLButtonElement, TactileButtonProps>(function TactileButton(
+  { variant = "button", disabled, className, children, ...rest },
+  ref,
+) {
+  const reduced = useEffectiveReducedMotion()
+  const spec = TACTILE[variant]
+  const inert =
+    Boolean(disabled) ||
+    rest["aria-disabled"] === true ||
+    rest["aria-disabled"] === "true" ||
+    /\banimate-spin\b/.test(className ?? "")
+
+  return (
+    <m.button
+      ref={ref}
+      disabled={disabled}
+      whileHover={reduced || inert ? undefined : spec.hover}
+      whileTap={reduced || inert ? undefined : spec.tap}
+      transition={reduced ? { duration: 0 } : spec.transition}
+      className={cn(className, "jn-spring")}
+      {...(rest as Omit<HTMLMotionProps<"button">, "ref" | "disabled" | "className" | "whileHover" | "whileTap" | "transition">)}
+    >
+      {children}
+    </m.button>
+  )
+})
+
+export interface TactileBoxProps extends HTMLAttributes<HTMLDivElement> {
+  /** 仅当容器处于可交互态时触发按压与悬停弹簧 */
+  interactive?: boolean
+  variant?: TactileVariant
+}
+
+/** 可点击容器（ListRow / MetricCard / TableRow）的弹簧外壳；非交互态退化为普通零开销 `<div>`。 */
+export const TactileBox = forwardRef<HTMLDivElement, TactileBoxProps>(function TactileBox(
+  { interactive = false, variant = "row", className, children, ...rest },
+  ref,
+) {
+  const reduced = useEffectiveReducedMotion()
+  if (!interactive) {
+    return (
+      <div ref={ref} className={className} {...rest}>
+        {children}
+      </div>
+    )
+  }
+
+  const spec = TACTILE[variant]
+  const inert = rest["aria-disabled"] === true || rest["aria-disabled"] === "true"
+
+  return (
+    <m.div
+      ref={ref}
+      whileHover={reduced || inert ? undefined : spec.hover}
+      whileTap={reduced || inert ? undefined : spec.tap}
+      transition={reduced ? { duration: 0 } : spec.transition}
+      className={cn(className, "jn-spring")}
+      {...(rest as Omit<HTMLMotionProps<"div">, "ref" | "className" | "whileHover" | "whileTap" | "transition">)}
+    >
+      {children}
+    </m.div>
+  )
+})

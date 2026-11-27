@@ -318,6 +318,60 @@ pub(crate) fn save_refresh(
     result
 }
 
+
+/// 订阅适配器共用的连接密文与模型目录缓存访问仓库，收口散落在各订阅平台里的重复 SQL。
+pub(crate) struct ConnectionSecretStore;
+
+impl ConnectionSecretStore {
+    pub(crate) fn auth_secret(
+        conn: &Connection,
+        id: &str,
+        platform: &str,
+        missing_err: &str,
+    ) -> Result<String, String> {
+        conn.query_row(
+            "SELECT secret FROM connections WHERE id=?1 AND platform=?2 AND kind='auth'",
+            [id, platform],
+            |r| r.get::<_, String>(0),
+        )
+        .map_err(|_| missing_err.to_string())
+    }
+
+    pub(crate) fn secret_and_models_json(
+        conn: &Connection,
+        id: &str,
+        platform: &str,
+    ) -> Option<(String, String)> {
+        conn.query_row(
+            "SELECT secret, models_json FROM connections WHERE id=?1 AND platform=?2 AND kind='auth'",
+            [id, platform],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok()
+    }
+
+    pub(crate) fn save_models_json_if_secret(
+        conn: &Connection,
+        id: &str,
+        platform: &str,
+        sealed: &str,
+        models_json: &str,
+        write_err: &str,
+        stale_err: &str,
+    ) -> Result<(), String> {
+        let changed = conn
+            .execute(
+                "UPDATE connections SET models_json=?4 WHERE id=?1 AND platform=?2 AND kind='auth' AND secret=?3",
+                rusqlite::params![id, platform, sealed, models_json],
+            )
+            .map_err(|_| write_err.to_string())?;
+        if changed != 1 {
+            return Err(stale_err.to_string());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(all(test, windows))]
 pub(crate) mod tests {
     use super::*;

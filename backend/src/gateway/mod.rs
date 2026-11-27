@@ -55,19 +55,14 @@ pub mod server;
 pub(crate) mod subscription;
 pub(crate) mod translate;
 pub mod wire;
-pub mod wiring;
-pub(crate) mod wiring_dsh;
-pub(crate) mod wiring_pi;
-pub(crate) mod wiring_qwen;
-pub(crate) mod wiring_workbuddy;
-pub(crate) mod wiring_specs;
 pub(crate) mod header_probe;
 pub(crate) mod yaml_lines;
-pub(crate) mod wiring_extra;
-pub(crate) mod wiring_antigravity;
-pub(crate) mod wiring_wsl;
-pub mod wiring_diff;
-pub mod wiring_store;
+pub mod wiring;
+pub use wiring::{diff as wiring_diff, store as wiring_store};
+pub(crate) use wiring::{
+    antigravity as wiring_antigravity, dsh as wiring_dsh, extra as wiring_extra, pi as wiring_pi,
+    qwen as wiring_qwen, specs as wiring_specs, workbuddy as wiring_workbuddy, wsl as wiring_wsl,
+};
 
 /// 本地代理的工作模式。默认 `Observe`，行为与历史版本完全一致。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

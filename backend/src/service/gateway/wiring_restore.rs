@@ -62,66 +62,108 @@ pub fn restore_all(conn: &mut Connection, port: u16) -> RestoreReport {
 mod tests {
     use super::*;
 
-    fn database() -> (Connection, std::path::PathBuf) {
-        let path = std::env::temp_dir().join(format!(
-            "jolu-restore-{}-{}.db",
+    /// 在隔离的空用户目录子进程中运行测试，绝不读写开发机真实的 `~/.claude` / `~/.codex` 等配置文件。
+    fn run_isolated(test_name: &str, body: impl FnOnce(&std::path::Path)) {
+        const ENV_KEY: &str = "JOLU_WIRING_RESTORE_ISOLATED_DIR";
+        if let Some(root) = std::env::var_os(ENV_KEY) {
+            body(std::path::Path::new(&root));
+            return;
+        }
+        let root = std::env::temp_dir().join(format!(
+            "jolu-restore-iso-{}-{test_name}-{}",
             std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
-        (crate::db::open(&path).unwrap(), path)
+        let home = root.join("home");
+        let appdata = root.join("appdata");
+        let localappdata = root.join("localappdata");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&appdata).unwrap();
+        std::fs::create_dir_all(&localappdata).unwrap();
+
+        let exact = format!("{}::{test_name}", module_path!().trim_start_matches("jolu_lib::"));
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &exact, "--nocapture"])
+            .env(ENV_KEY, &root)
+            .env("USERPROFILE", &home)
+            .env("HOME", &home)
+            .env("APPDATA", &appdata)
+            .env("LOCALAPPDATA", &localappdata)
+            .env("XDG_CONFIG_HOME", &appdata)
+            .env("CLAUDE_CONFIG_DIR", home.join(".claude"))
+            .env("CODEX_HOME", home.join(".codex"))
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            output.status.success(),
+            "isolated {test_name} failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
-    /// 空接线记录表上跑 `restore_all`：不报失败，也不 panic。
-    ///
-    /// 不能断言 `restored.is_empty()`：`restore_all` 判的是**文件实际状态**
-    /// （`status_with` 读各工具配置），不是只看记录表。开发机上某个工具真的处于
-    /// 已接线状态时，即使记录表是空的，它也会被还原——这正是它该做的事。
-    /// （2026-11-20：本机 dsh 真的接过，这条断言因此误报；改成只验「不失败」。）
+    fn database(root: &std::path::Path) -> Connection {
+        crate::db::open(&root.join("usage.db")).unwrap()
+    }
+
     #[test]
     fn an_empty_table_does_not_fail() {
-        let (mut conn, path) = database();
-        let report = restore_all(&mut conn, 12731);
-        assert!(report.failed.is_empty(), "不该有失败项：{report:?}");
-        drop(conn);
-        let _ = std::fs::remove_file(path);
+        run_isolated("an_empty_table_does_not_fail", |root| {
+            let mut conn = database(root);
+            let report = restore_all(&mut conn, 12731);
+            assert!(
+                report.restored.is_empty() && report.skipped.is_empty() && report.failed.is_empty(),
+                "空隔离目录与空记录表不应有任何动作或失败：{report:?}"
+            );
+        });
     }
 
     #[test]
     fn wired_record_without_config_file_is_a_no_op_like_escape() {
-        // wiring 记录存在、但配置文件已不在：status_with 判「未接线」（它按配置文件
-        // 实际内容判断），与 escape::restore_all 的既有语义一致——无需动作，不算失败。
-        // 这条固定的是「不把文件缺失当成还原失败」，避免卸载钩子误报。
-        let (mut conn, path) = database();
-        conn.execute(
-            "INSERT INTO agent_wiring(agent_id, instance_id, owner, state, original_json, applied_json, token, wired_ms)
-             VALUES('claude-code', 'test', 'test', 'wired', '{}', '{}', NULL, 1)",
-            [],
-        ).ok();
-        let report = restore_all(&mut conn, 12731);
-        assert!(report.restored.is_empty() && report.skipped.is_empty() && report.failed.is_empty(), "{report:?}");
-        drop(conn);
-        let _ = std::fs::remove_file(path);
+        run_isolated("wired_record_without_config_file_is_a_no_op_like_escape", |root| {
+            let mut conn = database(root);
+            conn.execute(
+                "INSERT INTO agent_wiring(agent_id, instance_id, owner, state, original_json, applied_json, token, wired_ms)
+                 VALUES('claude-code', 'test', 'test', 'wired', '{}', '{}', NULL, 1)",
+                [],
+            )
+            .ok();
+            let report = restore_all(&mut conn, 12731);
+            assert!(
+                report.restored.is_empty() && report.skipped.is_empty() && report.failed.is_empty(),
+                "{report:?}"
+            );
+        });
     }
 
     #[test]
     fn pending_record_goes_through_unwire_and_lands_on_skipped() {
-        // pending = 「打算写、可能写了一半」：即使配置文件不存在也要走一遍 unwire，
-        // 让 mark_idle 把状态收回，避免下次打开还看到挂起
-        let (mut conn, path) = database();
-        conn.execute(
-            "INSERT INTO agent_wiring(agent_id, instance_id, owner, state, original_json, applied_json, token, wired_ms)
-             VALUES('claude-code', 'test', 'test', 'pending', '{}', '{}', NULL, NULL)",
-            [],
-        ).ok();
-        let report = restore_all(&mut conn, 12731);
-        assert!(report.skipped.iter().any(|agent| agent == "claude-code"), "文件不存在 → Ok(false) → skipped：{report:?}");
-        assert!(report.failed.is_empty(), "{report:?}");
-        // 已知边界（与桌面端 escape::restore_all 一致）：skipped 不标 idle，
-        // 「pending + 文件已丢」的记录会留在 pending——真实场景里这要求用户先有
-        // 配置文件才接线，触发概率极低；若要收口应连同桌面端一起改。
-        let state: String = conn.query_row("SELECT state FROM agent_wiring WHERE agent_id='claude-code'", [], |r| r.get(0)).unwrap();
-        assert_eq!(state, "pending");
-        drop(conn);
-        let _ = std::fs::remove_file(path);
+        run_isolated("pending_record_goes_through_unwire_and_lands_on_skipped", |root| {
+            let mut conn = database(root);
+            conn.execute(
+                "INSERT INTO agent_wiring(agent_id, instance_id, owner, state, original_json, applied_json, token, wired_ms)
+                 VALUES('claude-code', 'test', 'test', 'pending', '{}', '{}', NULL, NULL)",
+                [],
+            )
+            .ok();
+            let report = restore_all(&mut conn, 12731);
+            assert!(
+                report.skipped.iter().any(|agent| agent == "claude-code"),
+                "文件不存在 → Ok(false) → skipped：{report:?}"
+            );
+            assert!(report.failed.is_empty(), "{report:?}");
+            let state: String = conn
+                .query_row(
+                    "SELECT state FROM agent_wiring WHERE agent_id='claude-code'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(state, "pending");
+        });
     }
 }

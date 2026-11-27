@@ -62,11 +62,16 @@ test("缓存列：没给写「未提供」，给了 0 就是 0，占比的分母
 })
 
 test("状态、项目与来源账号", () => {
-  assert.deepEqual(statusCell(true), { text: "正在生成", tone: "on" })
-  assert.deepEqual(statusCell(false), { text: "最近活跃", tone: "muted" }, "没有证据时不断言空闲")
-  // P4 审计 D12：没有在途请求但会话仍在运行（思考、执行本地工具）时不能写「空闲」
-  assert.deepEqual(statusCell(false, "running"), { text: "运行中（无在途请求）", tone: "on" })
+  assert.equal(statusCell(true).text, "正在生成")
+  assert.equal(statusCell(true).tone, "on")
+  assert.equal(statusCell(false).text, "最近活跃", "没有证据时不断言空闲")
+  assert.equal(statusCell(false).tone, "muted")
+  // P4 审计 D12：没有在途请求但会话仍在运行（思考、执行本地工具）时不能写「空闲」，胶囊保持简短、补充放副行
+  assert.equal(statusCell(false, "running").text, "运行中")
+  assert.equal(statusCell(false, "running").note, "无在途请求")
+  assert.equal(statusCell(false, "running").tone, "on")
   assert.equal(statusCell(false, "done").text, "已完成")
+  assert.equal(statusCell(false, "failed").text, "失败")
   assert.equal(projectOf(win("D:", "work", "Jolu", "")), "Jolu")
   assert.equal(projectOf("/home/dev/proj"), "proj")
   assert.equal(projectOf(null), null)
@@ -75,24 +80,25 @@ test("状态、项目与来源账号", () => {
   assert.equal(accountOf(null, "kimi"), "kimi")
 })
 
-test("合并最近会话与快照：运行中在前，只有快照的会话也列出", () => {
+test("合并经路由会话与快照：运行中在前，过滤未路由本机会话，只有快照的会话也列出", () => {
   const a = session()
-  const b = session({ session_id: "s2", title: null, links: [] })
+  const b = session({ session_id: "s2", title: null, gateway_last_ts: null, links: [] })
+  const localOnly = session({ session_id: "local-only", title: "直连会话", gateway_last_ts: null, links: [] })
   const rows = activeSessionRows(
-    [view(a, false, 600), view(b, true, 100)],
+    [view(a, false, 600), view(b, true, 100), view(localOnly, false, 999)],
     [ctx(), ctx({ id: 9, session_id: "s3", ts: 5_000 })],
   )
-  assert.deepEqual(rows.map((r) => r.sessionId), ["s2", "s3", "s1"])
+  assert.deepEqual(rows.map((r) => r.sessionId), ["s2", "s3", "s1"], "未经过模型路由的纯本机会话不应混入")
   const first = rows.find((r) => r.sessionId === "s1")
   assert.equal(first.title, "接线修复")
   assert.equal(first.project, "Jolu")
   assert.equal(first.model, "claude-sonnet-4-5")
   assert.equal(first.lastTs, 1_000)
   assert.equal(first.snapshotId, 1)
-  const noRoute = rows.find((r) => r.sessionId === "s2")
-  assert.equal(noRoute.context.text, "暂无请求")
-  assert.equal(noRoute.cache.text, "未提供")
-  assert.equal(noRoute.snapshotId, null)
+  const liveNoSnap = rows.find((r) => r.sessionId === "s2")
+  assert.equal(liveNoSnap.context.text, "尚未采集")
+  assert.equal(liveNoSnap.cache.text, "未提供")
+  assert.equal(liveNoSnap.snapshotId, null)
 })
 
 test("筛选与需要关注", () => {

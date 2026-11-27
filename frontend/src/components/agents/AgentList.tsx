@@ -2,7 +2,7 @@ import { useState } from "react"
 import { AGENT_FILTERS, agentGridRows, type AgentFilter, type AgentRow } from "@/lib/agentPage"
 import { cn } from "@/lib/utils"
 import { Icon } from "@/icons"
-import { Collapse } from "@/motion"
+import { Collapse, TactileButton } from "@/motion"
 import { AgentBadge } from "./AgentBadge"
 import { Button, Input, StatusPill, Switch as JnSwitch, Tabs, type StatusTone } from "@/ui"
 
@@ -98,14 +98,14 @@ export function AgentDirectory({ rows, selected, modelsCount, tierCount, busy, s
       {/* 暂不能接入折叠条（画板 V8-01 的信息结构；R1-08 未画，标「待确认」） */}
       {grid.blocked.length > 0 && (
         <div className="flex flex-col overflow-hidden rounded-[16px] bg-jn-well">
-          <button type="button" aria-expanded={blockedOpen} onClick={() => setBlockedOpen((value) => !value)}
+          <TactileButton variant="control" type="button" aria-expanded={blockedOpen} onClick={() => setBlockedOpen((value) => !value)}
             className="jn-interactive flex h-12 shrink-0 items-center gap-2.5 px-4 text-left">
             <Icon name="expand" size="sm" className={cn("jn-chevron shrink-0 text-jn-text-3", !blockedOpen && "-rotate-90")} />
             <span className="text-[13px] font-semibold text-jn-text">暂不能接入</span>
             <span className="rounded-full bg-jn-surface px-2 py-0.5 text-[11px] font-semibold tabular-nums text-jn-text-3">{grid.blocked.length}</span>
             <span className="flex-1" />
             <span className="text-[11px] text-jn-text-3">{blockedOpen ? "收起" : "原因"}</span>
-          </button>
+          </TactileButton>
           <Collapse open={blockedOpen}>
             <div className="grid grid-cols-1 gap-2.5 bg-jn-surface p-3 @[680px]:grid-cols-2 @[940px]:grid-cols-3">
               {grid.blocked.map((row) => (
@@ -153,16 +153,16 @@ function ToolCard({ row, selected, modelsCount, tierCount, busy, onSelect, onTog
       {/* 身份与开关 */}
       <div className="flex items-center gap-2.5">
         <AgentBadge agent={row.agent} name={row.name} size={40} />
-        <button type="button" onClick={onSelect} className="flex min-w-0 flex-1 flex-col gap-0.5 text-left">
+        <TactileButton variant="row" type="button" onClick={onSelect} className="flex min-w-0 flex-1 flex-col gap-0.5 text-left">
           <span className="truncate text-[15px] font-bold text-jn-text">{row.name}</span>
           {/* 只有需要处理时（漂移 / 配置文件被删等）才占第二行 */}
           {row.tone === "danger" && <span className="truncate text-[11px] text-jn-danger">{row.subtitle}</span>}
-        </button>
+        </TactileButton>
         {/* 暂不支持的也有开关形状（track 底），只是禁用不可拨 */}
         <JnSwitch checked={row.toggle === "on"} disabled={busy || !row.toggle} label={row.toggle ? `${row.toggle === "on" ? "断开" : "接入"} ${row.name}` : `${row.name} 暂不支持接入`} onChange={() => onToggle()} />
       </div>
       {/* 模型摘要三行（画板：标签 11 / 值 14 粗 / 注 11.5） */}
-      <button type="button" onClick={onSelect}
+      <TactileButton variant="tile" type="button" onClick={onSelect}
         className="jn-interactive flex min-h-[70px] flex-1 flex-col items-start justify-center gap-[3px] rounded-[16px] bg-jn-well px-3.5 py-3 text-left">
         {wired ? (
           <>
@@ -185,16 +185,16 @@ function ToolCard({ row, selected, modelsCount, tierCount, busy, onSelect, onTog
             <span className="max-w-full truncate text-[11.5px] text-jn-text-3">{row.subtitle}</span>
           </>
         )}
-      </button>
+      </TactileButton>
       {/* 底栏：状态 + 详细 */}
       <div className="flex h-6 shrink-0 items-center gap-2">
         <StatusPill tone={statusTone} className="max-w-[210px] overflow-hidden">{row.status}</StatusPill>
         <span className="min-w-0 flex-1" />
-        <button type="button" onClick={onSelect} title={row.supported ? undefined : "Jolu 还没有它的专用接入，可按「添加工具」走通用接入"}
+        <TactileButton variant="button" type="button" onClick={onSelect} title={row.supported ? undefined : "Jolu 还没有它的专用接入，可按「添加工具」走通用接入"}
           className="jn-interactive inline-flex h-6 shrink-0 items-center gap-1 rounded-full px-1 text-[12.5px] font-semibold text-jn-primary-ink">
           详细
           <Icon name="next" size="xs" />
-        </button>
+        </TactileButton>
       </div>
     </div>
   )

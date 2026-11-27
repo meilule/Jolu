@@ -1,10 +1,26 @@
-/** 动效模块唯一出口：令牌 + 封装组件。 */
-export { DURATION, EASE, SPRING, STAGGER, STAGGER_LIMIT } from "./tokens"
+/** 动效模块唯一出口：令牌 + 封装组件 + 纯物理函数。 */
+export { DURATION, EASE, SPRING, STAGGER, STAGGER_LIMIT, TACTILE, type TactileVariant } from "./tokens"
 export {
+  clamp,
+  computeLiquidScale,
+  computeLiquidStretch,
+  computeLocalX,
+  LIQUID_DEFAULT_STRETCH,
+  LIQUID_DRAG_THRESHOLD_PX,
+  LIQUID_HOVER_SWELL,
+  LIQUID_STRETCH_CAP,
+  LIQUID_SWITCH_GEOMETRY,
+  LIQUID_VELOCITY_TRAVEL_RATIO,
+  shouldFlipOnDrag,
+  type LiquidSwitchSize,
+} from "./liquidPhysics"
+export {
+  animate,
   AnimatedNumber,
   Collapse,
   DialogBackdrop,
   DialogPanel,
+  m,
   MotionProvider,
   Presence,
   Reveal,
@@ -12,8 +28,15 @@ export {
   SpringThumb,
   Stagger,
   StaggerItem,
+  TactileBox,
+  TactileButton,
+  useEffectiveReducedMotion,
   useMotionValue,
   useReducedMotion,
   useSpring,
+  useTransform,
+  useVelocity,
+  type TactileBoxProps,
+  type TactileButtonProps,
 } from "./components"
 export { useGlidePill } from "./useGlidePill"

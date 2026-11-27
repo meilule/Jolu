@@ -9,7 +9,7 @@ const repo = resolve(here, "../../../..")
 const logoSource = readFileSync(resolve(here, "PlatformLogo.tsx"), "utf8")
 const catalogSource = readFileSync(resolve(repo, "frontend/src/lib/providerCatalog.ts"), "utf8")
 const badgeSource = readFileSync(resolve(repo, "frontend/src/components/agents/AgentBadge.tsx"), "utf8")
-const discoverySource = readFileSync(resolve(repo, "backend/src/agent_discovery.rs"), "utf8")
+const discoverySource = readFileSync(resolve(repo, "backend/src/agents/discovery.rs"), "utf8")
 
 function objectKeys(source, name) {
   const block = source.match(new RegExp(`const ${name}[^=]*=\\s*\\{([\\s\\S]*?)\\n\\}`))?.[1]

@@ -62,7 +62,7 @@ export function StatusPill({ tone, children, className, ...rest }: StatusPillPro
   return (
     <span
       className={cn(
-        "inline-flex h-6 shrink-0 items-center gap-[6px] rounded-full pl-[9px] pr-[10px] text-xs font-semibold whitespace-nowrap",
+        "inline-flex h-6 max-w-full shrink-0 items-center gap-[6px] rounded-full pl-[9px] pr-[10px] text-xs font-semibold whitespace-nowrap",
         TONE[tone],
         className,
       )}
@@ -72,7 +72,7 @@ export function StatusPill({ tone, children, className, ...rest }: StatusPillPro
         aria-hidden
         className={cn("size-1.5 shrink-0 rounded-full", DOT[tone], tone === "active" && "animate-pulse")}
       />
-      {children}
+      <span className="min-w-0 truncate">{children}</span>
     </span>
   )
 }

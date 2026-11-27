@@ -103,59 +103,8 @@ struct TurnOutput {
     usage: Option<serde_json::Value>,
 }
 
-/// 网关会话键 → claude 的 session_id（用于 `--resume`）。
-/// `claude -p` 每轮都是一个新进程；延续同一场会话靠 resume 而不是复用进程。
-pub(crate) struct ClaudeSessions {
-    entries: std::collections::HashMap<String, (String, i64)>,
-}
-
-/// 会话表上限：超过后淘汰最久未用的条目。
-pub(crate) const SESSION_CAP: usize = 200;
-/// 会话空闲上限：超过则丢弃（下一轮当作新会话，不再 attempt resume）。
-pub(crate) const SESSION_IDLE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
-impl ClaudeSessions {
-    pub(crate) fn new() -> Self {
-        Self { entries: std::collections::HashMap::new() }
-    }
-
-    /// 取可 resume 的 session_id：空闲超时的不返回（并顺手清掉）。
-    pub(crate) fn resume_for(&mut self, session: &str) -> Option<String> {
-        let (id, used) = self.entries.get(session)?.clone();
-        if now_ms() - used > SESSION_IDLE.as_millis() as i64 {
-            self.entries.remove(session);
-            return None;
-        }
-        Some(id)
-    }
-
-    /// 记下本轮拿到的 session_id（心跳续期）。超上限时淘汰最久未用。
-    pub(crate) fn bind(&mut self, session: &str, claude_session: &str) {
-        if self.entries.len() >= SESSION_CAP && !self.entries.contains_key(session) {
-            if let Some(oldest) = self.entries.iter().min_by_key(|(_, (_, used))| *used).map(|(k, _)| k.clone()) {
-                self.entries.remove(&oldest);
-            }
-        }
-        self.entries.insert(session.to_string(), (claude_session.to_string(), now_ms()));
-    }
-
-    /// 会话失效（resume 失败或进程崩溃）时丢弃，下一轮重新建立。
-    pub(crate) fn forget(&mut self, session: &str) {
-        self.entries.remove(session);
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn len(&self) -> usize {
-        self.entries.len()
-    }
-}
+#[cfg(test)]
+use crate::proxy::deps::{now_ms, ClaudeSessions, CLAUDE_SESSION_CAP, CLAUDE_SESSION_IDLE};
 
 /// 聚合 claude 的 stdout JSONL：init 拿 session_id，assistant 累积文本，result 是最终答案。
 fn fold_event(output: &mut TurnOutput, line: &str) {
@@ -633,7 +582,7 @@ process.stdout.write(chunks.join("\n") + "\n");
         table.bind("user:s1", "claude-sess-1");
         assert_eq!(table.resume_for("user:s1").as_deref(), Some("claude-sess-1"));
         // 过期（人为把时间推前）后不再 resume
-        table.entries.insert("stale".into(), ("old".into(), now_ms() - SESSION_IDLE.as_millis() as i64 - 1));
+        table.entries.insert("stale".into(), ("old".into(), now_ms() - CLAUDE_SESSION_IDLE.as_millis() as i64 - 1));
         assert!(table.resume_for("stale").is_none(), "空闲超时的会话要丢弃");
         assert!(!table.entries.contains_key("stale"), "过期条目应被清掉");
         // forget 主动丢弃
@@ -644,11 +593,11 @@ process.stdout.write(chunks.join("\n") + "\n");
     #[test]
     fn session_table_evicts_oldest_beyond_cap() {
         let mut table = ClaudeSessions::new();
-        for i in 0..SESSION_CAP {
+        for i in 0..CLAUDE_SESSION_CAP {
             table.bind(&format!("s{i}"), &format!("c{i}"));
         }
         table.bind("newcomer", "c-new");
-        assert!(table.len() <= SESSION_CAP);
+        assert!(table.len() <= CLAUDE_SESSION_CAP);
         assert!(table.resume_for("newcomer").is_some(), "新会话必须保留");
     }
 

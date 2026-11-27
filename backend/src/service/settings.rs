@@ -19,10 +19,7 @@ pub fn load() -> Result<Settings, String> {
 
 /// 从一个已知数据目录读设置（测试与调用方已定位目录时用）。
 pub fn read_settings(directory: &Path) -> Settings {
-    std::fs::read_to_string(directory.join("settings.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<Settings>(&text).ok())
-        .unwrap_or_default()
+    crate::settings::read_readonly(directory)
 }
 
 /// models.dev 元数据缓存（桌面端维护的文件）。

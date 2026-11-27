@@ -8,7 +8,7 @@
 import type { ReactNode } from "react"
 import { cn } from "@/lib/utils"
 import { Icon, type IconName } from "@/icons"
-import { Reveal } from "@/motion"
+import { Reveal, TactileButton } from "@/motion"
 
 export interface BatchBarProps {
   /** 已选数量或自定义计数文案 */
@@ -43,7 +43,8 @@ export function BatchBar({
       {note && <span className="text-xs opacity-80">{note}</span>}
       <span className="min-w-0 flex-1" />
       <div className="flex flex-wrap items-center gap-2">{actions}</div>
-      <button
+      <TactileButton
+        variant="icon"
         type="button"
         disabled={disabled}
         onClick={onClose}
@@ -51,7 +52,7 @@ export function BatchBar({
         className="jn-interactive grid size-8 shrink-0 place-items-center rounded-full bg-jn-inverse-chip text-jn-on-inverse hover:opacity-85 disabled:pointer-events-none disabled:opacity-45"
       >
         <Icon name="close" size="sm" />
-      </button>
+      </TactileButton>
     </Reveal>
   )
 }
@@ -71,7 +72,8 @@ export function BatchAction({
   onClick: () => void
 }) {
   return (
-    <button
+    <TactileButton
+      variant="button"
       type="button"
       disabled={disabled}
       onClick={onClick}
@@ -84,6 +86,6 @@ export function BatchAction({
     >
       {icon && <Icon name={icon} size="sm" />}
       {children}
-    </button>
+    </TactileButton>
   )
 }

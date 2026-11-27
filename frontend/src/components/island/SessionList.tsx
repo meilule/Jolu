@@ -163,10 +163,24 @@ function SessionRow({ session: s, elapsed, showUnknownTag, onOpen, showSource }:
         {s.title}
       </span>
       {showSource && s.source && (
-        // 待确认（无画板）：mapped 是按配置推断的连接，用更浅的颜色区分
-        <span className={cn("max-w-[88px] shrink-0 truncate text-[10px]", s.source.confidence === "exact" ? "text-text-secondary" : "text-text-tertiary")}
-          title={s.source.confidence === "exact" ? `实际调用：${s.source.name}` : `按配置推断：${s.source.name}`}>
-          {s.source.name}
+        <span
+          className={cn(
+            "max-w-[96px] shrink-0 truncate text-[10px]",
+            s.source.confidence === "exact"
+              ? "text-text-secondary"
+              : s.source.confidence === "active_config"
+                ? "text-accent-blue"
+                : "text-text-tertiary",
+          )}
+          title={
+            s.source.confidence === "exact"
+              ? `网关/代理确证调用：${s.source.name}`
+              : s.source.confidence === "active_config"
+                ? `入库时刻本机配置匹配：${s.source.name}`
+                : `按端点/模型唯一推断：${s.source.name}`
+          }
+        >
+          {s.source.confidence === "active_config" ? `${s.source.name} · 本机` : s.source.name}
         </span>
       )}
       <StateTag state={s.state} showUnknown={showUnknownTag} />

@@ -98,6 +98,45 @@ function LiveTokens({ countKey, tokens, text, source, unknown = false }: {
   )
 }
 
+function ConcurrentPeerStack({
+  peers,
+  onCycle,
+}: {
+  peers: NonNullable<IslandData["concurrentPeers"]>
+  onCycle?: () => void
+}) {
+  if (peers.length === 0) return null
+  const shown = peers.slice(0, 3)
+  const summary = peers
+    .map((p) => {
+      const tok = p.runningTokens ?? p.todayTokens
+      const tokStr = tok != null && tok > 0 ? ` +${compactQuotaNumber(tok)}` : ""
+      return `${p.platformName}${p.connectionName ? `（${p.connectionName}）` : ""}${tokStr}`
+    })
+    .join("、")
+  return (
+    <button
+      type="button"
+      className="cap-peer-stack"
+      aria-label={`后台同时运行：${summary}，点击切换灵动岛焦点`}
+      title={`后台运行中：${summary} · 点击切换主视图`}
+      onClick={(e) => {
+        e.stopPropagation()
+        onCycle?.()
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      {shown.map((peer) => (
+        <span key={peer.platform} className="cap-av cap-peer-av">
+          <PlatformLogo platform={peer.platform as PlatformId} size={11} />
+          <i className="cap-av-dot" />
+        </span>
+      ))}
+      {peers.length > 3 && <span className="cap-av more">+{peers.length - 3}</span>}
+    </button>
+  )
+}
+
 export function CapsuleIsland({
   data,
   open,
@@ -156,14 +195,20 @@ export function CapsuleIsland({
   previewBubble?: boolean
 }) {
   const warnAt = linkage.quota_warn_percent ?? 80
-  const showQuotas = data.kind === "auth" && !data.unavailable
+  const unregisteredLocal = data.unregisteredLocal ?? null
+  const approvalAlert = data.approvalAlert ?? null
+  const approvalUrgent = Boolean(
+    approvalAlert && (approvalAlert.kind === "waiting_approval" || approvalAlert.kind === "waiting_input"),
+  )
+  const showQuotas = data.kind === "auth" && !data.unavailable && !unregisteredLocal
   const quotaRows = useMemo(() => quotaRowsFor(data.platform, data.quotas).slice(0, 2), [data.platform, data.quotas])
   const follow = data.relayQuota ?? null
   const ringPlatform = follow?.platform ?? data.platform
   const ringWindows = useMemo(
-    () => (follow ? quotaRings(follow.platform, follow.windows)
+    () => (unregisteredLocal ? []
+      : follow ? quotaRings(follow.platform, follow.windows)
       : data.kind === "auth" && !data.unavailable ? quotaRings(data.platform, data.quotas) : []),
-    [follow, data.kind, data.unavailable, data.platform, data.quotas],
+    [unregisteredLocal, follow, data.kind, data.unavailable, data.platform, data.quotas],
   )
   const ringsFor = (aria: boolean): BotRing[] => ringWindows.map((ring) => {
     const q = ring.window
@@ -244,10 +289,10 @@ export function CapsuleIsland({
   const [focusRing, setFocusRing] = useState<number | null>(null)
   const [pinRing, setPinRing] = useState<number | null>(null)
   const derived = botExpression({
-    connected: data.connected ?? data.status?.tone === "success",
+    connected: unregisteredLocal ? true : (data.connected ?? data.status?.tone === "success"),
     queryFailed: showQuotas && Boolean(data.queryFailed),
     quotaUsed: quotaRows.map((q) => q.usedPercent),
-    dragging, waiting: Boolean(data.automationWaiting), refreshing, working: writing, shot, inactiveMs: relayRaw ? 0 : inactiveMs,
+    dragging, waiting: Boolean(data.automationWaiting || approvalUrgent), refreshing, working: writing && !approvalUrgent, shot, inactiveMs: relayRaw ? 0 : inactiveMs,
     docked: Boolean(dockEdge) && !open, hover,
     relay: relayRaw && linkage.route_feedback ? (relayRaw.phase === "failed" ? "rejected" : relayRaw.phase) : null,
     warnThreshold: warnAt,
@@ -358,10 +403,53 @@ export function CapsuleIsland({
     }
   }, [open, connectionMenuOpen, collapse])
 
-  // 液体分离气泡（R2-I-01 / R2-I-04 自动化等额度气泡开关控制）
+  // 液体分离卫星气泡（4B 等待确认提醒 > 同平台多会话并发圆圈 > 自动化等额度 > 接线漂移）
+  // 跨平台并发工具（1A）收进主胶囊尾部图标栈（R2-I-01 ③），绝不挤占多会话并发旋转圆圈。
+  const concurrentPeers = data.concurrentPeers ?? []
   const bubbleSpec = useMemo<IslandBubbleSpec | null>(() => {
     if (view !== "capsule") return { visible: false, width: 40, side: dockEdge === "right" ? "left" : "right", children: null }
     const side: "left" | "right" = dockEdge === "right" ? "left" : "right"
+    if (approvalUrgent && approvalAlert && approvalAlert.platform !== data.platform) {
+      return {
+        visible: true,
+        width: 96,
+        side,
+        children: (
+          <button
+            type="button"
+            className="flex items-center gap-1.5 border-0 bg-transparent p-0 text-inherit cursor-pointer"
+            role="status"
+            aria-label={`${approvalAlert.platformName} ${approvalAlert.summary}，点击查看`}
+            onClick={(e) => {
+              e.stopPropagation()
+              if (isTauri) {
+                if (approvalAlert.sessionId) {
+                  void api.openMainSession(approvalAlert.platform, approvalAlert.sessionId).catch(() => {})
+                } else {
+                  void api.openMainSection("sessions").catch(() => {})
+                }
+              }
+            }}
+          >
+            <span className="cap-wdot" />
+            <span className="cap-o">等确认</span>
+          </button>
+        ),
+      }
+    }
+    if (writing && running >= 2) {
+      return {
+        visible: true,
+        width: 40,
+        side,
+        children: (
+          <span role="status" aria-label={`${running} 个会话运行中`}>
+            <span className="cap-spinner" />
+            <b className="cap-num">{running}</b>
+          </span>
+        ),
+      }
+    }
     if (data.automationWaiting && linkage.automation_bubble) {
       return {
         visible: true,
@@ -381,19 +469,6 @@ export function CapsuleIsland({
             <span className="cap-wdot" />
             <span>等额度</span>
           </button>
-        ),
-      }
-    }
-    if (writing && running >= 2) {
-      return {
-        visible: true,
-        width: 40,
-        side,
-        children: (
-          <span role="status" aria-label={`${running} 个会话运行中`}>
-            <span className="cap-spinner" />
-            <b className="cap-num">{running}</b>
-          </span>
         ),
       }
     }
@@ -424,17 +499,26 @@ export function CapsuleIsland({
       }
     }
     return { visible: false, width: 40, side, children: null }
-  }, [view, dockEdge, data.automationWaiting, linkage.automation_bubble, writing, running, drifted, previewBubble])
+  }, [view, dockEdge, approvalUrgent, approvalAlert, data.platform, data.automationWaiting, linkage.automation_bubble, writing, running, drifted, previewBubble])
 
   const attributed = data.activeConnection ?? null
   const plat = (
     <span
       className={cn("cap-plat", attributed?.confidence === "mapped" && "cap-dim")}
       data-cap-attribution={attributed?.confidence ?? "platform"}
-      title={attributed ? `${data.platformName} · ${attributed.name}` : undefined}
+      title={
+        attributed
+          ? attributed.confidence === "active_config"
+            ? `${data.platformName} · ${attributed.name}（入库时刻本机配置匹配）`
+            : `${data.platformName} · ${attributed.name}`
+          : undefined
+      }
     >
       <PlatformLogo platform={data.platform} size={13} />
       {attributed ? attributed.name : data.platformName}
+      {attributed?.confidence === "active_config" && (
+        <span className="cap-chip-local" title="按采集入库时刻本机生效凭证匹配，非网关中转确证">本机</span>
+      )}
     </span>
   )
   const quotaChips = quotaChipList.length > 0
@@ -454,8 +538,43 @@ export function CapsuleIsland({
     : null
   const dashOnly = <span className="cap-num cap-t3 text-[13px]">—</span>
 
-  const showTheaterPill = Boolean(theaterCue && !theaterCue.quiet && !open && !previewExpr)
-  const collapsedMain = showTheaterPill && theaterCue ? (
+  const dynamicCue = data.dynamicCue ?? null
+  const showTheaterPill = Boolean(theaterCue && !theaterCue.quiet && !open && !previewExpr && !approvalUrgent && !dynamicCue)
+  const collapsedMain = approvalUrgent && approvalAlert && approvalAlert.platform === data.platform ? (
+    <button
+      type="button"
+      data-hook-alert={approvalAlert.kind}
+      className="cap-hook-pill"
+      onClick={(e) => {
+        e.stopPropagation()
+        if (!isTauri) return
+        if (approvalAlert.sessionId) {
+          void api.openMainSession(approvalAlert.platform, approvalAlert.sessionId).catch(() => {})
+        } else {
+          void api.openMainSection("sessions").catch(() => {})
+        }
+      }}
+    >
+      <PlatformLogo platform={approvalAlert.platform as PlatformId} size={13} />
+      <span className="cap-wdot" />
+      <span className="cap-o">{approvalAlert.summary}</span>
+    </button>
+  ) : dynamicCue && !open ? (
+    <span className="cap-switch-cue" data-switch-cue={dynamicCue.kind}>
+      <PlatformLogo platform={data.platform} size={13} />
+      <span className={cn(dynamicCue.kind === "unregistered" ? "cap-o" : "cap-c")}>{dynamicCue.label}</span>
+    </span>
+  ) : unregisteredLocal ? (
+    <>
+      <span className="cap-plat">
+        <PlatformLogo platform={data.platform} size={13} />
+        {unregisteredLocal.sourceAgent ?? data.platformName}
+      </span>
+      <span className="cap-chip-unreg" title="当前生效凭证尚未收录到 Jolu，双击展开可一键收录">
+        未收录 {unregisteredLocal.masked}
+      </span>
+    </>
+  ) : showTheaterPill && theaterCue ? (
     <button
       type="button"
       data-theater-cue={theaterCue.prop}
@@ -496,7 +615,39 @@ export function CapsuleIsland({
   const statusText = data.unavailable ? data.unavailable.title : showQuotas && data.queryFailed ? "额度查询失败 · 请刷新重试"
     : refreshing ? "正在刷新…" : data.status?.label ?? "—"
 
-  const legend = data.unavailable ? (
+  const legend = unregisteredLocal ? (
+    <div className="flex flex-col gap-2">
+      <p className="cap-note">
+        检测到{unregisteredLocal.sourceAgent ? ` ${unregisteredLocal.sourceAgent} ` : "本机"}当前生效凭证{" "}
+        <code className="cap-mono text-[var(--pn-capsule-orange)]">{unregisteredLocal.masked}</code>{" "}
+        尚未收录，已隐藏旧账号额度以防误导。
+      </p>
+      {data.enrollNotice?.tone === "err" && (
+        <p className="cap-note text-[var(--pn-capsule-red)]">{data.enrollNotice.text}</p>
+      )}
+      {isTauri && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {data.onEnrollLocal && (
+            <button
+              type="button"
+              disabled={Boolean(data.enrollingLocal)}
+              className="cap-pill font-medium text-[var(--pn-capsule-cyan)] disabled:opacity-50"
+              onClick={() => data.onEnrollLocal?.()}
+            >
+              {data.enrollingLocal ? "正在收录…" : "一键收录到账号管理"}
+            </button>
+          )}
+          <button
+            type="button"
+            className="cap-pill"
+            onClick={() => void api.openMainSection("connections").catch(() => {})}
+          >
+            供应商页 →
+          </button>
+        </div>
+      )}
+    </div>
+  ) : data.unavailable ? (
     <p className="cap-note">{data.unavailable.hint}</p>
   ) : showQuotas ? (
     ringWindows.map((ring, index) => {
@@ -541,6 +692,7 @@ export function CapsuleIsland({
   )
 
   const notes = [
+    !unregisteredLocal && data.enrollNotice && data.enrollNotice.text,
     showQuotas && data.quotaMessage,
     data.localMetrics?.message,
     !showQuotas && !data.localMetrics && data.apiMessage,
@@ -621,7 +773,14 @@ export function CapsuleIsland({
               />
             </>
           )}
-          {!showTheaterPill && relayOn && agents.length > 0 && <>{!relay && <span className="cap-hair" />}<AgentStack agents={agents} activity={gateway!.activity} now={now} /></>}
+          {!showTheaterPill && concurrentPeers.length > 0 ? (
+            <>
+              <span className="cap-hair" />
+              <ConcurrentPeerStack peers={concurrentPeers} onCycle={data.onCycleConcurrent} />
+            </>
+          ) : (
+            !showTheaterPill && relayOn && agents.length > 0 && <>{!relay && <span className="cap-hair" />}<AgentStack agents={agents} activity={gateway!.activity} now={now} /></>
+          )}
         </span>
         {relay?.phase === "in" && <span className="cap-flow" />}
       </div>
@@ -671,6 +830,33 @@ export function CapsuleIsland({
           <div className="cap-legend">{legend}</div>
         </div>
 
+        {approvalAlert && (approvalAlert.kind === "waiting_approval" || approvalAlert.kind === "waiting_input" || approvalAlert.kind === "turn_complete") && (
+          <div className="cap-sec cap-hook-banner">
+            <div className="flex min-w-0 items-center gap-2">
+              <PlatformLogo platform={approvalAlert.platform as PlatformId} size={14} />
+              <span className="cap-wdot" />
+              <span className="truncate text-xs font-semibold text-[var(--pn-capsule-orange)]">
+                {approvalAlert.platformName} · {approvalAlert.summary}
+              </span>
+            </div>
+            {isTauri && (
+              <button
+                type="button"
+                className="cap-fix shrink-0"
+                onClick={() => {
+                  if (approvalAlert.sessionId) {
+                    void api.openMainSession(approvalAlert.platform, approvalAlert.sessionId).catch(() => {})
+                  } else {
+                    void api.openMainSection("sessions").catch(() => {})
+                  }
+                }}
+              >
+                查看会话
+              </button>
+            )}
+          </div>
+        )}
+
         {(sessionTotal > 0 || showDelta) && (
           <div className="cap-sec cap-col">
             <div className="cap-sh">
@@ -692,6 +878,41 @@ export function CapsuleIsland({
                 onOpen={isTauri ? (session) => void api.openMainSession(data.platform, session.id).catch(() => {}) : undefined}
               />
             )}
+          </div>
+        )}
+
+        {data.crossPlatformSessions && data.crossPlatformSessions.length > 0 && (
+          <div className="cap-sec cap-col">
+            <div className="cap-sh">
+              <span>跨平台活跃 · {data.crossPlatformSessions.length}</span>
+            </div>
+            <div className="cap-src">
+              {data.crossPlatformSessions.map((item) => (
+                <button
+                  key={`${item.platform}:${item.id}`}
+                  type="button"
+                  className="cap-xplat-row"
+                  onClick={
+                    isTauri
+                      ? () => void api.openMainSession(item.platform, item.id).catch(() => {})
+                      : undefined
+                  }
+                >
+                  <PlatformLogo platform={item.platform} size={13} />
+                  <span className="min-w-0 flex-1 truncate text-left text-xs text-[var(--pn-capsule-text)]" title={item.title}>
+                    {item.title}
+                  </span>
+                  {item.connectionName && (
+                    <span className={cn("max-w-[84px] shrink-0 truncate text-[10px]", item.confidence === "active_config" ? "cap-c" : "cap-t3")}>
+                      {item.confidence === "active_config" ? `${item.connectionName}·本机` : item.connectionName}
+                    </span>
+                  )}
+                  <b className="cap-num cap-mono text-[11px] cap-g">
+                    {item.deltaTokens != null ? `+${compactQuotaNumber(item.deltaTokens)}` : item.state === "running" ? "运行中" : "活跃"}
+                  </b>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 

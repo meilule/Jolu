@@ -21,13 +21,7 @@ pub(crate) fn bound(
     conn: &rusqlite::Connection,
     id: &str,
 ) -> Result<(String, crate::grok_browser_auth::Session), String> {
-    let secret: String = conn
-        .query_row(
-            "SELECT secret FROM connections WHERE id=?1 AND platform='grok' AND kind='auth'",
-            [id],
-            |r| r.get(0),
-        )
-        .map_err(|_| "所选 Grok 账号缺少授权，请重新登录")?;
+    let secret: String = crate::gateway::subscription::ConnectionSecretStore::auth_secret(conn, id, "grok", "所选 Grok 账号缺少授权，请重新登录")?;
     let Credential::Grok { session } = provider_browser_auth::load(id, "grok", &secret)? else {
         return Err("Grok 授权类型不匹配".into());
     };

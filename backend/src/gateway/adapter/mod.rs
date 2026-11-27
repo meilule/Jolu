@@ -23,6 +23,7 @@ pub mod zcode_start;
 pub mod qoder;
 mod qoder_chat;
 mod qoder_cosy;
+pub(crate) mod registry;
 mod text_calls;
 pub mod trae;
 pub(crate) mod trae_models;

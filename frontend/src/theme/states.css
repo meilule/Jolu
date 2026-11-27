@@ -26,13 +26,17 @@
 }
 
 /* 按下：轻微缩小。0.97 是设计稿给的数值。
-   transition 只挂 transform，颜色变化由各变体的 transition-colors 负责。 */
+   transition 只挂 transform，颜色变化由各变体的 transition-colors 负责。
+   已接管弹簧手感的控件（.jn-spring）由 Framer Motion 独管 transform，这里不重插值。 */
 .jn-interactive {
   transition-property: transform, background-color, border-color, color, opacity;
   transition-duration: var(--motion-feedback);
   transition-timing-function: var(--motion-ease-standard);
 }
-.jn-interactive:active:not(:disabled):not([aria-disabled="true"]):not(.jn-no-press) {
+.jn-interactive.jn-spring {
+  transition-property: background-color, border-color, color, opacity, box-shadow;
+}
+.jn-interactive:active:not(:disabled):not([aria-disabled="true"]):not(.jn-no-press):not(.jn-spring) {
   transform: scale(0.97);
 }
 

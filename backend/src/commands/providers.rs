@@ -1,7 +1,15 @@
 //! 供应商连接：增删改、凭据、模型清单与本机导入。
 
-#[allow(unused_imports)]
-use crate::*;
+use tauri::{Emitter, Manager, State};
+
+use crate::app::state::{
+    data_paths, invalidate_network_cache, with_database, with_reader, Cfg, Db, DbRead,
+};
+use crate::{
+    auth_snapshot, claude_auth, cli_apply, connections, creds, current_connection, island_clones,
+    login_detect, native_sources, platforms, provider_browser_auth, provider_key, quota,
+    refresh_tray_menu, update_tray_icon, validation,
+};
 
 /// 本机导入扫描：CC Switch / Claude Code / Codex 的现有上游读成草稿。
 /// 键不出后端——草稿里只有掩码，落库由 `providers_import_apply` 重读原文。
@@ -505,10 +513,22 @@ pub(crate) async fn replace_api_key(
 #[tauri::command]
 pub(crate) async fn current_connections(db: State<'_, Db>) -> Result<Vec<String>, String> {
     if validation::isolated() { return Ok(vec![]); }
-    let local = tauri::async_runtime::spawn_blocking(current_connection::read_local)
+    let customs = with_database(db.0.clone(), |conn| {
+        Ok(crate::custom_agents::list(conn).unwrap_or_default())
+    })
+    .await?;
+    let local = tauri::async_runtime::spawn_blocking(move || current_connection::read_all_local(&customs))
         .await.map_err(|error| error.to_string())?;
     with_database(db.0.clone(), move |conn| {
-        local.iter().filter_map(|local| connections::find_current_local(conn, local).transpose()).collect()
+        let mut ids: Vec<String> = Vec::new();
+        for item in &local {
+            if let Some((id, _, _)) = crate::local_active::find_matching_saved_connection(conn, item) {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+        Ok(ids)
     }).await
 }
 

@@ -67,12 +67,18 @@ export function liveFromSnapshot(seq: number, inFlight: LiveRequestDto[], buffer
 }
 
 export interface SessionLive {
+  platform: string
+  sessionId: string
   /** 在途请求数（并发请求逐个结束，全部结束才算停止） */
   count: number
   /** 正在使用的连接 id */
   connections: string[]
   /** 最近一个在途请求的开始时间 */
   latestTs: number
+  /** 最近一个在途请求识别出的 Agent / 模型 / 来源，用于在快照到达前实时展示 */
+  agent: string | null
+  requestedModel: string | null
+  source: string | null
 }
 
 /** 按会话汇总在途请求；没有已验证会话标识的请求不归到任何会话。 */
@@ -81,10 +87,24 @@ export function liveBySession(state: LiveState): Map<string, SessionLive> {
   for (const request of Object.values(state.requests)) {
     if (!request.session_platform || !request.session_id) continue
     const key = sessionKey(request.session_platform, request.session_id)
-    const entry = out.get(key) ?? { count: 0, connections: [], latestTs: 0 }
+    const entry = out.get(key) ?? {
+      platform: request.session_platform,
+      sessionId: request.session_id,
+      count: 0,
+      connections: [],
+      latestTs: 0,
+      agent: null,
+      requestedModel: null,
+      source: null,
+    }
     entry.count += 1
     if (request.connection_id && !entry.connections.includes(request.connection_id)) entry.connections.push(request.connection_id)
-    entry.latestTs = Math.max(entry.latestTs, request.ts)
+    if (request.ts >= entry.latestTs) {
+      entry.latestTs = request.ts
+      entry.agent = request.agent ?? entry.agent
+      entry.requestedModel = request.requested_model || entry.requestedModel
+      entry.source = request.source || entry.source
+    }
     out.set(key, entry)
   }
   return out
@@ -145,6 +165,9 @@ export interface SessionView {
   running: boolean
   /** 运行中正在使用的连接 */
   liveConnections: string[]
+  /** 在途请求的请求模型 / 来源（新会话快照未回前用于实时展示） */
+  liveModel?: string | null
+  liveSource?: string | null
   /** 最近活动：会话线程、经网关流水与在途请求三者取最新 */
   activity: number
   /** 运行中或刚结束仍在保留期内，排在前部 */
@@ -152,18 +175,47 @@ export interface SessionView {
 }
 
 export function buildSessionViews(sessions: GatewaySessionDto[], live: Map<string, SessionLive>, priority: PriorityState): SessionView[] {
-  const views = sessions.map((session) => {
+  const seen = new Set<string>()
+  const views: SessionView[] = sessions.map((session) => {
     const key = sessionKey(session.platform, session.session_id)
+    seen.add(key)
     const state = live.get(key)
     return {
       key,
       session,
       running: !!state && state.count > 0,
       liveConnections: state?.connections ?? [],
+      liveModel: state?.requestedModel ?? null,
+      liveSource: state?.source ?? null,
       activity: Math.max(session.thread_last_ts ?? 0, session.gateway_last_ts ?? 0, state?.latestTs ?? 0),
       prioritized: !!priority[key],
     }
   })
+  // 新发起的在途路由会话：不等下一次后端快照轮询，直接实时展示
+  for (const [key, state] of live) {
+    if (seen.has(key) || state.count <= 0) continue
+    views.push({
+      key,
+      session: {
+        platform: state.platform,
+        session_id: state.sessionId,
+        agent: state.agent,
+        title: null,
+        cwd: null,
+        thread_last_ts: null,
+        gateway_last_ts: state.latestTs,
+        thread_status: null,
+        tokens: { fresh_input: null, cache_read: null, cache_write: null, output: null, total: null, state: "missing" },
+        links: [],
+      },
+      running: true,
+      liveConnections: state.connections,
+      liveModel: state.requestedModel,
+      liveSource: state.source,
+      activity: state.latestTs,
+      prioritized: !!priority[key],
+    })
+  }
   return views.sort((a, b) => {
     const pa = priority[a.key]
     const pb = priority[b.key]
