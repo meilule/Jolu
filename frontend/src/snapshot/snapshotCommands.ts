@@ -69,6 +69,7 @@ function statusWithWiring() {
   const base = demoGatewayStatus()
   return {
     ...base,
+    port: state.settings.proxy_port,
     wiring: base.wiring.map((entry) => {
       const wired = state.wiring[entry.agent] ?? entry.wired
       return { ...entry, wired, state: wired ? "wired" : "idle", drift: wired ? entry.drift : null }
@@ -296,6 +297,12 @@ export function routeCommand(cmd: string, args: Args): unknown {
     /* ─────────── Agent 与模型路由 ─────────── */
     case "gateway_status": return statusWithWiring()
     case "gateway_set_mode": return { mode: str(args.mode), enabled: args.mode === "relay" }
+    case "gateway_suggest_port": return state.settings.proxy_port === 18731 ? 22731 : 18731
+    case "gateway_set_port": {
+      const port = num(args.port)
+      patchSettings({ proxy_port: port })
+      return { port, restored: [], skipped: [], failed: [], stopped: false }
+    }
     case "gateway_set_default_source": return args.connectionId ?? null
     case "gateway_wiring_set": {
       const agent = str(args.agent)

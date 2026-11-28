@@ -10,6 +10,7 @@ import {
 } from "@/lib/gatewayApi"
 import type { RoutingGroupDto } from "@/components/gateway/routingGroups"
 import { agentLabel, canEscape, wiredCount } from "@/lib/gatewayPage"
+import { isPortBindError, parseGatewayPort, portChangeSuccessText } from "@/lib/gatewayPort"
 import { driftText } from "@/lib/agentPage"
 import { rateLimitedSources, type OverviewRange } from "@/lib/gatewayOverview"
 import { activeSessionRows, contextRisks } from "@/lib/contextSessions"
@@ -26,6 +27,7 @@ import { GroupsPanel } from "@/components/gateway/GroupsPanel"
 import { PoolPanel } from "@/components/gateway/PoolPanel"
 import { AccessPanel } from "@/components/gateway/AccessPanel"
 import { MiddlewarePanel } from "@/components/gateway/MiddlewarePanel"
+import { GatewayPortDialog } from "@/components/gateway/GatewayPortDialog"
 
 /**
  * 模型路由（设计稿 jolu-new.pen R1-01/02 概览、R1-18 路由流水、R1-19 路由分组、
@@ -54,6 +56,13 @@ const TABS: readonly { id: Tab; label: string; icon: IconName }[] = [
 type Dialog =
   | { kind: "confirm"; title: string; description: string; label: string; danger?: boolean; work: () => Promise<boolean | void> }
   | null
+
+type PortModal = {
+  reason?: string | null
+  initialPort?: string | null
+  autoSuggest?: boolean
+  retryStart?: boolean
+} | null
 
 const RECENT_ROWS = 240
 /** 已经提示过的「发现新工具」（只提示一次） */
@@ -115,6 +124,7 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
   const [seenTools, setSeenTools] = useState<string[]>(() => readJson<string[]>(SEEN_KEY, []))
   const [discovery, setDiscovery] = useState<AgentDiscoveryDto[]>([])
   const [dialog, setDialog] = useState<Dialog>(null)
+  const [portModal, setPortModal] = useState<PortModal>(null)
   /** 中间件「添加规则」在页头；用序号通知面板打开新建表单 */
   const [middlewareAdd, setMiddlewareAdd] = useState(0)
   const operationLock = useRef(false)
@@ -278,9 +288,61 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
   }, [agents, discovery, seenTools, modelIds.length, logRows, connections, sessions.views, contexts])
 
   const toggleRunning = (on: boolean) => {
-    const work = (throwOnFailure = false) => run(() => gatewayApi.setMode(on ? "relay" : "observe", status?.default_connection ?? null), on ? "模型路由已开启" : "模型路由已停止，接入的工具已恢复原连接", throwOnFailure)
-    if (!on && wired > 0) setDialog({ kind: "confirm", title: "停止模型路由？", description: `将停止转发，并把 ${wired} 个已接入的工具恢复到原连接。正在进行的调用可能中断。`, label: "停止", danger: true, work: () => work(true) })
-    else void work()
+    const startRelay = async () => {
+      if (operationLock.current) return false
+      operationLock.current = true
+      setBusy(true)
+      try {
+        await gatewayApi.setMode("relay", status?.default_connection ?? null)
+        toast.success("模型路由已开启")
+        await Promise.all([refresh(), reload()])
+        return true
+      } catch (error) {
+        if (isPortBindError(error)) {
+          setPortModal({ reason: String(error), autoSuggest: true, retryStart: true })
+        } else {
+          toast.danger("操作失败", String(error))
+        }
+        return false
+      } finally {
+        operationLock.current = false
+        setBusy(false)
+      }
+    }
+    const stopRelay = (throwOnFailure = false) =>
+      run(() => gatewayApi.setMode("observe", status?.default_connection ?? null), "模型路由已停止，接入的工具已恢复原连接", throwOnFailure)
+    if (on) {
+      void startRelay()
+    } else if (wired > 0) {
+      setDialog({ kind: "confirm", title: "停止模型路由？", description: `将停止转发，并把 ${wired} 个已接入的工具恢复到原连接。正在进行的调用可能中断。`, label: "停止", danger: true, work: () => stopRelay(true) })
+    } else {
+      void stopRelay()
+    }
+  }
+
+  const commitInlinePort = async (raw: string) => {
+    const parsed = parseGatewayPort(raw)
+    if (!parsed.ok) {
+      toast.danger("端口无效", parsed.error)
+      setPortModal({ reason: parsed.error, initialPort: raw, autoSuggest: false })
+      return
+    }
+    if (status?.port === parsed.port) return
+    if (operationLock.current) return
+    operationLock.current = true
+    setBusy(true)
+    try {
+      const outcome = await gatewayApi.setPort(parsed.port, false)
+      toast.success(portChangeSuccessText(outcome))
+      await Promise.all([refresh(), reload()])
+    } catch (error) {
+      const text = String(error)
+      toast.danger("修改端口失败", text)
+      setPortModal({ reason: text, initialPort: raw, autoSuggest: isPortBindError(error) })
+    } finally {
+      operationLock.current = false
+      setBusy(false)
+    }
   }
 
   const escape = () => setDialog({
@@ -307,6 +369,7 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
   }
 
   const moreItems: MoreItem[] = [
+    { label: "修改监听端口", onClick: () => setPortModal({}) },
     { label: "管理来源", onClick: openSources },
     { label: "去 Agent 页接入工具", onClick: goAgents },
     ...(canEscape(status) ? [{ label: "紧急切回直连", danger: true, onClick: escape }] : []),
@@ -380,6 +443,8 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
               )
             }}
             onToggleRunning={() => toggleRunning(!running)}
+            onInlinePortCommit={commitInlinePort}
+            onOpenPortDialog={() => setPortModal({})}
             onOpenQuota={(connectionId) => {
               if (connectionId && onOpenConnection) onOpenConnection(connectionId)
               else onNavigate?.("providers")
@@ -398,6 +463,7 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
             wired={wired}
             busy={busy}
             onToggleRunning={() => toggleRunning(!running)}
+            onOpenPortDialog={() => setPortModal({})}
             moreItems={moreItems}
           />
         )}
@@ -424,6 +490,25 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
         )}
       </div>
 
+      {portModal && (
+        <GatewayPortDialog
+          open
+          currentPort={status?.port ?? null}
+          wired={wired}
+          reason={portModal.reason}
+          initialPort={portModal.initialPort}
+          autoSuggest={portModal.autoSuggest}
+          confirmLabel={portModal.retryStart ? "保存并开启中转" : undefined}
+          onOpenChange={(open) => { if (!open) setPortModal(null) }}
+          onSaved={async (outcome) => {
+            const shouldStart = Boolean(portModal.retryStart)
+            toast.success(portChangeSuccessText(outcome))
+            await Promise.all([refresh(), reload()])
+            if (shouldStart) toggleRunning(true)
+          }}
+        />
+      )}
+
       {dialog?.kind === "confirm" && (
         <ConfirmDialog
           open
@@ -441,12 +526,13 @@ export function GatewayView({ onNavigate, onOpenConnection }: { onNavigate?: (pa
 }
 
 /** 五页签共用的紧凑状态条（R1-18～22「路由状态条」：56 高、圆角 20）。 */
-function GatewayStatusBar({ port, running, wired, busy, onToggleRunning, moreItems }: {
+function GatewayStatusBar({ port, running, wired, busy, onToggleRunning, onOpenPortDialog, moreItems }: {
   port: number | null
   running: boolean
   wired: number
   busy: boolean
   onToggleRunning: () => void
+  onOpenPortDialog: () => void
   moreItems: MoreItem[]
 }) {
   return (
@@ -455,7 +541,15 @@ function GatewayStatusBar({ port, running, wired, busy, onToggleRunning, moreIte
         <Icon name="navGateway" size="md" className="text-jn-primary" />
       </span>
       <span className="shrink-0 text-[14px] font-bold text-jn-text">本机路由</span>
-      <span className="shrink-0 font-mono text-[12.5px] font-medium text-jn-text-2">127.0.0.1:{port ?? "—"}</span>
+      <button
+        type="button"
+        disabled={busy || port == null}
+        title="点击修改监听端口"
+        onClick={onOpenPortDialog}
+        className="shrink-0 cursor-pointer rounded-[6px] px-1.5 py-0.5 font-mono text-[12.5px] font-medium text-jn-text-2 transition-colors hover:bg-jn-well hover:text-jn-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jn-focus disabled:cursor-default disabled:hover:bg-transparent"
+      >
+        127.0.0.1:{port ?? "—"}
+      </button>
       <StatusPill tone={running ? "success" : "neutral"}>{running ? "正在中转" : "已停止"}</StatusPill>
       <span className="min-w-0 flex-1" />
       <span className="shrink-0 text-[12px] text-jn-text-3">{wired} 个工具已接入</span>

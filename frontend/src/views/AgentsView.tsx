@@ -6,6 +6,8 @@ import { gatewayApi, type AgentDiscoveryDto, type CatalogModelDto, type CustomAg
 import type { RoutingGroupDto } from "@/components/gateway/routingGroups"
 import { settingsApi, type AgentVersionRow } from "@/lib/settingsApi"
 import { buildAgentRows, customAgentRow, isCustomAgent, readHidden, writeHidden, type AgentRow } from "@/lib/agentPage"
+import { wiredCount } from "@/lib/gatewayPage"
+import { isPortBindError, portChangeSuccessText } from "@/lib/gatewayPort"
 import { emptyTierDraft, tierDraftFrom, tierModelsFrom, type TierDraft } from "@/lib/tierModels"
 import type { MainPage } from "@/lib/mainNavigation"
 import { useToast } from "@/components/ui/Toast"
@@ -14,6 +16,7 @@ import { Button, ConfirmDialog, PageActions } from "@/ui"
 import { AgentDirectory } from "@/components/agents/AgentList"
 import { AgentDetail } from "@/components/agents/AgentDetail"
 import { CustomAgentDialog, CustomAgentPanel } from "@/components/agents/CustomAgentPanel"
+import { GatewayPortDialog } from "@/components/gateway/GatewayPortDialog"
 
 /**
  * Agent 页（设计稿 jolu-new.pen R1-08 列表 / R1-09 详情 / R1-32 高级 / R1-33 写入改动）。
@@ -28,6 +31,7 @@ import { CustomAgentDialog, CustomAgentPanel } from "@/components/agents/CustomA
 
 type Applied = { model: string | null; subagent_model: string | null; tiers: import("@/lib/gatewayApi").TierModels | null }
 type Confirm = { title: string; description: string; label: string; danger?: boolean; work: () => Promise<boolean | void> }
+type PortModal = { reason: string; retry: () => void }
 
 /**
  * 跨挂载记住上次的探测与版本结果（T7）：切走页面会卸载组件，切回来先显示上次的结果，
@@ -60,6 +64,7 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
   const [subagent, setSubagent] = useState("")
   const [draft, setDraft] = useState<TierDraft>(emptyTierDraft)
   const [confirm, setConfirm] = useState<Confirm | null>(null)
+  const [portModal, setPortModal] = useState<PortModal | null>(null)
   const [customs, setCustoms] = useState<CustomAgentDto[]>([])
   const [customModel, setCustomModel] = useState("")
   const [adding, setAdding] = useState(false)
@@ -195,7 +200,7 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
     return () => window.removeEventListener("keydown", closeOnEscape)
   }, [selected])
 
-  const run = async (work: () => Promise<unknown>, ok?: string, rethrow = false) => {
+  const run = async (work: () => Promise<unknown>, ok?: string, rethrow = false, onPortError?: (reason: string) => void) => {
     if (lock.current) return false
     lock.current = true
     setBusy(true)
@@ -205,6 +210,10 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
       await loadCore()
       return true
     } catch (error) {
+      if (onPortError && isPortBindError(error)) {
+        onPortError(String(error))
+        return false
+      }
       toast.danger("操作失败", String(error))
       if (rethrow) throw error
       return false
@@ -225,10 +234,15 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
   const wire = (agent: string) => {
     const name = rows.find((entry) => entry.agent === agent)?.name ?? agent
     const claude = agent === "claude-code"
-    void run(async () => {
-      await ensureRouting()
-      return gatewayApi.setWiring(agent, true, claude ? mainModel || null : null, claude ? subagent || null : null, claude ? tiersFor(draft, mainModel, subagent) : undefined)
-    }, `已接入 ${name}`)
+    void run(
+      async () => {
+        await ensureRouting()
+        return gatewayApi.setWiring(agent, true, claude ? mainModel || null : null, claude ? subagent || null : null, claude ? tiersFor(draft, mainModel, subagent) : undefined)
+      },
+      `已接入 ${name}`,
+      false,
+      (reason) => setPortModal({ reason, retry: () => wire(agent) }),
+    )
   }
 
   const unwire = (agent: string) => {
@@ -244,11 +258,16 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
 
   const customName = (id: string) => customs.find((entry) => entry.id === id)?.name ?? id
   const reloadCustoms = async () => setCustoms(await gatewayApi.customAgents())
-  const customWire = (id: string) => void run(async () => {
-    await ensureRouting()
-    await gatewayApi.customAgentWire(id, customModel || null)
-    await reloadCustoms()
-  }, `已接入 ${customName(id)}`)
+  const customWire = (id: string) => void run(
+    async () => {
+      await ensureRouting()
+      await gatewayApi.customAgentWire(id, customModel || null)
+      await reloadCustoms()
+    },
+    `已接入 ${customName(id)}`,
+    false,
+    (reason) => setPortModal({ reason, retry: () => customWire(id) }),
+  )
   const customUnwire = (id: string) => setConfirm({
     title: `断开 ${customName(id)} 并还原？`,
     description: "只还原 Jolu 写下的地址、令牌与模型键；接入后你自己改过的值不会被还原。",
@@ -289,10 +308,15 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
   const rewire = () => {
     if (!row) return
     const claude = row.agent === "claude-code"
-    void run(async () => {
-      await ensureRouting()
-      return gatewayApi.setWiring(row.agent, true, claude ? mainModel || null : null, claude ? subagent || null : null, claude ? tiersFor(draft, mainModel, subagent) : undefined)
-    }, `已重新接入 ${row.name}`)
+    void run(
+      async () => {
+        await ensureRouting()
+        return gatewayApi.setWiring(row.agent, true, claude ? mainModel || null : null, claude ? subagent || null : null, claude ? tiersFor(draft, mainModel, subagent) : undefined)
+      },
+      `已重新接入 ${row.name}`,
+      false,
+      (reason) => setPortModal({ reason, retry: rewire }),
+    )
   }
 
   const accept = () => {
@@ -396,6 +420,23 @@ export function AgentsView({ onNavigate }: { onNavigate: (page: MainPage) => voi
         ) : null}
       </div>
       {adding && <CustomAgentDialog busy={busy} onClose={() => setAdding(false)} onSave={customAdd} />}
+      {portModal && (
+        <GatewayPortDialog
+          open
+          currentPort={status?.port ?? null}
+          wired={wiredCount(status) + customs.filter((entry) => entry.wired).length}
+          reason={portModal.reason}
+          autoSuggest
+          confirmLabel="保存并继续接入"
+          onOpenChange={(open) => { if (!open) setPortModal(null) }}
+          onSaved={async (outcome) => {
+            const retry = portModal.retry
+            toast.success(portChangeSuccessText(outcome))
+            await loadCore()
+            retry()
+          }}
+        />
+      )}
       {confirm && (
         <ConfirmDialog
           open

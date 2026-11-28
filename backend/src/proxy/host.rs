@@ -27,6 +27,163 @@ pub(crate) fn register_quota_refresher(refresher: QuotaRefresher) {
     let _ = QUOTA_REFRESHER.set(refresher);
 }
 
+/// 端口修改结果（供命令层与前端提示使用）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GatewayPortOutcome {
+    pub port: u16,
+    pub restored: Vec<String>,
+    pub skipped: Vec<String>,
+    pub failed: Vec<String>,
+    pub stopped: bool,
+}
+
+const PORT_CANDIDATES: [u16; 10] = [
+    18731, 22731, 28731, 32731, 38731, 42731, 17310, 27310, 37310, 12731,
+];
+
+pub(crate) fn format_bind_error(bind_host: &str, port: u16, error: &std::io::Error) -> String {
+    match error.kind() {
+        std::io::ErrorKind::AddrInUse => format!(
+            "端口 {port} 已被占用；模型入口必须使用固定端口，请先释放该端口或换一个端口再接入工具"
+        ),
+        std::io::ErrorKind::PermissionDenied => format!(
+            "端口 {port} 被系统保留或禁止监听（Windows 上常见于 WSL / Hyper-V / Docker 动态保留端口区间），请更换一个端口后再开启模型路由"
+        ),
+        _ => format!("监听 {bind_host}:{port} 失败：{error}"),
+    }
+}
+
+pub(crate) fn probe_port(bind_host: &str, port: u16) -> Result<(), String> {
+    std::net::TcpListener::bind((bind_host, port))
+        .map(|_| ())
+        .map_err(|error| format_bind_error(bind_host, port, &error))
+}
+
+/// 推荐一个当前可绑定的空闲端口：优先跨段探测以避开 Windows 连续 100 端口的保留区间，
+/// 全部不可用时向系统申请随机空闲端口。
+pub fn suggest_port(bind_host: &str, current_port: u16) -> Result<u16, String> {
+    for candidate in PORT_CANDIDATES {
+        if candidate == current_port {
+            continue;
+        }
+        if std::net::TcpListener::bind((bind_host, candidate)).is_ok() {
+            return Ok(candidate);
+        }
+    }
+    for _ in 0..8 {
+        let listener = std::net::TcpListener::bind((bind_host, 0))
+            .map_err(|error| format!("无法分配可用端口：{error}"))?;
+        let actual = listener
+            .local_addr()
+            .map_err(|error| format!("读取分配端口失败：{error}"))?
+            .port();
+        if actual >= 1024 && actual != current_port {
+            return Ok(actual);
+        }
+    }
+    Err("未能找到可用端口，请手动输入 1024–65535 之间的端口".into())
+}
+
+pub fn set_gateway_port(
+    app: &tauri::AppHandle,
+    port: u16,
+    restore_wired: bool,
+) -> Result<GatewayPortOutcome, String> {
+    if !(1024..=65535).contains(&port) {
+        return Err("端口须在 1024–65535 之间".into());
+    }
+    crate::cli_switch::with_switch(|| set_gateway_port_locked(app, port, restore_wired))
+}
+
+fn set_gateway_port_locked(
+    app: &tauri::AppHandle,
+    port: u16,
+    restore_wired: bool,
+) -> Result<GatewayPortOutcome, String> {
+    let settings = app.state::<crate::Cfg>().0.get();
+    let old_port = settings.proxy_port;
+    if port == old_port {
+        return Ok(GatewayPortOutcome {
+            port,
+            restored: Vec::new(),
+            skipped: Vec::new(),
+            failed: Vec::new(),
+            stopped: false,
+        });
+    }
+
+    let wired = crate::gateway::escape::wired_tool_names(app);
+    if !wired.is_empty() && !restore_wired {
+        return Err(format!(
+            "当前有 {} 个工具已接入端口 {old_port}，修改端口前需要先停止中转并还原工具配置",
+            wired.len()
+        ));
+    }
+
+    let bind_host = if settings.gateway_shared_lan {
+        "0.0.0.0"
+    } else {
+        "127.0.0.1"
+    };
+    // 先试绑新端口：失败时不触碰任何已接入工具配置，也不中断当前监听
+    probe_port(bind_host, port)?;
+
+    if !wired.is_empty() {
+        let outcome = crate::gateway::escape::restore_all(app);
+        stop();
+        app.state::<crate::Cfg>().0.try_update(|cfg| {
+            cfg.proxy_enabled = false;
+            cfg.proxy_port = port;
+        })?;
+        crate::events::settings_changed(app);
+        let _ = app.emit(crate::events::GATEWAY_WIRING_CHANGED, ());
+        return Ok(GatewayPortOutcome {
+            port,
+            restored: outcome.restored,
+            skipped: outcome.skipped,
+            failed: outcome.failed,
+            stopped: true,
+        });
+    }
+
+    let (mode, _) = crate::gateway::mode_from(&settings);
+    let was_relay_running = settings.proxy_enabled && mode == crate::gateway::Mode::Relay;
+    if was_relay_running {
+        stop();
+        app.state::<crate::Cfg>()
+            .0
+            .try_update(|cfg| cfg.proxy_port = port)?;
+        if let Err(error) = start(app) {
+            app.state::<crate::Cfg>()
+                .0
+                .update(|cfg| cfg.proxy_port = old_port);
+            let _ = start(app);
+            crate::events::settings_changed(app);
+            return Err(error);
+        }
+        crate::events::settings_changed(app);
+        return Ok(GatewayPortOutcome {
+            port,
+            restored: Vec::new(),
+            skipped: Vec::new(),
+            failed: Vec::new(),
+            stopped: false,
+        });
+    }
+
+    app.state::<crate::Cfg>()
+        .0
+        .try_update(|cfg| cfg.proxy_port = port)?;
+    crate::events::settings_changed(app);
+    Ok(GatewayPortOutcome {
+        port,
+        restored: Vec::new(),
+        skipped: Vec::new(),
+        failed: Vec::new(),
+        stopped: false,
+    })
+}
+
 pub(crate) async fn bind_listener(
     bind_host: &'static str,
     port: u16,
@@ -35,23 +192,22 @@ pub(crate) async fn bind_listener(
     match tokio::net::TcpListener::bind((bind_host, port)).await {
         Ok(listener) => Ok((listener, port)),
         Err(error)
-            if error.kind() == std::io::ErrorKind::AddrInUse
-                && mode == crate::gateway::Mode::Observe =>
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
+            ) && mode == crate::gateway::Mode::Observe =>
         {
             let listener = tokio::net::TcpListener::bind((bind_host, 0))
                 .await
-                .map_err(|fallback| format!("端口 {port} 已被占用，且无法分配随机端口：{fallback}"))?;
+                .map_err(|fallback| format!("端口 {port} 不可用，且无法分配随机端口：{fallback}"))?;
             let actual = listener
                 .local_addr()
                 .map_err(|e| format!("读取监听端口失败：{e}"))?
                 .port();
-            eprintln!("[代理] 端口 {port} 已被占用，改用 {actual}");
+            eprintln!("[代理] 端口 {port} 不可用，改用 {actual}");
             Ok((listener, actual))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => Err(format!(
-            "端口 {port} 已被占用；模型入口必须使用固定端口，请先释放该端口或换一个端口再接入工具"
-        )),
-        Err(error) => Err(format!("监听 {bind_host}:{port} 失败：{error}")),
+        Err(error) => Err(format_bind_error(bind_host, port, &error)),
     }
 }
 

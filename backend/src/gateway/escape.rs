@@ -330,6 +330,31 @@ pub fn circuit_break(app: &tauri::AppHandle, reason: &str) -> EscapeOutcome {
     outcome
 }
 
+/// 当前已接入端口（含 pending 与自定义工具）的工具名称列表，用于改端口前的方案 A 保护。
+pub(crate) fn wired_tool_names(app: &tauri::AppHandle) -> Vec<String> {
+    let settings = app.state::<crate::Cfg>().0.get();
+    let port = settings.proxy_port;
+    let mut names = Vec::new();
+    for agent in crate::gateway::wiring::agents() {
+        let record = record_for(app, agent);
+        let status = crate::gateway::wiring::status_with(agent, port, record.as_ref());
+        let pending = record.as_ref().is_some_and(|r| r.state == "pending");
+        if status.wired || pending {
+            names.push(agent.to_string());
+        }
+    }
+    if let Ok(conn) = app.state::<crate::Db>().0.lock() {
+        for agent in crate::custom_agents::list(&conn)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a.applied.is_some())
+        {
+            names.push(agent.name);
+        }
+    }
+    names
+}
+
 /// 逐 agent 还原接线。只清理自己的写入：外部已改的不覆盖。
 /// 调用方必须持有 [`crate::cli_switch::with_switch`] 的锁。
 pub(crate) fn restore_all(app: &tauri::AppHandle) -> EscapeOutcome {

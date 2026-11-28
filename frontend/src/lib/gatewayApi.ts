@@ -418,6 +418,14 @@ export interface SourceUsageDto {
   failed: number
 }
 
+export interface GatewayPortOutcomeDto {
+  port: number
+  restored: string[]
+  skipped: string[]
+  failed: string[]
+  stopped: boolean
+}
+
 export const gatewayApi = {
   sourceCapabilities: () => invoke<SourceCapabilityDto[]>("gateway_source_capabilities"),
   accessKey: (refresh: boolean) => invoke<string>("gateway_access_key", { refresh }),
@@ -428,6 +436,11 @@ export const gatewayApi = {
   /** 切换模式；切回 observe 时后端会先还原全部接线 */
   setMode: (mode: GatewayMode, defaultConnection: string | null) =>
     invoke<unknown>("gateway_set_mode", { mode, defaultConnection }),
+  /** 推荐一个当前可绑定的空闲端口（避开已占用及 Windows 保留端口段） */
+  suggestPort: () => invoke<number>("gateway_suggest_port"),
+  /** 修改本机路由监听端口；已有工具接入时须传 restoreWired = true 先还原工具并停止中转 */
+  setPort: (port: number, restoreWired = false) =>
+    invoke<GatewayPortOutcomeDto>("gateway_set_port", { port, restoreWired }),
   /**
    * 设置 / 清除默认来源。无前缀模型名只能靠它兜底，否则会被网关拒绝（未带来源前缀）。
    * 只接受已在模型池中的连接。

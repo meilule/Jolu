@@ -19,7 +19,10 @@ pub(crate) use deps::{
     detached_deps, extract_dedup_key, extract_served_model, queue_pending_timing,
     queue_pending_timing_with_models, running_deps, running_port, ProxyDeps, HEAD_CAP,
 };
-pub use host::{on_config_changed, set_proxy, start, startup, status, shutdown_and_restore, ProxyStatus};
+pub use host::{
+    on_config_changed, set_gateway_port, set_proxy, shutdown_and_restore, start, startup, status,
+    suggest_port, GatewayPortOutcome, ProxyStatus,
+};
 pub(crate) use host::register_quota_refresher;
 
 #[cfg(test)]
@@ -39,9 +42,36 @@ mod tests {
         PendingTiming, ProxyDeps, ProxyRuntime, FALLBACK_THRESHOLD, PENDING_TTL_MS,
         REQUEST_BODY_LIMIT,
     };
-    use super::host::{bind_listener, follow_external_configs, heal_observed_orphans};
+    use super::host::{
+        bind_listener, follow_external_configs, format_bind_error, heal_observed_orphans,
+        probe_port, suggest_port,
+    };
     use super::observe::{build_upstream_url, forward};
     use crate::proxy_config::{is_self_base, ProxyPlatform};
+
+    #[test]
+    fn format_bind_error_explains_windows_permission_denied() {
+        let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "os error 10013");
+        let message = format_bind_error("127.0.0.1", 12731, &error);
+        assert!(message.contains("12731") && message.contains("系统保留"), "{message}");
+    }
+
+    #[test]
+    fn suggest_port_returns_bindable_port_different_from_current() {
+        let picked = suggest_port("127.0.0.1", 18731).unwrap();
+        assert_ne!(picked, 18731);
+        assert!(picked >= 1024);
+        assert!(probe_port("127.0.0.1", picked).is_ok());
+    }
+
+    #[test]
+    fn probe_port_rejects_already_bound_port() {
+        let taken = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = taken.local_addr().unwrap().port();
+        let error = probe_port("127.0.0.1", port).unwrap_err();
+        assert!(error.contains("已被占用"), "{error}");
+        drop(taken);
+    }
 
     #[tokio::test]
     async fn relay_refuses_an_occupied_port_and_observe_falls_back_to_a_random_one() {

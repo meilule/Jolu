@@ -1,9 +1,10 @@
-import { useMemo, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { isTauri, type StatsOverviewDto } from "@/lib/api"
 import type { ContextSessionRowDto, DayOverviewDto, GatewayStatusDto, RouteLogDto } from "@/lib/gatewayApi"
 import type { SessionView } from "@/lib/gatewaySessions"
 import { relativeTime } from "@/lib/gatewaySessions"
 import { agentLabel } from "@/lib/gatewayPage"
+import { sanitizePortInput } from "@/lib/gatewayPort"
 import {
   finalAttempts, formatLatency, headerLatency, hourlyTrend, overviewRange, OVERVIEW_RANGES, successRate,
   type OverviewRange,
@@ -77,6 +78,8 @@ export function OverviewPanel(props: {
   onSharedLan: (on: boolean) => void
   onSelectStrategy: (group: RoutingGroupDto, strategy: "usage" | "order" | "intent") => void
   onToggleRunning: () => void
+  onInlinePortCommit: (raw: string) => void | Promise<void>
+  onOpenPortDialog: () => void
   onOpenQuota: (connectionId: string | null) => void
   onOpenMiddleware: () => void
   onOpenGroups: () => void
@@ -151,7 +154,9 @@ export function OverviewPanel(props: {
       <div className="grid grid-cols-1 gap-3.5 @[900px]:grid-cols-[minmax(390px,1.72fr)_minmax(0,1fr)_minmax(0,1fr)]">
         <RouterCard status={status} running={props.running} wired={props.wired} sharedLan={props.sharedLan} day={day} busy={busy}
           handling={props.inFlightCount ?? runningSessions.length} groups={props.groups}
-          onToggleRunning={props.onToggleRunning} />
+          onToggleRunning={props.onToggleRunning}
+          onInlinePortCommit={props.onInlinePortCommit}
+          onOpenPortDialog={props.onOpenPortDialog} />
         <TrendCard
           title={rangeText.period}
           icon="activity"
@@ -249,7 +254,7 @@ const PETAL_PATH =
   "M119.36 60l-0.24 2.06-0.69 2.03-1.07 1.94-1.33 1.84-1.46 1.75-1.44 1.67-1.29 1.63-1.04 1.65-0.74 1.7-0.4 1.8-0.12 1.94 0.08 2.08 0.19 2.2 0.15 2.27-0.01 2.28-0.28 2.2-0.63 2.04-1.02 1.81-1.4 1.53-1.75 1.23-2.01 0.95-2.16 0.71-2.2 0.55-2.15 0.51-2.01 0.56-1.81 0.71-1.59 0.95-1.39 1.22-1.24 1.5-1.15 1.73-1.14 1.89-1.22 1.93-1.34 1.83-1.52 1.62-1.71 1.28-1.89 0.86-2.03 0.42-2.14-0.04-2.18-0.41-2.16-0.7-2.12-0.84-2.03-0.86-1.95-0.72-1.89-0.49-1.84-0.17-1.84 0.17-1.89 0.49-1.95 0.72-2.03 0.86-2.12 0.84-2.16 0.7-2.18 0.41-2.14 0.04-2.03-0.42-1.89-0.86-1.71-1.28-1.52-1.62-1.34-1.83-1.22-1.93-1.14-1.89-1.15-1.73-1.24-1.5-1.39-1.22-1.59-0.95-1.81-0.71-2.01-0.56-2.15-0.51-2.2-0.55-2.16-0.71-2.01-0.95-1.75-1.23-1.4-1.53-1.02-1.81-0.63-2.04-0.28-2.2-0.01-2.28 0.15-2.27 0.19-2.2 0.08-2.08-0.12-1.94-0.4-1.8-0.74-1.7-1.04-1.65-1.29-1.63-1.44-1.67-1.46-1.75-1.33-1.84-1.07-1.94-0.69-2.03-0.24-2.06 0.24-2.06 0.69-2.03 1.07-1.94 1.33-1.84 1.46-1.75 1.44-1.67 1.29-1.63 1.04-1.65 0.74-1.7 0.4-1.8 0.12-1.94-0.08-2.08-0.19-2.2-0.15-2.27 0.01-2.28 0.28-2.2 0.63-2.04 1.02-1.81 1.4-1.53 1.75-1.23 2.01-0.95 2.16-0.71 2.2-0.55 2.15-0.51 2.01-0.56 1.81-0.71 1.59-0.95 1.39-1.22 1.24-1.5 1.15-1.73 1.14-1.89 1.22-1.93 1.34-1.83 1.52-1.62 1.71-1.28 1.89-0.86 2.03-0.42 2.14 0.04 2.18 0.41 2.16 0.7 2.12 0.84 2.03 0.86 1.95 0.72 1.89 0.49 1.84 0.17 1.84-0.17 1.89-0.49 1.95-0.72 2.03-0.86 2.12-0.84 2.16-0.7 2.18-0.41 2.14-0.04 2.03 0.42 1.89 0.86 1.71 1.28 1.52 1.62 1.34 1.83 1.22 1.93 1.14 1.89 1.15 1.73 1.24 1.5 1.39 1.22 1.59 0.95 1.81 0.71 2.01 0.56 2.15 0.51 2.2 0.55 2.16 0.71 2.01 0.95 1.75 1.23 1.4 1.53 1.02 1.81 0.63 2.04 0.28 2.2 0.01 2.28-0.15 2.27-0.19 2.2-0.08 2.08 0.12 1.94 0.4 1.8 0.74 1.7 1.04 1.65 1.29 1.63 1.44 1.67 1.46 1.75 1.33 1.84 1.07 1.94 0.69 2.03 0.24 2.06z"
 
 /** 本机路由大卡（R1-01 第 1 行左）：三层薄荷同心装饰环 + 地址/标签/运行数据 + 120px 电源花瓣主开关。 */
-function RouterCard({ status, running, wired, sharedLan, day, busy, handling, groups, onToggleRunning }: {
+function RouterCard({ status, running, wired, sharedLan, day, busy, handling, groups, onToggleRunning, onInlinePortCommit, onOpenPortDialog }: {
   status: GatewayStatusDto | null
   running: boolean
   wired: number
@@ -259,7 +264,43 @@ function RouterCard({ status, running, wired, sharedLan, day, busy, handling, gr
   handling: number
   groups: number
   onToggleRunning: () => void
+  onInlinePortCommit: (raw: string) => void | Promise<void>
+  onOpenPortDialog: () => void
 }) {
+  const [editingPort, setEditingPort] = useState(false)
+  const [portDraft, setPortDraft] = useState("")
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const committedRef = useRef(false)
+
+  useEffect(() => {
+    if (!editingPort) return
+    const input = inputRef.current
+    if (!input) return
+    input.focus()
+    input.select()
+  }, [editingPort])
+
+  const beginPortEdit = () => {
+    if (busy || status?.port == null) return
+    // 方案 A：已有工具接入时直接打开弹窗提示将先还原工具并停止中转，避免失焦误触
+    if (wired > 0) {
+      onOpenPortDialog()
+      return
+    }
+    committedRef.current = false
+    setPortDraft(String(status.port))
+    setEditingPort(true)
+  }
+
+  const finishPortEdit = () => {
+    if (committedRef.current) return
+    committedRef.current = true
+    setEditingPort(false)
+    const trimmed = portDraft.trim()
+    if (!trimmed || trimmed === String(status?.port ?? "")) return
+    void onInlinePortCommit(trimmed)
+  }
+
   return (
     <section className="relative flex min-h-[212px] gap-4 overflow-hidden rounded-jn-card border border-jn-line bg-jn-surface px-[22px] py-5 shadow-jn-surface">
       {/* R1-01 标志性同心装饰环（薄荷底 340 + 双环 300 / 250），居中落在右侧花瓣按钮背后 */}
@@ -278,7 +319,40 @@ function RouterCard({ status, running, wired, sharedLan, day, busy, handling, gr
         <div className="flex flex-col gap-2.5">
           <div className="flex items-end gap-0.5">
             <span className="tnum text-[30px] leading-none font-bold tracking-[-0.02em] text-jn-text">127.0.0.1</span>
-            <span className="tnum pb-0.5 text-[20px] leading-none font-semibold text-jn-text-3">:{status?.port ?? "—"}</span>
+            <span className="tnum pb-0.5 text-[20px] leading-none font-semibold text-jn-text-3">:</span>
+            {editingPort ? (
+              <input
+                ref={inputRef}
+                type="text"
+                inputMode="numeric"
+                aria-label="本机路由监听端口"
+                value={portDraft}
+                onChange={(event) => setPortDraft(sanitizePortInput(event.target.value))}
+                onBlur={finishPortEdit}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault()
+                    finishPortEdit()
+                  } else if (event.key === "Escape") {
+                    event.preventDefault()
+                    committedRef.current = true
+                    setEditingPort(false)
+                  }
+                }}
+                className="tnum w-[6ch] rounded-[6px] border border-jn-primary bg-jn-well px-1.5 py-0.5 font-mono text-[20px] leading-none font-semibold text-jn-text outline-none"
+              />
+            ) : (
+              <button
+                type="button"
+                disabled={busy || status?.port == null}
+                title={wired > 0 ? "点击修改监听端口（需先停止中转并还原已接入工具）" : "点击修改监听端口"}
+                aria-label={`监听端口 ${status?.port ?? "未知"}，点击修改`}
+                onClick={beginPortEdit}
+                className="tnum -mx-0.5 cursor-pointer rounded-[6px] px-1 pb-0.5 text-[20px] leading-none font-semibold text-jn-text-3 transition-colors hover:bg-jn-well hover:text-jn-text hover:underline hover:decoration-dashed hover:decoration-jn-text-3/60 hover:underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jn-focus disabled:cursor-default disabled:hover:bg-transparent disabled:hover:no-underline"
+              >
+                {status?.port ?? "—"}
+              </button>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <Tag>{wired} 个工具已接入</Tag>

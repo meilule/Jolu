@@ -70,6 +70,7 @@ pub(crate) fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + S
         gateway_access::gateway_client_key_issue, gateway_access::gateway_client_key_revoke, gateway_access::gateway_middleware_list,
         gateway_access::zcode_version_check, gateway_access::gateway_middleware_save, gateway_access::gateway_middleware_delete,
         preferences::fx_rate, preferences::set_cost_currency, routing::gateway_set_mode,
+        routing::gateway_suggest_port, routing::gateway_set_port,
         routing::gateway_set_default_source, providers::gateway_refresh_models, gateway_access::zcode_set_channel,
         routing::gateway_routing_group_list, routing::gateway_routing_group_create, routing::gateway_routing_group_update,
         routing::gateway_routing_group_delete, providers::providers_import_scan, providers::providers_import_apply,

@@ -39,6 +39,26 @@ pub(crate) fn gateway_status(app: tauri::AppHandle) -> GatewayStatus {
 }
 
 #[tauri::command]
+pub(crate) fn gateway_suggest_port(app: tauri::AppHandle) -> Result<u16, String> {
+    let settings = app.state::<Cfg>().0.get();
+    let bind_host = if settings.gateway_shared_lan {
+        "0.0.0.0"
+    } else {
+        "127.0.0.1"
+    };
+    crate::proxy::suggest_port(bind_host, settings.proxy_port)
+}
+
+#[tauri::command]
+pub(crate) fn gateway_set_port(
+    app: tauri::AppHandle,
+    port: u16,
+    restore_wired: Option<bool>,
+) -> Result<crate::proxy::GatewayPortOutcome, String> {
+    crate::proxy::set_gateway_port(&app, port, restore_wired.unwrap_or(false))
+}
+
+#[tauri::command]
 pub(crate) fn gateway_set_mode(
     app: tauri::AppHandle,
     mode: String,
